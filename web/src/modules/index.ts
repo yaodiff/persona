@@ -5,11 +5,13 @@
 import { registerModule, registeredModules, type ModuleDescriptor } from "../core/module-host";
 import { health } from "./health/module";
 import { lark } from "./lark/module";
+import { mail } from "./mail/module";
+import { office } from "./office/module";
 import { recording } from "./recording/module";
 import { STANDALONE_MODULES } from "./standalone";
 import { voice } from "./voice/module";
 
-export const MODULES: readonly ModuleDescriptor[] = [health, voice, recording, lark, ...STANDALONE_MODULES];
+export const MODULES: readonly ModuleDescriptor[] = [health, voice, recording, lark, office, mail, ...STANDALONE_MODULES];
 
 /**
  * Registers each module once (a second call, a hot reload or a test importing the list again, is a no-op). This runs

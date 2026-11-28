@@ -224,6 +224,7 @@ func TestMeetingFollowupAnyRecording(t *testing.T) {
 // a meeting trimmed with its minutes still gets one.
 func TestMeetingFollowupTrimmed(t *testing.T) {
 	d := newDayFixture(t)
+	setSettings(t, d.s, func(v *Settings) { days := 14; v.RecordingTextDays = &days }) // the text is kept forever by default
 	d.putDay(dayRec, 100, d.owner, nil)
 	d.do("POST", segmentsPath(dayRec), "", dayLines(100, 101), http.StatusOK)
 	d.do("POST", "/api/v1/recordings/"+dayRec+"/minutes", "", nil, http.StatusAccepted)
@@ -236,6 +237,7 @@ func TestMeetingFollowupTrimmed(t *testing.T) {
 		http.StatusConflict), codeNoMaterial)
 
 	r := newRoomFixture(t)
+	setSettings(t, r.s, func(v *Settings) { days := 14; v.RecordingTextDays = &days })
 	r.upload(meetingRec, 1, map[string]any{"complete": true, "ended_at": time.Now().UTC().Format(time.RFC3339),
 		"segments": []map[string]any{{"start": 0, "end": 9, "text": "We keep the cap."}}})
 	r.minutesFor(meetingRec, `{"title":"Design review","decisions":[{"text":"Keep the cap","line":1}]}`)

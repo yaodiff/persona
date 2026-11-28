@@ -165,7 +165,7 @@ func TestHiddenDirectorySupervisionNoticeDelivered(t *testing.T) {
 
 func TestHiddenDirectoryColdSupervision(t *testing.T) {
 	ctx := context.Background()
-	database, err := db.Open(ctx, newDatabase(t), db.ManagerSet)
+	database, err := db.Open(ctx, newMigratedDatabase(t, db.ManagerSet), db.ManagerSet)
 	if err != nil {
 		t.Fatal(err)
 	}

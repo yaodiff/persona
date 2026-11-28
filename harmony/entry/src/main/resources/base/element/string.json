@@ -1545,6 +1545,18 @@
       "value": "Couldn’t save attachments"
     },
     {
+      "name": "chat_attachment_photos_count_as_files",
+      "value": "Some photos were sent as files because there were too many for one message."
+    },
+    {
+      "name": "chat_attachment_photos_size_as_files",
+      "value": "Some photos were sent as files because the message was too large."
+    },
+    {
+      "name": "chat_attachment_photos_count_size_as_files",
+      "value": "Some photos were sent as files because of the number and size of the photos."
+    },
+    {
       "name": "chat_attachment_limit_reached",
       "value": "Attachment limit reached"
     },
@@ -2370,7 +2382,7 @@
     },
     {
       "name": "health_ask_placeholder",
-      "value": "问健康相关的问题…"
+      "value": "Ask about your health…"
     },
     {
       "name": "health_chats",
@@ -2438,7 +2450,7 @@
     },
     {
       "name": "health_question_resting_heart_rate",
-      "value": "Log my weight today: 62.5 kg"
+      "value": "How has my resting heart rate been trending this week?"
     },
     {
       "name": "health_log_weight",
@@ -8587,6 +8599,1650 @@
     {
       "name": "session_models_empty",
       "value": "This launcher has no models available to switch to."
+    },
+    {
+      "name": "agent_mark_all_seen",
+      "value": "Mark all as seen"
+    },
+    {
+      "name": "agent_mark_all_seen_confirm",
+      "value": "Mark {count} unread agents as seen?"
+    },
+    {
+      "name": "live_view_section_title",
+      "value": "Live View"
+    },
+    {
+      "name": "live_view_enable",
+      "value": "Show Live View"
+    },
+    {
+      "name": "live_view_enable_detail",
+      "value": "Keep waiting, working, and unread agents visible on the status bar and lock screen."
+    },
+    {
+      "name": "live_view_lock_details",
+      "value": "Show Details on Lock Screen"
+    },
+    {
+      "name": "live_view_lock_details_detail",
+      "value": "Display agent names and summaries instead of counts only."
+    },
+    {
+      "name": "live_view_test_publish",
+      "value": "Preview in System Live View"
+    },
+    {
+      "name": "live_view_test_stop",
+      "value": "End"
+    },
+    {
+      "name": "live_view_needs_count",
+      "value": "{count} need you"
+    },
+    {
+      "name": "live_view_working_count",
+      "value": "{count} working"
+    },
+    {
+      "name": "live_view_unread_count",
+      "value": "{count} unread"
+    },
+    {
+      "name": "live_view_all_caught_up",
+      "value": "All Caught Up"
+    },
+    {
+      "name": "live_view_assistant_replying",
+      "value": "Assistant replying"
+    },
+    {
+      "name": "live_view_background_tag",
+      "value": "Background"
+    },
+    {
+      "name": "live_view_anon_permission",
+      "value": "A permission request is waiting"
+    },
+    {
+      "name": "live_view_anon_plan",
+      "value": "A plan needs your approval"
+    },
+    {
+      "name": "live_view_anon_question",
+      "value": "A question needs your answer"
+    },
+    {
+      "name": "live_view_anon_screen",
+      "value": "A terminal needs you"
+    },
+    {
+      "name": "live_view_anon_working",
+      "value": "Working"
+    },
+    {
+      "name": "live_view_anon_unread",
+      "value": "Finished · unread"
+    },
+    {
+      "name": "live_view_capsule_needs",
+      "value": "Needs {count}"
+    },
+    {
+      "name": "live_view_capsule_working",
+      "value": "Working {count}"
+    },
+    {
+      "name": "live_view_capsule_unread",
+      "value": "Unread {count}"
+    },
+    {
+      "name": "live_view_capsule_done",
+      "value": "Done"
+    },
+    {
+      "name": "live_view_more_count",
+      "value": "+{count}"
+    },
+    {
+      "name": "live_view_system_disabled",
+      "value": "Enable Live View for Persona in system settings to display it on the status bar and lock screen."
+    },
+    {
+      "name": "live_view_entitlement_required",
+      "value": "System Live View requires a signed build with Live View capability enabled."
+    },
+    {
+      "name": "live_view_unavailable",
+      "value": "System Live View is unavailable on this device."
+    },
+    {
+      "name": "project_agent_count_one",
+      "value": "1 agent"
+    },
+    {
+      "name": "fold_inspector_title",
+      "value": "Live Inspector"
+    },
+    {
+      "name": "fold_inspector_fleet",
+      "value": "Fleet Pulse"
+    },
+    {
+      "name": "fold_posture_trifold",
+      "value": "Tri-Fold Workspace"
+    },
+    {
+      "name": "fold_posture_dual",
+      "value": "Foldable Split"
+    },
+    {
+      "name": "fold_posture_hover",
+      "value": "Tabletop Hover"
+    },
+    {
+      "name": "turn_changes_one",
+      "value": "1 file changed"
+    },
+    {
+      "name": "turn_changes_many",
+      "value": "{count} files changed"
+    },
+    {
+      "name": "turn_changes_review",
+      "value": "Review"
+    },
+    {
+      "name": "turn_changes_more",
+      "value": "Show {count} more"
+    },
+    {
+      "name": "bubble_show_more",
+      "value": "Show More"
+    },
+    {
+      "name": "bubble_show_less",
+      "value": "Show Less"
+    },
+    {
+      "name": "live_view_published_toast",
+      "value": "Live View updated on status bar"
+    },
+    {
+      "name": "agents_marked_seen_toast",
+      "value": "Marked {count} as seen"
+    },
+    {
+      "name": "live_view_preview_approve",
+      "value": "Approve"
+    },
+    {
+      "name": "live_view_preview_deny",
+      "value": "Deny"
+    },
+    {
+      "name": "live_view_capsule_metric_working",
+      "value": "Working"
+    },
+    {
+      "name": "fold_workbench_pulse",
+      "value": "Pulse"
+    },
+    {
+      "name": "fold_workbench_code",
+      "value": "Code"
+    },
+    {
+      "name": "fold_workbench_machines",
+      "value": "Machines"
+    },
+    {
+      "name": "fold_posture_trifold_angled",
+      "value": "Tri-Fold Stand"
+    },
+    {
+      "name": "fold_workbench_expand_tools",
+      "value": "Expand"
+    },
+    {
+      "name": "fold_workbench_pick_session",
+      "value": "Select an agent session to inspect files, git diff, and terminal."
+    },
+    {
+      "name": "fold_relay_next",
+      "value": "Next"
+    },
+    {
+      "name": "fold_relay_prev",
+      "value": "Previous"
+    },
+    {
+      "name": "fold_relay_queue",
+      "value": "{count} to review"
+    },
+    {
+      "name": "fold_relay_clear",
+      "value": "Queue clear"
+    },
+    {
+      "name": "machine_load_per_core",
+      "value": "{per}/core"
+    },
+    {
+      "name": "phone_xiaoyi",
+      "value": "XiaoYi"
+    },
+    {
+      "name": "phone_search_alias_phone_xiaoyi",
+      "value": "xiaoyi a2a intent skill assistant voice"
+    },
+    {
+      "name": "xiaoyi_section_capabilities",
+      "value": "Capabilities"
+    },
+    {
+      "name": "xiaoyi_section_preferences",
+      "value": "Preferences & Safety"
+    },
+    {
+      "name": "xiaoyi_section_diagnostics",
+      "value": "Self-Check"
+    },
+    {
+      "name": "xiaoyi_agent_card_label",
+      "value": "On-Device Agent"
+    },
+    {
+      "name": "xiaoyi_intents_count_label",
+      "value": "Registered Intents"
+    },
+    {
+      "name": "xiaoyi_skills_runtime_label",
+      "value": "Installed Skills"
+    },
+    {
+      "name": "xiaoyi_suggestions_toggle",
+      "value": "XiaoYi Suggestions"
+    },
+    {
+      "name": "xiaoyi_suggestions_hint",
+      "value": "Share privacy-safe status hints with XiaoYi when pending items arrive."
+    },
+    {
+      "name": "xiaoyi_suggestions_unregistered",
+      "value": "XiaoYi Suggestions require an app build registered on Xiaoyi Open Platform."
+    },
+    {
+      "name": "xiaoyi_lock_screen_notice",
+      "value": "Approvals from XiaoYi always require your phone to be unlocked. High-risk Auto-Run plans stay inside Persona."
+    },
+    {
+      "name": "xiaoyi_diag_run",
+      "value": "Run Self-Check"
+    },
+    {
+      "name": "xiaoyi_diag_running",
+      "value": "Checking…"
+    },
+    {
+      "name": "xiaoyi_diag_hub_paired",
+      "value": "Paired Hub"
+    },
+    {
+      "name": "xiaoyi_diag_credential",
+      "value": "Asset Store Token"
+    },
+    {
+      "name": "xiaoyi_diag_transport",
+      "value": "Direct Hub Access"
+    },
+    {
+      "name": "xiaoyi_diag_pass",
+      "value": "Ready"
+    },
+    {
+      "name": "xiaoyi_diag_attention",
+      "value": "Needs attention"
+    },
+    {
+      "name": "xiaoyi_diag_ssh_warning",
+      "value": "SSH tunnel only"
+    },
+    {
+      "name": "xiaoyi_diag_reachable",
+      "value": "Reachable ({online}/{total} online)"
+    },
+    {
+      "name": "xiaoyi_card_working",
+      "value": "{count} working"
+    },
+    {
+      "name": "xiaoyi_card_needs_you",
+      "value": "{count} need you"
+    },
+    {
+      "name": "xiaoyi_card_approve",
+      "value": "Allow / Approve"
+    },
+    {
+      "name": "xiaoyi_card_submitting",
+      "value": "Submitting…"
+    },
+    {
+      "name": "xiaoyi_card_confirm_prompt",
+      "value": "Confirm this request? Your phone must be unlocked."
+    },
+    {
+      "name": "xiaoyi_card_approved_done",
+      "value": "Confirmed."
+    },
+    {
+      "name": "xiaoyi_card_open_persona",
+      "value": "Open in Persona"
+    },
+    {
+      "name": "xiaoyi_card_continue",
+      "value": "Continue in Persona"
+    },
+    {
+      "name": "xiaoyi_card_open_failed",
+      "value": "Could not open Persona."
+    },
+    {
+      "name": "xiaoyi_sent_still_thinking",
+      "value": "Sent to Persona. It is still thinking."
+    },
+    {
+      "name": "xiaoyi_task_sent_summary",
+      "value": "Sent to {session} ({machine})."
+    },
+    {
+      "name": "xiaoyi_approved_summary",
+      "value": "Approved: {summary}"
+    },
+    {
+      "name": "xiaoyi_todo_saved_summary",
+      "value": "To-do saved: {title}"
+    },
+    {
+      "name": "xiaoyi_water_logged_summary",
+      "value": "Logged {amount} ml. Today: {today} / {goal} ml."
+    },
+    {
+      "name": "xiaoyi_push_queued_summary",
+      "value": "Queued to send when your Hub is reachable."
+    },
+    {
+      "name": "xiaoyi_push_sent_summary",
+      "value": "Sent to Persona."
+    },
+    {
+      "name": "xiaoyi_push_sent_no_dest_summary",
+      "value": "Sent to Persona. Turn on Inbox or Knowledge in Settings > Subscriptions."
+    },
+    {
+      "name": "xiaoyi_opening_recording",
+      "value": "Opening Persona Meeting Recording."
+    },
+    {
+      "name": "xiaoyi_opening_persona",
+      "value": "Opening Persona."
+    },
+    {
+      "name": "xiaoyi_kb_no_hits",
+      "value": "No knowledge matches found for \"{query}\"."
+    },
+    {
+      "name": "xiaoyi_not_paired",
+      "value": "Not paired yet. Open Persona and connect your Hub first."
+    },
+    {
+      "name": "xiaoyi_auth_expired",
+      "value": "The pairing has expired. Open Persona to pair again."
+    },
+    {
+      "name": "xiaoyi_already_handled",
+      "value": "This request was already handled."
+    },
+    {
+      "name": "xiaoyi_ssh_open_app",
+      "value": "This Hub connects over an SSH tunnel. Open Persona to run this action."
+    },
+    {
+      "name": "xiaoyi_unlock_required",
+      "value": "Unlock your phone before approving requests."
+    },
+    {
+      "name": "xiaoyi_offline",
+      "value": "Cannot reach the Hub right now. Check your network connection."
+    },
+    {
+      "name": "xiaoyi_machine_offline",
+      "value": "{target} is offline. Check that your computer is awake and Persona Link is running."
+    },
+    {
+      "name": "xiaoyi_machine_not_found",
+      "value": "Could not find a computer named {target}."
+    },
+    {
+      "name": "xiaoyi_no_online_machine",
+      "value": "No computer is online right now."
+    },
+    {
+      "name": "xiaoyi_no_live_session",
+      "value": "No active session found on {target}. Open Persona to start one."
+    },
+    {
+      "name": "xiaoyi_hub_update_required",
+      "value": "Please update your Persona Hub to use this action."
+    },
+    {
+      "name": "xiaoyi_need_app_for_new_session",
+      "value": "Start a session on {target} in Persona once so XiaoYi knows your folder and launcher."
+    },
+    {
+      "name": "xiaoyi_nothing_pending",
+      "value": "Nothing needs your approval right now."
+    },
+    {
+      "name": "xiaoyi_needs_screen",
+      "value": "Open Persona to answer this request."
+    },
+    {
+      "name": "xiaoyi_nothing_to_send",
+      "value": "Nothing to send."
+    },
+    {
+      "name": "xiaoyi_water_not_enabled",
+      "value": "First add Water tracking in Health inside Persona."
+    },
+    {
+      "name": "xiaoyi_recording_module_off",
+      "value": "Meeting recording is off on this hub."
+    },
+    {
+      "name": "xiaoyi_diag_recording_module",
+      "value": "Meeting recording module"
+    },
+    {
+      "name": "xiaoyi_diag_on",
+      "value": "On"
+    },
+    {
+      "name": "xiaoyi_diag_off",
+      "value": "Off"
+    },
+    {
+      "name": "xiaoyi_agent_card_ready",
+      "value": "Ready · {count} capabilities"
+    },
+    {
+      "name": "xiaoyi_diag_preview_card",
+      "value": "Preview XiaoYi Card"
+    },
+    {
+      "name": "xiaoyi_timeout",
+      "value": "The Hub is taking longer than expected. Open Persona to view progress."
+    },
+    {
+      "name": "xiaoyi_rate_limited",
+      "value": "Too many items pushed recently. Try again later."
+    },
+    {
+      "name": "xiaoyi_failed",
+      "value": "Unable to complete the request. Open Persona to check details."
+    },
+    {
+      "name": "fold_urgent_review",
+      "value": "Review"
+    },
+    {
+      "name": "fold_hover_deck_title",
+      "value": "Tabletop Deck"
+    },
+    {
+      "name": "fold_interrupt_agent",
+      "value": "Interrupt"
+    },
+    {
+      "name": "knowledge_minutes_checking",
+      "value": "Checking the whole recording…"
+    },
+    {
+      "name": "knowledge_minutes_checking_progress",
+      "value": "Checking the whole recording ({done} of {total} min)…"
+    },
+    {
+      "name": "knowledge_minutes_writing",
+      "value": "Writing the minutes…"
+    },
+    {
+      "name": "agents_use_herdr_tab_name",
+      "value": "Use the herdr tab name as the session name"
+    },
+    {
+      "name": "agents_use_herdr_tab_name_hint",
+      "value": "Shows the tab name first and syncs this preference across devices on this hub."
+    },
+    {
+      "name": "composer_queued_count",
+      "value": "{count} queued"
+    },
+    {
+      "name": "composer_queue_send_now",
+      "value": "Send now"
+    },
+    {
+      "name": "composer_queue_relayed",
+      "value": "Relayed"
+    },
+    {
+      "name": "code_wrap_lines",
+      "value": "Wrap"
+    },
+    {
+      "name": "code_unwrap_lines",
+      "value": "Scroll"
+    },
+    {
+      "name": "copied",
+      "value": "Copied"
+    },
+    {
+      "name": "quick_palette_title",
+      "value": "Quick Commands"
+    },
+    {
+      "name": "quick_palette_placeholder",
+      "value": "Jump to agent, workspace, or action…"
+    },
+    {
+      "name": "quick_palette_agents",
+      "value": "Needs You & Active Agents"
+    },
+    {
+      "name": "quick_palette_workspaces",
+      "value": "Workspaces"
+    },
+    {
+      "name": "quick_palette_actions",
+      "value": "Pro Controls"
+    },
+    {
+      "name": "quick_palette_toggle_theme",
+      "value": "Toggle Light / Dark Theme"
+    },
+    {
+      "name": "quick_palette_toggle_workbench",
+      "value": "Toggle Live Workbench"
+    },
+    {
+      "name": "quick_palette_liveview_preview",
+      "value": "LiveView Preview"
+    },
+    {
+      "name": "quick_palette_code_tab",
+      "value": "Switch to Code Tab"
+    },
+    {
+      "name": "quick_palette_machines_tab",
+      "value": "Switch to Machines Tab"
+    },
+    {
+      "name": "quick_palette_empty",
+      "value": "No matching commands"
+    },
+    {
+      "name": "fold_posture_book",
+      "value": "Foldable Book"
+    },
+    {
+      "name": "machine_cpu_load",
+      "value": "CPU & Load"
+    },
+    {
+      "name": "composer_queue_edit",
+      "value": "Take Back to Edit"
+    },
+    {
+      "name": "composer_queue_move_up",
+      "value": "Move Up"
+    },
+    {
+      "name": "composer_queue_move_down",
+      "value": "Move Down"
+    },
+    {
+      "name": "composer_queue_taken_back",
+      "value": "Moved back to the input box"
+    },
+    {
+      "name": "composer_queue_deleted",
+      "value": "Removed from the queue"
+    },
+    {
+      "name": "composer_queue_arrives_turn_end",
+      "value": "Arrives when this turn ends"
+    },
+    {
+      "name": "composer_queue_arrives_next",
+      "value": "Arrives with next message"
+    },
+    {
+      "name": "starred_messages",
+      "value": "Starred Messages"
+    },
+    {
+      "name": "star_message",
+      "value": "Star"
+    },
+    {
+      "name": "unstar_message",
+      "value": "Unstar"
+    },
+    {
+      "name": "starred_badge",
+      "value": "Starred"
+    },
+    {
+      "name": "starred_saved_toast",
+      "value": "Message starred"
+    },
+    {
+      "name": "starred_removed_toast",
+      "value": "Message unstarred"
+    },
+    {
+      "name": "starred_search_placeholder",
+      "value": "Search Starred Messages"
+    },
+    {
+      "name": "starred_empty_title",
+      "value": "No Starred Messages"
+    },
+    {
+      "name": "starred_empty_message",
+      "value": "Touch and hold a message to star it."
+    },
+    {
+      "name": "starred_unavailable_title",
+      "value": "Starred Messages Are Unavailable"
+    },
+    {
+      "name": "starred_unavailable_message",
+      "value": "Update the hub to use starred messages with this assistant."
+    },
+    {
+      "name": "starred_load_failed",
+      "value": "Couldn't Load Starred Messages"
+    },
+    {
+      "name": "starred_search_empty",
+      "value": "No matching starred messages"
+    },
+    {
+      "name": "starred_open_original",
+      "value": "Open Original"
+    },
+    {
+      "name": "starred_original_unavailable",
+      "value": "The original message is unavailable."
+    },
+    {
+      "name": "starred_original_check_failed",
+      "value": "Couldn't check the original message. Try again."
+    },
+    {
+      "name": "starred_omitted_chars",
+      "value": "{count} additional characters"
+    },
+    {
+      "name": "export_chat",
+      "value": "Export Chat"
+    },
+    {
+      "name": "export_include_timestamps",
+      "value": "Include Timestamps"
+    },
+    {
+      "name": "export_include_work_steps",
+      "value": "Include Work Steps"
+    },
+    {
+      "name": "export_preview_count",
+      "value": "{count} messages"
+    },
+    {
+      "name": "export_truncated_badge",
+      "value": "{count} truncated"
+    },
+    {
+      "name": "export_truncated_notice",
+      "value": "{omitted} characters truncated"
+    },
+    {
+      "name": "export_copy_markdown",
+      "value": "Copy Markdown"
+    },
+    {
+      "name": "export_save_share",
+      "value": "Save / Share"
+    },
+    {
+      "name": "export_copied_toast",
+      "value": "Markdown copied"
+    },
+    {
+      "name": "archived_chats",
+      "value": "Archived"
+    },
+    {
+      "name": "unarchive",
+      "value": "Unarchive"
+    },
+    {
+      "name": "unarchived_toast",
+      "value": "Unarchived"
+    },
+    {
+      "name": "archived_search_placeholder",
+      "value": "Search Archived Chats"
+    },
+    {
+      "name": "archived_empty_title",
+      "value": "No Archived Chats"
+    },
+    {
+      "name": "archived_empty_message",
+      "value": "Archived conversations will appear here. Tap one to open or unarchive it."
+    },
+    {
+      "name": "archived_search_empty",
+      "value": "No matching archived chats"
+    },
+    {
+      "name": "fork_continue_new_chat",
+      "value": "Continue in New Chat"
+    },
+    {
+      "name": "fork_chat_done_toast",
+      "value": "Opened branch in new chat"
+    },
+    {
+      "name": "undo",
+      "value": "Undo"
+    },
+    {
+      "name": "assistant",
+      "value": "Assistant"
+    },
+    {
+      "name": "token_usage_title",
+      "value": "Token Usage"
+    },
+    {
+      "name": "token_usage_quick_subtitle",
+      "value": "12-week heatmap & projects"
+    },
+    {
+      "name": "token_usage_unsupported",
+      "value": "Update hub to view token usage"
+    },
+    {
+      "name": "token_usage_total_12w",
+      "value": "Last 12 weeks"
+    },
+    {
+      "name": "token_usage_hit_rate",
+      "value": "Cache Hit"
+    },
+    {
+      "name": "token_usage_input",
+      "value": "Input"
+    },
+    {
+      "name": "token_usage_output",
+      "value": "Output"
+    },
+    {
+      "name": "token_usage_cache_read",
+      "value": "Cache Read"
+    },
+    {
+      "name": "token_usage_cache_write",
+      "value": "Cache Write"
+    },
+    {
+      "name": "token_usage_heatmap_title",
+      "value": "Token Activity"
+    },
+    {
+      "name": "token_usage_heatmap_tap_hint",
+      "value": "Tap a day"
+    },
+    {
+      "name": "token_usage_less",
+      "value": "Less"
+    },
+    {
+      "name": "token_usage_more",
+      "value": "More"
+    },
+    {
+      "name": "token_usage_by_project",
+      "value": "Usage by Project"
+    },
+    {
+      "name": "token_usage_no_projects",
+      "value": "No project usage in this range"
+    },
+    {
+      "name": "token_usage_range_today",
+      "value": "Today"
+    },
+    {
+      "name": "token_usage_range_3d",
+      "value": "3d"
+    },
+    {
+      "name": "token_usage_range_7d",
+      "value": "7d"
+    },
+    {
+      "name": "token_usage_by_machine",
+      "value": "By Computer"
+    },
+    {
+      "name": "token_usage_by_model",
+      "value": "By Model"
+    },
+    {
+      "name": "token_usage_share",
+      "value": "Share"
+    },
+    {
+      "name": "token_usage_project_home",
+      "value": "Home Folder"
+    },
+    {
+      "name": "token_usage_project_temp",
+      "value": "Temporary Folders"
+    },
+    {
+      "name": "token_usage_project_assistant",
+      "value": "Assistant"
+    },
+    {
+      "name": "token_usage_project_unknown",
+      "value": "Unknown Folder"
+    },
+    {
+      "name": "todo_wait_heading",
+      "value": "Waiting"
+    },
+    {
+      "name": "todo_wait_from_step",
+      "value": "From step: {step}"
+    },
+    {
+      "name": "todo_wait_waiting_on",
+      "value": "Waiting on"
+    },
+    {
+      "name": "todo_wait_blocked_by",
+      "value": "Blocked by"
+    },
+    {
+      "name": "todo_wait_details",
+      "value": "Details"
+    },
+    {
+      "name": "todo_wait_wakes_when",
+      "value": "Wakes when"
+    },
+    {
+      "name": "todo_wait_scheduled_wake",
+      "value": "Scheduled wake"
+    },
+    {
+      "name": "todo_wait_check_in_due_label",
+      "value": "Check-in due"
+    },
+    {
+      "name": "todo_wait_until_label",
+      "value": "Until"
+    },
+    {
+      "name": "todo_wait_sent_via",
+      "value": "Sent via {channel}"
+    },
+    {
+      "name": "todo_wait_open_message",
+      "value": "Open Message"
+    },
+    {
+      "name": "todo_wait_view_pr",
+      "value": "View PR"
+    },
+    {
+      "name": "todo_wait_open_source",
+      "value": "Open Source"
+    },
+    {
+      "name": "todo_wait_waiting_since",
+      "value": "Waiting since {time}"
+    },
+    {
+      "name": "todo_wait_kind_person_reply",
+      "value": "Waiting for reply"
+    },
+    {
+      "name": "todo_wait_kind_merge_review",
+      "value": "Waiting for review"
+    },
+    {
+      "name": "todo_wait_kind_pr_merge",
+      "value": "Waiting to merge"
+    },
+    {
+      "name": "todo_wait_kind_external_event",
+      "value": "Waiting on external event"
+    },
+    {
+      "name": "todo_wait_kind_date",
+      "value": "Waiting until date"
+    },
+    {
+      "name": "todo_wait_kind_todo_handoff",
+      "value": "Waiting on another to-do"
+    },
+    {
+      "name": "todo_wait_kind_agent",
+      "value": "Waiting on another Agent"
+    },
+    {
+      "name": "todo_wait_kind_usage_limit",
+      "value": "Usage limit reached"
+    },
+    {
+      "name": "todo_wait_kind_computer_offline",
+      "value": "Computer offline"
+    },
+    {
+      "name": "todo_wait_kind_scheduled_report",
+      "value": "Scheduled report"
+    },
+    {
+      "name": "todo_wait_kind_parked",
+      "value": "Parked"
+    },
+    {
+      "name": "todo_wait_blocker_review_required",
+      "value": "Needs review"
+    },
+    {
+      "name": "todo_wait_blocker_changes_requested",
+      "value": "Changes requested"
+    },
+    {
+      "name": "todo_wait_blocker_checks_pending",
+      "value": "Checks running"
+    },
+    {
+      "name": "todo_wait_blocker_checks_failing",
+      "value": "Checks failing"
+    },
+    {
+      "name": "todo_wait_blocker_conflicts",
+      "value": "Merge conflicts"
+    },
+    {
+      "name": "todo_wait_usage_limit_target",
+      "value": "{target} reached its usage limit"
+    },
+    {
+      "name": "todo_wait_waiting_to_merge_target",
+      "value": "Waiting to merge {target}"
+    },
+    {
+      "name": "todo_wait_waiting_on_target",
+      "value": "Waiting on {target}"
+    },
+    {
+      "name": "todo_wait_back_at",
+      "value": "Back {time}"
+    },
+    {
+      "name": "todo_wait_wakes_at",
+      "value": "Wakes {time}"
+    },
+    {
+      "name": "todo_wait_check_in_due",
+      "value": "Check-in due ({time})"
+    },
+    {
+      "name": "todo_wait_until_at",
+      "value": "Until {time}"
+    },
+    {
+      "name": "todo_wait_since_at",
+      "value": "Since {time}"
+    },
+    {
+      "name": "personal_agents",
+      "value": "Personal Agents"
+    },
+    {
+      "name": "personal_agents_hide",
+      "value": "Hide"
+    },
+    {
+      "name": "personal_agents_restore",
+      "value": "Restore"
+    },
+    {
+      "name": "personal_agents_removed",
+      "value": "Removed ({count})"
+    },
+    {
+      "name": "knowledge_minutes_debates",
+      "value": "Disagreements"
+    },
+    {
+      "name": "knowledge_minutes_debate_open",
+      "value": "Open"
+    },
+    {
+      "name": "knowledge_minutes_debate_settled",
+      "value": "Settled"
+    },
+    {
+      "name": "knowledge_minutes_debate_outcome",
+      "value": "Outcome"
+    },
+    {
+      "name": "kb_chat_in_inbox",
+      "value": "In Inbox"
+    },
+    {
+      "name": "kb_chat_inbox_done_count",
+      "value": "{count} done"
+    },
+    {
+      "name": "kb_chat_knowledge_page",
+      "value": "Knowledge Page"
+    },
+    {
+      "name": "todo_stage_plan",
+      "value": "Plan"
+    },
+    {
+      "name": "todo_stage_develop",
+      "value": "Develop"
+    },
+    {
+      "name": "todo_stage_review",
+      "value": "Review"
+    },
+    {
+      "name": "todo_stage_merge",
+      "value": "Merge"
+    },
+    {
+      "name": "todo_stage_deploy",
+      "value": "Deploy"
+    },
+    {
+      "name": "todo_stage_verify",
+      "value": "Verified"
+    },
+    {
+      "name": "todo_stage_done",
+      "value": "Done"
+    },
+    {
+      "name": "todo_stage_state_done",
+      "value": "done"
+    },
+    {
+      "name": "todo_stage_state_current",
+      "value": "current step"
+    },
+    {
+      "name": "todo_stage_state_ahead",
+      "value": "still ahead"
+    },
+    {
+      "name": "todo_stage_step_of",
+      "value": "step {current} of {total}"
+    },
+    {
+      "name": "todo_stage_step_summary",
+      "value": "Step {current} of {total} · {stage}"
+    },
+    {
+      "name": "todo_decisions_title",
+      "value": "Decisions"
+    },
+    {
+      "name": "todo_decisions_loading",
+      "value": "Loading decisions…"
+    },
+    {
+      "name": "todo_decisions_load_failed",
+      "value": "Couldn't load decisions."
+    },
+    {
+      "name": "todo_decisions_empty",
+      "value": "Decisions made on this to-do go here. Your answers to an agent's questions and finished task outcomes are recorded automatically; you can also add your own."
+    },
+    {
+      "name": "todo_decisions_show_all",
+      "value": "Show All {count} Decisions"
+    },
+    {
+      "name": "todo_decisions_show_first",
+      "value": "Show First {count}"
+    },
+    {
+      "name": "todo_decisions_full_history",
+      "value": "Full History ({count} Revised)"
+    },
+    {
+      "name": "todo_decisions_current_only",
+      "value": "Current Only"
+    },
+    {
+      "name": "todo_decision_chose",
+      "value": "Chose:"
+    },
+    {
+      "name": "todo_decision_reason_prefix",
+      "value": "Reason:"
+    },
+    {
+      "name": "todo_decision_revise",
+      "value": "Revise"
+    },
+    {
+      "name": "todo_decision_revised_badge",
+      "value": "Revised"
+    },
+    {
+      "name": "todo_decision_revises",
+      "value": "Revises “{choice}”"
+    },
+    {
+      "name": "todo_decision_revises_item",
+      "value": "Revises “{question} → {choice}”"
+    },
+    {
+      "name": "todo_decision_undo_revision",
+      "value": "Undo Revision"
+    },
+    {
+      "name": "todo_decision_record_title",
+      "value": "Record a Decision"
+    },
+    {
+      "name": "todo_decision_save",
+      "value": "Record"
+    },
+    {
+      "name": "todo_decision_revise_note",
+      "value": "The earlier choice “{choice}” stays struck through in history; only the new choice goes to agents."
+    },
+    {
+      "name": "todo_decision_question_label",
+      "value": "Question"
+    },
+    {
+      "name": "todo_decision_question_placeholder",
+      "value": "What needs deciding…"
+    },
+    {
+      "name": "todo_decision_choice_label",
+      "value": "Choice"
+    },
+    {
+      "name": "todo_decision_choice_placeholder",
+      "value": "What was decided…"
+    },
+    {
+      "name": "todo_decision_reason_label",
+      "value": "Reason (Optional)"
+    },
+    {
+      "name": "todo_decision_reason_placeholder",
+      "value": "Why, and what was ruled out…"
+    },
+    {
+      "name": "todo_decision_source_manual",
+      "value": "Added by hand"
+    },
+    {
+      "name": "todo_decision_source_outcome",
+      "value": "Recorded when the agent finished"
+    },
+    {
+      "name": "todo_decision_source_agent",
+      "value": "Noted by an agent while working"
+    },
+    {
+      "name": "todo_decision_source_thread",
+      "value": "Said in the Lark topic"
+    },
+    {
+      "name": "todo_decision_source_card",
+      "value": "Answered in an agent's question"
+    },
+    {
+      "name": "todo_decision_recorded_toast",
+      "value": "Decision recorded"
+    },
+    {
+      "name": "todo_decision_revised_toast",
+      "value": "Decision revised"
+    },
+    {
+      "name": "todo_decision_marked_revised",
+      "value": "Marked as revised"
+    },
+    {
+      "name": "todo_decision_revision_undone",
+      "value": "Revision undone"
+    },
+    {
+      "name": "expand_all",
+      "value": "Expand All"
+    },
+    {
+      "name": "collapse_all",
+      "value": "Collapse All"
+    },
+    {
+      "name": "saving",
+      "value": "Saving…"
+    },
+    {
+      "name": "token_usage_recent_hourly",
+      "value": "Recent Hourly Activity"
+    },
+    {
+      "name": "token_usage_by_machine_7d",
+      "value": "By Computer · Last 7 Days"
+    },
+    {
+      "name": "token_usage_by_agent_7d",
+      "value": "By Agent · Last 7 Days"
+    },
+    {
+      "name": "token_usage_by_agent",
+      "value": "By Agent"
+    },
+    {
+      "name": "token_usage_by_launcher",
+      "value": "By Launcher"
+    },
+    {
+      "name": "token_usage_by_place",
+      "value": "Folders and Worktrees"
+    },
+    {
+      "name": "token_usage_requests",
+      "value": "Requests"
+    },
+    {
+      "name": "token_usage_worktree",
+      "value": "Linked Worktree"
+    },
+    {
+      "name": "token_usage_removed_computer",
+      "value": "Removed Computer"
+    },
+    {
+      "name": "token_usage_not_split",
+      "value": "Not Split (Before the Update)"
+    },
+    {
+      "name": "token_usage_launcher_terminal",
+      "value": "Opened in a Terminal"
+    },
+    {
+      "name": "token_usage_project_by_hour",
+      "value": "By Hour"
+    },
+    {
+      "name": "token_usage_project_each_day",
+      "value": "Each Day"
+    },
+    {
+      "name": "next_suggestions_title",
+      "value": "Suggest the Next Message"
+    },
+    {
+      "name": "next_suggestions_note",
+      "value": "After a reply in an open chat, suggest what you might send next above the empty message box."
+    },
+    {
+      "name": "suggestion_use",
+      "value": "Use"
+    },
+    {
+      "name": "suggestion_fill_in",
+      "value": "Fill In"
+    },
+    {
+      "name": "suggestion_send_now",
+      "value": "Send Now"
+    },
+    {
+      "name": "suggestion_hint_safe",
+      "value": "Tap to fill input. Touch and hold to send right away."
+    },
+    {
+      "name": "suggestion_hint_risky",
+      "value": "Tap to fill input for review."
+    },
+    {
+      "name": "rule_suggestion_always",
+      "value": "Always"
+    },
+    {
+      "name": "rule_suggestion_not_now",
+      "value": "Not Now"
+    },
+    {
+      "name": "rule_suggestion_creates_task_trust",
+      "value": "Always adds this kind of task to Auto-Start Tasks so it starts without asking first."
+    },
+    {
+      "name": "rule_suggestion_creates_task_trust_scoped",
+      "value": "Always adds a rule to Auto-Start Tasks: tasks changing files in {directory} on {machine} start without asking first."
+    },
+    {
+      "name": "rule_suggestion_creates_standing",
+      "value": "Always creates a standing authorization for “{action}” in {directory} on {machine}."
+    },
+    {
+      "name": "rule_suggestion_creates_setting",
+      "value": "Always puts this suggestion away for 30 days without storing a rule."
+    },
+    {
+      "name": "rule_suggestion_made_task_trust",
+      "value": "Rule added: these tasks start without asking first."
+    },
+    {
+      "name": "rule_suggestion_made_standing",
+      "value": "Standing authorization added."
+    },
+    {
+      "name": "rule_suggestion_made_setting",
+      "value": "This suggestion stays quiet for {setting}."
+    },
+    {
+      "name": "rule_suggestion_made_none",
+      "value": "Done. Nothing was stored."
+    },
+    {
+      "name": "rule_suggestion_conflict",
+      "value": "Standing authorizations changed meanwhile. Try again."
+    },
+    {
+      "name": "rule_suggestion_failed",
+      "value": "Couldn't save your answer."
+    },
+    {
+      "name": "recording_bookmark",
+      "value": "Bookmark"
+    },
+    {
+      "name": "recording_transcript_review",
+      "value": "Review Transcript"
+    },
+    {
+      "name": "recording_transcript_find",
+      "value": "Find in transcript…"
+    },
+    {
+      "name": "recording_transcript_previous",
+      "value": "Previous match"
+    },
+    {
+      "name": "recording_transcript_next",
+      "value": "Next match"
+    },
+    {
+      "name": "recording_transcript_bookmarks",
+      "value": "Bookmarks"
+    },
+    {
+      "name": "recording_transcript_copy",
+      "value": "Copy Text"
+    },
+    {
+      "name": "recording_transcript_copied",
+      "value": "Transcript copied"
+    },
+    {
+      "name": "recording_transcript_no_matches",
+      "value": "No matches"
+    },
+    {
+      "name": "recording_transcript_matches",
+      "value": "matches"
+    },
+    {
+      "name": "recording_transcript_expired",
+      "value": "Speech has expired and only retained bookmarks remain."
+    },
+    {
+      "name": "recording_transcript_empty",
+      "value": "No retained transcript passages."
+    },
+    {
+      "name": "standing_auth_title",
+      "value": "Standing Authorizations"
+    },
+    {
+      "name": "standing_tab_standing",
+      "value": "Standing"
+    },
+    {
+      "name": "standing_tab_session",
+      "value": "Session Grants"
+    },
+    {
+      "name": "standing_action_merge",
+      "value": "Merge changes"
+    },
+    {
+      "name": "standing_action_push",
+      "value": "Push changes"
+    },
+    {
+      "name": "standing_action_deploy_test",
+      "value": "Deploy to a test environment"
+    },
+    {
+      "name": "standing_action_deploy_production",
+      "value": "Deploy to production"
+    },
+    {
+      "name": "standing_action_send",
+      "value": "Send messages"
+    },
+    {
+      "name": "standing_action_delete",
+      "value": "Delete data"
+    },
+    {
+      "name": "standing_action_spend",
+      "value": "Spend money"
+    },
+    {
+      "name": "standing_no_actions",
+      "value": "No actions recorded"
+    },
+    {
+      "name": "standing_condition_ci_green",
+      "value": "All checks pass"
+    },
+    {
+      "name": "standing_condition_no_conflicts",
+      "value": "No merge conflicts"
+    },
+    {
+      "name": "standing_only_when",
+      "value": "Only when"
+    },
+    {
+      "name": "standing_place_format",
+      "value": "In {folder} on {machine}"
+    },
+    {
+      "name": "standing_reversible_yes",
+      "value": "Reversible"
+    },
+    {
+      "name": "standing_reversible_no",
+      "value": "Irreversible"
+    },
+    {
+      "name": "standing_since",
+      "value": "Since {date}"
+    },
+    {
+      "name": "standing_source_chat",
+      "value": "A chat"
+    },
+    {
+      "name": "standing_source_suggested_rule",
+      "value": "Suggested rule: the same answer {count} times in 14 days, confirmed with Always."
+    },
+    {
+      "name": "standing_show_details",
+      "value": "Details"
+    },
+    {
+      "name": "standing_hide_details",
+      "value": "Hide Details"
+    },
+    {
+      "name": "standing_revoke",
+      "value": "Revoke"
+    },
+    {
+      "name": "standing_revoke_action",
+      "value": "Revoke Authorization"
+    },
+    {
+      "name": "standing_revoke_confirm_title",
+      "value": "Revoke this authorization?"
+    },
+    {
+      "name": "standing_revoke_confirm_message",
+      "value": "Persona will ask you again before it does this in {folder} on {machine}: {actions}. Work already done isn't affected. To grant it again, ask Persona in the main chat."
+    },
+    {
+      "name": "standing_revoked_toast",
+      "value": "Authorization revoked"
+    },
+    {
+      "name": "standing_revoke_failed_toast",
+      "value": "Couldn't revoke this authorization. It's still in effect. Check the connection and try again."
+    },
+    {
+      "name": "standing_empty_title",
+      "value": "None yet"
+    },
+    {
+      "name": "standing_empty_message",
+      "value": "Persona asks you before it merges, pushes, deploys, sends messages, deletes data or spends money. When you tell it in a chat to always go ahead somewhere, that go-ahead is listed here."
+    },
+    {
+      "name": "standing_forbidden_title",
+      "value": "Needs full access"
+    },
+    {
+      "name": "standing_forbidden_message",
+      "value": "Only a device with full access can see and revoke standing authorizations."
+    },
+    {
+      "name": "standing_failed_title",
+      "value": "Couldn't load standing authorizations"
+    },
+    {
+      "name": "standing_footer_note",
+      "value": "Persona does these without asking you first, until you revoke them."
+    },
+    {
+      "name": "standing_select_conversation",
+      "value": "Conversation"
+    },
+    {
+      "name": "phone_search_alias_standing_authorizations",
+      "value": "standing authorizations always allow grants permissions revoke"
+    },
+    {
+      "name": "always_grants_heading",
+      "value": "Always allowed in this conversation"
+    },
+    {
+      "name": "always_grants_empty",
+      "value": "No saved permissions."
+    },
+    {
+      "name": "always_grants_restart_needed",
+      "value": "The saved permission was revoked, but the running conversation could not be reset. Restart this conversation before relying on the revocation."
+    },
+    {
+      "name": "always_grants_scope_footer",
+      "value": "These saved permissions apply only to this conversation. Records store the tool name, but not detailed directory or command scope."
+    },
+    {
+      "name": "always_grant_unnamed",
+      "value": "Unnamed permission"
+    },
+    {
+      "name": "always_grant_revoke_title",
+      "value": "Revoke this permission?"
+    },
+    {
+      "name": "always_grant_revoke_message",
+      "value": "Revoking stops the current response to clear its permissions. Send another message to continue."
+    },
+    {
+      "name": "always_grant_revoked_toast",
+      "value": "Permission revoked"
+    },
+    {
+      "name": "assistant_full_search_title",
+      "value": "Search Chats & Agents"
+    },
+    {
+      "name": "assistant_search_scope_chats",
+      "value": "Chats"
+    },
+    {
+      "name": "archived_agents_empty_title",
+      "value": "No archived agents"
+    },
+    {
+      "name": "archived_agents_empty_message",
+      "value": "Archived agent sessions appear here until you restore them."
+    },
+    {
+      "name": "agent_auto_rename",
+      "value": "Auto Rename"
+    },
+    {
+      "name": "agent_renaming",
+      "value": "Renaming…"
+    },
+    {
+      "name": "assistant_session",
+      "value": "Assistant chats cannot be auto-renamed here"
     }
   ]
 }

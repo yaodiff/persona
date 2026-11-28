@@ -391,11 +391,20 @@ func todoHasOpenPR(t Todo, delivery []string) bool {
 // todoStageGateNode projects a live Todo into a pure stagegate.Node for todos_v2 dependency evaluation.
 // Cancelled and failed-start to-dos never report Done, Accepted, Stage, or Contracts so evaluation always fails closed.
 func todoStageGateNode(t Todo, requireAccepted bool, delivery []string) stagegate.Node {
+	return todoStageGateNodeWithRule(t, requireAccepted, delivery, nil)
+}
+
+func todoStageGateNodeWithRule(t Todo, requireAccepted bool, delivery []string, overrideRule *todoStageUnlockRule) stagegate.Node {
 	afterIDs := cleanIDs(t.After)
 	effectiveRequireAccepted := requireAccepted || t.RequireAcceptedAfter
 	var edges []stagegate.Edge
 	if len(afterIDs) > 0 {
-		if rule, ok := parseTodoStageUnlockRule(t); ok {
+		rule, hasRule := parseTodoStageUnlockRule(t)
+		if !hasRule && overrideRule != nil && (overrideRule.Stage != "" || len(overrideRule.Contracts) > 0) {
+			rule = *overrideRule
+			hasRule = true
+		}
+		if hasRule {
 			sortedIDs := slices.Clone(afterIDs)
 			slices.Sort(sortedIDs)
 			edges = make([]stagegate.Edge, 0, len(sortedIDs))
@@ -477,10 +486,11 @@ func todoStageGateSatisfiedReason(dep Todo, delivery []string, node stagegate.No
 	return "stage_ready"
 }
 
-// checkTodoAfterReadyStageGate evaluates candidate's after prerequisites using the pure stagegate package when
+// evaluateTodoAfterStageGate evaluates candidate's after prerequisites using the pure stagegate package when
 // todos_v2=true. It captures the transitive after subgraph for cycle detection and fails closed on missing
 // prerequisites, cancelled prerequisites, dependency cycles, or transient repository-store read errors.
-func (s *Service) checkTodoAfterReadyStageGate(ctx context.Context, candidate Todo, afterIDs []string) ([]prompts.SupervisePrerequisite, bool, error) {
+func (s *Service) evaluateTodoAfterStageGate(ctx context.Context, candidate Todo, rule *todoStageUnlockRule) (todoReadiness, error) {
+	afterIDs := candidate.After
 	reachable := map[string]Todo{candidate.ID: candidate}
 	reqAcceptedByID := map[string]bool{}
 
@@ -516,7 +526,7 @@ func (s *Service) checkTodoAfterReadyStageGate(ctx context.Context, candidate To
 		}
 		delivery, deliveryErr := s.todoDeliveryPRs(ctx, dep)
 		if deliveryErr != nil && dep.DoneAt == nil && !dep.Cancelled() && dep.StartError == "" {
-			return nil, false, deliveryErr
+			return todoReadiness{}, deliveryErr
 		}
 		deliveryByID[id] = delivery
 	}
@@ -530,28 +540,38 @@ func (s *Service) checkTodoAfterReadyStageGate(ctx context.Context, candidate To
 	nodes := make([]stagegate.Node, 0, len(ids))
 	nodeByID := make(map[string]stagegate.Node, len(ids))
 	for _, id := range ids {
-		n := todoStageGateNode(reachable[id], reqAcceptedByID[id], deliveryByID[id])
+		var ruleOverride *todoStageUnlockRule
+		if id == candidate.ID {
+			ruleOverride = rule
+		}
+		n := todoStageGateNodeWithRule(reachable[id], reqAcceptedByID[id], deliveryByID[id], ruleOverride)
 		nodes = append(nodes, n)
 		nodeByID[id] = n
 	}
 
 	ev := stagegate.Evaluate(nodes, candidate.ID, true)
-	if ev.Status != stagegate.StatusReady || !ev.Ready {
-		return nil, false, nil
+	if ev.Status == stagegate.StatusCycleDetected {
+		return todoReadiness{after: afterIDs}, nil
 	}
 
-	out := make([]prompts.SupervisePrerequisite, 0, len(afterIDs))
+	var result todoReadiness
+	for _, dep := range ev.Unsatisfied {
+		result.after = append(result.after, dep.PrereqID)
+	}
 	for _, id := range afterIDs {
+		if slices.Contains(result.after, id) {
+			continue
+		}
 		dep := reachable[id]
 		delivery := deliveryByID[id]
-		out = append(out, prompts.SupervisePrerequisite{
+		result.prerequisites = append(result.prerequisites, prompts.SupervisePrerequisite{
 			ID:        dep.ID,
 			Title:     dep.Title,
 			Reason:    todoStageGateSatisfiedReason(dep, delivery, nodeByID[id]),
 			MergedPRs: todoObservedMergedPRs(dep, delivery),
 		})
 	}
-	return out, true, nil
+	return result, nil
 }
 
 // checkTodoAfterReady checks whether candidate is an open, unstarted dependent to-do whose after prerequisites are
@@ -561,47 +581,18 @@ func (s *Service) checkTodoAfterReady(ctx context.Context, candidate Todo) ([]pr
 		candidate.isConcern() || isAskTodo(candidate.ID) {
 		return nil, false, nil
 	}
-	afterIDs := cleanIDs(candidate.After)
-	if len(afterIDs) == 0 {
+	if todoHasActiveAgent(candidate) || len(cleanIDs(candidate.After)) == 0 {
 		return nil, false, nil
 	}
-	if todoHasActiveAgent(candidate) || s.requestStartPending(ctx, candidate) || s.workspaceQueuePending(ctx, candidate) {
-		return nil, false, nil
+	task, err := s.readinessPlan(ctx, candidate)
+	if err != nil || task.Queue != nil && (task.RequestGate != "" || task.Queue.Workspace != nil) {
+		return nil, false, err
 	}
-
-	if s.settings(ctx).todosV2On() {
-		return s.checkTodoAfterReadyStageGate(ctx, candidate, afterIDs)
+	result, err := s.readTodoReadiness(ctx, candidate, task, false)
+	if err != nil || !result.ready() {
+		return nil, false, err
 	}
-
-	s.todos.mu.RLock()
-	requireAccepted := candidate.PartOf != "" && s.hasRequestGateLocked(candidate.PartOf)
-	deps := make([]Todo, 0, len(afterIDs))
-	missing := false
-	for _, id := range afterIDs {
-		dep, ok := s.todos.todos[id]
-		if !ok {
-			missing = true
-			break
-		}
-		deps = append(deps, copyTodoLocked(dep))
-	}
-	s.todos.mu.RUnlock()
-	if missing || len(deps) == 0 {
-		return nil, false, nil
-	}
-
-	out := make([]prompts.SupervisePrerequisite, 0, len(deps))
-	for _, dep := range deps {
-		p, ok, err := s.prerequisiteSatisfied(ctx, dep, requireAccepted)
-		if err != nil {
-			return nil, false, err
-		}
-		if !ok {
-			return nil, false, nil
-		}
-		out = append(out, p)
-	}
-	return out, true, nil
+	return result.prerequisites, true, nil
 }
 
 // todoAfterReadyState is checkTodoAfterReady when callers only need a boolean readiness verdict.
@@ -873,7 +864,8 @@ func (s *Service) pruneTodoReadyWakes(ctx context.Context) {
 // maybeEmitTodoReady evaluates candidate and, if ready and not already woken for its current after set, queues a
 // todo_ready supervision signal for its owning supervisor conversation.
 func (s *Service) maybeEmitTodoReady(ctx context.Context, candidate Todo) {
-	if _, ready := s.todoAfterReadyState(ctx, candidate); !ready {
+	prereqs, ready := s.todoAfterReadyState(ctx, candidate)
+	if !ready {
 		return
 	}
 	key := todoReadyKey(candidate)
@@ -898,11 +890,20 @@ func (s *Service) maybeEmitTodoReady(ctx context.Context, candidate Todo) {
 		todoReadyKey(current) != key {
 		return
 	}
+	var extraPRs []string
+	for _, p := range prereqs {
+		extraPRs = append(extraPRs, p.MergedPRs...)
+	}
+	detail := ""
+	if prURLs := s.collectUpstreamPRURLs(ctx, candidate.ID, current.After, nil, extraPRs); len(prURLs) > 0 {
+		detail = "upstream PRs: " + strings.Join(prURLs, ", ")
+	}
 	s.signal(superviseSignal{
-		Todo: candidate.ID,
-		Kind: sigTodoReady,
-		Key:  key,
-		To:   to,
+		Todo:   candidate.ID,
+		Kind:   sigTodoReady,
+		Key:    key,
+		To:     to,
+		Detail: detail,
 	})
 }
 

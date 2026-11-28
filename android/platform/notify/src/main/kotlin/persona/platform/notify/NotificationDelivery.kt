@@ -44,17 +44,23 @@ internal class NotificationDelivery(
     },
     /** Only notifications showing now, not the delivered/dismissed history used to suppress a second arrival. */
     private val showing: () -> Set<String> = notified,
+    private val retractOccurrence: ((String, String) -> Unit)? = null,
+    private val notifiedOccurrences: () -> Map<String, String?> = { emptyMap() },
 ) {
+    private fun retractCard(id: String, createdAt: String?) {
+        if (createdAt != null && retractOccurrence != null) retractOccurrence.invoke(id, createdAt) else retract(id)
+    }
+
     suspend fun accept(event: ServerEvent) {
         when (event) {
-            is InteractionResolvedEvent -> retract(event.id)
+            is InteractionResolvedEvent -> retractCard(event.id, event.createdAt)
             is InteractionEvent -> {
                 // A current snapshot is not a new arrival. Only redraw a notification this device already delivered,
                 // with the server's latest deadline and without notifying again for an unseen card.
-                if (!event.interaction.canClarify || event.interaction.id !in showing()) return
+                if (event.interaction.isDisplayMirror || !event.interaction.canClarify || event.interaction.id !in showing()) return
                 interactions.refresh()
                 val current = interactions.pending.value.firstOrNull { it.id == event.interaction.id } ?: return
-                if (NotificationPolicy.expired(current)) { retract(current.id); return }
+                if (NotificationPolicy.expired(current)) { retractCard(current.id, current.createdAt); return }
                 val session = current.sessionKey.takeIf { it.machineId.isNotBlank() && it.sessionId.isNotBlank() }
                 if (session == null || !suppressed(session)) postInteraction(current, false, null)
             }
@@ -74,7 +80,8 @@ internal class NotificationDelivery(
                     // is found by the event's own ids, and with no conversation of its own to be looking at, never held back.
                     val key = SessionKey(event.machineId, event.sessionId)
                     val ix = interactions.pending.value.firstOrNull { it.id == id && it.sessionKey == key } ?: return
-                    if (NotificationPolicy.expired(ix)) { retract(id); return }
+                    if (ix.isDisplayMirror) return
+                    if (NotificationPolicy.expired(ix)) { retractCard(id, ix.createdAt); return }
                     if (session == null || !suppressed(session)) postInteraction(ix, event.quiet, null)
                 } else if (session == null || !suppressed(session)) postNotify(event)
             }
@@ -93,23 +100,25 @@ internal class NotificationDelivery(
         sessions.refresh()
         interactions.refresh()
         val currentTime = now()
-        val pending = interactions.pending.value.map { ix ->
+        val pending = interactions.pending.value.filterNot { it.isDisplayMirror }.map { ix ->
             ix to checkNotNull(settings[GroupKeys.namespaceOf(ix.machineId)]) {
                 "Notification preferences are not ready for the request's hub group"
             }
         }
         val alreadyNotified = notified()
+        val occurrences = notifiedOccurrences()
         val pendingIds = pending.mapTo(HashSet()) { it.first.id }
-        // A request resolved while no service was alive leaves both its system notification and its de-dup record behind.
-        (alreadyNotified - pendingIds).forEach(retract)
+        // A resolved occurrence clears only its own alert and history, never a same-ID replacement's.
+        ((alreadyNotified + occurrences.keys) - pendingIds).forEach { retractCard(it, occurrences[it]) }
         pending.forEach { (ix, groupSettings) ->
             if (NotificationPolicy.expired(ix, currentTime)) {
-                retract(ix.id)
+                retractCard(ix.id, ix.createdAt)
                 return@forEach
             }
+            val delivered = if (ix.createdAt != null && occurrences.isNotEmpty()) occurrences[ix.id] == ix.createdAt else ix.id in alreadyNotified
             if (
                 !groupSettings.input ||
-                ix.id in alreadyNotified ||
+                delivered ||
                 (ix.manager ?: "assistant") in groupSettings.mutedManagers.orEmpty()
             ) return@forEach
             if (groupSettings.muteWhileDesktop == true && desktopOnline(ix.machineId) == true) return@forEach

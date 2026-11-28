@@ -4,13 +4,21 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-const viewport = vi.hoisted(() => ({ phone: false, integrationsV2: false, inboxSources: false }));
+const viewport = vi.hoisted(() => ({
+  phone: false, integrationsV2: false, inboxSources: false, selected: undefined as string | undefined,
+  otherModes: {} as Record<string, boolean | null>,
+}));
+const profileReads = vi.hoisted(() => vi.fn((manager: string) => ({
+  manager: viewport.otherModes[manager] === null ? "assistant" : manager,
+  integrations_v2: viewport.otherModes[manager] ?? viewport.integrationsV2,
+})));
 vi.hoisted(() => {
   // a phone matches the narrow queries; a wide screen the wide ones (the list beside an item, from 900 px)
   window.matchMedia = ((query: string) => ({ get matches() { return /min-width/.test(query) ? !viewport.phone : viewport.phone; }, media: query, onchange: null, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false })) as typeof window.matchMedia;
 });
 vi.mock("../lib/store", async (original) => ({
   ...(await original<typeof import("../lib/store")>()),
+  getState: () => ({ features: viewport.inboxSources ? ["inbox_sources"] : [] }),
   useStore: (select: (state: {
     features: string[];
     machines: unknown[];
@@ -19,7 +27,7 @@ vi.mock("../lib/store", async (original) => ({
     hubName: string;
     mesh: unknown[];
     loaded: boolean;
-    assistant: { integrations_v2: boolean };
+    assistant: { manager?: string; integrations_v2: boolean };
   }) => unknown) =>
     select({
       features: ["channels", "extension_manager", "connectors", ...(viewport.inboxSources ? ["inbox_sources", "inbox_sources_graph"] : [])],
@@ -29,7 +37,7 @@ vi.mock("../lib/store", async (original) => ({
       hubName: "",
       mesh: [],
       loaded: true,
-      assistant: { integrations_v2: viewport.integrationsV2 },
+      assistant: { manager: viewport.selected, integrations_v2: viewport.integrationsV2 },
     }),
 }));
 vi.mock("./settings/ShortcutSettings", () => ({ ShortcutSettings: () => <div data-page="shortcuts" /> }));
@@ -42,17 +50,37 @@ vi.mock("./settings/ModelConfiguration", () => ({
     </div>
   ),
 }));
-vi.mock("./settings/KnowledgeSelection", () => ({ KnowledgeSelection: () => <div data-page="knowledge-selection" /> }));
+vi.mock("./settings/KnowledgeSelection", () => ({
+  KnowledgeSelection: () => (
+    <div data-page="knowledge-selection">
+      <section data-settings-group="knowledge-items"><div /></section>
+    </div>
+  ),
+}));
 vi.mock("./settings/TranslationSettings", () => ({ TranslationSettings: () => <div data-page="translation" /> }));
-vi.mock("./settings/AssistantSettings", () => ({ AssistantSettings: () => <div data-page="persona" /> }));
+vi.mock("./settings/AssistantSettings", () => ({
+  AssistantSettings: () => (
+    <div data-page="persona">
+      <section data-settings-group="repositories"><div /></section>
+    </div>
+  ),
+}));
 vi.mock("./settings/SidebarPages", () => ({ SidebarPagesGroup: () => <div data-page="sidebar-pages" /> }));
 vi.mock("./settings/StartPage", () => ({ StartPageGroup: () => <div data-page="start-page" /> }));
 vi.mock("../lib/pwa", async (original) => ({ ...(await original<typeof import("../lib/pwa")>()), useInstall: () => "installed" }));
-vi.mock("../lib/api", async (original) => ({ ...(await original<typeof import("../lib/api")>()), api: () => Promise.resolve({ accounts: [] }) }));
+vi.mock("../lib/api", async (original) => ({
+  ...(await original<typeof import("../lib/api")>()),
+  api: (path: string, options?: RequestInit) => {
+    const manager = new Headers(options?.headers).get("X-Persona-Manager");
+    return Promise.resolve(path === "/assistant" && manager ? profileReads(manager) : { accounts: [] });
+  },
+}));
 vi.mock("./settings/AgentSettings", () => ({ AgentSettings: ({ agent }: { agent: string }) => <div data-page="agent" data-agent={agent} /> }));
 vi.mock("./settings/Extensions", () => ({
-  Extensions: ({ open, onOpen, headerBack }: { open: string | null; onOpen: (id: string | null) => void; headerBack?: boolean }) => (
-    <div data-page="extensions" data-open={open} data-header-back={headerBack ? "yes" : "no"}>
+  Extensions: ({ open, onOpen, headerBack, manager, prefill }: {
+    open: string | null; onOpen: (id: string | null) => void; headerBack?: boolean; manager?: string; prefill?: unknown;
+  }) => (
+    <div data-page="extensions" data-open={open} data-manager={manager} data-prefill={JSON.stringify(prefill)} data-header-back={headerBack ? "yes" : "no"}>
       <button type="button" data-item="open" onClick={() => onOpen("example")} />
       <button type="button" data-item="close" onClick={() => onOpen(null)} />
     </div>
@@ -66,9 +94,15 @@ vi.mock("./settings/HubConnector", () => ({
 }));
 vi.mock("./settings/SentSettings", () => ({ SentSettings: () => <div data-page="sent" /> }));
 vi.mock("./settings/Integrations", () => ({
-  Integrations: ({ open, onOpen }: { open: string | null; onOpen: (id: string | null) => void }) => (
-    <div data-page="integrations" data-open={open ?? ""}>
-      <button type="button" data-integrations-sources onClick={() => onOpen("-sources")} />
+  Integrations: ({ route, onOpen, parentView, onBack, onSettings }: IntegrationsProps) => (
+    <div data-page="integrations" data-open={new URL(integrationHref(route), location.origin).searchParams.get("integration") ?? ""}
+      data-manager={integrationManager(route.scope)} data-parent={parentView?.kind ?? ""} data-view={route.view.kind}>
+      <button type="button" data-related-connector onClick={() => onOpen({ ...route, view: { kind: "connector", id: "larkcli" } })} />
+      <button type="button" data-related-sources onClick={() => onOpen({ ...route, view: { kind: "source", state: "scoped" } })} />
+      <button type="button" data-back-parent onClick={onBack} />
+      <button type="button" data-integrations-sources onClick={() => onOpen({ ...route, view: { kind: "data-flow" } })} />
+      <button type="button" data-integrations-repos onClick={() => onSettings?.("settings/persona#repositories", integrationManager(route.scope))} />
+      <button type="button" data-integrations-kb onClick={() => onSettings?.("settings/knowledge#knowledge-items", integrationManager(route.scope))} />
     </div>
   ),
 }));
@@ -80,6 +114,10 @@ import { enabledNavItems, registerModule, resetModulesForTest } from "../core/mo
 import { forgetModuleSwitches, MODULE_SWITCH_KEY } from "../core/module-switch";
 import { initI18n, t } from "../i18n";
 import { Settings } from "./Settings";
+import { chooseManager, chosenManager, resetManagerChoice } from "../lib/manager-choice";
+import { navigate } from "../lib/router";
+import type { IntegrationsProps } from "./settings/Integrations";
+import { integrationHref, integrationManager } from "./settings/integrations-route";
 import { loadPages } from "../lib/lazy-page";
 import { FROM_LIST, openedFromSub } from "./settings/nav";
 
@@ -93,7 +131,11 @@ beforeEach(() => {
   viewport.phone = false;
   viewport.integrationsV2 = false;
   viewport.inboxSources = false;
+  viewport.selected = undefined;
+  viewport.otherModes = {};
+  profileReads.mockClear();
   localStorage.clear();
+  resetManagerChoice();
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
@@ -190,6 +232,33 @@ describe("Settings category navigation", () => {
     }
   });
 
+  it("controls Needs you auto-open with an off-by-default browser setting (#17061)", async () => {
+    await initI18n("en");
+    try {
+      await mount("/settings?tab=general");
+      const row = () => host.querySelector<HTMLElement>('[data-settings-row="needs-you-auto-open"]');
+      const toggle = () => row()?.querySelector<HTMLButtonElement>('[role="switch"]');
+      expect(row(), 'Auto-open "Needs you" on entering main chat').not.toBeNull();
+      expect(row()?.textContent).toContain('Auto-open "Needs you" on entering main chat');
+      expect(toggle()?.getAttribute("aria-checked")).toBe("false");
+      expect(localStorage.getItem("persona.needsYouAutoOpen")).toBeNull();
+
+      await act(async () => toggle()!.click());
+      expect(toggle()?.getAttribute("aria-checked")).toBe("true");
+      expect(localStorage.getItem("persona.needsYouAutoOpen")).toBe("1");
+
+      await act(async () => root.render(null));
+      await act(async () => root.render(<Settings onToggleSidebar={() => {}} />));
+      expect(toggle()?.getAttribute("aria-checked")).toBe("true");
+
+      await act(async () => toggle()!.click());
+      expect(toggle()?.getAttribute("aria-checked")).toBe("false");
+      expect(localStorage.getItem("persona.needsYouAutoOpen")).toBeNull();
+    } finally {
+      await initI18n("zh-Hans");
+    }
+  });
+
   // audit item 17: General's hints were cut at one line ("切换后页面会重新载…"), at every width
   it.each([false, true])("lets General's hints wrap rather than cutting them (phone: %s)", async (phone) => {
     viewport.phone = phone;
@@ -198,6 +267,7 @@ describe("Settings category navigation", () => {
       ["language", t("language.hint")],
       ["text-size", t("ui-look.text_size_hint")],
       ["reply-motion", t("settings.reply_motion_hint")],
+      ["needs-you-auto-open", t("settings.needs_you_auto_open_hint")],
       ["agent-details", t("context.details_hint")],
       ["install-app", t("settings.install_installed")],
     ];
@@ -206,6 +276,125 @@ describe("Settings category navigation", () => {
       expect(hint, anchor).toBeTruthy();
       expect(hint!.classList.contains("truncate"), anchor).toBe(false);
     }
+  });
+
+  const managementItems = { devices: "Paired test browser", managers: "Test assistant" } as const;
+  const mockManagementPages = async () => {
+    const api = await import("../lib/api");
+    const fallback = api.api;
+    vi.spyOn(api, "api").mockImplementation((path, options) => {
+      if (path === "/auth/tokens") return Promise.resolve({ tokens: [{ id: "web-test", kind: "web", name: managementItems.devices }], current: "web-test" });
+      if (path === "/managers") return Promise.resolve({ managers: [{ id: "assistant", name: managementItems.managers, online: true }], default: "assistant" });
+      return fallback(path, options);
+    });
+  };
+  // Use the visible row labels: the phone row also contains a hint, and other categories mention assistants.
+  const entries = (scope: Element, label: string) => [...scope.querySelectorAll("button")].filter(button =>
+    [...button.querySelectorAll("span, div")].some(el => el.childElementCount === 0 && el.textContent === label));
+
+  it.each([false, true])("keeps Devices and Assistants under Advanced and goes back one level (phone: %s)", async phone => {
+    viewport.phone = phone;
+    await mockManagementPages();
+    await mount("/settings");
+    for (const key of ["devices", "managers"] as const) {
+      expect(entries(nav(), t(`settings-nav.tab_${key}`))).toHaveLength(0);
+    }
+    await act(async () => category(t("settings-nav.tab_advanced")).click());
+    for (const key of ["devices", "managers"] as const) {
+      const label = t(`settings-nav.tab_${key}`);
+      const advanced = host.querySelector<HTMLElement>('[role="region"]')!;
+      advanced.scrollTop = 450;
+      advanced.dispatchEvent(new Event("scroll"));
+      const rows = entries(advanced, label);
+      expect(rows).toHaveLength(1);
+      await act(async () => rows[0].click());
+      expect(location.search).toBe(`?tab=${key}`);
+      expect(host.querySelector('[role="region"]')?.textContent).toContain(managementItems[key]);
+      expect(host.querySelector('[role="region"]')?.getAttribute("aria-label")).toBe(label);
+      const back = host.querySelector<HTMLButtonElement>(`button[aria-label="${t("settings.back_to", { name: t("settings-nav.tab_advanced") })}"]`)!;
+      expect(back).not.toBeNull();
+      await popped(() => key === "devices" ? history.back() : back.click());
+      expect(location.search).toBe("?tab=advanced");
+      expect(advanced.scrollTop).toBe(450);
+    }
+    if (phone) {
+      await popped(() => host.querySelector<HTMLButtonElement>("header button")!.click());
+      expect(location.search).toBe("");
+      expect(nav()).not.toBeNull();
+    }
+  });
+
+  it("keeps previous and forward entries when the former Advanced page has been replaced", async () => {
+    await mount("/settings?tab=advanced");
+    const region = host.querySelector<HTMLElement>('[role="region"]')!;
+    region.scrollTop = 450;
+    region.dispatchEvent(new Event("scroll"));
+    await act(async () => entries(region, t("settings-nav.tab_devices"))[0].click());
+    history.pushState(null, "", "/inbox");
+    await popped(() => history.back());
+    await popped(() => history.back());
+    await act(async () => category(t("settings-nav.tab_notifications")).click());
+    await popped(() => history.forward());
+    expect(location.search).toBe("?tab=devices");
+    const back = host.querySelector<HTMLButtonElement>(`button[aria-label="${t("settings.back_to", { name: t("settings-nav.tab_advanced") })}"]`)!;
+    await act(async () => {
+      const reached = new Promise<void>(resolve => {
+        const check = () => {
+          if (location.search !== "?tab=advanced") return;
+          removeEventListener("popstate", check);
+          resolve();
+        };
+        addEventListener("popstate", check);
+      });
+      back.click();
+      await reached;
+    });
+    expect(region.getAttribute("aria-label")).toBe(t("settings-nav.tab_advanced"));
+    expect(region.scrollTop).toBe(450);
+    await popped(() => history.forward());
+    expect(location.pathname).toBe("/inbox");
+    await popped(() => history.back());
+    await popped(() => history.back());
+    expect(location.search).toBe("?tab=notifications");
+  });
+
+  it("keeps the Advanced search result selected while showing a child", async () => {
+    await mount("/settings");
+    const box = host.querySelector<HTMLInputElement>(`input[aria-label="${t("settings.search_settings")}"]`)!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(box, t("settings-nav.tab_advanced"));
+      box.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    const advanced = category(t("settings-nav.tab_advanced"));
+    await act(async () => advanced.click());
+    await act(async () => entries(host.querySelector('[role="region"]')!, t("settings-nav.tab_devices"))[0].click());
+    expect(advanced.getAttribute("aria-current")).toBe("page");
+  });
+
+  it.each(["devices", "managers"] as const)("opens the %s search result", async key => {
+    await mockManagementPages();
+    await mount("/settings");
+    const label = t(`settings-nav.tab_${key}`);
+    const box = host.querySelector<HTMLInputElement>(`input[aria-label="${t("settings.search_settings")}"]`)!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(box, label);
+      box.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    const result = entries(nav(), label).find(button => button.textContent === label)!;
+    await act(async () => result.click());
+    expect(host.querySelector('[role="region"]')?.textContent).toContain(managementItems[key]);
+    expect(location.search).toBe(`?tab=${key}`);
+    expect(host.querySelector('[role="region"]')?.getAttribute("aria-label")).toBe(label);
+  });
+
+  it.each(["devices", "managers"] as const)("opens a bookmarked %s page and returns to Advanced", async key => {
+    viewport.phone = true;
+    await mockManagementPages();
+    await mount(`/settings?tab=${key}`);
+    expect(host.querySelector('[role="region"]')?.textContent).toContain(managementItems[key]);
+    expect(host.querySelector("h1")?.textContent).toBe(t(`settings-nav.tab_${key}`));
+    await act(async () => host.querySelector<HTMLButtonElement>("header button")!.click());
+    expect(location.search).toBe("?tab=advanced");
   });
 
   // #13398: General keeps the default appearance; the opt-in looks moved to Advanced › Appearance with no storage change
@@ -412,7 +601,7 @@ describe("Settings category navigation", () => {
     expect(host.querySelector('[data-page="sent"]')).not.toBeNull();
     expect(host.querySelector('[data-page="connector-detail"]')).toBeNull();
     expect(host.querySelector('[data-settings-group="sent"]')).toBeNull();
-    const own = [...host.querySelectorAll<HTMLButtonElement>("button")].find(b => b.textContent === t("settings-hubconnector.back"));
+    const own = [...host.querySelectorAll<HTMLButtonElement>('[role="region"] button')].find(b => b.textContent === t("settings-hubconnector.back"));
     // a phone's top bar has the one Back (audit item 64); wider, the page has its own
     // named for where it goes: Connectors
     const header = host.querySelector<HTMLButtonElement>(`header button[aria-label="${t("settings.back_to", { name: t("settings-nav.tab_connectors") })}"]`);
@@ -460,26 +649,23 @@ describe("Settings category navigation", () => {
     expect(host.querySelector("nav")).not.toBeNull();
   });
 
-  // audit item 64: pages inside an extension's or the market's had the top bar's Back, to the extension list, over their
-  // own, to the catalog or the extension; the top bar's now goes where theirs did, and they draw none
-  it.each([
-    { from: "-market/example-market/example", to: "-market", label: () => t("settings.back_to", { name: t("settings-extensionmarket.market_title") }) },
-    { from: "-markets", to: "-market", label: () => t("settings.back_to", { name: t("settings-extensionmarket.market_title") }) },
-    { from: "-market/example-market/example@work", to: "example@work", label: () => t("settings-extensionview.back") },
-    { from: "example/ui/main", to: "example", label: () => t("settings-extensionview.back") },
-    { from: "-market", to: null, label: () => t("settings.back_to", { name: t("settings-nav.tab_extensions") }) },
-  ])("on a phone, the top bar's Back goes from extension page $from to its parent", async ({ from, to, label }) => {
-    viewport.phone = true;
-    history.pushState(null, "", "/");
-    await mount(`/settings?tab=extensions&extension=${encodeURIComponent(from)}`);
-    const page = () => [...host.querySelectorAll("[data-page=extensions]")].at(-1)!;
-    expect(page().getAttribute("data-header-back")).toBe("yes");
-    const back = host.querySelector<HTMLButtonElement>("header button:first-child")!;
-    expect(back.getAttribute("aria-label")).toBe(label());
-    await act(async () => back.click());
-    expect(page().getAttribute("data-open")).toBe(to);
-    expect(new URLSearchParams(location.search).get("extension")).toBe(to);
-  });
+  // A direct link has no visited parent. The phone's header returns to that assistant's directory.
+  it.each(["-market/example-market/example", "-markets", "-market/example-market/example@work", "example/ui/main", "-market"])(
+    "returns from a direct legacy extension link %s to its assistant's directory", async (from) => {
+      viewport.phone = true;
+      history.pushState(null, "", "/");
+      await mount(`/settings?tab=extensions&extension=${encodeURIComponent(from)}`);
+      const page = () => [...host.querySelectorAll("[data-page=extensions]")].at(-1)!;
+      expect(page().getAttribute("data-header-back")).toBe("yes");
+      const back = host.querySelector<HTMLButtonElement>("header button:first-child")!;
+      expect(back.getAttribute("aria-label")).toBe(t("settings.back_to", { name: t("settings-nav.tab_extensions") }));
+      await act(async () => back.click());
+      expect(page().getAttribute("data-open")).toBeNull();
+      const query = new URLSearchParams(location.search);
+      expect(query.get("extension")).toBeNull();
+      expect(query.get("manager")).toBe(from.includes("@") ? "work" : null);
+    },
+  );
 
   it("keeps a connector page's own Back on a wide screen and leaves legacy scroll container unchanged", async () => {
     await mount("/settings?tab=connectors&connector=github");
@@ -647,27 +833,29 @@ describe("Settings category navigation", () => {
   it("redirects sources URLs and Settings search results into integrations -sources when integrations_v2 is on and transitions live on toggle", async () => {
     viewport.inboxSources = true;
     viewport.integrationsV2 = true;
+    chooseManager("work");
+    viewport.selected = "work";
     const sampleState = JSON.stringify({ p: "source", id: "sub_push_1" });
     const enc = encodeURIComponent(sampleState);
 
     // Direct legacy /settings/sources/<state> with manager redirects into integrations -sources@work/<encodedState>.
     await mount(`/settings/sources/${enc}?manager=work`);
     expect(location.pathname + location.search).toBe(
-      `/settings?manager=work&tab=integrations&integration=${encodeURIComponent(`-sources@work/${enc}`)}`,
+      `/settings?tab=integrations&manager=work&integration=${encodeURIComponent(`-sources@work/${enc}`)}`,
     );
     expect(host.querySelector('[data-page="integrations"]')?.getAttribute("data-open")).toBe(`-sources@work/${enc}`);
 
     // Live toggle integrations_v2 off -> falls back to legacy sources preserving manager & state.
     viewport.integrationsV2 = false;
     await act(async () => root.render(<Settings onToggleSidebar={() => {}} />));
-    expect(location.pathname + location.search).toBe(`/settings?manager=work&tab=sources&state=${enc}`);
+    expect(location.pathname + location.search).toBe(`/settings?tab=sources&manager=work&state=${enc}`);
     expect(host.querySelector('[data-page="sources"]')?.getAttribute("data-state")).toBe(sampleState);
 
     // Live toggle integrations_v2 back on -> returns smoothly to unified integrations -sources@work/<encodedState>.
     viewport.integrationsV2 = true;
     await act(async () => root.render(<Settings onToggleSidebar={() => {}} />));
     expect(location.pathname + location.search).toBe(
-      `/settings?manager=work&tab=integrations&integration=${encodeURIComponent(`-sources@work/${enc}`)}`,
+      `/settings?tab=integrations&manager=work&integration=${encodeURIComponent(`-sources@work/${enc}`)}`,
     );
     expect(host.querySelector('[data-page="integrations"]')?.getAttribute("data-open")).toBe(`-sources@work/${enc}`);
 
@@ -679,11 +867,176 @@ describe("Settings category navigation", () => {
       box.dispatchEvent(new Event("input", { bubbles: true }));
     });
     const groupBtn = [...nav().querySelectorAll<HTMLButtonElement>("button")].find(
-      (b) => b.textContent?.includes(`${t("settings-nav.tab_integrations")}›${t("settings-nav.tab_sources")}`),
+      (b) => b.textContent?.includes(`${t("settings-nav.tab_integrations")}›${t("settings-integrations.view_sources")}`),
     )!;
     expect(groupBtn).toBeTruthy();
     await act(async () => groupBtn.click());
     expect(location.pathname + location.search).toBe("/settings?tab=integrations&integration=-sources");
     expect(host.querySelector('[data-page="integrations"]')?.getAttribute("data-open")).toBe("-sources");
+  });
+
+  it.each([["connector", "connector:larkcli@work"], ["sources", "-sources@work/scoped"]])(
+    "returns through the parent integration from phone %s settings using header or browser Back", async (kind, child) => {
+    viewport.phone = true;
+    viewport.integrationsV2 = true;
+    await mount("/settings?tab=integrations&integration=builtin%3Afeishu-bot%40work");
+    const parent = location.href;
+    for (const browserBack of [false, true]) {
+      await act(async () => host.querySelector<HTMLButtonElement>(`[data-related-${kind}]`)!.click());
+      expect(new URLSearchParams(location.search).get("integration")).toBe(child);
+      await popped(() => browserBack ? history.back() : host.querySelector<HTMLButtonElement>("header button")!.click());
+      expect(location.href).toBe(parent);
+    }
+  });
+
+  it.each([["connector", "connector:larkcli@work"], ["sources", "-sources@work/scoped"]])(
+    "preserves integrationParent and returns to parent integration on desktop %s drill-down", async (kind, child) => {
+    viewport.phone = false;
+    viewport.integrationsV2 = true;
+    await mount("/settings?tab=integrations&integration=builtin%3Afeishu-bot%40work");
+    const parent = location.href;
+    await act(async () => host.querySelector<HTMLButtonElement>(`[data-related-${kind}]`)!.click());
+    expect(new URLSearchParams(location.search).get("integration")).toBe(child);
+    expect(host.querySelector('[data-page="integrations"]')?.getAttribute("data-parent")).toBe("builtin");
+    expect(history.state.integrationParent).toEqual({
+      scope: { kind: "owned", manager: "work" }, view: { kind: "builtin", id: "feishu-bot" }, filter: "all",
+    });
+    await popped(() => host.querySelector<HTMLButtonElement>("[data-back-parent]")!.click());
+    expect(location.href).toBe(parent);
+    expect(host.querySelector('[data-page="integrations"]')?.getAttribute("data-parent")).toBe("");
+  });
+
+  it.each([true, false])("shows conflicting owners without reading either assistant when the selected Labs flag is %s", async (enabled) => {
+    viewport.integrationsV2 = enabled;
+    viewport.phone = true;
+    await mount("/settings?tab=integrations&manager=assistant&integration=ext:example@work");
+    expect(host.textContent).toContain(t("settings-integrations.link_conflict"));
+    expect(host.querySelector('[data-page="integrations"], [data-page="extensions"]')).toBeNull();
+    expect(profileReads).not.toHaveBeenCalled();
+
+    await act(async () => host.querySelector<HTMLButtonElement>("header button")!.click());
+    expect(new URLSearchParams(location.search).get("tab")).toBe(enabled ? "integrations" : "extensions");
+    expect(new URLSearchParams(location.search).has("manager")).toBe(false);
+    expect(chosenManager()).toBeNull();
+  });
+
+  it("uses the linked assistant's Labs mode, and keeps scope, filter, and prefill on a live rollback", async () => {
+    viewport.integrationsV2 = true;
+    viewport.otherModes.work = false;
+    const set = '{ "color": "blue" }';
+    await mount(`/settings?tab=integrations&manager=work&integration=ext:example&filter=tools&set=${encodeURIComponent(set)}`);
+    await act(async () => loadPages());
+    expect(profileReads).toHaveBeenCalledWith("work");
+    expect(chosenManager()).toBeNull();
+    const legacy = host.querySelector('[data-page="extensions"][data-open="example@work"]');
+    expect(legacy?.getAttribute("data-manager")).toBe("work");
+    expect(legacy?.getAttribute("data-prefill")).toBe('{"color":"blue"}');
+    expect(new URLSearchParams(location.search).get("set")).toBe(set);
+
+    viewport.selected = "work";
+    await act(async () => {
+      chooseManager("work");
+      root.render(<Settings onToggleSidebar={() => {}} />);
+    });
+    let query = new URLSearchParams(location.search);
+    expect(query.get("tab")).toBe("integrations");
+    expect(query.get("integration")).toBe("ext:example@work");
+    expect(query.get("manager")).toBe("work");
+    expect(query.get("filter")).toBe("tools");
+    expect(query.get("set")).toBe(set);
+
+    viewport.integrationsV2 = false;
+    await act(async () => root.render(<Settings onToggleSidebar={() => {}} />));
+    query = new URLSearchParams(location.search);
+    expect(query.get("extension")).toBe("example@work");
+    expect(query.get("set")).toBe(set);
+    expect(query.get("filter")).toBe("tools");
+  });
+
+  it("blocks a response from a different assistant and recovers through Back", async () => {
+    viewport.integrationsV2 = true;
+    viewport.otherModes.work = null;
+    await mount("/settings?tab=extensions&manager=work&extension=example");
+    expect(profileReads).toHaveBeenCalledWith("work");
+    expect(host.querySelector('[data-page="extensions"], [data-page="integrations"]')).toBeNull();
+    expect(host.textContent).toContain(t("settings.start_page_unavailable"));
+    await act(async () => host.querySelector<HTMLButtonElement>('[role="region"] button')!.click());
+    expect(host.querySelector('[data-page="integrations"]')?.getAttribute("data-view")).toBe("list");
+  });
+
+  it("keeps a complete parent across a same-address filter replacement and browser Forward", async () => {
+    viewport.integrationsV2 = true;
+    const initial = "/settings?tab=integrations&manager=work&integration=ext:example&filter=data&set=%7B%7D";
+    await mount(initial);
+    await act(async () => host.querySelector<HTMLButtonElement>("[data-related-sources]")!.click());
+    const parent = {
+      scope: { kind: "owned", manager: "work" }, view: { kind: "extension", id: "example", prefill: "{}" }, filter: "data",
+    };
+    expect(history.state.integrationParent).toEqual(parent);
+    const child = new URL(location.href);
+    child.searchParams.set("filter", "tools");
+    await act(async () => navigate(child.pathname + child.search, true));
+    await popped(() => history.back());
+    expect(location.pathname + location.search).toBe(initial);
+    await popped(() => history.forward());
+    expect(history.state.integrationParent).toEqual(parent);
+    await popped(() => host.querySelector<HTMLButtonElement>("[data-back-parent]")!.click());
+    expect(location.pathname + location.search).toBe(initial);
+  });
+
+  it.each([["persona", "repositories"], ["knowledge", "knowledge-items"]])(
+    "restores %s group #%s on reload and follows content resizes for 500ms", async (tab, group) => {
+      vi.useFakeTimers();
+      const resize = vi.fn();
+      const stop = vi.fn();
+      let align!: () => void;
+      vi.stubGlobal("ResizeObserver", class {
+        constructor(callback: () => void) { align = callback; }
+        observe = resize;
+        disconnect = stop;
+      });
+      const scroll = vi.fn();
+      Element.prototype.scrollIntoView = scroll;
+      try {
+        await mount(`/settings?tab=${tab}#${group}`);
+        const target = host.querySelector<HTMLElement>(`[data-settings-group="${group}"]`)!;
+        expect(resize).toHaveBeenCalledWith(host.querySelector('[role="region"]')!.firstElementChild);
+        expect(target.firstElementChild?.getAttribute("style")).toContain("var(--accent)");
+        expect(scroll.mock.contexts.filter(el => el === target)).toHaveLength(1);
+        align();
+        expect(scroll.mock.contexts.filter(el => el === target)).toHaveLength(2);
+        vi.advanceTimersByTime(499);
+        expect(stop).not.toHaveBeenCalled();
+        vi.advanceTimersByTime(1);
+        expect(stop).toHaveBeenCalledTimes(1);
+      } finally { vi.useRealTimers(); }
+    },
+  );
+
+  it("handles Integrations onSettings #anchor jumps to Assistant repositories and Knowledge items smoothly in-app", async () => {
+    viewport.integrationsV2 = true;
+    const scrolled: Element[] = [];
+    Element.prototype.scrollIntoView = function (this: Element) { scrolled.push(this); };
+
+    // Jump from Integrations to Settings › Assistant #repositories
+    await mount("/settings?tab=integrations&integration=builtin%3Agithub");
+    await act(async () => host.querySelector<HTMLButtonElement>("[data-integrations-repos]")!.click());
+    expect(location.pathname + location.search).toBe("/settings?tab=persona");
+    expect(location.hash).toBe("#repositories");
+    const reposGroup = host.querySelector<HTMLElement>('[data-settings-group="repositories"]')!;
+    expect(reposGroup).not.toBeNull();
+    expect(scrolled).toContain(reposGroup);
+    expect(reposGroup.querySelector<HTMLElement>(":scope > div")!.style.boxShadow).toContain("var(--accent)");
+
+    // Jump from Integrations to Settings › Knowledge #knowledge-items
+    scrolled.length = 0;
+    await act(async () => category(t("settings-nav.tab_integrations")).click());
+    await act(async () => host.querySelector<HTMLButtonElement>("[data-integrations-kb]")!.click());
+    expect(location.pathname + location.search).toBe("/settings?tab=knowledge");
+    expect(location.hash).toBe("#knowledge-items");
+    const kbGroup = host.querySelector<HTMLElement>('[data-settings-group="knowledge-items"]')!;
+    expect(kbGroup).not.toBeNull();
+    expect(scrolled).toContain(kbGroup);
+    expect(kbGroup.querySelector<HTMLElement>(":scope > div")!.style.boxShadow).toContain("var(--accent)");
   });
 });

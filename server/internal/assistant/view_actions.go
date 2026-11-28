@@ -500,6 +500,7 @@ func (s *Service) viewActionParams(ctx context.Context, a db.AssistantViewAction
 	}
 	s.UserSpoke(ctx, SessionRef{MachineID: a.MachineID, SessionID: a.Conversation})
 	s.ownerInterjects(a.Conversation, params)
+	s.detachPendingApprovalsOnOwnerMessage(a.MachineID, a.Conversation)
 	return params, nil
 }
 

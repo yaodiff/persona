@@ -13,6 +13,17 @@ const deadline = setTimeout(() => { console.error("FAIL workspace naming browser
 const browser = await chromium.launch({ executablePath, env: { ...process.env, TMPDIR: process.env.WORKSPACE_NAMING_BROWSER_TMP || process.env.TMPDIR }, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
 const errors = [];
 const results = [];
+// Exercise the same CSS text sizes as Settings and crop the complete editor on scrollable pages.
+async function captureEditor(page, editor, surface, scheme, width) {
+  for (const size of ["standard", "large"]) {
+    await page.evaluate((size) => { document.documentElement.dataset.textSize = size; }, size);
+    await editor.scrollIntoViewIfNeeded();
+    assert(await editor.evaluate((el) => el.scrollWidth <= el.clientWidth), "editor fits the available width");
+    await editor.screenshot({ path: join(shots, `${surface}-${scheme}-${width}-${size}.png`) });
+  }
+  await page.evaluate(() => { delete document.documentElement.dataset.textSize; });
+}
+
 let activePage;
 try {
   for (const scheme of ["light", "dark"]) {
@@ -26,60 +37,47 @@ try {
       assert(cleared.ok(), "reset only this isolated fixture's naming rules");
       await page.goto(origin + "/settings?tab=persona");
       const preference = page.getByLabel("When dispatching tasks, prefer", { exact: true });
-      await preference.selectOption("prefer-new");
+
       const dispatch = page.locator('[data-settings-group="dispatch-tasks"]');
       const group = page.locator('[data-settings-group="workspace-naming"]');
       await group.waitFor();
-      assert.equal(await dispatch.locator('[data-workspace-naming]').count(), 1, "naming belongs to Dispatch tasks");
-      await dispatch.scrollIntoViewIfNeeded();
-      await dispatch.screenshot({ path: join(shots, `collapsed-${scheme}-${width}.png`) });
-      assert((await group.boundingBox()).height <= 50, "collapsed entry is one settings row");
+      assert.equal(await preference.inputValue(), "prefer-existing");
+      assert.equal(await dispatch.locator("[data-workspace-naming]").count(), 0);
+      await preference.selectOption("prefer-new");
       const trigger = group.getByRole("button", { name: "Workspace naming", exact: true });
       await trigger.focus(); await page.keyboard.press("Enter");
       const task = group.getByLabel("Task folder template", { exact: true });
       await task.waitFor();
       assert.equal(await task.inputValue(), "", "unset default is an empty input");
       assert.equal(await task.getAttribute("placeholder"), "System default: task-{task-id}");
-      assert(await group.getByText("Fields: {task-id}, {task-slug}, {yyyy}, {mmdd}. Relative subfolders are allowed.", { exact: true }).isVisible(), "help is visible without disclosure");
-      assert.equal(await group.getByRole("button", { name: /inherited|inheritance/i }).count(), 0, "no reset controls");
-      await dispatch.screenshot({ path: join(shots, `expanded-${scheme}-${width}.png`) });
+      const label = await group.getByText("Task folder template", { exact: true }).boundingBox();
+      const input = await task.boundingBox();
+      const baseInput = await group.getByLabel("Base folder", { exact: true }).boundingBox();
+      assert(input && label && baseInput && label.y + label.height <= input.y + 1, "label sits above the input");
+      assert.equal(input.x, label.x, "label and input share a left edge");
+      assert.equal(input.width, baseInput.width, "fields share the available width");
+      assert.equal(await group.locator("details").count(), 0);
+      assert.equal(await group.getByRole("button", { name: "Save", exact: true }).count(), 0);
       await task.fill("{yyyy}{mmdd}/task-{task-id}-{task-slug}");
       await group.getByRole("button", { name: "Save", exact: true }).click();
-      await page.waitForFunction(() => !document.body.textContent.includes("Unsaved changes") && [...document.querySelectorAll('[data-settings-group="workspace-naming"] button')].some((b) => b.textContent.trim() === "Save" && b.disabled && b.getAttribute("aria-busy") !== "true"));
+      await group.getByRole("button", { name: "Save", exact: true }).waitFor({ state: "hidden" });
       await page.reload();
       await group.getByRole("button", { name: "Workspace naming", exact: true }).click();
       await task.waitFor(); assert.equal(await task.inputValue(), "{yyyy}{mmdd}/task-{task-id}-{task-slug}", "settings persisted through reload");
-      await group.getByText("Preview options", { exact: true }).click();
-      if (width === 1440) {
-        const [computerBox, layoutBox, previewBox] = await Promise.all([
-          group.getByLabel("Preview on computer", { exact: true }).boundingBox(),
-          group.getByLabel("Folder layout", { exact: true }).boundingBox(),
-          group.getByRole("button", { name: "Preview naming", exact: true }).boundingBox(),
-        ]);
-        assert(computerBox && layoutBox && previewBox, "preview controls are visible");
-        assert.equal(previewBox.height, computerBox.height, "preview action matches the select height");
-        assert(Math.abs(previewBox.y + previewBox.height - (computerBox.y + computerBox.height)) <= 1, "preview action aligns with the selects");
-        assert(previewBox.x >= layoutBox.x + layoutBox.width, "preview action follows the layout select");
-      }
-      if (width === 390) {
-        const [layoutBox, previewBox] = await Promise.all([
-          group.getByLabel("Folder layout", { exact: true }).boundingBox(),
-          group.getByRole("button", { name: "Preview naming", exact: true }).boundingBox(),
-        ]);
-        assert(previewBox && layoutBox && previewBox.y >= layoutBox.y + layoutBox.height, "preview action stacks below the selects on phones");
-        assert(previewBox.width >= layoutBox.width - 1, "preview action spans the narrow form");
-      }
       await group.getByRole("button", { name: "Preview naming", exact: true }).click();
       await group.locator("[data-naming-root]").waitFor();
       assert.match(await group.locator("[data-naming-root]").innerText(), /^\/home\/example\/workspace\/\d{8}\/task-todo_example-example-task$/);
       assert.deepEqual(await group.locator("[data-naming-repo]").evaluateAll((rows) => rows.map((row) => [row.querySelector("[data-naming-folder]")?.textContent, row.querySelector("[data-naming-branch]")?.textContent]).sort((a, b) => a[0].localeCompare(b[0]))),
         [["api", "persona/todo_example"], ["web", "persona/todo_example"]], "container previews each repository's folder and branch");
+      assert.equal(await group.getByText("Starts from the repository’s default branch", { exact: true }).count(), 2);
+      await captureEditor(page, group, "settings", scheme, width);
+      await group.getByRole("button", { name: "Preview options" }).click();
       await group.getByLabel("Folder layout", { exact: true }).selectOption("root");
       await group.getByRole("button", { name: "Preview naming", exact: true }).click();
       await group.locator("[data-naming-root]").waitFor();
       const rootLayout = await group.locator("[aria-live]").innerText();
       const rootPath = await group.locator("[data-naming-root]").innerText();
-      assert.equal(await group.locator("[data-naming-repo]").count(), 0, "the internal dot is not a row");
+      assert.equal(await group.locator("[data-naming-repo]").count(), 1, "the root repository has one branch mapping");
       assert.equal(await group.locator("[data-naming-branch]").innerText(), "persona/todo_example", "the root branch is labeled");
       assert.equal(rootLayout.split(rootPath).length - 1, 1, "the root path appears once");
       assert(!rootLayout.split("\n").some((line) => line.trim() === "."), "no standalone dot");
@@ -88,7 +86,6 @@ try {
       assert(!rootLayout.includes("UTC"), "no routine timestamp or time zone");
       await group.scrollIntoViewIfNeeded();
       assert(await group.evaluate((el) => el.scrollWidth <= el.clientWidth), "no horizontal overflow");
-      await group.screenshot({ type: "jpeg", quality: 80, path: join(shots, `settings-${scheme}-${width}.jpg`) });
       await task.fill("");
       await group.getByRole("button", { name: "Preview naming", exact: true }).click();
       await group.locator("[data-naming-root]").waitFor();
@@ -106,27 +103,21 @@ try {
       await group.getByRole("button", { name: "Preview naming", exact: true }).click();
       await group.getByRole("alert").first().waitFor();
       assert.equal(await task.inputValue(), "../unsafe", "failed preview preserves draft");
-      await group.screenshot({ type: "jpeg", quality: 80, path: join(shots, `invalid-${scheme}-${width}.jpg`) });
 
       await preference.selectOption("prefer-existing");
-      await group.waitFor({ state: "hidden" });
-      await preference.selectOption("prefer-new");
-      await group.getByRole("button", { name: "Workspace naming", exact: true }).click();
-      assert.equal(await task.inputValue(), "{yyyy}{mmdd}/task-{task-id}-{task-slug}", "hiding preserves saved rules");
-      if (width === 390) {
-        await page.evaluate(() => document.documentElement.style.setProperty("--text-scale", "2"));
-        await group.getByText("Preview options", { exact: true }).click();
-        await group.getByRole("button", { name: "Preview naming", exact: true }).click();
-        await group.locator("[data-naming-root]").waitFor();
-        assert.equal(await group.locator("[data-naming-repo]").count(), 2, "the enlarged preview lists both repositories");
-        assert((await group.locator("[data-naming-root]").innerText()).length > 0, "the enlarged preview shows the root path");
-        assert.equal(await group.locator("[aria-live] details").count(), 0, "the enlarged preview has no routine details");
-        assert(await group.evaluate((el) => el.scrollWidth <= el.clientWidth), "settings preview fits at 200% text");
-        await group.locator("details").first().screenshot({ path: join(shots, `large-text-${scheme}-${width}.png`) });
-      }
+      assert.equal(await task.inputValue(), "../unsafe", "switching preference preserves the open draft");
 
       // Direct API state is supplied by the real fixture, not browser interception.
       const todo = await (await page.request.get(origin + "/api/v1/_qa/todo")).json();
+      const repositoriesURL = `${origin}/api/v1/todos/${encodeURIComponent(todo.id)}/repositories`;
+      const initial = await (await context.request.get(repositoriesURL, { headers: fixtureHeaders })).json();
+      const catalog = await (await context.request.get(origin + "/api/v1/assistant/repositories", { headers: fixtureHeaders })).json();
+      const seeded = await context.request.put(repositoriesURL, { headers: fixtureHeaders, data: {
+        expected_revision: initial.revision, expected_catalog_revision: catalog.catalog_revision,
+        repositories: initial.repositories.map(({ repo_id, directory_alias }, index) => ({ repo_id, directory_alias,
+          requested_ref: index === 0 ? { kind: "branch", value: "release/next" } : { kind: "default" } })),
+      } });
+      assert(seeded.ok(), "seed default and named starting branches in the fixture");
       await page.goto(origin + "/todos?id=" + encodeURIComponent(todo.id));
       await page.getByRole("button", { name: "Workspace naming", exact: true }).click();
       const field = page.getByLabel("Task branch template", { exact: true }); await field.waitFor();
@@ -159,16 +150,20 @@ try {
       await editor.getByRole("button", { name: "Preview naming", exact: true }).click();
       await editor.locator("[data-naming-root]").waitFor();
       for (const branch of await editor.locator("[aria-live] [data-naming-branch]").allTextContents()) assert.equal(branch, `persona/${todo.id}`, "cleared task branch previews assistant fallback");
-      if (width === 390) await page.evaluate(() => document.documentElement.style.setProperty("--text-scale", "2"));
-      assert(await editor.evaluate((el) => el.scrollWidth <= el.clientWidth), "task editor fits at enlarged text");
-      if (width === 390) {
-        await editor.locator("details").first().screenshot({ type: "jpeg", quality: 80, path: join(shots, `task-${scheme}-${width}-options.jpg`) });
-        await editor.locator("[aria-live]").screenshot({ type: "jpeg", quality: 80, path: join(shots, `task-${scheme}-${width}-preview.jpg`) });
-      } else await editor.screenshot({ type: "jpeg", quality: 80, path: join(shots, `task-${scheme}-${width}.jpg`) });
+      assert(await editor.getByText("Starts from the selected branch · release/next").isVisible());
+      const options = editor.getByRole("button", { name: "Preview options" });
+      await options.click();
+      await captureEditor(page, editor, "todo", scheme, width);
+      await options.click();
+      const checks = await editor.getByRole("checkbox").all();
+      for (const check of checks) await check.uncheck();
+      await editor.getByRole("button", { name: "Preview naming", exact: true }).click();
+      await editor.getByText("Folder only · No repositories attached").waitFor();
+      assert.equal(await editor.locator("[data-naming-branch]").count(), 0);
+      for (const check of checks) await check.check();
+
       // Repository associations can change in another editor while this panel stays open.
-      const repositoriesURL = `${origin}/api/v1/todos/${encodeURIComponent(todo.id)}/repositories`;
       const bindings = await (await context.request.get(repositoriesURL, { headers: fixtureHeaders })).json();
-      const catalog = await (await context.request.get(origin + "/api/v1/assistant/repositories", { headers: fixtureHeaders })).json();
       const inputRows = bindings.repositories.map(({ repo_id, directory_alias, requested_ref }) => ({ repo_id, directory_alias, requested_ref }));
       const retained = bindings.repositories[1];
       const remove = await context.request.put(repositoriesURL, { headers: fixtureHeaders, data: {
@@ -193,7 +188,6 @@ try {
       await editor.locator("[data-naming-root]").waitFor();
       assert.equal(await editor.locator("[data-naming-repo]").count(), 1);
       assert.equal(await editor.locator("[data-naming-branch]").innerText(), `recovered/${todo.id}`);
-      await editor.screenshot({ type: "jpeg", quality: 80, path: join(shots, `recovered-${scheme}-${width}.jpg`) });
 
       // Another settings editor changes the fallback while this task remains open.
       const changedDefault = await context.request.put(origin + "/api/v1/assistant", { headers: fixtureHeaders, data: {
@@ -213,20 +207,6 @@ try {
       assert.equal(fresh.request().postDataJSON().machine_id, "server");
       const freshResult = await fresh.json();
       assert.equal(freshResult.plan.root_path, `/home/example/workspace/fresh/${todo.id}`, "the displayed fallback matches the actual manager/Node preview");
-      if (width === 390) {
-        await page.evaluate(() => document.documentElement.style.setProperty("--text-scale", "1"));
-        await editor.scrollIntoViewIfNeeded();
-      }
-      await editor.screenshot({ type: "jpeg", quality: 80, path: join(shots, `fresh-default-${scheme}-${width}.jpg`) });
-      if (width === 390) {
-        await page.evaluate(() => document.documentElement.style.setProperty("--text-scale", "2"));
-        // Paint the whole enlarged element; the task page virtualizes offscreen content.
-        await page.setViewportSize({ width, height: 6000 });
-        await editor.scrollIntoViewIfNeeded();
-        await editor.screenshot({ type: "jpeg", quality: 80, path: join(shots, `fresh-default-${scheme}-${width}-large.jpg`) });
-        await page.evaluate(() => document.documentElement.style.setProperty("--text-scale", "1"));
-      }
-
       const computer = editor.getByLabel("Preview on computer", { exact: true });
       await computer.selectOption("");
       await field.fill("../invalid");
@@ -238,7 +218,6 @@ try {
       assert(await editor.getByRole("button", { name: "Preview naming", exact: true }).isDisabled(), "Reload does not silently choose a preview target");
       results.push({ scheme, width, previewInput: fresh.request().postDataJSON(), root: freshResult.plan.root_path,
         placeholder: await taskFolder.getAttribute("placeholder"), recoveredComputer: await computer.inputValue(), recoveredDraft: await field.inputValue() });
-      await editor.screenshot({ type: "jpeg", quality: 80, path: join(shots, `retained-selection-${scheme}-${width}.jpg`) });
       const restored = await context.request.put(repositoriesURL, { headers: fixtureHeaders, data: {
         expected_revision: removed.revision, expected_catalog_revision: catalog.catalog_revision, repositories: inputRows,
       } });
@@ -252,7 +231,6 @@ try {
   await writeFile(join(shots, "browser-results.json"), JSON.stringify({ results, pageErrors: errors }, null, 2) + "\n");
   console.log("PASS isolated workspace naming browser journey");
   await fetch(origin + "/api/v1/_qa/stop");
-  await new Promise((resolve) => setTimeout(resolve, 500));
 } catch (error) {
   if (activePage && !activePage.isClosed()) { await activePage.screenshot({ type: "jpeg", quality: 80, path: join(shots, "failure.jpg"), fullPage: true }); await writeFile(join(shots, "failure.txt"), await activePage.locator("body").innerText()); }
   throw error;

@@ -71,9 +71,9 @@ describe("EventMark and the manager's now key", () => {
     expect(mark(legacy[0])).toContain("建议回复");
     expect(mark(legacy[0])).toContain("周五可以。");
     expect(mark(legacy[1])).toContain("AI 正在准备建议");
-    expect(mark(legacy[2])).toContain("AI 没处理完");
-    expect(mark(legacy[3])).toContain("等对方回复");
-    expect(mark(legacy[5])).toContain("助手处理了");
+    expect(mark(legacy[2])).toContain("AI 未能完成处理");
+    expect(mark(legacy[3])).toContain("等待对方回复");
+    expect(mark(legacy[5])).toContain("已由助手处理");
   });
 
   it("uses the composed waiting words when the key is known", () => {

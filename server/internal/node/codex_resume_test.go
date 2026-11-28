@@ -120,27 +120,74 @@ func TestCodexHistoryResumesOnAStart(t *testing.T) {
 	}
 }
 
-// A Codex App thread (originator "Codex Desktop") is not resumed in a terminal: the App owns it.
+// A Codex App thread (originator "Codex Desktop") is refused terminal resume while the Codex App is running and
+// could load it, and is resumable once the App is not running and no live writer holds the thread (#13772).
+// A shared app-server stamp corroborated by the App sidebar remains protected as an App thread.
 func TestCodexDesktopThreadIsNotResumedInATerminal(t *testing.T) {
-	n, _, home := herdrNode(t)
+	n, f, home := herdrNode(t)
 	cwd := mkdir(t, filepath.Join(home, "proj"))
 	day := time.Now()
 	dir := mkdir(t, filepath.Join(home, ".codex", "sessions", day.Format("2006"), day.Format("01"), day.Format("02")))
 	meta, _ := json.Marshal(map[string]any{"timestamp": day.UTC().Format(time.RFC3339Nano), "type": "session_meta",
 		"payload": map[string]any{"id": startThread, "cwd": cwd, "originator": "Codex Desktop", "source": "vscode"}})
-	if err := os.WriteFile(filepath.Join(dir, "rollout-2026-11-02T10-00-00-"+startThread+".jsonl"), append(meta, '\n'), 0o600); err != nil {
+	done := `{"timestamp":"` + day.UTC().Format(time.RFC3339Nano) + `","type":"event_msg","payload":{"type":"task_complete"}}`
+	if err := os.WriteFile(filepath.Join(dir, "rollout-2026-11-02T10-00-00-"+startThread+".jsonl"), append(append(meta, '\n'), append([]byte(done), '\n')...), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	n.codices = newCodexRegistry()
-	n.codices.scan = func() []codexProcess { return nil }
+	appRunning := true
+	n.codices.scan = func() []codexProcess {
+		if appRunning {
+			return []codexProcess{{pid: 4242, home: filepath.Join(home, ".codex"), endpoint: "stdio://", desktop: true}}
+		}
+		return nil
+	}
+	n.codices.checked = func() ([]codexProcess, bool) { return n.codices.scan(), true }
 	fixtureCodexIndex(n.codices)
 	n.configureCodex(proto.CodexConfig{})
-	if s := byID(listSessions(t, n))[startThread]; s.Capabilities == nil || s.Capabilities.Send {
-		t.Errorf("a Codex App thread is sendable: %+v", s)
+	n.discoverCodex()
+
+	if s := byID(listSessions(t, n))[startThread]; s.Capabilities == nil || s.Capabilities.Send || s.Capabilities.Terminal ||
+		s.Capabilities.Takeover == nil || s.Capabilities.Takeover.CanResume || s.Capabilities.Takeover.Reason != "app_running" {
+		t.Errorf("running Codex App thread should refuse resume and offer continue only: %+v (%+v)", s, s.Capabilities)
 	}
 	_, err := request(t, n, "session.start", map[string]any{"resume_session_id": startThread})
 	if code, _ := refusalOf(t, err); code != "codex_read_only" {
-		t.Errorf("resume of a Codex App thread: %v", err)
+		t.Errorf("resume of a Codex App thread while App is running: %v", err)
+	}
+
+	appRunning = false
+	n.discoverCodex()
+	if s := byID(listSessions(t, n))[startThread]; s.Capabilities == nil || s.Capabilities.Send || !s.Capabilities.Terminal ||
+		s.Capabilities.Takeover == nil || !s.Capabilities.Takeover.CanResume || !s.Capabilities.Takeover.AppOwned {
+		t.Fatalf("idle unowned Codex App thread should be resumable: %+v (%+v)", s, s.Capabilities)
+	}
+	f.reset()
+	got := resumeFile(f, cwd)
+	res, err := request(t, n, "session.start", map[string]any{"resume_session_id": startThread})
+	if err != nil {
+		t.Fatalf("resume of idle unowned Codex App thread failed: %v", err)
+	}
+	if s, _ := res["session"].(map[string]any); s == nil || s["session_id"] != startThread || s["pane_id"] != "w1:p2" {
+		t.Errorf("session = %v", res["session"])
+	}
+	if file := got(); strings.Join(file.Argv, " ") != "codex resume "+startThread {
+		t.Errorf("ran %q", file.Argv)
+	}
+}
+
+func TestCodexSharedOriginDoesNotResumeInATerminal(t *testing.T) {
+	n, _, cwd := codexHistoryNode(t)
+	home := n.codexHome()
+	state := `{"projectless-thread-ids":["` + remoteOther + `"]}`
+	if err := os.WriteFile(filepath.Join(home, ".codex-global-state.json"), []byte(state), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	path := writeCodexTestRollout(t, home, remoteOther, cwd, "persona", "vscode", time.Now())
+	id := n.registerCodex(home, remoteOther, path)
+	_, err := request(t, n, "session.start", map[string]any{"resume_session_id": id})
+	if code, _ := refusalOf(t, err); code != "codex_read_only" {
+		t.Fatalf("resume of a sidebar-confirmed App thread = %v", err)
 	}
 }
 
@@ -237,13 +284,15 @@ func TestCodexResumeUsesRequestedHost(t *testing.T) {
 			for _, tc := range []struct {
 				name, pane, def, explicit string
 				orca, wantResume          bool
+				wantCode                  string // the refusal when not resumed here ("": the Codex read-only one)
 			}{
-				{"orca_explicit_herdr", "orca:tab1:leaf1", "herdr", "herdr", true, true},
-				{"disabled_host_explicit_herdr", "orca:tab1:leaf1", "paseo", "herdr", false, true},
-				{"orca_without_explicit_host", "orca:tab1:leaf1", "herdr", "", true, false},
-				{"disabled_host_without_explicit_host", "orca:tab1:leaf1", "paseo", "", false, false},
-				{"remembered_herdr_without_explicit_host", "w1:p1", "paseo", "", false, true},
-				{"explicit_paseo", "w1:p1", "herdr", "paseo", false, false},
+				{"orca_explicit_herdr", "orca:tab1:leaf1", "herdr", "herdr", true, true, ""},
+				{"disabled_host_explicit_herdr", "orca:tab1:leaf1", "paseo", "herdr", false, true, ""},
+				// It resumes in the Orca it ran in (#17044), not herdr: this stand-in Orca is not running.
+				{"orca_without_explicit_host", "orca:tab1:leaf1", "herdr", "", true, false, engineMissing},
+				{"disabled_host_without_explicit_host", "orca:tab1:leaf1", "paseo", "", false, false, ""},
+				{"remembered_herdr_without_explicit_host", "w1:p1", "paseo", "", false, true, ""},
+				{"explicit_paseo", "w1:p1", "herdr", "paseo", false, false, ""},
 			} {
 				if tc.explicit == "paseo" && !direct {
 					continue
@@ -282,6 +331,9 @@ func TestCodexResumeUsesRequestedHost(t *testing.T) {
 						want := "codex_read_only"
 						if direct {
 							want = codexResumeRefused
+						}
+						if tc.wantCode != "" {
+							want = tc.wantCode
 						}
 						if code, _ := refusalOf(t, err); code != want {
 							t.Fatalf("refusal = %v, want %s", err, want)

@@ -15,3 +15,10 @@ it("shows an agent's latest words on one line without their Markdown (#10939)", 
 it("draws no second line without latest words", () => {
   expect(renderToStaticMarkup(<AgentRow s={session()} />)).not.toContain("truncate text-[12px]");
 });
+
+it("links the attached to-do separately from the session", () => {
+  const html = renderToStaticMarkup(<AgentRow s={session({ todo: { id: "task-a", title: "Check the build" } })} />);
+  expect(html).toMatch(/href="\/s\/mac\/s1".*?<\/a>.*?href="\/todos\?id=task-a"/s);
+  expect(html).toContain("Check the build");
+  expect(renderToStaticMarkup(<AgentRow s={session()} />)).not.toContain('href="/todos');
+});

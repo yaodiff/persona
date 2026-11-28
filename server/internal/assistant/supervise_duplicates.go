@@ -141,11 +141,125 @@ func bigrams(s string) []string {
 	return out
 }
 
-// planDuplicates is what the task_plan tool adds to its answer about the plan's tasks that look like work already
-// going on (duplicateHints); "" when none does. A hint, not a refusal: the plan goes on as ever.
-func (s *Service) planDuplicates(ctx context.Context, tasks []PlanTask) string {
+// reuseHint is an active agent on an open to-do the caller opened or supervises, working in the same directory as new
+// work being planned. Unlike duplicateHints it does not rely on title similarity: a follow-up is often worded very
+// differently from the original task, so a same-directory active agent is itself the signal (#13192).
+type reuseHint struct {
+	todoID    string
+	todoTitle string
+	machineID string
+	sessionID string
+}
+
+// reuseHints lists, at most limit, active agents on still-open to-dos conversation self opened or supervises whose
+// working directory overlaps cwd. Hints never block: only the model can tell whether the new work is the same topic.
+func (s *Service) reuseHints(ctx context.Context, self, cwd string, limit int) []reuseHint {
+	if self == "" || cwd == "" || limit <= 0 || s.ensureTodosLoaded(ctx) != nil {
+		return nil
+	}
+	s.todos.mu.RLock()
+	defer s.todos.mu.RUnlock()
+	var out []reuseHint
+	seen := map[string]bool{}
+	for _, t := range s.todos.todos {
+		if t.DoneAt != nil || (t.Origin != self && (t.Supervision == nil || t.Supervision.Supervisor != self)) {
+			continue
+		}
+		for _, a := range t.Agents {
+			if !a.active() || !dirsOverlap(a.Cwd, cwd) {
+				continue
+			}
+			key := a.MachineID + "/" + a.SessionID
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			out = append(out, reuseHint{todoID: t.ID, todoTitle: t.Title, machineID: a.MachineID, sessionID: a.SessionID})
+			if len(out) >= limit {
+				return out
+			}
+		}
+	}
+	return out
+}
+
+// reuseHintText renders reuseHints as a non-blocking paragraph for a tool answer, with the exact ids the next call
+// needs. "" when there is none.
+func reuseHintText(kind string, hints []reuseHint) string {
+	if len(hints) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "\n\nAn Agent is already active on related work in this directory. Before starting a new one, check whether the owner's request can go to it (the id is exact, copy it):\n")
+	for _, h := range hints {
+		fmt.Fprintf(&b, "- to-do %s (%q): agent_send machine=%s session_id=%s", h.todoID, clip(oneLine(h.todoTitle), 40), h.machineID, short(h.sessionID))
+		switch kind {
+		case "task_plan":
+			b.WriteString("; once that to-do is closed and its Agent released, task_plan with its todo_id and continues reuses the to-do")
+		case "todo_create":
+			b.WriteString("; use task_plan with todo_id to put an Agent on the new to-do, or agent_send for work that belongs on the existing one")
+		}
+		b.WriteString("\n")
+	}
+	b.WriteString("Parallel work is still allowed: start the new task anyway and say in why it cannot reuse that Agent. When the Agent has stopped and the follow-up belongs on its still-open to-do, resume that same session with agent_send resume=true and the to-do's todo_id; a task_plan continues run starts a successor Agent on the to-do instead.")
+	return b.String()
+}
+
+// activeReuseHints lists active agents on open to-dos conversation self opened or supervises, regardless of
+// directory: todo_create carries no cwd, so the conversation's own active agents are the signal there (#13192).
+func (s *Service) activeReuseHints(ctx context.Context, self string, limit int) []reuseHint {
+	if self == "" || limit <= 0 || s.ensureTodosLoaded(ctx) != nil {
+		return nil
+	}
+	s.todos.mu.RLock()
+	defer s.todos.mu.RUnlock()
+	var out []reuseHint
+	seen := map[string]bool{}
+	for _, t := range s.todos.todos {
+		if t.DoneAt != nil || (t.Origin != self && (t.Supervision == nil || t.Supervision.Supervisor != self)) {
+			continue
+		}
+		for _, a := range t.Agents {
+			if !a.active() {
+				continue
+			}
+			key := a.MachineID + "/" + a.SessionID
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			out = append(out, reuseHint{todoID: t.ID, todoTitle: t.Title, machineID: a.MachineID, sessionID: a.SessionID})
+			if len(out) >= limit {
+				return out
+			}
+		}
+	}
+	return out
+}
+
+// planReuseHints gathers reuseHints for every planned task's working directory, de-duplicated by agent session.
+func (s *Service) planReuseHints(ctx context.Context, self string, tasks []PlanTask) []reuseHint {
+	var out []reuseHint
+	seen := map[string]bool{}
+	for _, t := range tasks {
+		for _, h := range s.reuseHints(ctx, self, t.Cwd, 4) {
+			key := h.machineID + "/" + h.sessionID
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			out = append(out, h)
+		}
+	}
+	return out
+}
+
+// planDuplicates adds existing work and idle reuse hints to the task_plan receipt.
+// A nil reuseSpace excludes idle hints for Agent callers with restricted messaging.
+func (s *Service) planDuplicates(ctx context.Context, tasks []PlanTask, reuseSpace *string) string {
 	var open []Todo
-	if s.ensureTodosLoaded(ctx) == nil {
+	todosLoaded := s.ensureTodosLoaded(ctx) == nil
+	if todosLoaded {
 		own := map[string]bool{} // a todo a task runs on is that task, not a copy of it
 		for _, t := range tasks {
 			if t.ReuseTodo != "" {
@@ -193,12 +307,16 @@ func (s *Service) planDuplicates(ctx context.Context, tasks []PlanTask) string {
 		}
 		fmt.Fprintf(&b, "\n- 「%s」可能和这些重复：%s", t.Title, strings.Join(hints, "；"))
 	}
+	reuse := ""
+	if reuseSpace != nil && todosLoaded {
+		reuse = s.idlePlanReuse(*reuseSpace, tasks, sessions)
+	}
 	if b.Len() == 0 {
-		return ""
+		return reuse
 	}
 	return "\n\nPossible duplicates (work already going on): look at them (agent_read, the todo) before this goes on; if it is the " +
 		"same work, cancel the new task (task_review cancelled, or dismiss the plan) or send what is new to the agent already on it. " +
 		"If the new task takes over from one of them (a retry elsewhere, a rework round, a part split off), plan it again with " +
 		"continues set to that todo id and continues_why, so it keeps that task's brief (the owner's request and criteria); " +
-		"if it is different work, say why in your answer." + b.String()
+		"if it is different work, say why in your answer." + b.String() + reuse
 }

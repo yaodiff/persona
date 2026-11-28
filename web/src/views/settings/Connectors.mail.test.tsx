@@ -1,9 +1,11 @@
 // @vitest-environment jsdom
+import { installedMailbox, preloadMailbox } from "../../test/installed-mailbox";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { t } from "../../i18n";
-import { Connectors } from "./Connectors";
+import { chooseManager } from "../../lib/manager-choice";
+import { Connectors, MailInboxSwitch } from "./Connectors";
 
 vi.mock("../../ui/atoms", async (original) => ({ ...(await original<typeof import("../../ui/atoms")>()), toast: vi.fn() }));
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -34,6 +36,7 @@ afterEach(() => {
 });
 
 const openMail = async (port: string) => {
+  await preloadMailbox("Settings");
   act(() => root.render(<Connectors open={null} onOpen={() => {}} />));
   await flush();
   const add = [...host.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === t("settings-connectors.add_mail"))!;
@@ -49,7 +52,7 @@ const openMail = async (port: string) => {
   return form;
 };
 
-describe("mail account SMTP submission (#4879)", () => {
+describe.skipIf(!installedMailbox)("mail account SMTP submission (#4879)", () => {
   it.each([["0587", 587, "starttls"], ["587", 587, "starttls"], ["465", 465, "tls"]])("submits %s with its numeric port and connection mode", async (text, port, security) => {
     const form = await openMail(String(text));
     act(() => form.requestSubmit());
@@ -70,5 +73,45 @@ describe("mail account SMTP submission (#4879)", () => {
     await flush();
     expect(posts()).toHaveLength(1);
     expect(JSON.parse(posts()[0][1].body)).toMatchObject({ smtp_port: 465, smtp_security: "tls" });
+  });
+});
+
+describe("legacy integration destinations", () => {
+  it.each(installedMailbox ? ["mail", "lark"] : ["lark"])("opens the built-in %s section", async (id) => {
+    if (id === "mail") await preloadMailbox("Settings");
+    act(() => root.render(<Connectors open={id} onOpen={() => {}} />));
+    await flush();
+    expect(host.querySelector(`[data-settings-group="${id}"]`)).toBeTruthy();
+  });
+
+  it("opens one bot dialog on the named manager during desktop rollback", async () => {
+    act(() => root.render(<>
+      <Connectors open={null} openBeside="feishu-bot@work" onOpen={() => {}} />
+      <Connectors open="feishu-bot@work" onOpen={() => {}} />
+    </>));
+    await flush();
+    expect(document.querySelectorAll('[role="dialog"]')).toHaveLength(1);
+    expect(fetcher.mock.calls.filter(([url]) => url === "/api/v1/bots/feishu")
+      .some(([, init]) => new Headers(init.headers).get("X-Persona-Manager") === "work")).toBe(true);
+  });
+
+  it.skipIf(!installedMailbox)("reads and updates the chosen assistant's mail switch", async () => {
+    await preloadMailbox("InboxSwitch");
+    chooseManager("work");
+    try {
+      fetcher.mockImplementation(async () => ({ ok: true, text: async () => JSON.stringify({
+        connectors: [{ id: "mail", inbox: false }, { id: "mail", manager: "work", inbox: true }],
+      }) }));
+      act(() => root.render(<MailInboxSwitch />));
+      await flush();
+      const toggle = host.querySelector<HTMLButtonElement>('[role="switch"]')!;
+      expect(toggle?.getAttribute("aria-checked")).toBe("true");
+      act(() => toggle.click());
+      await flush();
+      const write = fetcher.mock.calls.find(([, init]) => init.method === "PUT");
+      expect(write && new Headers(write[1].headers).get("X-Persona-Manager")).toBe("work");
+    } finally {
+      act(() => chooseManager(null));
+    }
   });
 });

@@ -16,6 +16,7 @@ const (
 	ToolSearch   = "mail_search"
 	ToolRead     = "mail_read"
 	ToolSend     = "mail_send"
+	ToolMove     = "mail_move"
 	// ToolSaveAttachment writes a file on the machine the agent runs on, so that machine's node answers it
 	// (node/mailattachment.go) with the bytes FetchAttachment hands over its mail.attachment request; it is listed
 	// here with the others so that it comes and goes with mail.
@@ -89,6 +90,9 @@ type Config struct {
 // module (persona_without_mail, persona_core_only) has none, and the manager runs without mail.
 type Factory func(Config) (Service, error)
 
+// PreparedMove executes the single move described by its approval summary.
+type PreparedMove func(context.Context) (MoveResult, error)
+
 // Service is the mail module as the extension manager uses it.
 type Service interface {
 	Handler() http.Handler
@@ -119,6 +123,9 @@ type Service interface {
 	PasswordGuide(lang, email string) string
 	// SendSummary is mail_send's arguments as the approval card says them, or why they are not mail_send's.
 	SendSummary(args json.RawMessage) (string, error)
+	// PrepareMove reads the message and resolves the destination for the approval card. Run the returned move only
+	// after the owner approves that card.
+	PrepareMove(ctx context.Context, args json.RawMessage) (summary string, move PreparedMove, err error)
 	// ReadableText is a message's HTML body as readable text (paragraphs kept); PlainText the same on one line.
 	ReadableText(html string) string
 	PlainText(html string) string

@@ -4,8 +4,9 @@
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useCodexThread } from "./codex-waiting";
 import { useRuntimeSession } from "./runtime-session";
-import { connect, reset } from "./store";
+import { applyCompleteSessions, connect, getState, reset } from "./store";
 import type { Session } from "./types";
 
 class Socket {
@@ -43,6 +44,43 @@ afterEach(() => { reset(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 const settle = () => act(() => vi.advanceTimersByTimeAsync(200));
 
 describe("an open chat and sessions_list hints", () => {
+  it("follows a waiting Codex into a compact list row and reads its complete controls", async () => {
+    const waiting = { ...open, session_id: "waiting", agent: "codex", pane_id: "p1", awaiting_first_message: true };
+    const thread = { ...open, agent: "codex", pane_id: "p1", capabilities: { model: true }, model: "gpt-test", effort: "high", efforts: ["high"] };
+    let attached = false;
+    vi.stubGlobal("fetch", vi.fn(async (path: string) => {
+      const url = new URL(path, "http://demo");
+      if (!url.pathname.endsWith("/api/v1/sessions") || url.searchParams.has("counts")) return Response.json({});
+      const exact = url.searchParams.get("session_id");
+      const row = attached ? (exact === "waiting" ? undefined : exact ? thread : { ...thread, waiting: false }) : exact ? waiting : { ...waiting, waiting: false };
+      const sessions = row ? [row] : [];
+      return Response.json({ sessions, remove: url.searchParams.has("since") ? ['["demo","waiting"]'] : [], total: sessions.length, has_more: false, revision: attached ? "r2" : "r1" });
+    }));
+    connect();
+    Socket.last.push({ type: "hello", features: ["sessions_list", "sessions_lookup"] });
+    applyCompleteSessions([waiting]);
+    const Probe = () => {
+      const sid = useCodexThread(waiting) ?? waiting.session_id;
+      const { session } = useRuntimeSession("demo", sid);
+      return createElement("div", null, session?.capabilities?.model ? `${session.model} ${session.effort}` : "Waiting");
+    };
+    const container = document.createElement("div");
+    const root = createRoot(container);
+    try {
+      await act(async () => root.render(createElement(Probe)));
+      await settle();
+      expect(container.textContent).toBe("Waiting");
+      attached = true;
+      Socket.last.push({ type: "sessions_list", since: "r1", revision: "r2", changed: [["demo", "waiting"], ["demo", "open"]] });
+      await act(() => vi.advanceTimersByTimeAsync(2_100));
+      await settle();
+      expect(container.textContent).toBe("gpt-test high");
+      expect(getState().sessions.demo.find((row) => row.session_id === "open")?.efforts).toEqual(["high"]);
+    } finally {
+      act(() => root.unmount());
+    }
+  });
+
   it("asks for the changed rows, and reads its row only when a hint names it or cannot say", async () => {
     connect();
     expect(new URL(Socket.last.url).searchParams.get("features")?.split(",")).toContain("sessions_list_changes");

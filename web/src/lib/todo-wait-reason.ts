@@ -1,16 +1,11 @@
-// What a waiting to-do waits on (#11090; docs/assistant/todos.md "State calculation rules", row 4.5). A to-do is Waiting
-// when one of its Agents ended its turn and something brings it back (todos.ts agentWaits, #3274). One word for all of
-// them read as "it waits for me", so its label names the wait instead: "Waiting on you" in the attention color only when
-// it waits on its owner by the sidebar badge's own predicate (todo-triage.ts waitsOnOwner, #11085), so the label and the
-// badge agree; otherwise a neutral word for what it waits on, or "Paused (nothing needed from you)" when nothing says.
-// Pure: it reads only the to-do, its Agents' sessions and its placement, never what an Agent says in words.
+// Waiting labels use the hub projection. Older hubs need the session, triage and park fallback below.
 
 import { stateOf } from "./format";
-import { waitName, type WaitReason } from "./state-labels";
+import { serverWaitReason, waitName, type WaitReason } from "./state-labels";
 import { openMergePRs, triage, waitsOnOwner, type Triage } from "./todo-triage";
-import { agentWaits, heldDelivery, shownStatus, TODO_STATUS_INFO, todoStatusLabel, type SessionLookup, type Todo, type TodoStatus, type TodoTone } from "./todos";
+import { agentWaits, heldDelivery, openPRLook, shownStatus, TODO_STATUS_INFO, todoRestLook, todoStatusLabel, type SessionLookup, type Todo, type TodoRepoGateLook, type TodoStatus, type TodoTone } from "./todos";
 
-export type { WaitReason };
+export type { WaitReason, LegacyWaitReason } from "./state-labels";
 
 /** What its first waiting Agent (agentWaits, in the to-do's order as waitingLine reads it) waits on, by its work state
  *  (docs/assistant/agent-work.md "Model"): its own background commands, subagents, Monitors or workflows, or an
@@ -64,7 +59,7 @@ function checkVerdict(todo: Todo): string | undefined {
 }
 
 /**
- * What a to-do whose status is Waiting waits on, first that holds:
+ * With no hub projection, use the first legacy waiting reason that holds:
  *
  *  1. owner         it waits on its owner (waitsOnOwner: a decision only they can make, or work held for their OK)
  *  2. background    its Agent's own background work runs, and it wakes itself
@@ -84,6 +79,7 @@ function checkVerdict(todo: Todo): string | undefined {
  *               waiting to-do comes out the same whatever the page restored or superseded
  */
 export function waitReason(todo: Todo, lookup: SessionLookup | undefined, placed?: Triage, now = Date.now()): WaitReason {
+  if (todo.wait != null) return serverWaitReason(todo.wait);
   if (waitsOnOwner(todo, placed ?? triage(todo, lookup, now))) return "owner";
   const agent = agentWait(todo, lookup);
   if (agent && agent !== "external") return agent;
@@ -95,6 +91,7 @@ export function waitReason(todo: Todo, lookup: SessionLookup | undefined, placed
 
 /** waitReason for a waiting to-do, undefined for any other status. */
 export function waitOf(todo: Todo, status: TodoStatus, lookup: SessionLookup | undefined, placed?: Triage): WaitReason | undefined {
+  if (todo.wait != null) return serverWaitReason(todo.wait);
   return status === "waiting" ? waitReason(todo, lookup, placed) : undefined;
 }
 
@@ -106,12 +103,20 @@ export function waitTone(r: WaitReason): TodoTone {
 /** A to-do's state word and tone (TODO_TONE_CLASS) as the lists draw them: a waiting one's says what it waits on
  *  (`wait`, from waitOf; none reads as unknown), every other status's are todoStatusLabel's and the tone of `toneOf`'s
  *  TODO_STATUS_INFO, as each list took it before: shownStatus (the To-dos page), or the status itself (the overview). */
-export function todoLook(todo: Todo, status: TodoStatus, wait?: WaitReason, toneOf: TodoStatus = shownStatus(todo, status)): { label: string; tone: TodoTone } {
+export function todoLook(todo: Todo, status: TodoStatus, wait?: WaitReason, toneOf: TodoStatus = shownStatus(todo, status), now = Date.now(), repoGateLook?: TodoRepoGateLook): { label: string; tone: TodoTone } {
+  if (todo.wait != null) {
+    if (!todo.done_at && todo.wait.kind === "pr_merge") {
+      return openPRLook(todo, now, repoGateLook) ?? { label: waitName("pr_merge"), tone: "idle" };
+    }
+    return { label: waitName(serverWaitReason(todo.wait)), tone: "idle" };
+  }
   if (status === "waiting") return { label: waitName(wait ?? "unknown"), tone: waitTone(wait ?? "unknown") };
-  return { label: todoStatusLabel(todo, status), tone: TODO_STATUS_INFO[toneOf].tone };
+  const rest = todoRestLook(todo, status, now, repoGateLook);
+  if (rest) return rest;
+  return { label: todoStatusLabel(todo, status, now, repoGateLook), tone: TODO_STATUS_INFO[toneOf].tone };
 }
 
 /** A status's word as TODO_STATUS_INFO says it, a waiting one's naming its wait. */
 export function statusWord(status: TodoStatus, wait?: WaitReason): string {
-  return status === "waiting" ? waitName(wait ?? "unknown") : TODO_STATUS_INFO[status].label;
+  return wait !== undefined || status === "waiting" ? waitName(wait ?? "unknown") : TODO_STATUS_INFO[status].label;
 }

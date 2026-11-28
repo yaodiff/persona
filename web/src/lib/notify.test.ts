@@ -170,7 +170,7 @@ describe("需要你的通知写清楚问什么（#4056）", () => {
 
 describe("授权卡的通知带「允许 / 拒绝」（#4464）", () => {
   const n = { title: "a 需要你授权", body: "go test ./...", tag: "m/a#needs", url: "/s/m/a" };
-  async function post(o: { maxActions?: number; controller?: boolean; fine?: boolean; ix?: string; before?: boolean; workerHas?: string[] }) {
+  async function post(o: { maxActions?: number; controller?: boolean; fine?: boolean; ix?: string; created_at?: string; before?: boolean; workerHas?: string[] }) {
     const made: string[] = [];
     const closed: string[] = [];
     const workerClosed: string[] = [];
@@ -195,18 +195,19 @@ describe("授权卡的通知带「允许 / 拒绝」（#4464）", () => {
     vi.stubGlobal("localStorage", { getItem: (k: string) => (k === "persona.systemNotify" ? "1" : null), setItem: () => {}, removeItem: () => {} });
     const { postNotification } = await import("./notify");
     if (o.before) postNotification({ ...n, title: "a 需要你" }, () => {});
-    postNotification({ ...n, ix: o.ix }, () => {});
+    postNotification({ ...n, ix: o.ix, created_at: o.created_at }, () => {});
     await new Promise((r) => setTimeout(r, 0));
     vi.unstubAllGlobals();
     return { made, closed, workerClosed, showNotification };
   }
 
-  it("浏览器画得出按钮：经 service worker 弹，带两个按钮和卡片 id", async () => {
-    const { made, showNotification } = await post({ maxActions: 2, ix: "p1" });
+  it("浏览器画得出按钮：经 service worker 弹，带两个按钮和卡片 occurrence", async () => {
+    const created_at = "2026-01-02T03:04:05.000000001Z";
+    const { made, showNotification } = await post({ maxActions: 2, ix: "p1", created_at });
     expect(made).toEqual([]);
     expect(showNotification).toHaveBeenCalledWith("a 需要你授权", expect.objectContaining({
       tag: "m/a#needs",
-      data: { url: "/s/m/a", ix: "p1" },
+      data: { url: "/s/m/a", ix: "p1", created_at },
       actions: [{ action: "allow", title: "允许" }, { action: "deny", title: "拒绝" }],
     }));
   });

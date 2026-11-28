@@ -50,7 +50,9 @@ func serveAgentSourceExtensionForTest() {
 				return map[string]any{"accounts": []any{map[string]any{"accountId": "acc", "provider": "example_bot", "status": "active", "sessionCount": 1}}}, nil
 			case "sessions":
 				return map[string]any{"sessions": []any{map[string]any{"sessionKey": "room/1", "provider": "example_bot", "title": "Room",
-					"canSend": true, "unreadCount": len(sent), "rankTimeMs": 100 + len(sent)}}}, nil
+					"canSend": true, "unreadCount": len(sent), "rankTimeMs": 100 + len(sent),
+					"previewText": "Last line", "previewIsMine": true, "onTopRankTimeMs": 42,
+					"quota": map[string]any{"state": "low", "percent": 15, "show": false, "resetsAt": 1800000000000, "future": "kept"}}}}, nil
 			case "messages":
 				msgs := []any{}
 				for i, t := range sent {
@@ -121,6 +123,14 @@ func TestExtensionAgentSource(t *testing.T) {
 	list, _ := out["sessions"].([]any)
 	if len(list) != 1 || list[0].(map[string]any)["id"] != id || list[0].(map[string]any)["source"] != "examplebot" {
 		t.Fatalf("sessions: %v", out)
+	}
+	// the list's preview and the source's own pin reach the apps unchanged
+	if row := list[0].(map[string]any); row["previewText"] != "Last line" || row["previewIsMine"] != true || row["onTopRankTimeMs"] != float64(42) {
+		t.Fatalf("preview fields: %v", row)
+	}
+	// the quota as the source sent it, fields the hub does not know and show=false included
+	if q, _ := list[0].(map[string]any)["quota"].(map[string]any); q["state"] != "low" || q["percent"] != float64(15) || q["show"] != false || q["future"] != "kept" {
+		t.Fatalf("quota: %v", list[0])
 	}
 	if code, out := call(t, mux, "GET", "/api/v1/agents/sessions/"+url.PathEscape("examplebot:nope")+"/messages", master, ""); code != 404 {
 		t.Fatalf("a session the plugin does not have: %d %v", code, out)

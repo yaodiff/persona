@@ -41,6 +41,21 @@ describe("engineSwitchOf", () => {
     expect(switchOf(block('to="codex"', "x")).sw).toBeUndefined();
     expect(switchOf(block('from="Claude" to="codex"', "x")).sw).toBeUndefined();
     expect(switchOf(block('from=" codex " to="claude"', "x")).sw).toMatchObject({ from: "codex", to: "claude" });
+    expect(switchOf(block('from="claude" to="agy" model="gemini-4-neon-high"', "x")).sw).toEqual({
+      from: "claude",
+      to: "agy",
+      model: "gemini-4-neon-high",
+      resumed: false,
+      text: "x",
+    });
+    expect(switchOf(block('from="agy" to="claude" resumed="1"', "x")).sw).toEqual({
+      from: "agy",
+      to: "claude",
+      model: undefined,
+      resumed: true,
+      text: "x",
+    });
+    expect(switchOf(block('from="agy" to="agy"', "x")).sw).toBeUndefined();
   });
 
   it("is nothing for any other block", () => {

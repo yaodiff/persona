@@ -1,7 +1,7 @@
 import { Suspense, useContext, useEffect, useId, useLayoutEffect, useRef, useState, type ComponentType } from "react";
 import { createPortal } from "react-dom";
 import { t } from "../i18n";
-import type { AgentState } from "../lib/types";
+import type { StatusMarkState } from "../lib/types";
 import { Icon, type IconName } from "./icons";
 import { StatusMark } from "./StatusMark";
 import type { ToastLiftProps } from "./toast-lift";
@@ -89,10 +89,12 @@ export function Loading({ label = t("common.loading") }: { label?: string }) {
 }
 
 /** A state as a word in a pill; `awaiting`: seen and awaiting the user's reply, a quiet pending mark (#5096). */
-export function StatePill({ state, awaiting = false, waiting = false, dot = true }: { state: AgentState; awaiting?: boolean; /** working only on background commands that wait (#6045) */ waiting?: boolean; /** false beside a dot that already says the state (an Agent's header, #3956): the words alone */ dot?: boolean }) {
-  const tone: Record<AgentState, string> = {
+export function StatePill({ state, awaiting = false, waiting = false, dot = true }: { state: StatusMarkState; awaiting?: boolean; /** working only on background commands that wait (#6045) */ waiting?: boolean; /** false beside a dot that already says the state (an Agent's header, #3956): the words alone */ dot?: boolean }) {
+  const tone: Record<StatusMarkState, string> = {
     needs_you: "bg-field text-attention",
     working: "bg-field text-orange",
+    done: "bg-green-tint text-green",
+    error: "bg-danger-wash text-red",
     unread: "bg-green-tint text-green",
     idle: "bg-field text-ink-2",
     offline: "bg-field text-ink-3",
@@ -171,6 +173,7 @@ export function Button({
   title,
   href,
   expanded,
+  "aria-pressed": pressed,
   testId,
   size,
   ref,
@@ -189,6 +192,8 @@ export function Button({
   href?: string;
   /** A button that shows or hides something: whether it is shown (aria-expanded). */
   expanded?: boolean;
+  /** A toggle: whether it is on (aria-pressed). */
+  "aria-pressed"?: boolean;
   /** The id of what it shows or hides. */
   "aria-controls"?: string;
   /** A fuller name for screen readers, starting with the visible words, as "Show 2 more in Export". */
@@ -205,7 +210,7 @@ export function Button({
   if (href && !disabled && !busy) {
     // an <a> is never :enabled, so the link has its own hover / press
     const links: Record<BtnTone, string> = {
-      primary: "bg-ink text-surface shadow-[inset_0_1px_0_rgba(255,255,255,0.14)] hover:opacity-90",
+      primary: "bg-ink text-surface hover:opacity-90",
       accent: "bg-accent-ink text-surface hover:brightness-105",
       secondary: "bg-surface text-ink shadow-btn hover:bg-hover",
       quiet: "text-ink-2 hover:bg-hover hover:text-ink",
@@ -219,7 +224,7 @@ export function Button({
     );
   }
   const tones: Record<BtnTone, string> = {
-    primary: "bg-ink text-surface shadow-[inset_0_1px_0_rgba(255,255,255,0.14)] enabled:hover:opacity-90",
+    primary: "bg-ink text-surface enabled:hover:opacity-90",
     accent: "bg-accent-ink text-surface enabled:hover:brightness-105",
     // dark: at 45% the ring and the light label still read as a button you can press, so a disabled one drops both
     secondary: "bg-surface text-ink shadow-btn enabled:hover:bg-hover dark:disabled:bg-transparent dark:disabled:text-ink-3 dark:disabled:shadow-hairline",
@@ -236,6 +241,7 @@ export function Button({
       // the spinner is aria-hidden, so without this a busy button just reads as disabled
       aria-busy={busy || undefined}
       aria-expanded={expanded}
+      aria-pressed={pressed}
       data-testid={testId}
       onClick={onClick}
       className={cx(
@@ -261,6 +267,24 @@ export function Spinner({ size = 12 }: { size?: number }) {
   );
 }
 
+/** `animated`: crossfade tone changes (#2757). `wrap`: keep long explanatory chips inside a narrow row. */
+export function Pill({ children, tone, animated, wrap, size }: { children: React.ReactNode; tone?: "accent" | "green" | "red" | "orange"; animated?: boolean; wrap?: boolean; size?: "sm" }) {
+  return (
+    <span
+      style={animated ? { transitionTimingFunction: EASE } : undefined}
+      className={cx(
+        animated && "transition-[background-color,color,box-shadow] duration-300",
+        "inline-flex items-center rounded-full text-[11px] font-medium",
+        size === "sm" ? "px-1" : "px-1.5",
+        wrap ? "min-h-5 max-w-full whitespace-normal break-words py-0.5" : "h-5 shrink-0 whitespace-nowrap",
+        tone === "accent" ? "bg-accent-tint text-accent-ink" : tone === "green" ? "bg-green-tint text-green" : tone === "red" ? "bg-red-tint text-red" : tone === "orange" ? "bg-orange-tint text-orange" : "bg-inset text-ink-2 shadow-hairline",
+      )}
+    >
+      {children}
+    </span>
+  );
+}
+
 /** An on / off switch (role=switch): the knob slides over 200 ms with the design system's ease (reduced motion: at once).
  *  Settings' rows, and the chat's and "New agent"'s ultracode switch (#3428). `className`: added to the track (a place
  *  that needs its grayed state drawn more clearly); without it the switch is as before. */
@@ -279,7 +303,7 @@ export function Switch({ on, onChange, disabled, label, className, describedBy, 
       onClick={() => onChange(!on)}
       className={cx("switch touch-hit relative inline-flex h-[22px] w-[38px] shrink-0 items-center rounded-full transition-colors duration-200 disabled:opacity-50", on ? "bg-switch-on" : "bg-switch-off", className)}
     >
-      <span aria-hidden className="absolute left-[2px] size-[18px] rounded-full bg-white shadow-knob transition-transform duration-200" style={{ transform: on ? "translateX(16px)" : "none", transitionTimingFunction: EASE }} />
+      <span aria-hidden className="absolute left-[2px] size-[18px] rounded-full bg-white shadow-knob transition-transform duration-200" style={{ transform: on ? "translateX(16px)" : "none", transitionTimingFunction: "var(--ease-spring)" }} />
     </button>
   );
 }
@@ -787,8 +811,8 @@ function MenuPanel({
       aria-label={reading ? (header ?? items[0].label) : undefined}
       data-menu={id}
       data-side-panel={inSidePanel ? "" : undefined}
-      className="fixed z-50 max-h-[calc(100dvh-(--spacing(4)))] overflow-y-auto rounded-[10px] bg-surface p-1 shadow-overlay"
-      style={{ ...pos, animation: `pop-in 160ms ${EASE} both`, transformOrigin: origin }}
+      className="fixed z-50 max-h-[calc(100dvh-(--spacing(4)))] overflow-y-auto rounded-card bg-surface p-1 shadow-overlay"
+      style={{ ...pos, animation: "pop-in 180ms var(--ease-spring) both", transformOrigin: origin }}
       onMouseEnter={onEnter}
       onMouseLeave={onLeave}
       onScroll={measureMore}
@@ -857,7 +881,7 @@ function MenuPanel({
         ])}
       </div>
       {failure && (
-        <div role="alert" className="mx-1 mt-1 max-h-28 overflow-y-auto border-t border-line px-1 pt-1.5 pb-1 text-[11.5px] break-words whitespace-pre-wrap text-red">
+        <div role="alert" className="mx-1 mt-1 max-h-28 overflow-y-auto border-t border-line px-1 pt-1.5 pb-1 text-submeta break-words whitespace-pre-wrap text-red">
           {failure}
         </div>
       )}
@@ -1109,6 +1133,7 @@ export function Dialog({
   footer,
   labelledBy,
   describedBy,
+  closeOnBack = false,
 }: {
   open: boolean;
   onClose: () => void;
@@ -1120,11 +1145,13 @@ export function Dialog({
   labelledBy?: string;
   /** The id of the text that says what the dialog asks. */
   describedBy?: string;
+  /** A drill-down is a history entry even on wider screens. */
+  closeOnBack?: boolean;
 }) {
   const panel = useRef<HTMLDivElement>(null);
   const titleId = useId();
   const sheet = useMedia(SHEET_QUERY);
-  useCloseOnBack(open, onClose, sheet);
+  useCloseOnBack(open, onClose, sheet || closeOnBack);
   useEscapeClose(open, onClose);
   // The dialog itself takes the focus, so a phone's keyboard does not come up for its first field (one with autoFocus
   // took it already). On close it goes back to the opener, unless the close moved it outside on purpose.
@@ -1169,7 +1196,7 @@ export function Dialog({
         aria-labelledby={shown.title ? titleId : labelledBy}
         aria-describedby={describedBy}
         tabIndex={-1}
-        className="flex max-h-[calc(88vh-(--spacing(8)))] w-full max-w-(--dialog-w) animate-[slide-up_220ms_var(--ease-out-strong)_both] flex-col overflow-hidden rounded-[14px] bg-surface shadow-overlay outline-none max-sm:max-h-[calc(var(--kb-h)*0.9)] max-sm:max-w-none max-sm:animate-none max-sm:rounded-b-none max-sm:transition-transform max-sm:duration-300 max-sm:ease-(--ease-out-strong) max-sm:starting:translate-y-full"
+        className="flex max-h-[calc(88vh-(--spacing(8)))] w-full max-w-(--dialog-w) animate-[slide-up_240ms_var(--ease-spring)_both] flex-col overflow-hidden rounded-[14px] bg-surface shadow-overlay outline-none max-sm:max-h-[calc(var(--kb-h)*0.9)] max-sm:max-w-none max-sm:animate-none max-sm:rounded-b-none max-sm:transition-transform max-sm:duration-300 max-sm:ease-(--ease-out-strong) max-sm:starting:translate-y-full"
         style={{ "--dialog-w": `${width}px` } as React.CSSProperties}
       >
         {shown.title && (

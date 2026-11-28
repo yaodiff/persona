@@ -89,9 +89,15 @@
     <string name="settings_devices_empty_detail">配对后可在这里查看和撤销设备。</string>
     <string name="settings_devices_unnamed">未命名设备</string>
     <string name="settings_devices_this">本机</string>
+    <string name="settings_devices_online">在线</string>
+    <string name="settings_devices_group_devices">设备</string>
+    <string name="settings_devices_group_browsers">浏览器</string>
+    <string name="settings_devices_group_links">电脑</string>
+    <string name="settings_devices_group_integrations">集成与受限访问</string>
     <string name="settings_devices_platform_role">%1$s，%2$s</string>
     <string name="settings_devices_role_full">完整权限</string>
     <string name="settings_devices_role_answer">只能回答</string>
+    <string name="settings_devices_role_scoped">受限访问</string>
     <string name="settings_devices_role_unknown">角色未提供</string>
     <string name="settings_devices_added">添加于：%1$s</string>
     <string name="settings_devices_last_used">最近使用：%1$s</string>
@@ -135,6 +141,8 @@
     <string name="settings_not_provided">未提供</string>
     <string name="settings_about_build">构建号</string>
     <string name="settings_devices_watch">手表</string>
+    <string name="settings_devices_web">网页</string>
+    <string name="settings_devices_link">Persona Link</string>
     <string name="settings_devices_phone_unknown">手机（平台未提供）</string>
     <string name="settings_devices_platform_unknown">平台未提供</string>
     <string name="settings_devices_no_record">尚无记录</string>

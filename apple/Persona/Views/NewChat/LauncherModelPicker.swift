@@ -16,16 +16,16 @@ nonisolated struct LauncherModelChoice: Equatable {
     var presetDefault = false
     /// The launcher New Agent will actually start. A shared settings picker leaves this nil.
     var startLauncher: Launcher? = nil
-    var startsInHerdr = false
+    var startsInOmpModelHost = false
 
     private var supportsTyping: Bool {
         if let launcher = startLauncher, launcher.startsOmp || launcher.runtimeAgent == "omp" { return launcher.startsOmp }
         return LauncherModels.takesTypedModel(agent: list.agent)
     }
-    /// Only the native launcher in herdr can apply an omp start model, even when a different host's catalog has rows.
+    /// Only the native launcher in herdr or Orca can apply an omp start model, even when a different host's catalog has rows.
     var startAllowsModel: Bool {
         guard startLauncher?.startsOmp == true else { return true } // other runtimes keep their advertised lists
-        return startsInHerdr && list.supportsStartModel == true && list.locked == nil
+        return startsInOmpModelHost && list.supportsStartModel == true && list.locked == nil
     }
     private var offersModels: Bool { startAllowsModel && (!list.models.isEmpty || supportsTyping) }
     /// A pick can reach the agent even when the list is empty if the launcher accepts a typed ID.
@@ -40,7 +40,7 @@ nonisolated struct LauncherModelChoice: Equatable {
     /// or typed, even when the list is empty.
     var showsLocked: Bool {
         guard list.locked != nil else { return false }
-        return startLauncher?.startsOmp == true ? startsInHerdr : offersModels
+        return startLauncher?.startsOmp == true ? startsInOmpModelHost : offersModels
     }
     /// The model the agent runs when it is given none.
     var defaultModel: AgentModel? { list.models.first(where: \.isDefault) }

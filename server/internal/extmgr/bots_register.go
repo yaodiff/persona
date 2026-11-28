@@ -110,7 +110,7 @@ func (h *Manager) beginFeishuRegistration(ctx context.Context, errText string) (
 		return connector.Prompt{Error: errText}, false
 	}
 	// The app also asks for the user scopes of the sync's tier (TierDocs unless the owner chose another), so the
-	// owner can authorize it to read as them right after (larksync_auth.go) without registering again.
+	// owner can authorize it to read as them right after (internal/modules/lark/larksync) without registering again.
 	ch, err := r.BeginWith(ctx, region, botRegisterName, larksyncwire.RegisterOptions{UserScopes: larksyncwire.ScopesFor(h.larkSyncPrimaryTier(ctx))})
 	if err != nil {
 		h.logf("bots: registration: %v", err)

@@ -63,7 +63,7 @@ internal object NotificationPolicy {
                                 action("answer.$index", option.label, AnswerAction.PickOption, AnswerDraft(optionIndex = index))
                             }
                         }.orEmpty()
-                    AnswerRequirement.PlainDialogOption in policy.requirements -> ix.dialog?.options.orEmpty()
+                    AnswerRequirement.PlainDialogOption in policy.requirements -> ix.dialog?.takeUnless { it.multi }?.options.orEmpty()
                         .filter { it.kind == null || it.kind == "" || it.kind == "plain" }
                         .take(policy.maxOptions ?: 0).map { action("option.${it.key}", it.label, AnswerAction.ScreenOption, AnswerDraft(option = it.key)) }
                     else -> emptyList()

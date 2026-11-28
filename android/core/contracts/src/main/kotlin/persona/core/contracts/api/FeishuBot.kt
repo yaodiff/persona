@@ -17,6 +17,9 @@ interface FeishuBotSettings {
 
     /** The bot's daily sync into the knowledge base ([LarkSyncSettings]); null where this client has none. */
     val sync: LarkSyncSettings? get() = null
+
+    /** Who else may @ the bot in a group ([FeishuGroupAccessSettings]); null where this client has none. */
+    val groupAccess: FeishuGroupAccessSettings? get() = null
 }
 
 @Serializable data class FeishuBotStatus(

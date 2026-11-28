@@ -12,18 +12,21 @@ import { conversationRoute } from "../../lib/conversation-page";
 import { api, ApiError, errorText } from "../../lib/api";
 import { markdownBody, markdownInSummary, withoutMarks } from "../../lib/inbox-markdown";
 import { docChangeLine, inboxSessionRoute, openInboxConversation } from "../../lib/inbox-page";
-import { otherManager } from "../../lib/manager-choice";
+import { mainConversationMachine } from "../../lib/feed-cache";
+import { otherManager, sameManager } from "../../lib/manager-choice";
 import { nowText } from "../../lib/inbox-now";
 import { connectorBrand } from "../../lib/connectors";
-import { stateOf } from "../../lib/format";
+import { activityOf } from "../../lib/format";
 import { stateName } from "../../lib/state-labels";
 import { openLink } from "../../lib/links";
 import { type Route } from "../../lib/router";
 import { openFromInbox } from "../../lib/inbox-nav";
+import { useComposition } from "../../lib/ime";
 import { useStore } from "../../lib/store";
 import { t } from "../../i18n";
 import { Button, cx, Shimmer, Spinner, Switch, toast } from "../../ui/atoms";
 import { BrandMark } from "../../ui/BrandMark";
+import { BoundMentions, ReplyRichText } from "./ReplyBody";
 import { Icon, type IconName } from "../../ui/icons";
 import { Markdown } from "../../ui/Markdown";
 import { StatusMark } from "../../ui/StatusMark";
@@ -36,6 +39,14 @@ import { useItemReadOnly } from "./item-write-gate";
 /** Where a tapped `source` entry (or "Original") opens the item's own page: at a Feishu position, a mail's uid, or a URL. */
 export type SourceAt = { position?: string; uid?: number; url?: string };
 
+/** An untitled main chat can be named from this manager's loaded snapshot, without looking up the target. */
+function SuggestionLabel({ item, suggestion }: { item: InboxItem; suggestion: InboxSuggestion }) {
+  const main = useStore(({ assistant }) => suggestion.kind === "handoff" && !suggestion.target_title && !!assistant?.main
+    && sameManager(item.manager, assistant.manager) && suggestion.session_id === assistant.main
+    && suggestion.machine_id === mainConversationMachine(assistant));
+  return suggestionTitle(suggestion, main);
+}
+
 // ── the row ──────────────────────────────────────────────
 
 /** Under a row: a known manager state always has its own line; an older hub keeps the handling or suggestion line. */
@@ -43,7 +54,8 @@ export function EventMark({ it }: { it: InboxItem }) {
   const now = nowText(it);
   if (now !== undefined) {
     const key = it.now!;
-    const needsYou = key === "confirm_reply" || key === "confirm_agent" || key === "decide" || key === "follow_up_ask" || key === "check_due" || key === "failed" || key === "needs_you";
+    const needsYou = key === "confirm_reply" || key === "confirm_agent" || key === "confirm_handoff" || key === "decide" || key === "follow_up_ask" || key === "check_due" || key === "failed" || key === "needs_you";
+    const handoff = (key === "confirm_handoff" || key === "decide") && it.suggestion?.kind === "handoff" ? it.suggestion : undefined;
     const working = key === "queued" || key === "looking" || key === "agent_working";
     const icon = key === "waiting" ? "clock" : working ? "spinner" : needsYou ? "needs-you" : key.startsWith("done_") ? "check" : "none";
     return (
@@ -57,7 +69,9 @@ export function EventMark({ it }: { it: InboxItem }) {
           </span>
         )}
         {icon === "check" && <Icon name="check" size={12} stroke={2.4} className="shrink-0" />}
-        {key === "looking" ? <Shimmer className="truncate">{now}</Shimmer> : <span className="truncate">{now}</span>}
+        {key === "looking" ? <Shimmer className="truncate">{now}</Shimmer> : <span className="truncate">
+          {handoff ? <>{key === "decide" && `${now} · `}<SuggestionLabel item={it} suggestion={handoff} /></> : now}
+        </span>}
       </p>
     );
   }
@@ -75,7 +89,7 @@ export function EventMark({ it }: { it: InboxItem }) {
   if (s) {
     return (
       <p className="flex min-w-0 items-center gap-1.5 text-submeta whitespace-nowrap" data-event-mark="suggestion">
-        <span className="shrink-0 font-medium text-accent-ink"><Spark />{suggestionTitle(s)}</span>
+        <span className="max-w-full shrink-0 truncate font-medium text-accent-ink"><Spark /><SuggestionLabel item={it} suggestion={s} /></span>
         <span className="min-w-0 truncate text-ink-2">{firstLine(s.text)}</span>
       </p>
     );
@@ -123,7 +137,7 @@ export function EventBody({ item, onSource, embedded = false }: { item: InboxIte
   const body = (
     <div ref={box} {...fold} className={embedded ? "min-h-0 overflow-y-auto" : "min-h-0 flex-1 overflow-y-auto"} data-event-body={embedded ? "embedded" : ""}>
       <div className={cx("mx-auto flex max-w-[760px] flex-col px-4 sm:px-6", embedded ? "gap-3 py-3" : "gap-4 py-4")}>
-        {(!done || now !== undefined || hasConversation) && <HandlingLine item={item} now={now} />}
+        {(!done || now !== undefined || hasConversation) && <HandlingLine key={itemKey(item)} item={item} now={now} />}
         {done && now === undefined && item.done_by === "manager" && !hasConversation && (
           <p className="flex items-center gap-2 text-[12.5px] text-ink-2" data-event-manager-done>
             <Icon name="check" size={13} stroke={2.4} className="shrink-0 text-green" />
@@ -131,7 +145,7 @@ export function EventBody({ item, onSource, embedded = false }: { item: InboxIte
           </p>
         )}
         {!done && item.suggestion && item.summary && <EventSummary text={item.summary} marked />}
-        {!done && item.suggestion && <SuggestionCard key={`${item.id}@${item.suggestion.version}`} item={item} suggestion={item.suggestion} />}
+        {!done && item.suggestion && <SuggestionCard key={`${itemKey(item)}@${item.suggestion.version}`} item={item} suggestion={item.suggestion} />}
         {!done && item.suggestion && item.recap && (
           <section className="flex flex-col gap-2">
             <div>
@@ -224,37 +238,59 @@ function HandlingLine({ item, now }: { item: InboxItem; now?: string }) {
   const [sayOpen, setSayOpen] = useState(false);
   const [say, setSay] = useState("");
   const [acting, setActing] = useState(false);
+  const ime = useComposition();
+  const { onBlur: resetIme } = ime;
+  const inFlightRef = useRef(false);
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
   const h = item.handling;
   const mid = h?.machine_id;
   const sid = h?.session_id;
   const done = isDone(item);
   const canSay = !done && !item.suggestion;
   const failed = canSay && (h ? handlingFailed(item) : item.now === "failed" || item.agent?.state === "failed");
+  const showSay = sayOpen && canSay && !failed;
+  useEffect(() => {
+    if (!showSay) resetIme();
+  }, [showSay, resetIme]);
   const showPreparing = !done && preparing(item);
   if (!h && !canSay && now === undefined) return null;
   const word = now ?? (done ? (item.done_by === "manager" ? t("inbox-inboxevent.manager_done") : undefined) : handlingWord(item));
   const working = h?.state === "looking" || h?.state === "agent";
   const instruct = async (words: string) => {
     const text = words.trim();
-    if (!text || acting) return;
+    if (!text || acting || inFlightRef.current) return;
+    inFlightRef.current = true;
     setActing(true);
-    const r = await actOnSuggestion(itemPath(item.id), 0, "instruct", text, undefined, item.manager);
-    setActing(false);
-    if (r.ok) {
-      if (r.item?.id === item.id) replaceItem(r.item, item.manager);
-      setSay("");
-      setSayOpen(false);
-      toast(t("lib-inbox-events.instructed"), "ok");
-    } else if (r.stale) {
-      if (r.item) replaceItem(r.item, item.manager);
-      else void reloadInbox();
-      toast(r.error, "info");
-    } else {
-      toast(t("lib-inbox.suggestion_failed", { error: r.error }), "error");
+    try {
+      const r = await actOnSuggestion(itemPath(item.id), 0, "instruct", text, undefined, item.manager);
+      if (r.ok) {
+        if (r.item?.id === item.id) replaceItem(r.item, item.manager);
+        if (mountedRef.current) {
+          setSay("");
+          setSayOpen(false);
+        }
+        toast(t("lib-inbox-events.instructed"), "ok");
+      } else if (r.stale) {
+        if (r.item) replaceItem(r.item, item.manager);
+        else void reloadInbox();
+        toast(r.error, "info");
+      } else {
+        toast(t("lib-inbox.suggestion_failed", { error: r.error }), "error");
+      }
+    } finally {
+      inFlightRef.current = false;
+      if (mountedRef.current) setActing(false);
     }
   };
   const retry = async () => {
-    if (acting) return;
+    if (acting || inFlightRef.current) return;
+    inFlightRef.current = true;
     setActing(true);
     const current = () => getInbox().items.find((row) => sameItem(row, item));
     const before = current();
@@ -277,7 +313,8 @@ function HandlingLine({ item, now }: { item: InboxItem; now?: string }) {
         toast(t("inbox-inboxdetail.retry_failed", { error: errorText(err) }), "error");
       }
     } finally {
-      setActing(false);
+      inFlightRef.current = false;
+      if (mountedRef.current) setActing(false);
     }
   };
   const open = mid && sid && (
@@ -291,7 +328,6 @@ function HandlingLine({ item, now }: { item: InboxItem; now?: string }) {
   ) : !sayOpen ? (
     <Button tone="quiet" size="sm" icon="chat" onClick={() => setSayOpen(true)} testId="inbox-say">{t("inbox-inboxdetail.say_something")}</Button>
   ) : null);
-  const showSay = sayOpen && canSay && !failed;
   const actions = (open || action) ? <div className="flex shrink-0 items-center gap-2" data-event-status-actions>{open}{action}</div> : null;
   if (!showPreparing && !failed && !word && !(done && open) && !action && !showSay) return null;
   return (
@@ -328,17 +364,23 @@ function HandlingLine({ item, now }: { item: InboxItem; now?: string }) {
             <input
               value={say}
               onChange={(e) => setSay(e.target.value)}
+              disabled={acting}
               placeholder={t("inbox-inboxevent.say_placeholder")}
               aria-label={t("inbox-inboxdetail.say_something")}
               className="min-w-0 flex-1 bg-transparent text-[12.5px] text-ink outline-none placeholder:text-ink-3"
               data-event-say-input
+              {...ime.handlers}
+              onBlur={ime.onBlur}
               onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.nativeEvent.isComposing && say.trim()) void instruct(say);
+                if (e.key === "Enter" && !ime.busy(e.nativeEvent) && say.trim() && !acting && !inFlightRef.current) {
+                  e.preventDefault();
+                  void instruct(say);
+                }
               }}
             />
           </label>
           <div className="flex flex-wrap justify-end gap-2">
-            <Button tone="quiet" size="sm" disabled={acting} onClick={() => { setSayOpen(false); setSay(""); }}>{t("common.cancel")}</Button>
+            <Button tone="quiet" size="sm" disabled={acting} onClick={() => { if (inFlightRef.current) return; setSayOpen(false); setSay(""); }}>{t("common.cancel")}</Button>
             <Button tone="accent" size="sm" icon="spark" disabled={!say.trim() || acting} busy={acting} onClick={() => void instruct(say)}>{t("inbox-inboxdetail.say_something")}</Button>
           </div>
         </div>
@@ -354,8 +396,9 @@ function HandlingLine({ item, now }: { item: InboxItem; now?: string }) {
  * back to the processing conversation for a new suggestion instead.
  */
 export function SuggestionCard({ item, suggestion: s }: { item: InboxItem; suggestion: InboxSuggestion }) {
-  if (s.kind === "todo") return <TodoSuggestion item={item} suggestion={s} />;
-  return <TextSuggestion item={item} suggestion={s} />;
+  const cardKey = `${itemKey(item)}@${s.version}`;
+  if (s.kind === "todo") return <TodoSuggestion key={cardKey} item={item} suggestion={s} />;
+  return <TextSuggestion key={cardKey} item={item} suggestion={s} />;
 }
 
 /**
@@ -371,10 +414,24 @@ function TodoSuggestion({ item, suggestion: s }: { item: InboxItem; suggestion: 
   const [allDay, setAllDay] = useState(!t0);
   const [time, setTime] = useState(t0 || "09:00");
   const [acting, setActing] = useState<"" | "confirm" | "reject">("");
+  const inFlightRef = useRef(false);
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
   const act = async (action: "confirm" | "reject") => {
+    if (busy || inFlightRef.current || (action === "confirm" && !title.trim())) return;
+    inFlightRef.current = true;
     setActing(action);
-    await suggestionAct(item, action, action === "confirm" && title.trim() !== s.text ? title.trim() : undefined, action === "confirm" ? dueOf(day, allDay ? "" : time) : undefined);
-    setActing("");
+    try {
+      await suggestionAct(item, action, action === "confirm" && title.trim() !== s.text ? title.trim() : undefined, action === "confirm" ? dueOf(day, allDay ? "" : time) : undefined);
+    } finally {
+      inFlightRef.current = false;
+      if (mountedRef.current) setActing("");
+    }
   };
   const field = "h-8 rounded-control bg-field px-2.5 text-meta text-ink outline-none focus:shadow-[inset_0_0_0_1px_var(--accent)]";
   return (
@@ -428,14 +485,38 @@ function TextSuggestion({ item, suggestion: s }: { item: InboxItem; suggestion: 
   const [text, setText] = useState(s.text);
   const [say, setSay] = useState("");
   const [acting, setActing] = useState<"" | "confirm" | "reject" | "instruct">("");
-  useEffect(() => setText(s.text), [s.text]);
+  const ime = useComposition();
+  const { onBlur: resetIme } = ime;
+  const inFlightRef = useRef(false);
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+  useEffect(() => {
+    if (!editing) {
+      setText(s.text);
+      resetIme();
+    }
+  }, [s.text, editing, resetIme]);
   const b = suggestionButtons(s);
   const act = async (action: "confirm" | "reject" | "instruct", body?: string) => {
-    if (replyReadOnly && action !== "reject") return;
+    if ((replyReadOnly && action !== "reject") || busy || inFlightRef.current) return;
+    if (action === "instruct" && !body?.trim()) return;
+    inFlightRef.current = true;
     setActing(action);
-    const ok = await suggestionAct(item, action, body);
-    setActing("");
-    if (ok) setEditing(false);
+    try {
+      const ok = await suggestionAct(item, action, body);
+      if (ok && mountedRef.current) {
+        setEditing(false);
+        if (action === "instruct") setSay("");
+      }
+    } finally {
+      inFlightRef.current = false;
+      if (mountedRef.current) setActing("");
+    }
   };
   const edited = text.trim() && text !== s.text ? text : undefined;
   if (attempt) {
@@ -444,7 +525,8 @@ function TextSuggestion({ item, suggestion: s }: { item: InboxItem; suggestion: 
     return (
       <section className="rounded-[14px] bg-surface p-3.5 shadow-card" data-suggestion={s.kind} data-delivery={attempt.status}>
         <p className={cx("text-submeta font-medium", label === "failed" ? "text-red" : "text-ink-2")}>{t(`assistant-handoffcard.${label}`)}</p>
-        <p className="mt-1.5 text-meta leading-relaxed whitespace-pre-wrap text-ink" data-suggestion-text>{attempt.text}</p>
+        <ReplyRichText text={attempt.text} className="mt-1.5 text-meta leading-relaxed text-ink" dataSuggestionText />
+        <BoundMentions text={attempt.text} mentions={attempt.mentions ?? s.mentions} sent={attempt.status === "sent"} className="mt-1.5" />
         {Number.isFinite(Date.parse(attempt.at)) && <time dateTime={attempt.at} className="mt-1 block text-submeta text-ink-3">{chainTime(attempt.at)}</time>}
         {label !== "sent" && <p role="status" className="mt-2 text-meta text-ink-2">
           {t(`assistant-handoffcard.${label === "failed" ? retryable ? "retry_hint" : "failed_hint" : label + "_hint"}`)}
@@ -458,8 +540,8 @@ function TextSuggestion({ item, suggestion: s }: { item: InboxItem; suggestion: 
   }
   return (
     <section className="rounded-[14px] bg-surface p-3.5 shadow-card" data-suggestion={s.kind} data-handback={s.handback ? "" : undefined}>
-      <p className="flex items-center gap-1.5 text-submeta font-medium whitespace-nowrap text-accent-ink">
-        <span><Spark />{suggestionTitle(s)}</span>
+      <p className="flex items-center gap-1.5 text-submeta font-medium text-accent-ink">
+        <span className="min-w-0 wrap-anywhere"><Spark /><SuggestionLabel item={item} suggestion={s} /></span>
         {s.handback && <span className="text-ink-3">· {t("inbox-inboxevent.handback")}</span>}
       </p>
       {editing ? (
@@ -467,29 +549,37 @@ function TextSuggestion({ item, suggestion: s }: { item: InboxItem; suggestion: 
           <textarea
             value={text}
             onChange={(e) => setText(e.target.value)}
+            disabled={busy}
             aria-label={t("inbox-inboxevent.edit_text")}
             rows={Math.min(8, Math.max(3, text.split("\n").length + 1))}
             className="w-full resize-y rounded-control bg-field px-2.5 py-2 text-meta leading-relaxed text-ink outline-none focus:shadow-[inset_0_0_0_1px_var(--accent)]"
             data-suggestion-editor
           />
+          <BoundMentions text={text} mentions={s.mentions} />
           {!replyReadOnly && (
             <label className="flex h-8 items-center gap-2 rounded-control bg-field px-2.5 focus-within:shadow-[inset_0_0_0_1px_var(--accent)]">
               <Icon name="chat" size={13} className="shrink-0 text-ink-3" />
               <input
                 value={say}
                 onChange={(e) => setSay(e.target.value)}
+                disabled={busy}
                 placeholder={t("inbox-inboxevent.say_placeholder")}
                 aria-label={t("inbox-inboxevent.say")}
                 className="min-w-0 flex-1 bg-transparent text-[12.5px] text-ink outline-none placeholder:text-ink-3"
                 data-suggestion-say
+                {...ime.handlers}
+                onBlur={ime.onBlur}
                 onKeyDown={(e) => {
-                  if (e.key === "Enter" && !e.nativeEvent.isComposing && say.trim() && !replyReadOnly) void act("instruct", say.trim());
+                  if (e.key === "Enter" && !ime.busy(e.nativeEvent) && say.trim() && !replyReadOnly && !busy && !inFlightRef.current) {
+                    e.preventDefault();
+                    void act("instruct", say.trim());
+                  }
                 }}
               />
             </label>
           )}
           <div className="flex flex-wrap justify-end gap-2">
-            <Button tone="quiet" disabled={busy} onClick={() => { setEditing(false); setText(s.text); setSay(""); }}>{t("common.cancel")}</Button>
+            <Button tone="quiet" disabled={busy} onClick={() => { if (inFlightRef.current) return; setEditing(false); setText(s.text); setSay(""); }}>{t("common.cancel")}</Button>
             {!replyReadOnly && (
               <>
                 <Button tone={say.trim() ? "accent" : "secondary"} icon="spark" disabled={!say.trim() || (busy && acting !== "instruct")} busy={acting === "instruct"} onClick={() => void act("instruct", say.trim())}>
@@ -504,7 +594,8 @@ function TextSuggestion({ item, suggestion: s }: { item: InboxItem; suggestion: 
         </div>
       ) : (
         <>
-          <p className="mt-1.5 text-meta leading-relaxed whitespace-pre-wrap text-ink" data-suggestion-text>{s.text}</p>
+          <ReplyRichText text={s.text} className="mt-1.5 text-meta leading-relaxed text-ink" dataSuggestionText />
+          <BoundMentions text={s.text} mentions={s.mentions} className="mt-1.5" />
           {(s.changes ?? []).map((c) => (
             <p key={`${c.ref}|${c.field}`} className="mt-1 flex items-center gap-1.5 truncate text-submeta text-ink-2">
               <Icon name="chevronRight" size={11} stroke={2.4} className="shrink-0 text-ink-3" />
@@ -514,7 +605,7 @@ function TextSuggestion({ item, suggestion: s }: { item: InboxItem; suggestion: 
           {s.note && <p className="mt-1.5 text-label leading-relaxed text-ink-3">{s.note}</p>}
           <div className="mt-3 flex flex-wrap justify-end gap-2">
             <Button tone="quiet" disabled={busy && acting !== "reject"} busy={acting === "reject"} onClick={() => void act("reject")}>{t("inbox-inboxevent.reject")}</Button>
-            {!replyReadOnly && b.edit && <Button tone="secondary" icon="pencil" disabled={busy} onClick={() => setEditing(true)}>{t("inbox-inboxevent.edit")}</Button>}
+            {!replyReadOnly && b.edit && <Button tone="secondary" icon="pencil" disabled={busy} onClick={() => { if (inFlightRef.current) return; setText(s.text); setEditing(true); }}>{t("inbox-inboxevent.edit")}</Button>}
             {!replyReadOnly && (
               <Button tone="accent" icon={s.kind === "reply" && !s.handback ? "send" : "check"} disabled={busy && acting !== "confirm"} busy={acting === "confirm"} onClick={() => void act("confirm")}>
                 {b.confirm}
@@ -638,7 +729,7 @@ export function Chain({ item, onSource }: { item: InboxItem; onSource: (at: Sour
     const link = agentSession(e);
     if (!link || latestAgent.get(link.key) !== e.id) return undefined;
     const session = sessions[link.machine]?.find((s) => s.session_id === link.session);
-    return session ? stateName(stateOf(session)) : undefined;
+    return session ? stateName(activityOf(session)) : undefined;
   };
   return (
     <section data-event-chain>

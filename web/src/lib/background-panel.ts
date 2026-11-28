@@ -6,6 +6,7 @@ import { useSyncExternalStore } from "react";
 import { getPanel, openPanel, type Panel } from "./panel";
 import type { Session } from "./types";
 import { otherBackground, recentWorkflows } from "./workflows";
+import { byTime } from "./times";
 
 export type BackgroundPanel = Extract<Panel, { kind: "background" }>;
 
@@ -45,8 +46,7 @@ export function isWorkflowsCommand(text: string, images: number): boolean {
  *  among those the panel lists (recentWorkflows: a run that ended over a day ago is not one of them). */
 export function latestWorkflowRun(s: Session | undefined, now = Date.now()): string | undefined {
   const runs = recentWorkflows(s, now);
-  const at = (w: (typeof runs)[number]) => Date.parse(w.started_at ?? "") || 0;
-  const pick = (list: typeof runs) => list.slice().sort((a, b) => at(b) - at(a))[0];
+  const pick = (list: typeof runs) => list.slice().sort((a, b) => byTime(b.started_at, a.started_at))[0];
   return (pick(runs.filter((w) => w.running)) ?? pick(runs))?.task_id;
 }
 

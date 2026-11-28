@@ -33,6 +33,7 @@ func TestPreparedHubLostHandleReportsOriginalConversationExactlyOnce(t *testing.
 
 			var handleValid, applyRequests, executions atomic.Int32
 			handleValid.Store(1)
+			discarded := make(chan json.RawMessage, 1)
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				ws, err := websocket.Accept(w, r, nil)
 				if err != nil {
@@ -60,6 +61,10 @@ func TestPreparedHubLostHandleReportsOriginalConversationExactlyOnce(t *testing.
 						return assistantwire.FleetApprovalApplyResult{Text: "applied"}, nil
 					case assistantwire.MethodFleetApprovalDiscard:
 						handleValid.Store(0)
+						select {
+						case discarded <- raw:
+						default:
+						}
 						return map[string]any{"ok": true}, nil
 					default:
 						return map[string]any{}, nil
@@ -120,6 +125,15 @@ func TestPreparedHubLostHandleReportsOriginalConversationExactlyOnce(t *testing.
 			}
 			if applyRequests.Load() != 1 || executions.Load() != 0 {
 				t.Fatalf("apply requests=%d executions=%d, want one refused request and no execution", applyRequests.Load(), executions.Load())
+			}
+			select {
+			case raw := <-discarded:
+				var discard assistantwire.FleetApprovalDiscard
+				if err := json.Unmarshal(raw, &discard); err != nil || discard.InteractionID != id || discard.Status != "stale" {
+					t.Fatalf("discard request = %s, %v", raw, err)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("discard request did not reach the hub")
 			}
 
 			// Repeating the owner answer and draining the durable journal cannot

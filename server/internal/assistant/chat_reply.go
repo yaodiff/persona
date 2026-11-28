@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -33,6 +34,17 @@ const (
 	chatReplyGap = 10 * time.Minute
 	// chatReplyContextMax is how many characters of the messages' text one message carries: the newest.
 	chatReplyContextMax = 3000
+	// chatReplyMutedChatsKey is the persona_settings key listing Lark chats muted from chat_reply relays.
+	chatReplyMutedChatsKey = "assistant.chat_reply_relay_muted_chats"
+	chatReplyMutedChatsMax = 200
+	// chatReplyTakeoverKey persists per-chat owner takeover timestamps in the settings store for chatReplyWindow.
+	chatReplyTakeoverKey = "assistant.chat_reply_takeover"
+	// chatReplyAround is how many messages either side of the newest batch message to fetch for owner-reply detection.
+	chatReplyAround = 10
+	// chatReplyCheckTimeout bounds the GroupMessagesAround call per batch.
+	chatReplyCheckTimeout = 10 * time.Second
+	// chatReplyClockSkew tolerates clock skew when matching unreferenced assistant sends by timestamp.
+	chatReplyClockSkew = 2 * time.Minute
 )
 
 // chatReply is what a chat_reply message tells, kept with it in the queue (relayMsg.Chat) so that a later batch of the
@@ -49,6 +61,12 @@ type chatReply struct {
 	Context string `json:"context"`
 }
 
+type chatReplyMeta struct {
+	title string
+	group bool
+	at    time.Time
+}
+
 // chatReplyBook is what each conversation was told of each chat, in memory: after a restart, a batch the Inbox has not
 // put in an event yet may be told once more (one queued then is not: its ids are in the queue).
 type chatReplyBook struct {
@@ -57,8 +75,13 @@ type chatReplyBook struct {
 	told    map[string]*chatTold // by chatReplyKey
 	// refused: by conversation, when the owner was pushed that it refused a chat_reply for good (chatReplyRefused); one
 	// push until a chat_reply goes into it again or chatReplyWindow is over. In memory: a restart may push once more.
-	refused map[string]time.Time
-	wg      sync.WaitGroup // the rounds being told
+	refused        map[string]time.Time
+	meta           map[string]chatReplyMeta // by feed ID
+	takeover       map[string]time.Time     // by feed ID: latest time the owner personally spoke there
+	takeoverLoaded bool
+	takeoverDirty  bool
+	takeoverSaveMu sync.Mutex
+	wg             sync.WaitGroup // the rounds being told
 }
 
 // chatTold is what one conversation was told of one chat: the messages told or queued (when last handed), and when a
@@ -102,6 +125,16 @@ func (b *chatReplyBook) pruneLocked(now time.Time) {
 			delete(b.refused, to)
 		}
 	}
+	for feed, m := range b.meta {
+		if now.Sub(m.at) > chatReplyWindow {
+			delete(b.meta, feed)
+		}
+	}
+	for feed, at := range b.takeover {
+		if now.Sub(at) > chatReplyWindow {
+			delete(b.takeover, feed)
+		}
+	}
 }
 
 // chatSentStore is the part of the assistant's store that reads the sent-as-user ledger (the manager's Postgres).
@@ -126,9 +159,11 @@ func chatReplyRelayOn(cfg Settings) bool {
 	return cfg.ChatReplyRelay != nil && *cfg.ChatReplyRelay
 }
 
-// dropQueuedChatReplies takes every chat_reply that still waits in the relay queue out of it (assistant.chat_reply_relay
-// turned off). One going into its conversation right now (the head of a draining queue) is dropped by the drain.
-func (s *Service) dropQueuedChatReplies(ctx context.Context) {
+// dropQueuedChatReplies removes matching chat_reply messages still waiting in relay queues.
+// When feed is empty every queued chat_reply is dropped; when feed is set only that chat is dropped
+// (and when before is non-zero, only messages tied to assistant sends at or before before).
+// A chat_reply already draining at the head of a queue is skipped here and dropped by the drain via chatReplyStale.
+func (s *Service) dropQueuedChatReplies(ctx context.Context, feed string, before time.Time) {
 	b := &s.relays
 	b.mu.Lock()
 	if !s.relayLocked(ctx) {
@@ -139,7 +174,7 @@ func (s *Service) dropQueuedChatReplies(ctx context.Context) {
 	for to, q := range b.st.Queue {
 		kept := q[:0:0]
 		for i, m := range q {
-			if m.Tool == chatReplyTool && !(i == 0 && b.draining[to]) {
+			if m.Tool == chatReplyTool && !(i == 0 && b.draining[to]) && chatReplyMatchesDrop(m, feed, before) {
 				changed = true
 				continue
 			}
@@ -157,6 +192,168 @@ func (s *Service) dropQueuedChatReplies(ctx context.Context) {
 	b.mu.Unlock()
 	if changed {
 		s.publish(ctx)
+	}
+}
+
+func chatReplyMatchesDrop(m relayMsg, feed string, before time.Time) bool {
+	if feed == "" {
+		return true
+	}
+	if m.Chat == nil {
+		return false
+	}
+	f, ok := larkChatFeed(m.Chat.Thread)
+	if !ok || f != feed {
+		return false
+	}
+	return before.IsZero() || !m.Chat.Sent.After(before)
+}
+
+// chatReplyStale reports whether a queued chat_reply about to drain should be discarded because the global switch is
+// off, the chat is muted, or the owner personally spoke in that chat after the assistant's send.
+func (s *Service) chatReplyStale(ctx context.Context, msg relayMsg) bool {
+	if msg.Tool != chatReplyTool {
+		return false
+	}
+	cfg := s.settings(ctx)
+	if !chatReplyRelayOn(cfg) {
+		return true
+	}
+	if msg.Chat == nil {
+		return false
+	}
+	feed, ok := larkChatFeed(msg.Chat.Thread)
+	if !ok {
+		return false
+	}
+	return chatReplyChatMuted(cfg, feed) || s.chatReplyTakenOver(ctx, feed, msg.Chat.Sent, time.Now())
+}
+
+func (s *Service) noteChatMeta(feed, title string, group bool, now time.Time) {
+	if feed == "" || title == "" {
+		return
+	}
+	b := &s.chatReplies
+	b.mu.Lock()
+	if b.meta == nil {
+		b.meta = map[string]chatReplyMeta{}
+	}
+	b.meta[feed] = chatReplyMeta{title: title, group: group, at: now}
+	b.mu.Unlock()
+}
+
+// ensureChatReplyTakeoverLoaded ensures persisted takeover stops are loaded into b.takeover and flushes any
+// in-memory entries recorded while an earlier store read failed. Returns false if the store is absent or its read
+// fails so callers avoid overwriting previously persisted entries with an incomplete in-memory map.
+func (s *Service) ensureChatReplyTakeoverLoaded(ctx context.Context) bool {
+	b := &s.chatReplies
+	b.mu.Lock()
+	if b.takeoverLoaded && !b.takeoverDirty {
+		b.mu.Unlock()
+		return true
+	}
+	alreadyLoaded := b.takeoverLoaded
+	b.mu.Unlock()
+
+	st := s.store()
+	if st == nil {
+		b.mu.Lock()
+		if b.takeover == nil {
+			b.takeover = map[string]time.Time{}
+		}
+		b.mu.Unlock()
+		return false
+	}
+
+	var saved map[string]time.Time
+	if !alreadyLoaded {
+		if _, err := st.Setting(ctx, chatReplyTakeoverKey, &saved); err != nil {
+			s.logf("chat replies: takeover state could not be loaded: %v", err)
+			b.mu.Lock()
+			if b.takeover == nil {
+				b.takeover = map[string]time.Time{}
+			}
+			b.mu.Unlock()
+			return false
+		}
+	}
+
+	needFlush := false
+	b.mu.Lock()
+	if !b.takeoverLoaded {
+		if b.takeover == nil {
+			b.takeover = map[string]time.Time{}
+		}
+		for feed, at := range saved {
+			if prev, ok := b.takeover[feed]; !ok || at.After(prev) {
+				b.takeover[feed] = at
+			}
+		}
+		b.takeoverLoaded = true
+	}
+	needFlush = b.takeoverDirty
+	b.mu.Unlock()
+
+	if needFlush {
+		s.saveChatReplyTakeover(ctx, st, time.Now())
+	}
+	return true
+}
+
+func (s *Service) saveChatReplyTakeover(ctx context.Context, st Store, now time.Time) {
+	b := &s.chatReplies
+	b.takeoverSaveMu.Lock()
+	defer b.takeoverSaveMu.Unlock()
+	b.mu.Lock()
+	b.pruneLocked(now)
+	snap := maps.Clone(b.takeover)
+	b.takeoverDirty = false
+	b.mu.Unlock()
+	if err := st.PutSetting(ctx, chatReplyTakeoverKey, snap); err != nil {
+		b.mu.Lock()
+		b.takeoverDirty = true
+		b.mu.Unlock()
+		s.logf("chat replies: takeover state could not be saved: %v", err)
+	}
+}
+
+func (s *Service) chatReplyTakenOver(ctx context.Context, feed string, sent, now time.Time) bool {
+	if feed == "" {
+		return false
+	}
+	s.ensureChatReplyTakeoverLoaded(ctx)
+	b := &s.chatReplies
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.pruneLocked(now)
+	at, ok := b.takeover[feed]
+	return ok && now.Sub(at) <= chatReplyWindow && !sent.After(at)
+}
+
+func (s *Service) recordChatReplyTakeover(ctx context.Context, feed string, at, now time.Time) {
+	if feed == "" || at.IsZero() {
+		return
+	}
+	loaded := s.ensureChatReplyTakeoverLoaded(ctx)
+	b := &s.chatReplies
+	b.mu.Lock()
+	if b.takeover == nil {
+		b.takeover = map[string]time.Time{}
+	}
+	if prev, ok := b.takeover[feed]; !ok || at.After(prev) {
+		b.takeover[feed] = at
+	}
+	b.pruneLocked(now)
+	if !loaded {
+		// Store was unavailable or failed to read: keep in memory and flush once a read succeeds so persisted
+		// stops for other chats are never clobbered by a partial map.
+		b.takeoverDirty = true
+		b.mu.Unlock()
+		return
+	}
+	b.mu.Unlock()
+	if st := s.store(); st != nil {
+		s.saveChatReplyTakeover(ctx, st, now)
 	}
 }
 
@@ -208,24 +405,70 @@ func (s *Service) tellChatBatches(ctx context.Context, batches []connector.Inbox
 	listed := false
 	for _, t := range batches {
 		feed, _ := larkChatFeed(t.Thread)
+		s.noteChatMeta(feed, clip(oneLine(t.Title), 60), t.Kind != KindDM, now)
+		cfg := s.settings(ctx)
+		if chatReplyChatMuted(cfg, feed) {
+			continue
+		}
+		var candidates []chatWriter
 		for _, w := range chatWriters(rows, machine, feed) {
-			if !t.At.After(w.at) || now.Sub(w.at) > chatReplyWindow {
-				continue
+			if t.At.After(w.at) && now.Sub(w.at) <= chatReplyWindow {
+				candidates = append(candidates, w)
 			}
-			if !listed {
-				if list, err = s.sessions(ctx, machine); err != nil {
-					s.logf("chat replies: the conversations could not be listed: %v", err) // the batch comes again
-					return
-				}
-				listed = true
+		}
+		if len(candidates) == 0 {
+			continue
+		}
+		if !listed {
+			if list, err = s.sessions(ctx, machine); err != nil {
+				s.logf("chat replies: the conversations could not be listed: %v", err) // the batch comes again
+				return
 			}
+			listed = true
+		}
+		var openWriters []chatWriter
+		for _, w := range candidates {
 			if s.chatWriterOpen(ctx, machine, w.session, list) {
-				if !chatReplyRelayOn(s.settings(ctx)) {
-					s.hintChatReply(ctx, w.session, t)
-					return // one hint is all there is while it is off
-				}
-				s.tellChatBatch(ctx, w.session, w.at, t, now)
+				openWriters = append(openWriters, w)
 			}
+		}
+		if len(openWriters) == 0 {
+			continue
+		}
+		if !chatReplyRelayOn(cfg) {
+			s.hintChatReply(ctx, openWriters[0].session, t)
+			return // one hint is all there is while it is off
+		}
+		var active []chatWriter
+		for _, w := range openWriters {
+			if !s.chatReplyTakenOver(ctx, feed, w.at, now) {
+				active = append(active, w)
+			}
+		}
+		if len(active) == 0 || !s.anyChatBatchFresh(active, t.Thread, t.Group.New, now) {
+			continue
+		}
+		if msgs, ok := s.fetchChatMessagesAround(ctx, t.Thread, t.Group.New[len(t.Group.New)-1]); ok && len(msgs) > 0 {
+			var maxTakeover time.Time
+			for _, w := range active {
+				if at, stopped := ownerSpokeAfterSend(msgs, feed, rows, w); stopped && at.After(maxTakeover) {
+					maxTakeover = at
+				}
+			}
+			if !maxTakeover.IsZero() {
+				s.recordChatReplyTakeover(ctx, feed, maxTakeover, now)
+				s.dropQueuedChatReplies(ctx, feed, maxTakeover)
+				kept := active[:0]
+				for _, w := range active {
+					if w.at.After(maxTakeover) {
+						kept = append(kept, w)
+					}
+				}
+				active = kept
+			}
+		}
+		for _, w := range active {
+			s.tellChatBatch(ctx, w.session, w.at, t, now)
 		}
 	}
 }
@@ -257,6 +500,8 @@ func (s *Service) hintChatReply(ctx context.Context, to string, t connector.Inbo
 type chatWriter struct {
 	session string
 	at      time.Time
+	ref     string
+	rowID   int64
 }
 
 // chatWriters are the conversations of machine that wrote a message into chat feed as the user, by the ledger's rows,
@@ -275,9 +520,16 @@ func chatWriters(rows []db.SentAsUser, machine, feed string) []chatWriter {
 			continue
 		}
 		if i := slices.IndexFunc(out, func(w chatWriter) bool { return w.session == o.Session }); i < 0 {
-			out = append(out, chatWriter{o.Session, r.At})
+			out = append(out, chatWriter{session: o.Session, at: r.At, ref: r.MessageRef, rowID: r.ID})
 		} else if r.At.After(out[i].at) {
 			out[i].at = r.At
+			out[i].ref = r.MessageRef
+			out[i].rowID = r.ID
+		} else if r.At.Equal(out[i].at) && (r.MessageRef != "" || out[i].rowID == 0) {
+			if r.MessageRef != "" {
+				out[i].ref = r.MessageRef
+			}
+			out[i].rowID = r.ID
 		}
 	}
 	return out
@@ -286,21 +538,285 @@ func chatWriters(rows []db.SentAsUser, machine, feed string) []chatWriter {
 // chatMessageRoutes are the gated routes that put a message into the chat their path names (extmgr's createsMessage).
 var chatMessageRoutes = []string{"messages", "images", "files", "attachments"}
 
-// wroteInto says whether ledger row r is a message written into chat feed: a gated POST /conversations/<feed>/<route>
-// of chatMessageRoutes, or a connector's send whose target names the chat (conversation or chat) and no one message.
-// A reaction, an edit or a read receipt is not, and a reply to one message names no chat.
-func wroteInto(r db.SentAsUser, feed string) bool {
+// wroteFeed extracts the Lark chat feed ID from ledger row r when it wrote a message into a chat (a gated
+// POST /conversations/<feed>/<route> of chatMessageRoutes, or a connector send whose target names conversation/chat
+// without naming a single message).
+func wroteFeed(r db.SentAsUser) (string, bool) {
 	var t map[string]any
 	if json.Unmarshal(r.Target, &t) != nil {
-		return false
+		return "", false
 	}
 	str := func(k string) string { v, _ := t[k].(string); return v }
 	if p, _, _ := strings.Cut(str("path"), "?"); p != "" {
 		segs := strings.Split(strings.Trim(p, "/"), "/")
-		return strings.EqualFold(str("method"), "POST") && len(segs) == 3 && segs[0] == "conversations" && segs[1] == feed &&
-			slices.Contains(chatMessageRoutes, segs[2])
+		if strings.EqualFold(str("method"), "POST") && len(segs) == 3 && segs[0] == "conversations" && segs[1] != "" &&
+			slices.Contains(chatMessageRoutes, segs[2]) {
+			return segs[1], true
+		}
+		return "", false
 	}
-	return str("message") == "" && (str("conversation") == feed || str("chat") == feed)
+	if str("message") != "" {
+		return "", false
+	}
+	if conv := str("conversation"); conv != "" {
+		return conv, true
+	}
+	if chat := str("chat"); chat != "" {
+		return chat, true
+	}
+	return "", false
+}
+
+// wroteInto says whether ledger row r is a message written into chat feed.
+func wroteInto(r db.SentAsUser, feed string) bool {
+	got, ok := wroteFeed(r)
+	return ok && got == feed
+}
+
+func (s *Service) anyChatBatchFresh(writers []chatWriter, thread string, ids []string, now time.Time) bool {
+	b := &s.chatReplies
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.pruneLocked(now)
+	for _, w := range writers {
+		told := b.told[chatReplyKey(w.session, thread)]
+		for _, id := range ids {
+			if told == nil {
+				return true
+			}
+			if _, seen := told.ids[id]; !seen {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (s *Service) fetchChatMessagesAround(ctx context.Context, thread, messageID string) ([]settleMsg, bool) {
+	if messageID == "" {
+		return nil, false
+	}
+	cctx, cancel := context.WithTimeout(ctx, chatReplyCheckTimeout)
+	defer cancel()
+	args, _ := json.Marshal(map[string]any{"message": messageID, "n": chatReplyAround})
+	var res struct {
+		Result string `json:"result"`
+	}
+	err := s.appCall(cctx, AppInbox, inboxGroupTool, map[string]any{
+		"source": migratedConnectorID,
+		"call":   connector.GroupToolCall{Thread: thread, Name: connector.GroupMessagesAround, Args: args},
+	}, &res)
+	if err != nil {
+		if !unsupported(err) {
+			s.logf("chat replies: reading messages around %s: %v", thread, err)
+		}
+		return nil, false
+	}
+	return settleMessages(res.Result), true
+}
+
+// ownerSpokeAfterSend checks structured chat history around the latest batch message for any non-recalled message
+// written personally by the owner after assistant send w (reconciled 1-to-1 against sent_as_user ledger rows so
+// recorded sends and replies are excluded once without swallowing subsequent personal messages).
+func ownerSpokeAfterSend(msgs []settleMsg, feed string, rows []db.SentAsUser, w chatWriter) (time.Time, bool) {
+	msgAt := make([]time.Time, len(msgs))
+	msgHasAt := make([]bool, len(msgs))
+	msgNorm := make([]string, len(msgs))
+	for i, m := range msgs {
+		if t, err := time.Parse(time.RFC3339Nano, m.At); err == nil {
+			msgAt[i], msgHasAt[i] = t, true
+		}
+		msgNorm[i] = normalizeSentText(m.Text)
+	}
+
+	claimedMsg := make([]bool, len(msgs))
+	claimedRow := make([]bool, len(rows))
+	var wPos string
+	var wMsgAt time.Time
+	isWriterRow := func(r db.SentAsUser) bool {
+		if w.rowID != 0 {
+			return r.ID == w.rowID
+		}
+		if w.ref != "" {
+			return r.MessageRef == w.ref
+		}
+		return wroteInto(r, feed) && r.At.Equal(w.at)
+	}
+	noteAnchor := func(ri, mi int) {
+		if !isWriterRow(rows[ri]) {
+			return
+		}
+		if msgs[mi].Pos != "" {
+			wPos = msgs[mi].Pos
+		}
+		if msgHasAt[mi] {
+			wMsgAt = msgAt[mi]
+		}
+	}
+
+	// Pass 1: exact MessageRef match on Lark rows.
+	for ri, r := range rows {
+		if r.Connector != connector.Lark || r.MessageRef == "" {
+			continue
+		}
+		for mi, m := range msgs {
+			if claimedMsg[mi] || !m.Mine || m.Text == recalledText || m.ID != r.MessageRef {
+				continue
+			}
+			claimedRow[ri] = true
+			claimedMsg[mi] = true
+			noteAnchor(ri, mi)
+			break
+		}
+	}
+	// Populate the writer's own anchor even if matched above by an earlier duplicate ref or recalled.
+	if w.ref != "" && wPos == "" && wMsgAt.IsZero() {
+		for mi, m := range msgs {
+			if m.ID == w.ref {
+				if m.Pos != "" {
+					wPos = m.Pos
+				}
+				if msgHasAt[mi] {
+					wMsgAt = msgAt[mi]
+				}
+				break
+			}
+		}
+	}
+
+	// Pass 2a: unreferenced Lark reply rows (/messages/<id>/replies) matched 1-to-1 by ReplyTo (+ optional text).
+	for ri, r := range rows {
+		if claimedRow[ri] || r.Connector != connector.Lark || r.RecalledAt != nil || r.MessageRef != "" {
+			continue
+		}
+		var t map[string]any
+		if json.Unmarshal(r.Target, &t) != nil {
+			continue
+		}
+		replyMsg, _ := t["message"].(string)
+		if replyMsg == "" {
+			continue
+		}
+		rNorm := normalizeSentText(r.Text)
+		if mi, ok := matchUnreferencedRow(r, msgs, msgAt, msgHasAt, claimedMsg, false, func(i int, m settleMsg) bool {
+			if m.ReplyTo != replyMsg {
+				return false
+			}
+			return rNorm == "" || msgNorm[i] == "" || rNorm == msgNorm[i]
+		}); ok {
+			claimedRow[ri] = true
+			claimedMsg[mi] = true
+			noteAnchor(ri, mi)
+		}
+	}
+
+	// Pass 2b: unreferenced Lark chat rows with non-empty text matched 1-to-1 by normalized text.
+	for ri, r := range rows {
+		if claimedRow[ri] || r.Connector != connector.Lark || r.RecalledAt != nil || r.MessageRef != "" || !wroteInto(r, feed) {
+			continue
+		}
+		rNorm := normalizeSentText(r.Text)
+		if rNorm == "" {
+			continue
+		}
+		if mi, ok := matchUnreferencedRow(r, msgs, msgAt, msgHasAt, claimedMsg, false, func(i int, _ settleMsg) bool {
+			return msgNorm[i] == rNorm
+		}); ok {
+			claimedRow[ri] = true
+			claimedMsg[mi] = true
+			noteAnchor(ri, mi)
+		}
+	}
+
+	// Pass 2c: conservative 1-to-1 fallback for writer w's own unreferenced textless row (e.g. file/image upload).
+	for ri, r := range rows {
+		if claimedRow[ri] || r.Connector != connector.Lark || r.RecalledAt != nil || r.MessageRef != "" ||
+			!wroteInto(r, feed) || normalizeSentText(r.Text) != "" || !isWriterRow(r) {
+			continue
+		}
+		if mi, ok := matchUnreferencedRow(r, msgs, msgAt, msgHasAt, claimedMsg, true, func(_ int, m settleMsg) bool {
+			return m.ReplyTo == ""
+		}); ok {
+			claimedRow[ri] = true
+			claimedMsg[mi] = true
+			noteAnchor(ri, mi)
+		}
+	}
+
+	var latest time.Time
+	for mi, m := range msgs {
+		if claimedMsg[mi] || !m.Mine || m.Text == recalledText {
+			continue
+		}
+		var cand time.Time
+		switch {
+		case wPos != "" && m.Pos != "":
+			if !positionAfter(m.Pos, wPos) {
+				continue
+			}
+			cand = w.at
+			if msgHasAt[mi] && msgAt[mi].After(cand) {
+				cand = msgAt[mi]
+			}
+		case !wMsgAt.IsZero() && msgHasAt[mi]:
+			if !msgAt[mi].After(wMsgAt) {
+				continue
+			}
+			cand = w.at
+			if msgAt[mi].After(cand) {
+				cand = msgAt[mi]
+			}
+		default:
+			if !msgHasAt[mi] || !msgAt[mi].After(w.at.Add(chatReplyClockSkew)) {
+				continue
+			}
+			cand = msgAt[mi]
+		}
+		if cand.After(latest) {
+			latest = cand
+		}
+	}
+	return latest, !latest.IsZero()
+}
+
+func matchUnreferencedRow(r db.SentAsUser, msgs []settleMsg, msgAt []time.Time, msgHasAt, claimedMsg []bool,
+	requireTime bool, match func(mi int, m settleMsg) bool) (int, bool) {
+	best, bestDelta := -1, time.Duration(0)
+	timedCount, untimedCount, untimedIdx := 0, 0, -1
+	for mi, m := range msgs {
+		if claimedMsg[mi] || !m.Mine || m.Text == recalledText || !match(mi, m) {
+			continue
+		}
+		if !msgHasAt[mi] {
+			untimedCount++
+			untimedIdx = mi
+			continue
+		}
+		d := absDuration(msgAt[mi].Sub(r.At))
+		if d > chatReplyClockSkew {
+			continue
+		}
+		timedCount++
+		if best < 0 || d < bestDelta {
+			best, bestDelta = mi, d
+		}
+	}
+	if best >= 0 {
+		return best, true
+	}
+	if !requireTime && timedCount == 0 && untimedCount == 1 {
+		return untimedIdx, true
+	}
+	return -1, false
+}
+
+func normalizeSentText(s string) string { return strings.Join(strings.Fields(s), "") }
+
+func absDuration(d time.Duration) time.Duration {
+	if d < 0 {
+		return -d
+	}
+	return d
 }
 
 // chatWriterOpen: conversation id is one of the assistant's on machine (list), not archived, neither one the Inbox

@@ -10,8 +10,10 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/bus"
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
@@ -171,8 +173,7 @@ func (h *Hub) moveMachineMoving(ctx context.Context, mid, to string) (from strin
 	// A manager that keeps its own list does not go by the hand-over: from lets it go here, and to is put it from
 	// hub.json once it reports (settleOwnList, after this move).
 	if h.keepsList(from) {
-		var out devicewire.MachineRemoved
-		if err := h.keeperCall(ctx, from, devicewire.MethodMachinesRemove, devicewire.MachineRef{MachineID: mid}, &out); err != nil {
+		if _, err := keeperCall(ctx, h, from, devicewire.MachinesRemoveMethod, devicewire.MachineRef{MachineID: mid}); err != nil {
 			h.logf("managers: [%s] moved away from %s, which could not take it out of its own list: %v", mid, from, err)
 		}
 	}
@@ -189,15 +190,15 @@ func (h *Hub) moveMachineMoving(ctx context.Context, mid, to string) (from strin
 func (h *Hub) carryEngine(ctx context.Context, mid, from, to string) error {
 	cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	var got devicewire.MachineEngine
-	if err := h.callBus(cctx, from, devicewire.MethodEngineGet, devicewire.MachineRef{MachineID: mid}, &got); err != nil {
+	got, err := buswire.Call(cctx, h.managerCaller(from), devicewire.EngineGetMethod, devicewire.MachineRef{MachineID: mid})
+	if err != nil {
 		h.logf("managers: [%s] engine choice not carried from %s: %v", mid, from, err)
 		return nil
 	}
 	if got.Choice == nil {
 		return nil
 	}
-	err := h.callBus(cctx, to, devicewire.MethodEnginePut, devicewire.MachineEngine{MachineID: mid, Choice: got.Choice}, nil)
+	_, err = buswire.Call(cctx, h.managerCaller(to), devicewire.EnginePutMethod, devicewire.MachineEngine{MachineID: mid, Choice: got.Choice})
 	if re := (*rpc.Error)(nil); errors.As(err, &re) && re.Code == bus.CodeUnknownMethod {
 		h.logf("managers: [%s] %s is too old to keep its engine choice: moved without it", mid, to)
 		return nil
@@ -247,6 +248,7 @@ func (h *Hub) machineHandedOver(mid, to string) {
 		h.sessionsChanged(m)
 	}
 	h.devicesConfigChanged()
+	h.fleetClientsRefresh()
 }
 
 // releaseMachines gives the machines removed manager id carried back to the carrier. Called under removingManager.
@@ -322,19 +324,29 @@ func (h *Hub) withdrawCardsOn(mid, to string) {
 	}
 	f := &h.reported
 	f.mu.Lock()
-	var gone []string
+	var gone []proto.Interaction
+	withdrawn := map[string]bool{}
 	for id, ix := range f.interactions {
 		if cmp.Or(ix.Manager, assistantwire.AssistantID) == to {
 			continue
 		}
 		if ix.MachineID == mid || ix.MachineID == "" && ix.SessionID != "" && on[ix.SessionID] {
-			gone = append(gone, id)
+			gone = append(gone, ix)
+			withdrawn[id] = true
+			delete(f.interactions, id)
+		}
+	}
+	for id, ix := range f.interactions {
+		if withdrawn[ix.MirrorOf] {
+			// A display copy lives at Main's destination, not on the moved
+			// machine. It must end with its authoritative card nonetheless.
+			gone = append(gone, ix)
 			delete(f.interactions, id)
 		}
 	}
 	f.mu.Unlock()
-	for _, id := range gone {
-		h.broadcast(map[string]any{"type": "interaction_resolved", "id": id})
+	for _, ix := range gone {
+		h.broadcastInteractionResolved(ix, interactionResolvedEvent(ix))
 	}
 }
 

@@ -1,6 +1,5 @@
 {
   "title": "Machine files",
-  "machine_label": "Machine",
   "machine_offline": "This machine is offline. Reconnect it to browse files.",
   "no_machines": "No machines available.",
   "roots_label": "Quick roots",

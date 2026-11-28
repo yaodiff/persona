@@ -4,7 +4,41 @@ import (
 	"reflect"
 	"slices"
 	"testing"
+
+	"github.com/nwverse/persona/server/internal/assistant/repository"
 )
+
+func TestRepoGateInputsUseExplicitDeliveryLinks(t *testing.T) {
+	const repoURL = "https://github.com/org/core"
+	delivery := TodoPRStatus{URL: repoURL + "/pull/1", State: "merged"}
+	reference := TodoPRStatus{URL: repoURL + "/pull/2", State: "open", Checks: "failure"}
+	unlinked := TodoPRStatus{URL: repoURL + "/pull/3", State: "open", Checks: "failure"}
+	bound := []repository.TaskRepository{{
+		SourceSnapshot: repository.SourceSnapshot{Identity: repository.Identity{CanonicalURL: repoURL}},
+		Links: []repository.TaskLink{
+			{Kind: "pull_request", CanonicalURL: delivery.URL, Role: repository.LinkRoleDelivery},
+			{Kind: "pull_request", CanonicalURL: reference.URL, Role: repository.LinkRoleReference},
+		},
+	}}
+	want := []repoGatePR{{URL: delivery.URL, State: "merged"}}
+
+	for _, tc := range []struct {
+		name string
+		todo Todo
+	}{
+		{"unlinked current observation", Todo{PRStatus: &unlinked, OtherPRs: []TodoPRStatus{delivery, reference}}},
+		{"unlinked earlier observation", Todo{PRStatus: &delivery, OtherPRs: []TodoPRStatus{unlinked, reference}}},
+		{"unlinked URL without observation", Todo{PRURL: unlinked.URL, OtherPRs: []TodoPRStatus{delivery, reference}}},
+		{"same-repo reference", Todo{PRStatus: &delivery, OtherPRs: []TodoPRStatus{reference}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			inputs := buildRepoGateInputs(tc.todo, bound)
+			if len(inputs) != 1 || !inputs[0].IsTarget || !reflect.DeepEqual(inputs[0].PRs, want) {
+				t.Fatalf("repo gate inputs = %+v, want one target with PRs %+v", inputs, want)
+			}
+		})
+	}
+}
 
 func TestRepoGateEmptyInput(t *testing.T) {
 	if got := aggregateRepoGate(nil); got != nil {

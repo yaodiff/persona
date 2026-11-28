@@ -11,9 +11,10 @@ import (
 )
 
 // Recorded from the unlocalized upstream tool inventory, including task_plan
-// ownership (#13362), agent_supervise leader adoption (#13357), and default
-// cross-machine/cross-harness A2A subagent launches (#14215). This covers the
-// description and schema of every tool, not only a representative golden.
+// ownership (#13362), agent_supervise leader adoption (#13357), default
+// cross-machine/cross-harness A2A subagent launches (#14215), and the Agent
+// presets an Agent starts another on (#14672). This covers the description
+// and schema of every tool, not only a representative golden.
 func TestMCPLegacyBytes(t *testing.T) {
 	raw, err := os.ReadFile("testdata/mcp_legacy.json")
 	if err != nil {
@@ -23,9 +24,8 @@ func TestMCPLegacyBytes(t *testing.T) {
 	if err := json.Unmarshal(raw, &expected); err != nil {
 		t.Fatal(err)
 	}
-	// Unified-ledger tools, origin-scoped withdrawal, health_strength (#14713), file_transfer, a2a_read (#13831), page (Dashboards, #15017) and
-	// model_profile_capture (#15288) were introduced after the frozen legacy inventory.
-	newTools := []string{"decision_record", "decisions_query", "space_state_update", "lark_image", "ask_user_withdraw", "conversations_switch", "health_strength", "file_transfer", "a2a_read", "page", "model_profile_capture", "model_probe", "launcher_import", "external_sources_read", "external_sources_write"}
+	// These tools were introduced after the legacy inventory was frozen.
+	newTools := []string{"decision_record", "decisions_query", "space_state_update", "lark_image", "ask_user_withdraw", "conversations_switch", "health_strength", "file_transfer", "a2a_read", "page", "model_profile_capture", "model_profile_deactivate", "model_profile_clear", "model_probe", "launcher_import", "external_sources_read", "external_sources_write", "bot_group_reply", "todo_split", "todo_merge", "browser_fetch_download", "mail_move", "orca_bot_list", "orca_bot_read", "orca_bot_send", "agent_modes"}
 	for _, name := range newTools {
 		if _, exists := expected[name]; exists {
 			t.Fatalf("%s is not a legacy tool", name)
@@ -39,7 +39,7 @@ func TestMCPLegacyBytes(t *testing.T) {
 			tool := Tool(name, lang)
 			digest := sha256.Sum256([]byte(tool.Description + "\x00" + string(tool.InputSchema)))
 			if got := hex.EncodeToString(digest[:]); got != want {
-				t.Errorf("%s/%s: legacy bytes changed", name, lang)
+				t.Errorf("%s/%s: legacy digest = %s, want %s", name, lang, got, want)
 			}
 		}
 	}

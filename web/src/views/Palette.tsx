@@ -7,7 +7,7 @@ import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useSta
 import { credentialOwner, subscribeCredentialOwner, enc, api } from "../lib/api";
 import { machineWithHub } from "../lib/mesh";
 import { createPortal } from "react-dom";
-import { ago, sessionDisplayTab, sessionTitle, sessionTitleDetail, shortPath, stateOf, tabLabel } from "../lib/format";
+import { ago, sessionDisplayTab, sessionTitle, sessionTitleDetail, shortPath, activityOf, tabLabel } from "../lib/format";
 import { useHerdrTabName } from "../lib/agents-display";
 import { appCommands, commandKeys, contextCommands, filterCommands, inboxHits, matchPaletteWords, orderGroups, parseQuery, placeHits, openPaletteWith, setPaletteQuery, terminalHits, usePalette, type InboxHit, type MachinePanes, type PaletteCommand, type PaletteContext, type PlaceHit, type PlaceInput, type TerminalHit } from "../lib/palette";
 import { isDone, itemRoute, useInbox, type InboxItem } from "../lib/inbox";
@@ -750,7 +750,7 @@ function PaletteView({
     const ctx = { machines: machines as Machine[], pins, interactions: interactions as Interaction[], now: Date.now() };
     for (const s of sessions) {
       const found = agentSearch ? agentSearch.agentSearchHit(s, text, ctx, preferTab) : { score: score(s, query, machineWithHub(s.machine_id, machines as Machine[]), false, preferTab), snippet: undefined };
-      if (found.score) out.push({ key: `s:${runtimeSearchKey(s)}`, s, to: { name: "session", mid: s.machine_id, sid: s.session_id }, score: found.score + (stateOf(s) === "offline" ? 0 : 5), evidence: found.snippet });
+      if (found.score) out.push({ key: `s:${runtimeSearchKey(s)}`, s, to: { name: "session", mid: s.machine_id, sid: s.session_id }, score: found.score + (activityOf(s) === "offline" ? 0 : 5), evidence: found.snippet });
     }
     // The server's grouped matches and evidence are never matched again against truncated summaries.
     const merged = runtimeSearch.mergeHits?.(out, sessions, runtimeSearch);
@@ -1053,7 +1053,7 @@ function PaletteView({
               };
             }
             const h = r.hit;
-            const st = stateOf(h.s);
+            const st = activityOf(h.s);
             const isMain = Boolean(h.assistant && h.s.session_id === assistant?.main && h.s.machine_id === assistant.machine_id);
             // a Persona chat says what was said last (its folder is the assistant's own, the same for every chat); an Agent
             // where it runs

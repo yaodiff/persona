@@ -389,8 +389,25 @@ class ConnectionRuntime @Inject constructor(application: Application) : HubConne
 
     /** Revokes this device's credential on one hub (#5538): the hub then drops its pushes and Live Activities. */
     private suspend fun revokeOnHubLocked(group: GroupRuntime?) {
-        val deviceId = group?.data?.credentials?.deviceId?.takeIf { it.isNotBlank() } ?: return
-        revokeCredential(group.connection, deviceId)
+        val credentials = group?.data?.credentials ?: return
+        val deviceId = credentials.deviceId?.takeIf { it.isNotBlank() } ?: return
+        if (revokeCredential(group.connection, deviceId)) {
+            val _ = runCatching { dataStore.forgetUnrevokedDeviceId(credentials.hubId) }
+        } else {
+            val _ = runCatching { dataStore.rememberUnrevokedDeviceId(credentials.hubId, deviceId) }
+        }
+    }
+
+    /** Previous credential ID this phone held on [hubId] (still paired or remembered after an offline sign-out). */
+    suspend fun previousDeviceId(hubId: String): String? = gate.withLock {
+        mutableGroups.value.firstNotNullOfOrNull { group ->
+            group.data?.credentials?.takeIf { it.hubId == hubId }?.deviceId?.takeIf(String::isNotBlank)
+        } ?: runCatching { dataStore.unrevokedDeviceId(hubId) }.getOrNull()
+    }
+
+    /** Clears the remembered unrevoked credential ID for [hubId] after pairing has given the hub its chance to replace it. */
+    suspend fun forgetUnrevokedDeviceId(hubId: String) {
+        val _ = runCatching { dataStore.forgetUnrevokedDeviceId(hubId) }
     }
 
     /**

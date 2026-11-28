@@ -23,9 +23,9 @@ func (ps *extensions) extensionTranscriptionCall(ctx context.Context, id, method
 	if ps.h == nil {
 		return nil, &rpc.Error{Code: assistantwire.CodeAssistantOffline, Message: errAssistantOffline.Error()}
 	}
-	var out json.RawMessage
-	if err := ps.h.kbAsk(ctx, assistantwire.MethodTranscriptionExtension,
-		assistantwire.ExtensionTranscription{Extension: id, Method: method, Params: params}, &out); err != nil {
+	out, err := callAssistantRaw(ctx, ps.h.kbAsk, assistantwire.TranscriptionExtensionMethod,
+		assistantwire.ExtensionTranscription{Extension: id, Method: method, Params: params})
+	if err != nil {
 		return nil, err
 	}
 	return out, nil

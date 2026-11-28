@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -42,6 +43,120 @@ func planID(t *testing.T, res string) string {
 		t.Fatalf("no plan in %q", res)
 	}
 	return id
+}
+
+func scopedLauncherFitHub(t *testing.T) (*Service, *fakeHub) {
+	t.Helper()
+	s, f := launcherFitHub(t)
+	addProvider(t, s, `{"name":"managed","base_url":"https://provider.example.com","model":"managed-model","api_key":"test-key","share":"selected","scope_machines":["box"]}`)
+	setModel(t, s, "agent.new", ModelBinding{Provider: "launcher.managed", Model: "managed-model", Effort: "high"})
+	return s, f
+}
+
+func TestScopedManagedDefaultIsSwappedForTask(t *testing.T) {
+	s, f := scopedLauncherFitHub(t)
+	ctx := t.Context()
+	res, err := s.toolTaskPlan(ctx, "conv9", json.RawMessage(`{"tasks":[{"title":"Ping","permission":"bypassPermissions","prompt":"Reply with pong","machine":"l4","cwd":"~/code/app","why":"A quick check"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := planID(t, res)
+	p, err := s.loadPlan(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task := p.Tasks[0]; task.Machine != "l4" || task.Launcher != "claude" ||
+		!strings.Contains(task.Why, "managed") || !strings.Contains(task.Why, "claude") {
+		t.Fatalf("task placement = %+v, want claude on l4 with a swap note", task)
+	}
+	if _, err := s.startPlan(ctx, id, nil, false); err != nil {
+		t.Fatal(err)
+	}
+	todoID := todoIDOfPlan(t, s, id)
+	waitFor(t, "the swapped agent linked", func() bool { return len(todoNow(s, todoID).Agents) == 1 })
+	if st := startsOf(f); len(st) != 1 || st[0]["launcher"] != "claude" ||
+		!unset(st[0]["model"]) || !unset(st[0]["effort"]) || !slices.Equal(taskStartMachines(f), []string{"l4"}) {
+		t.Fatalf("starts = %v on %v, want l4's claude with its own defaults", st, taskStartMachines(f))
+	}
+}
+
+func TestScopedManagedExplicitStartIsRefused(t *testing.T) {
+	s, f := scopedLauncherFitHub(t)
+	saveTier(t, s, "strong", ModelTier{Launcher: "managed", Model: "managed-model"})
+	for _, tc := range []struct {
+		key, value string
+	}{
+		{"launcher", "managed"},
+		{"tier", "strong"},
+	} {
+		t.Run(tc.key, func(t *testing.T) {
+			params := map[string]any{"machine": "l4", "cwd": "/home/me/code", "prompt": "Reply with pong", tc.key: tc.value}
+			raw, err := json.Marshal(params)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx := t.Context()
+			if _, err := s.runTool(ctx, "server", "conv9", "agent_start", raw); err == nil || !strings.Contains(err.Error(), "managed") {
+				t.Fatalf("agent_start refusal = %v", err)
+			}
+			if _, err := s.AgentStartParams(ctx, AgentStartParams{MachineID: "l4", Params: params}); codeOf(err) != proto.CodeLauncherOutOfScope {
+				t.Fatalf("app start refusal = %v, want %s", err, proto.CodeLauncherOutOfScope)
+			}
+			if len(startsOf(f)) != 0 {
+				t.Fatalf("a start reached the node: %v", startsOf(f))
+			}
+		})
+	}
+}
+
+func TestScopedManagedLauncherAvailability(t *testing.T) {
+	s, f := scopedLauncherFitHub(t)
+	ctx := t.Context()
+	saveTier(t, s, "strong", ModelTier{Candidates: []TierCandidate{{Launcher: "managed"}, {Launcher: "claude"}}})
+	for _, tc := range []struct {
+		name string
+		list []proto.Launcher
+	}{
+		{"readable", []proto.Launcher{{Name: "claude", Source: "zshrc"}}},
+		{"stale alias", []proto.Launcher{{Name: "managed", Source: "zshrc"}, {Name: "claude", Source: "zshrc"}}},
+		{"unreadable", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f.mu.Lock()
+			f.zshrc["l4"] = tc.list
+			f.mu.Unlock()
+			if available, reason, agent := s.availabilityOn("l4").check(ctx, "managed"); available || reason == "" || agent != "" {
+				t.Errorf("l4 tier candidate = %v, %q, %q", available, reason, agent)
+			}
+			pick, err := s.pickTierCandidate(ctx, "strong", tierFacts{Machine: "l4"})
+			if err != nil || pick.Tier.Launcher != "claude" || pick.Reason != tierReasonUnavailable {
+				t.Errorf("l4 tier pick = %+v, %v", pick, err)
+			}
+			if names, _, err := s.healthLaunchers(ctx, "l4"); err != nil || slices.Contains(names, "managed") {
+				t.Errorf("l4 health launcher list = %v, %v", names, err)
+			}
+			if s.launcherOn(ctx, "l4", "managed") {
+				t.Error("l4 can receive a health detour for the scoped launcher")
+			}
+			if _, got := s.probeLauncherHealth(ctx, "l4", "managed"); got {
+				t.Error("l4 returned a health probe for the out-of-scope launcher")
+			}
+			p := newPlacement("l4", "fixed")
+			params := map[string]any{"launcher": "managed", "model": "managed-model"}
+			m, _ := s.device(ctx, "l4")
+			note, _, err := s.fitLauncher(context.WithValue(ctx, placementKey{}, p), m, startPick{}, params)
+			if err != nil || params["launcher"] != "claude" || note == "" ||
+				!slices.ContainsFunc(p.candidate("l4").Hits, func(h placementHit) bool { return h.Key == "launcher_missing" && h.Args["launcher"] == "managed" }) {
+				t.Errorf("l4 default fit = %v, note %q, error %v, placement %+v", params, note, err, p.Candidates)
+			}
+		})
+	}
+	if available, reason, agent := s.availabilityOn("box").check(ctx, "managed"); !available || reason != "" || agent != "claude" {
+		t.Errorf("box tier candidate = %v, %q, %q", available, reason, agent)
+	}
+	if names, _, err := s.healthLaunchers(ctx, "box"); err != nil || !slices.Contains(names, "managed") {
+		t.Errorf("box health launcher list = %v, %v", names, err)
+	}
 }
 
 // A default the computer lacks: the plan card already names the launcher that will run there (claude, with its own
@@ -241,6 +356,7 @@ func TestExplicitTierRefusedAtDispatchWhenLauncherDisappears(t *testing.T) {
 	f.mu.Lock()
 	f.zshrc["box"] = []proto.Launcher{{Name: "claude", Source: "zshrc"}}
 	f.mu.Unlock()
+	s.invalidateLauncherListCache("box")
 	if _, err := s.startPlan(ctx, id, nil, false); err != nil {
 		t.Fatal(err)
 	}

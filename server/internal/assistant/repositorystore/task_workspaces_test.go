@@ -52,6 +52,31 @@ func backendDB(t *testing.T) *Store {
 	}
 	return d
 }
+
+func TestBackendWorkspacePersistenceWithoutRepositories(t *testing.T) {
+	d := backendDB(t)
+	ctx := t.Context()
+	const op = "operation_empty"
+	plan := backendPlan(t, d, op, func(source *workspacenaming.Source) {
+		source.Layout = repository.LayoutContainer
+		source.Repositories, _ = repository.Snapshot(source.Manager, source.TodoID, source.Repositories.Revision, nil, nil)
+		source.Rules.BranchTemplate = "persona/{base-branch}/{task-id}"
+	})
+	r, err := d.BeginTaskWorkspace(ctx, "backend", op, "assistant")
+	if err != nil || r.Plan.Digest != plan.Digest || len(r.Plan.Repositories) != 0 {
+		t.Fatal(r, err)
+	}
+	result := *r
+	result.State = "ready"
+	ready, err := d.SaveTaskWorkspaceResult(ctx, "backend", op, r.Revision, result)
+	if err != nil || ready.State != "ready" || len(ready.Repositories) != 0 {
+		t.Fatal(ready, err)
+	}
+	if _, err := d.MutateTaskWorkspace(ctx, "backend", op, ready.Revision, "acquire", "launch_example"); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestBackendWorkspacePersistenceConcurrencyAndLateResults(t *testing.T) {
 	d := backendDB(t)
 	ctx := t.Context()

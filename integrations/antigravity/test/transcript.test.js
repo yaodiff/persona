@@ -1,10 +1,13 @@
 import assert from 'node:assert/strict'
-import { appendFileSync, closeSync, mkdirSync, mkdtempSync, openSync, readFileSync, renameSync, rmSync, writeFileSync, writeSync } from 'node:fs'
+import fs from 'node:fs'
+import { appendFileSync, closeSync, mkdirSync, mkdtempSync, openSync, readFileSync, renameSync, rmSync, statSync, utimesSync, writeFileSync, writeSync } from 'node:fs'
+import { syncBuiltinESMExports } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { startFakeNode } from '../../runtime-sdk/testing/fake-node.js'
-import { readTranscript, readTranscriptSteps, rememberObservedWake, stepsToItems } from '../lib/map.js'
+import { extractBackground } from '../lib/background.js'
+import { readTranscript, readTranscriptSteps, rememberObservedWake, stepsToItems, transcriptVersion } from '../lib/map.js'
 import { createAgyRuntime } from '../lib/runtime.js'
 
 function logs(t) {
@@ -162,6 +165,75 @@ test('a reused lower step index keeps earlier steps when the export goes on past
   assert.deepEqual(contents(readTranscript(parallelWhole.brain, true).steps), rewoundOrder)
 })
 
+test('a background RUNNING step completing in place keeps later completed replies intact', (t) => {
+  const { brain, directory } = logs(t)
+  const file = join(directory, 'transcript_full.jsonl')
+  const rows = [
+    { step_index: 0, source: 'USER_EXPLICIT', type: 'USER_INPUT', status: 'DONE', created_at: '2026-01-01T00:00:00Z', content: 'Run check.' },
+    { step_index: 1, source: 'MODEL', type: 'PLANNER_RESPONSE', status: 'DONE', created_at: '2026-01-01T00:00:01Z', tool_calls: [{ name: 'run_command', args: { CommandLine: 'npm test' } }] },
+    { step_index: 2, source: 'MODEL', type: 'GENERIC', status: 'RUNNING', created_at: '2026-01-01T00:00:02Z', content: 'running' },
+    { step_index: 3, source: 'MODEL', type: 'PLANNER_RESPONSE', status: 'DONE', created_at: '2026-01-01T00:00:03Z', content: 'Complete first reply.' },
+  ]
+  writeFileSync(file, rows.map((r) => JSON.stringify(r)).join('\n') + '\n')
+  const before = readTranscript(brain, true)
+  assert.equal(before.steps.length, 4)
+
+  // Background command finishes and updates step 2 from RUNNING -> DONE after step 3 was already logged.
+  appendFileSync(file, JSON.stringify({ step_index: 2, source: 'MODEL', type: 'GENERIC', status: 'DONE', created_at: '2026-01-01T00:00:02Z', content: 'exit 0' }) + '\n')
+  const updated = readTranscript(brain, true)
+  assert.equal(updated.branch, before.branch, 'in-place RUNNING -> DONE update must not start a rewind branch')
+  assert.deepEqual(updated.steps.map((s) => [s.step_index, s.type, s.status, s.content ?? '']), [
+    [0, 'USER_INPUT', 'DONE', 'Run check.'],
+    [1, 'PLANNER_RESPONSE', 'DONE', ''],
+    [2, 'GENERIC', 'DONE', 'exit 0'],
+    [3, 'PLANNER_RESPONSE', 'DONE', 'Complete first reply.'],
+  ])
+
+  // Subsequent SYSTEM_MESSAGE + resumed reply keeps step 2 once and emits a wake notice after step 3.
+  appendFileSync(file, [
+    { step_index: 4, source: 'SYSTEM', type: 'SYSTEM_MESSAGE', status: 'DONE', created_at: '2026-01-01T00:00:10Z', content: 'task done' },
+    { step_index: 5, source: 'MODEL', type: 'PLANNER_RESPONSE', status: 'DONE', created_at: '2026-01-01T00:00:11Z', content: 'Follow-up update.' },
+  ].map((r) => JSON.stringify(r)).join('\n') + '\n')
+  const after = readTranscript(brain, true)
+  assert.equal(after.steps.filter((s) => s.step_index === 2).length, 1, 'step 2 must not be duplicated')
+  assert.deepEqual(
+    stepsToItems(after.steps).items.filter((it) => it.wake || it.kind === 'text').map((it) => it.wake ? 'wake' : it.text),
+    ['Run check.', 'Complete first reply.', 'wake', 'Follow-up update.'],
+  )
+})
+
+test('a background result updates a restored step until a rewind replaces it', (t) => {
+  const { brain, directory } = logs(t)
+  const file = join(directory, 'transcript_full.jsonl')
+  const conversation = '00000000-0000-4000-8000-000000000001'
+  const id = `${conversation}/task-1`
+  const started = '2026-01-01T00:00:00Z'
+  const ended = '2026-01-01T00:00:01Z'
+  const line = (step_index, content, extra = {}) => JSON.stringify({
+    step_index, content, type: 'PLANNER_RESPONSE', status: 'DONE', created_at: started, ...extra,
+  }) + '\n'
+  const task = { type: 'GENERIC' }
+  const replacement = { created_at: ended }
+  writeFileSync(file, line(0, 'start') + line(1, 'first writer') +
+    line(2, `Tool is running as a background task with task id: ${id}`, { ...task, status: 'RUNNING' }) +
+    line(1, 'second writer', replacement) + line(3, 'first writer continued'))
+  const running = readTranscript(brain, true)
+  assert.deepEqual(extractBackground(running.steps, conversation).running.map((entry) => entry.id), [id])
+
+  appendFileSync(file, line(2, 'task output', { ...task, updated_at: ended }))
+  const completed = readTranscript(brain, true)
+  assert.equal(completed.branch, running.branch)
+  assert.deepEqual(completed.steps.map((step) => step.content), ['start', 'first writer', 'second writer', 'task output', 'first writer continued'])
+  assert.deepEqual(extractBackground(completed.steps, conversation).ended.map((entry) => [entry.id, entry.status]), [[id, 'completed']])
+
+  appendFileSync(file, line(2, 'second writer continued', replacement))
+  const expected = ['start', 'second writer', 'second writer continued', 'first writer continued']
+  assert.deepEqual(readTranscript(brain, true).steps.map((step) => step.content), expected)
+  const whole = logs(t)
+  writeFileSync(join(whole.directory, 'transcript_full.jsonl'), readFileSync(file))
+  assert.deepEqual(readTranscript(whole.brain, true).steps.map((step) => step.content), expected)
+})
+
 test('parsed transcript cache retains a full inventory of 80 sessions', async (t) => {
   const entries = Array.from({ length: 80 }, () => logs(t))
   for (const { directory } of entries) writeFileSync(join(directory, 'transcript_full.jsonl'), record('Cached reply.'))
@@ -317,6 +389,37 @@ test('wake receipts update cached transcripts without mutating prior snapshots a
   assert.equal(switched.steps[1].content, 'Full reply.')
 })
 
+test('same-size wake receipt replacement invalidates cached history even with a restored mtime', (t) => {
+  const { brain, directory } = logs(t)
+  const line = (step) => JSON.stringify({ source: 'MODEL', status: 'DONE', ...step }) + '\n'
+  writeFileSync(join(directory, 'transcript_full.jsonl'),
+    line({ step_index: 0, type: 'USER_INPUT', source: 'USER_EXPLICIT', created_at: '2026-11-20T10:00:00Z', content: 'go' }) +
+    line({ step_index: 1, type: 'PLANNER_RESPONSE', created_at: '2026-11-20T10:00:01Z', content: 'Initial reply.' }) +
+    line({ step_index: 2, type: 'PLANNER_RESPONSE', created_at: '2026-11-20T10:05:00Z', content: 'Background follow-up.' }))
+  const before = readTranscript(brain, true)
+  rememberObservedWake(brain, before.steps, 2)
+  const receipt = join(brain, '.persona-observed-wakes')
+  const original = readFileSync(receipt)
+  const stamp = Math.floor(Date.now() / 1000) - 60
+  utimesSync(receipt, stamp, stamp)
+  const receiptBefore = statSync(receipt, { bigint: true })
+  const withWake = readTranscript(brain, true)
+  assert.match(withWake.revision, /:wake:/)
+  const versionBefore = transcriptVersion(brain, true)?.key
+
+  writeFileSync(receipt + '.new', Buffer.alloc(original.length, 48))
+  renameSync(receipt + '.new', receipt)
+  utimesSync(receipt, stamp, stamp)
+  const receiptAfter = statSync(receipt, { bigint: true })
+  assert.equal(receiptAfter.size, receiptBefore.size)
+  assert.equal(receiptAfter.mtimeNs, receiptBefore.mtimeNs)
+  assert.notEqual(transcriptVersion(brain, true)?.key, versionBefore,
+    'the list version must detect receipt replacement independently of the transcript cache')
+  const replaced = readTranscript(brain, true)
+  assert.equal(replaced.revision, before.revision)
+  assert.equal(stepsToItems(replaced.steps).items.some((item) => item.wake), false)
+})
+
 test('stepsToItems caches exact hits, reuses immutable prefixes on append, and invalidates on option or live mutations', (t) => {
   const { brain, directory } = logs(t)
   const file = join(directory, 'transcript_full.jsonl')
@@ -410,15 +513,18 @@ test('concurrent session.items and session.cursor calls coalesce and return cons
     node.peer.call('session.items', { session_id: sessionId, limit: 10 }),
     node.peer.call('session.items', { session_id: sessionId, turns: 2 }),
     node.peer.call('session.items', { session_id: sessionId, after_seq: 35 }),
-    node.peer.call('session.items', { session_id: sessionId, limit: 50 }),
+    node.peer.call('session.items', { session_id: sessionId, limit: 80 }),
     node.peer.call('session.watch', { session_id: sessionId }),
     node.peer.call('session.watch', { session_id: sessionId }),
   ])
-  assert.equal(p1.items.length, 10)
+  const visible = (page) => page.items.filter((it) => it.kind !== 'turn_duration')
+  assert.ok(p1.items.length >= 10)
   assert.equal(p1.to_seq, 40)
-  assert.equal(p2.items.length, 4)
-  assert.equal(p3.items.length, 5)
-  assert.equal(p4.items.length, 40)
+  assert.equal(visible(p2).length, 4)
+  assert.equal(p2.items.filter((it) => it.kind === 'turn_duration').length, 1)
+  assert.equal(visible(p3).length, 5)
+  assert.equal(visible(p4).length, 40)
+  assert.equal(p4.items.filter((it) => it.kind === 'turn_duration').length, 19)
   assert.equal(w1.ok, true)
   assert.equal(w2.ok, true)
 
@@ -580,3 +686,87 @@ test('same-inode growth detects an in-place same-length prefix edit anywhere in 
   assert.equal(after.steps[200].content, 'TAIL-200')
   assert.notEqual(after.revision, before.revision)
 })
+
+// P1-1 (#16001): multi-MB pure-append growth verifies fixed head/tail boundary samples instead of
+// re-hashing the whole existing prefix with SHA-256; head or old-tail overwrites must still force a
+// full reparse.
+function largeAppendFixture(t) {
+  const { brain, directory } = logs(t)
+  const file = join(directory, 'transcript_full.jsonl')
+  const row = (index, tag) => JSON.stringify({
+    step_index: index,
+    source: 'MODEL',
+    type: 'PLANNER_RESPONSE',
+    status: 'DONE',
+    created_at: '2026-11-20T10:00:00Z',
+    content: `${tag}-${String(index).padStart(5, '0')}-${'z'.repeat(900)}`,
+  }) + '\n'
+  const count = 3000
+  const rows = Array.from({ length: count }, (_, index) => row(index, 'ORIG'))
+  writeFileSync(file, rows.join(''))
+  assert.ok(statSync(file).size > 2 * 1024 * 1024, 'fixture should be multi-MB')
+  assert.equal(readTranscript(brain, true).steps.length, count) // cold parse populates the cache entry
+  return { brain, file, row, rows, count }
+}
+
+function spyFsMethod(method, onCall) {
+  const original = fs[method]
+  fs[method] = function (...args) {
+    onCall(args)
+    return original.apply(this, args)
+  }
+  syncBuiltinESMExports()
+  return () => {
+    fs[method] = original
+    syncBuiltinESMExports()
+  }
+}
+
+test('a multi-MB pure append verifies from fixed samples with only delta hashing', (t) => {
+  const { brain, file, row, count } = largeAppendFixture(t)
+  let readBytes = 0
+  const restore = spyFsMethod('readSync', ([, buffer, offset, length]) => {
+    readBytes += length || buffer?.length || 0
+  })
+  try {
+    appendFileSync(file, row(count, 'TAIL'))
+    const after = readTranscript(brain, true)
+    assert.equal(after.steps.length, count + 1)
+    assert.ok(after.steps[count].content.startsWith('TAIL-'), 'appended step is parsed incrementally')
+    assert.ok(readBytes < 128 * 1024, `append verification read ${readBytes} B; expected fixed samples + delta, not the multi-MB prefix`)
+  } finally {
+    restore()
+  }
+})
+
+for (const where of ['head', 'boundary']) {
+  test(`an in-place ${where} overwrite before a large append is detected and fully reparsed`, (t) => {
+    const { brain, file, row, rows, count } = largeAppendFixture(t)
+    const index = where === 'head' ? 0 : count - 1
+    const offset = Buffer.byteLength(rows.slice(0, index).join(''))
+    const replacement = Buffer.from(row(index, 'EDIT'))
+    assert.equal(replacement.length, Buffer.byteLength(rows[index]), 'overwrite must be same length')
+
+    let fullReads = 0
+    const restore = spyFsMethod('readFileSync', ([path]) => {
+      if (String(path) === file) fullReads += 1
+    })
+    try {
+      const fd = openSync(file, 'r+')
+      try {
+        writeSync(fd, replacement, 0, replacement.length, offset)
+      } finally {
+        closeSync(fd)
+      }
+      appendFileSync(file, row(count, 'TAIL'))
+
+      const after = readTranscript(brain, true)
+      assert.equal(after.steps.length, count + 1)
+      assert.ok(after.steps[index].content.startsWith('EDIT-'), `${where} overwrite must not be hidden by the append fast path`)
+      assert.ok(after.steps[count].content.startsWith('TAIL-'))
+      assert.equal(fullReads, 1, 'a failed boundary sample must fall back to one full read and reparse')
+    } finally {
+      restore()
+    }
+  })
+}

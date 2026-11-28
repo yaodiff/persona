@@ -77,9 +77,24 @@ it("takes N, I and Backspace only while the toolbar menu owns focus", async () =
   await clickRow(t("lib-node-actions.split_down")); expect(onSplit).toHaveBeenCalledOnce();
   open(); key(trigger, "Backspace"); expect(fake.post).toHaveBeenCalledTimes(1);
 });
-it("keeps offline and non-herdr panes read-only", () => {
+it("keeps offline panes and hosts that do neither read-only", () => {
   fake.online = false; render(); expect(button(t("lib-node-actions.split_right"))).toBeNull();
-  fake.online = true; fake.session!.space_kind = "orca"; render(); expect(button(t("lib-node-actions.split_right"))).toBeNull(); open(); expect(document.body.textContent).not.toContain(t("session-terminalpanel.close_this_pane"));
+  fake.online = true; fake.session!.space_kind = "herdr-core"; fake.session!.pane_id = "herdr-core:p1"; render();
+  expect(button(t("lib-node-actions.split_right"))).toBeNull(); open(); expect(document.body.textContent).not.toContain(t("session-terminalpanel.close_this_pane"));
+});
+// #17053: an Orca pane closes (the node does it for Orca) and splits once its computer says Orca does.
+it("follows what the pane's host can do: Orca closes, and splits once the node reports it", async () => {
+  fake.session!.space_kind = "orca"; fake.session!.pane_id = "orca:tab1:leaf1"; render();
+  expect(button(t("lib-node-actions.split_right"))).toBeNull(); open(); expect(document.body.textContent).toContain(t("session-terminalpanel.close_this_pane"));
+  key(button(t("session-terminalpanel.pane_actions")), "Escape");
+  const { rememberHostAbilities, resetHostAbilities } = await import("../../../lib/host-abilities");
+  try {
+    act(() => rememberHostAbilities("m1", { hosts: [{ kind: "orca", stream: false, control: false, new_tab: true, workspaces: [], tabs: [], panes: [],
+      abilities: { rename: true, close_pane: true, split: true, close_tab: false, git: true, run_here: false } }] }));
+    expect(button(t("lib-node-actions.split_right"))).not.toBeNull();
+  } finally {
+    act(() => resetHostAbilities());
+  }
 });
 it("hides missing-pane controls and unsupported splits", () => {
   fake.session!.pane_id = undefined; render(); expect(host.childElementCount).toBe(0);

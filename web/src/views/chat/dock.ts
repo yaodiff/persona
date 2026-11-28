@@ -62,9 +62,9 @@ export interface NextWaiting {
   count: number;
 }
 
-/** The cards other chats wait on you with (#4091): the same list "Overview"'s "Needs you" shows, this chat's taken out. */
+/** Authoritative cards other chats wait on you with (#4091): the same list "Overview"'s "Needs you" shows, this chat's taken out. */
 export function nextWaiting(all: Interaction[], mid: string, sid: string): NextWaiting | null {
-  const others = all.filter((ix) => ix.machine_id !== mid || ix.session_id !== sid);
+  const others = all.filter((ix) => !ix.mirror_of && (ix.machine_id !== mid || ix.session_id !== sid));
   return others.length ? { ix: others[0], count: others.length } : null;
 }
 

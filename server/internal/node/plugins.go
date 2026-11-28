@@ -60,6 +60,7 @@ func (n *Node) plugins() *pluginHost {
 	if peer := n.peer; peer != nil { // the hub's latest connection is where the programs' events go
 		ph.mu.Lock()
 		ph.notify = func(event string, params any) { _ = peer.Notify(event, params) }
+		ph.hubCaller = peer.Call
 		ph.lcu = n.lcuComputerCall
 		ph.mu.Unlock()
 	}
@@ -78,7 +79,9 @@ type pluginHost struct {
 	running        map[string]*pluginRun
 	uploads        map[string]*pluginUpload
 	notify         func(event string, params any)
-	lcu            lcuCaller // the latest connection's, so LCU's confirmations reach the hub that is there now
+	// hubCaller is the latest connection's Call: the programs' plugin.node.hub_call go to the hub that is there now.
+	hubCaller func(ctx context.Context, method string, params, out any) error
+	lcu       lcuCaller // the latest connection's, so LCU's confirmations reach the hub that is there now
 }
 
 type pluginRun struct {

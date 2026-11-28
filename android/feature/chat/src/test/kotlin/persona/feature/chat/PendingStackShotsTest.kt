@@ -62,7 +62,7 @@ import java.time.Instant
 /**
  * Pending requests in the real chat page (#4210 T6, #4339 C10), every style, light and dark: an Agent's chat with one
  * request ("one"), with three ("three"), with two and the first folded ("folded"), and Persona's conversation with its own
- * card and its tasks' oldest question ("assistant"; "assistant-folded" with its own card folded; "assistant-many" with two
+ * card and its tasks' oldest question ("assistant"; "assistant-many" with two
  * cards of its own, which outgrow their place and scroll under "N pending"); "three" and "assistant-many" again at the
  * largest text size (Glass, light). It uses only what `main` has too, so the same file draws the pictures before the change. PNGs in `build/pending-stack-shots/` (or
  * `-Dpersona.shots=<dir>`). Native JVM rendering: no system bars, no glass refraction, no device.
@@ -172,7 +172,7 @@ class PendingStackShotsTest {
         save("$name-${style.name.lowercase()}-${if (dark) "dark" else "light"}${if (large) "-large" else ""}")
     }
 
-    private fun assistantScene(style: AppStyle, dark: Boolean, fold: Boolean = false, many: Boolean = false, large: Boolean = false) {
+    private fun assistantScene(style: AppStyle, dark: Boolean, many: Boolean = false, large: Boolean = false) {
         val main = SessionKey("computer-a", "main")
         val docs = Session("computer-a", "docs", title = "Update the docs", state = "needs_you", status = "blocked", pendingInteractions = 1)
         val release = Session("computer-b", "release", title = "Prepare the release", state = "needs_you", status = "blocked", pendingInteractions = 1)
@@ -256,12 +256,7 @@ class PendingStackShotsTest {
             }
         }
         frames({ shown -> shown.any { it.startsWith("I'll look at the downloads") } && shown.any { it == "Needs you" } }, "assistant")
-        // Its own Bash card folded to its line, the task's question and its name above the entries as they were
-        if (fold) {
-            rule.onNode(hasContentDescription("Collapse") and hasAnyAncestor(hasTestTag("pending-card-own"))).performClick()
-            frames({ shown -> shown.any { it == "Expand" } }, "assistant folded")
-        }
-        save("assistant${if (many) "-many" else ""}${if (fold) "-folded" else ""}-${style.name.lowercase()}-${if (dark) "dark" else "light"}${if (large) "-large" else ""}")
+        save("assistant${if (many) "-many" else ""}-${style.name.lowercase()}-${if (dark) "dark" else "light"}${if (large) "-large" else ""}")
     }
 
     @Test fun oneGlass() = agentScene("one", listOf(permission), AppStyle.Glass, false)
@@ -315,12 +310,6 @@ class PendingStackShotsTest {
     @Test fun assistantBriefDark() = assistantScene(AppStyle.Brief, true)
     @Test fun assistantBoard() = assistantScene(AppStyle.Board, false)
     @Test fun assistantBoardDark() = assistantScene(AppStyle.Board, true)
-    @Test fun assistantFoldedGlass() = assistantScene(AppStyle.Glass, false, fold = true)
-    @Test fun assistantFoldedGlassDark() = assistantScene(AppStyle.Glass, true, fold = true)
-    @Test fun assistantFoldedBrief() = assistantScene(AppStyle.Brief, false, fold = true)
-    @Test fun assistantFoldedBriefDark() = assistantScene(AppStyle.Brief, true, fold = true)
-    @Test fun assistantFoldedBoard() = assistantScene(AppStyle.Board, false, fold = true)
-    @Test fun assistantFoldedBoardDark() = assistantScene(AppStyle.Board, true, fold = true)
     @Test fun assistantManyGlass() = assistantScene(AppStyle.Glass, false, many = true)
     @Test fun assistantManyGlassDark() = assistantScene(AppStyle.Glass, true, many = true)
     @Test fun assistantManyBrief() = assistantScene(AppStyle.Brief, false, many = true)

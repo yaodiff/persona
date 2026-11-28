@@ -1,10 +1,10 @@
 // Actual extension-page navigation, with owner-bound socket sessions retained below the top of the stack.
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import type { LegacyExtensionUI } from "./ExtensionView";
-import { pageHref } from "./ExtensionView";
+import { composeAssistant, pageHref } from "./ExtensionView";
 import { appUIStreamPage, type AppUIStreamPage, type NativePagePermission } from "../../lib/extension-ui-app-stream";
 import { NATIVE_STREAM_COMPONENTS, type StreamPageIdentity } from "../../lib/extension-ui-stream";
-import { MAX_STACK, uiContext, type UIPush } from "../../lib/extension-ui";
+import { composeText, MAX_STACK, uiContext, type UIPush } from "../../lib/extension-ui";
 import { credentialOwner, enc, errorText } from "../../lib/api";
 import { endInteraction, getState, useStore } from "../../lib/store";
 import { apiOp } from "../../lib/ops";
@@ -13,6 +13,7 @@ import { confirmedDefaultManager, onDefaultManager } from "../../lib/manager-cho
 import { uuid } from "../../lib/format";
 import { takeOverlayEntry, withoutOverlayState } from "../../lib/back-close";
 import { navigate } from "../../lib/router";
+import { safeWebURL } from "../../lib/format";
 import { openLink } from "../../lib/links";
 import { wideView } from "../../lib/code-view";
 import { currentLanguage, t } from "../../i18n";
@@ -29,6 +30,8 @@ export function NativeExtensionUI(props: Props & { legacy: (props: Props) => Rea
   const [stack, setStack] = useState<Page[]>(() => [{ key: uuid(), ui: props.ui, state: props.state, title: props.title }]);
   const stackRef = useRef(stack); stackRef.current = stack;
   const historied = props.history ?? (props.pages !== "open");
+  // Settings draws the route back only at the first page; a pushed page's own Back replaces it.
+  useEffect(() => { props.onDepth?.(stack.length); }, [props.onDepth, stack.length]);
   useEffect(() => {
     if (manager) return;
     let live = true;
@@ -95,10 +98,27 @@ function ConnectedPage(props: Props & { legacy: (props: Props) => ReactNode; onL
   useEffect(() => {
     if (props.page.legacy) return;
     setFallback(false);
-    const page = appUIStreamPage({ identity, state: props.page.state ?? "", context: { ...uiContext(props.context), locale: currentLanguage(), ui_version: NATIVE_UI_VERSION, stream: { protocol: 1, components: [...NATIVE_STREAM_COMPONENTS] } } }, props.manager,
+    const page = appUIStreamPage({
+      identity, state: props.page.state ?? "",
+      context: {
+        ...uiContext(props.context),
+        // Electron uses the web renderer for protocol 1. HTTP dashboards have a separate desktop context.
+        platform: "web", locale: currentLanguage(), ui_version: NATIVE_UI_VERSION,
+        stream: { protocol: 1, components: [...NATIVE_STREAM_COMPONENTS] },
+      },
+    }, props.manager,
       (result) => {
         if (result.toast) toast(result.toast, "ok");
-        if (result.open_url) openLink(result.open_url);
+        if (result.open_url) {
+          // A page's own quick prompt goes into the assistant's main composer without sending it (#16697); every
+          // other answer's URL opens as a link.
+          const prompt = composeText(result.open_url);
+          if (prompt) composeAssistant(prompt);
+          else {
+            const safe = safeWebURL(result.open_url, true);
+            if (safe) openLink(safe);
+          }
+        }
         if (result.push) callbacks.current.push(result.push);
         if (result.pop) callbacks.current.pop();
       },
@@ -126,7 +146,7 @@ function ConnectedPage(props: Props & { legacy: (props: Props) => ReactNode; onL
   const fail = useCallback(() => setFallback(true), []);
   const error = useCallback((e: unknown) => toast(t("settings-extensionview.action_failed", { error: e instanceof Error ? e.message : String(e) }), "error"), []);
   const jump = useCallback((action: { push?: UIPush }) => { if (action.push) callbacks.current.push(action.push); }, []);
-  const legacy = props.legacy({ ...props, ui: props.page.ui, state: props.page.state, title: props.page.title,
+  const legacy = props.legacy({ ...props, onDepth: undefined, ui: props.page.ui, state: props.page.state, title: props.page.title,
     active: props.active, history: false, navigation: { push: (p) => callbacks.current.push(p, true), pop: props.pop } });
   return <>
     {props.back && <Button tone="quiet" icon="chevronLeft" onClick={props.pop}>{props.back}</Button>}
@@ -147,7 +167,7 @@ function HostConfirmation({ adapter, active }: { adapter: AppUIStreamPage; activ
   const ix = active ? Object.values(interactions).find((ix) => adapter.ownsHostConfirmation(ix as NativePagePermission)) : undefined;
   return ix ? <PagePermission key={ix.id} adapter={adapter} ix={ix as NativePagePermission} /> : null;
 }
-function PagePermission({ adapter, ix }: { adapter: AppUIStreamPage; ix: NativePagePermission }) {
+export function PagePermission({ adapter, ix }: { adapter: AppUIStreamPage; ix: NativePagePermission }) {
   const [busy, setBusy] = useState(false);
   const answer = async (allow: boolean) => {
     if (busy || !adapter.ownsHostConfirmation(ix)) return;
@@ -155,8 +175,9 @@ function PagePermission({ adapter, ix }: { adapter: AppUIStreamPage; ix: NativeP
     try {
       // The existing hub endpoint routes this pending ID to its owning manager and rechecks auth.
       // Do not manufacture an Agent session or bypass the generic Agent approval guard.
-      await apiOp(`/interactions/${enc(ix.id)}/resolve`, { method: "POST", json: { allow } });
-      endInteraction(ix.id);
+      await apiOp(`/interactions/${enc(ix.id)}/resolve`, { method: "POST", json: { allow },
+        headers: ix.created_at ? { "X-Persona-Interaction-Created-At": ix.created_at } : undefined });
+      endInteraction(ix.id, undefined, ix.created_at);
     } catch (error) { toast(t("settings-extensionview.action_failed", { error: errorText(error) }), "error"); }
     finally { setBusy(false); }
   };

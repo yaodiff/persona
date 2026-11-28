@@ -74,27 +74,44 @@ func readCodexCacheEntries(home string) ([]codexCachedModel, bool) {
 	if home == "" {
 		return nil, false
 	}
-	b, err := os.ReadFile(filepath.Join(home, "models_cache.json"))
-	if err != nil {
-		return nil, false
+	candidates := make([]string, 0, 2)
+	if _, _, catalog := readCodexConfigTopLevel(home); catalog != "" {
+		if !filepath.IsAbs(catalog) {
+			catalog = filepath.Join(home, catalog)
+		}
+		candidates = append(candidates, catalog)
 	}
-	var doc struct {
-		Models []codexCachedModel `json:"models"`
+	candidates = append(candidates, filepath.Join(home, "models_cache.json"))
+	for _, path := range candidates {
+		b, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		var doc struct {
+			Models []codexCachedModel `json:"models"`
+		}
+		if json.Unmarshal(b, &doc) != nil {
+			continue
+		}
+		return doc.Models, true
 	}
-	if json.Unmarshal(b, &doc) != nil {
-		return nil, false
-	}
-	return doc.Models, true
+	return nil, false
 }
 
 // readCodexConfigDefault reads top-level `model` and `model_reasoning_effort` from <home>/config.toml without touching it.
 func readCodexConfigDefault(home string) (model, effort string) {
+	model, effort, _ = readCodexConfigTopLevel(home)
+	return model, effort
+}
+
+// readCodexConfigTopLevel reads top-level `model`, `model_reasoning_effort`, and `model_catalog_json` from <home>/config.toml without touching it.
+func readCodexConfigTopLevel(home string) (model, effort, catalog string) {
 	if home == "" {
-		return "", ""
+		return "", "", ""
 	}
 	f, err := os.Open(filepath.Join(home, "config.toml"))
 	if err != nil {
-		return "", ""
+		return "", "", ""
 	}
 	defer f.Close()
 	sc := bufio.NewScanner(f)
@@ -126,9 +143,11 @@ func readCodexConfigDefault(home string) (model, effort string) {
 			}
 		case "model_reasoning_effort":
 			effort = v
+		case "model_catalog_json":
+			catalog = v
 		}
 	}
-	return model, effort
+	return model, effort, catalog
 }
 
 // readCodexHomeModels reads visible models from <home>/models_cache.json and <home>/config.toml as a local fallback when

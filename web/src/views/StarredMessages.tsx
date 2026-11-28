@@ -69,7 +69,7 @@ export function StarredMessages({ onToggleSidebar }: { onToggleSidebar?: () => v
   }, []);
   return (
     <div className="flex h-full min-h-0 flex-col bg-page">
-      <header className="flex shrink-0 items-center gap-3 border-b border-line bg-surface px-4 py-3">
+      <header className="flex h-14 shrink-0 items-center gap-2 border-b border-line bg-surface px-3 sm:px-4">
         {onToggleSidebar && <IconButton icon="sidebar" label={t("app.sidebar")} onClick={onToggleSidebar} className="lg:hidden" />}
         <h1 className="min-w-0 flex-1 truncate text-base font-semibold text-ink">{t("starred.title")}</h1>
         {list.status === "ready" && <Button onClick={() => setBackupOpen(true)}>{t("starred.backup")}</Button>}

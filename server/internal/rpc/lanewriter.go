@@ -225,9 +225,11 @@ func (lw *laneWriter) run() {
 		lw.mu.Lock()
 		var batch []byte
 		if !lw.lost {
-			if lw.resend >= 0 {
+			if lw.resend >= 0 && lw.resend < len(lw.kept) {
 				batch, finished = lw.resendLocked(buf[:0]), finished[:0]
 			} else {
+				lw.resend = -1
+				lw.releaseHeldLocked()
 				batch, finished = lw.fillLocked(buf[:0], finished[:0], time.Now())
 			}
 		}
@@ -265,10 +267,7 @@ func (lw *laneWriter) run() {
 				l.done <- err
 			}
 			if err == nil && lw.resend < 0 {
-				for _, l := range lw.held {
-					l.done <- nil
-				}
-				lw.held = nil
+				lw.releaseHeldLocked()
 			}
 		}
 		lw.mu.Unlock()
@@ -278,6 +277,17 @@ func (lw *laneWriter) run() {
 			return
 		}
 	}
+}
+
+// releaseHeldLocked completes lines held across a lost transport once nothing remains to resend.
+func (lw *laneWriter) releaseHeldLocked() {
+	if len(lw.held) == 0 {
+		return
+	}
+	for _, l := range lw.held {
+		l.done <- nil
+	}
+	lw.held = nil
 }
 
 // stop ends the writer: every line still queued is told err.
@@ -576,7 +586,11 @@ func (lw *laneWriter) dropKeptLocked(seq uint64, now time.Time) {
 		clear(lw.kept[:i]) // the frames' bytes go; the slice moves on (append makes it anew when it outgrows its end)
 		lw.kept = lw.kept[i:]
 		if lw.resend >= 0 {
-			lw.resend = max(lw.resend-i, 0)
+			if len(lw.kept) == 0 {
+				lw.resend = -1
+			} else {
+				lw.resend = max(lw.resend-i, 0)
+			}
 		}
 	}
 }

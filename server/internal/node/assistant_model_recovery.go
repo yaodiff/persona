@@ -316,6 +316,8 @@ func (n *Node) applyModelRecoveryReturn(ctx context.Context, id, askedModel stri
 	default:
 		if askedModel == marker.From && execution.Model == marker.From {
 			execution.Model = marker.To // a cold restart has no hold, but the persisted fallback still applies
+			execution.PersistedModel = false
+			execution.FromRecovery = true
 		}
 	}
 	return execution

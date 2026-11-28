@@ -15,7 +15,7 @@ import { PersonalAgents } from "./SidebarRows";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const example: AgentSession = { id: "example:agent", source: "example", sessionKey: "agent", provider: "example", title: "Example personal agent", canSend: true, unreadCount: 0, rankTimeMs: 1 };
-const ready: AgentSourceStatus = { source: "example", enabled: true, accounts: [{ id: "example-account" }] };
+const ready: AgentSourceStatus = { source: "example", enabled: true, accounts: [{ accountId: "example-account", provider: "example" }] };
 const response = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
 let host: HTMLDivElement, root: Root;
 let listed: AgentSession[];

@@ -4,9 +4,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
+	"weak"
 
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -137,6 +139,29 @@ func TestAbandonedBranchIsLeftOutOfARead(t *testing.T) {
 	if _, err := f.Full("u2#0"); err == nil {
 		t.Fatal("an abandoned item is still there")
 	}
+}
+
+// File windows parse slices of one read buffer. The cached items and branch topology
+// must stay usable after the buffer itself becomes unreachable.
+func TestFileReleasesParsedWindow(t *testing.T) {
+	f := &File{tree: &branchTree{}}
+	buf := []byte(rewound().b.String() + "\n{bad json}\npartial")
+	ref := weak.Make(&buf[0])
+	f.parseLines(buf, 0, 1, &f.meta, f.tree, &f.items, nil)
+	runtime.GC()
+	if ref.Value() != nil {
+		t.Error("parsed window is still reachable")
+	}
+	for _, rec := range f.tree.recs {
+		if rec.raw != nil {
+			t.Fatalf("cached branch record %s holds its raw line", rec.uuid)
+		}
+	}
+	want(t, f.items, "一", "答一", "二改", "答二改")
+	if !f.tree.hidden["u2"] {
+		t.Fatal("lost the rewound branch")
+	}
+	runtime.KeepAlive(f)
 }
 
 // The usual case for a running node: the conversation is read, shown, and the user goes back later. The batch with the
@@ -435,6 +460,13 @@ func TestBranchesAcrossWindows(t *testing.T) {
 	}
 	if windowed.history() != whole.history() {
 		t.Fatalf("history after paging back %q (opened with %q), whole read %q", windowed.history(), windowedTokenAtOpen, whole.history())
+	}
+	m := windowed.Meta()
+	if windowed.partialMeta || m.FirstUser != "一" {
+		t.Fatalf("full metadata did not reach the first prompt: %q", m.FirstUser)
+	}
+	if m.tree.raw != nil || windowed.meta.tree.raw != nil {
+		t.Fatal("full metadata retained the last raw line")
 	}
 }
 

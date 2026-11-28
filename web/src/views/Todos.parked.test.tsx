@@ -103,6 +103,17 @@ const parkedTask = (id: string, until: string) => task(id, {
 });
 
 describe("To-dos parked status section", () => {
+  it("renders the hub's active blocker on the list and detail without supervision or local PR facts", async () => {
+    const todo = task("blocked", { wait: { kind: "external_event", waiting_on: "CDN rollout (+1 more)", reason: "Propagation" } });
+    await render([todo]);
+    const row = section("parked")?.querySelector('[data-todo="blocked"]')!;
+    expect(row.querySelector("[data-wait-target]")?.textContent).toContain("CDN rollout (+1 more)");
+    await act(async () => root.render(<TodosView selectedId={todo.id} />));
+    await flush();
+    const detail = host.querySelector('[data-wait-collapsed="false"]');
+    expect(detail?.querySelector("[data-wait-reason]")?.textContent).toBe("Propagation");
+  });
+
   it("keeps explicitly parked tasks together, including a park past its until time", async () => {
     const todos = [
       parkedTask("parked-future", new Date(NOW + DAY).toISOString()),

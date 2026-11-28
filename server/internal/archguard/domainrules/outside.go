@@ -200,14 +200,16 @@ func (c *outsideChecks) declares(p *Pkg, name string) bool {
 
 // visitorImpl is out-visitor-impl on one method: a Visit* method whose parameters name a type of an imported core
 // or the kit implements a visitor, which only adapters, testkit and a core's own tests do. The finding counts against
-// the first core the parameters name (the kit when they name no core). A Visit* method of a generic type names only
-// its type parameters, and an instance of the type (peek[fleetcount.Why]), made in any file of the package,
-// implements any core's visitor, so in a package a file of which imports a core or the kit it counts against a core
-// or kit package the package imports: first one that declares an interface method of its name, then a core, then by
-// path; in a core's own test, only another core it imports. In a core's own test a method is judged by the visitor it
-// implements, not by the packages its parameters name: one of the core's own visitors passes, whatever kit or shared
-// kernel types it takes (VisitHoldUntil(until instant.Instant), VisitAsker(asker agentref.Ref)), and another domain
-// package's visitor counts against that package, even when it takes only the kit's types.
+// the first core the parameters name (the kit when they name no core). A parameterless Visit* method names no type,
+// so in a package a file of which imports a core or the kit it counts against the imported core or kit whose
+// interface declares that method with matching signature (a core before the kit, then by path). A Visit* method of a
+// generic type names only its type parameters, and an instance of the type (peek[fleetcount.Why]), made in any file
+// of the package, implements any core's visitor, so in a package a file of which imports a core or the kit it counts
+// against a core or kit package the package imports: first one that declares an interface method of its name, then a
+// core, then by path; in a core's own test, only another core it imports. In a core's own test a method is judged by
+// the visitor it implements, not by the packages its parameters name: one of the core's own visitors passes, whatever
+// kit or shared kernel types it takes (VisitHoldUntil(until instant.Instant), VisitAsker(asker agentref.Ref)), and
+// another domain package's visitor counts against that package, even when it takes only the kit's types.
 func (c *outsideChecks) visitorImpl(f *File, fd *ast.FuncDecl, refs map[string]ref, allowed bool) {
 	if allowed || fd.Recv == nil || !strings.HasPrefix(fd.Name.Name, "Visit") {
 		return
@@ -247,6 +249,11 @@ func (c *outsideChecks) visitorImpl(f *File, fd *ast.FuncDecl, refs map[string]r
 		named = append(named, *first)
 		if !declaresMethod(first.pkg, fd.Name.Name) {
 			generic = " is a generic type's Visit method in a package that imports " + first.name
+		}
+	}
+	if len(named) == 0 && len(params(fd.Type.Params)) == 0 {
+		if r, ok := c.implemented(f, fd, c.pkgRefs()); ok {
+			named = append(named, r)
 		}
 	}
 	if len(named) == 0 {

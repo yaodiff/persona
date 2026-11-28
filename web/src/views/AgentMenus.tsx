@@ -8,18 +8,18 @@ import { closeAgentAction } from "../lib/close-agent";
 import { machineWithHub } from "../lib/mesh";
 import { isPinned } from "../lib/pins";
 import { isMuted } from "../lib/session-actions";
-import { getState, markSeen, refresh, refreshTodos, useStore } from "../lib/store";
+import { getState, refresh, refreshTodos, useStore } from "../lib/store";
 import { unlinkAgentFromTodo } from "../lib/todos";
 import type { Session } from "../lib/types";
 import { nodeActions, sessionNode, type NodeActionDeps } from "../lib/node-actions";
-import { Button, copyText, Dialog, Menu, toast, type MenuItem } from "../ui/atoms";
+import { copyText, Menu, toast, type MenuItem } from "../ui/atoms";
 import type { MenuAt } from "../ui/menu-model";
-import { NodeMenu } from "./NodeMenu";
+import type { NodeMenuProps } from "./NodeMenu";
 import { preloadSessionDialogs } from "./chat/SessionDialogs";
 import { t } from "../i18n";
-import { markAllSeenLabel } from "../lib/state-labels";
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, type ComponentType } from "react";
 import type { SpaceMenuProps } from "./SpaceMenu";
+import { lazyDialog } from "./LazyOverlay";
 
 export type NoticeTone = "ok" | "error" | "info";
 export interface ArchiveCloseActions {
@@ -50,6 +50,8 @@ export interface MarkSeenDialogProps {
 }
 
 const isPromiseLike = (v: unknown): v is PromiseLike<unknown> => Boolean(v) && typeof (v as PromiseLike<unknown>).then === "function";
+const LazyMarkSeenDialog = lazyDialog((): Promise<ComponentType<MarkSeenDialogProps & { open: boolean }>> => import("./MarkSeenDialog").then((m) => m.MarkSeenDialogBody));
+
 function runControlled(fn: () => void | Promise<void>, onNotice?: (message: string, tone: NoticeTone) => void) {
   try {
     const res = fn();
@@ -158,95 +160,22 @@ function AgentRowMenuView({ s, anchor, at, onClose, pinned, muted, features, onl
   return <NodeMenu key={menuKey} node={sessionNode(s, online)} at={place} onClose={onClose} before={before} omit={["node-copy-path", "node-rename"]} />;
 }
 
+// The menu of a computer, folder or Agent opens on a click: its code comes in a chunk of its own on the first one, as
+// SpaceMenu's below does, so it is not on every first screen (Sidebar, AgentRowMenu).
+const LazyNodeMenu = lazy(() => import("./NodeMenu").then((module) => ({ default: module.NodeMenu })));
+export function NodeMenu(props: NodeMenuProps) {
+  return <Suspense fallback={null}><LazyNodeMenu {...props} /></Suspense>;
+}
+
 const LazySpaceMenu = lazy(() => import("./SpaceMenu").then((module) => ({ default: module.SpaceMenu })));
 export function SpaceMenu({ preloadDialogs = true, ...props }: SpaceMenuProps & { preloadDialogs?: boolean }) {
   useEffect(() => { if (preloadDialogs) preloadSessionDialogs(); }, [preloadDialogs]); // its Rename… opens a dialog from a chunk of its own (#10382)
   return <Suspense fallback={null}><LazySpaceMenu {...props} /></Suspense>;
 }
 
-const sessionScopeKey = (s: Session) => `${s.machine_id}/${s.session_id}`;
-
 /** "Mark all as seen", asked first: it changes what the other devices show too. `release`: every row in the scope
- *  whose held-seen place also leaves when confirmed (defaults to `list`). */
-export function MarkSeenDialog({ list, release, onClose, onDone, onMarkSeen, onNotice }: MarkSeenDialogProps) {
-  const n = list?.length ?? 0;
-  const scopeKey = list ? `${list.map(sessionScopeKey).join(",")}::${(release ?? list).map(sessionScopeKey).join(",")}` : "";
-  const [prevScope, setPrevScope] = useState(scopeKey);
-  const [pending, setPending] = useState(false);
-  const [error, setError] = useState("");
-  const opRef = useRef(0);
-  const aliveRef = useRef(true);
-  const inFlightRef = useRef(false);
-  const callbacksRef = useRef({ onClose, onDone, onNotice });
-  callbacksRef.current = { onClose, onDone, onNotice };
-  if (prevScope !== scopeKey) {
-    setPrevScope(scopeKey);
-    if (pending) setPending(false);
-    if (error) setError("");
-  }
-  useEffect(() => { aliveRef.current = true; return () => { aliveRef.current = false; inFlightRef.current = false; opRef.current++; }; }, []);
-  useEffect(() => () => { inFlightRef.current = false; opRef.current++; }, [scopeKey]);
-
-  const confirm = () => {
-    if (!list || pending || inFlightRef.current) return;
-    const target = release ?? list;
-    if (!onMarkSeen) { markSeen(target); onDone?.(); onClose(); return; }
-    setError("");
-    const token = ++opRef.current;
-    inFlightRef.current = true;
-    try {
-      const result = onMarkSeen(target);
-      if (isPromiseLike(result)) {
-        setPending(true);
-        void Promise.resolve(result).then(
-          () => {
-            if (!aliveRef.current || token !== opRef.current) return;
-            inFlightRef.current = false;
-            setPending(false);
-            callbacksRef.current.onDone?.();
-            callbacksRef.current.onClose();
-          },
-          (e) => {
-            if (!aliveRef.current || token !== opRef.current) return;
-            inFlightRef.current = false;
-            const msg = errorText(e);
-            setPending(false);
-            setError(msg);
-            callbacksRef.current.onNotice?.(msg, "error");
-          },
-        );
-        return;
-      }
-      inFlightRef.current = false;
-      onDone?.();
-      onClose();
-    } catch (e) {
-      inFlightRef.current = false;
-      const msg = errorText(e);
-      setError(msg);
-      onNotice?.(msg, "error");
-    }
-  };
-
-  return (
-    <Dialog
-      open={Boolean(list)}
-      onClose={onClose}
-      title={markAllSeenLabel()}
-      width={380}
-      footer={
-        <>
-          <Button tone="quiet" onClick={onClose}>
-            {t("common.cancel")}
-          </Button>
-          <Button tone="primary" icon="check" busy={pending} disabled={pending} onClick={confirm}>
-            {markAllSeenLabel(n)}
-          </Button>
-        </>
-      }
-    >
-      <p className="text-[13px] leading-relaxed text-ink-2">{t("agentmenus.mark_all_seen_body", { count: n })}</p>
-      {error && <p role="alert" className="mt-2 text-meta text-red">{error}</p>}
-    </Dialog>
-  );
+ *  whose held-seen place also leaves when confirmed (defaults to `list`). Nothing until its first open, then the dialog
+ *  from its own chunk (views/MarkSeenDialog.tsx), kept mounted for its exit. */
+export function MarkSeenDialog(props: MarkSeenDialogProps) {
+  return <LazyMarkSeenDialog {...props} open={Boolean(props.list)} />;
 }

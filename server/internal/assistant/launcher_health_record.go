@@ -318,7 +318,7 @@ func (s *Service) recordStartFailure(ctx context.Context, machine, launcher stri
 		s.recordHealth(ctx, machine, launcher, healthResult{err: err.Error(), source: healthSourceStart, kind: errKindNotInTerminal})
 		return
 	}
-	s.recordHealth(ctx, machine, launcher, healthResult{err: err.Error(), source: healthSourceStart})
+	s.recordHealth(ctx, machine, launcher, healthResult{err: err.Error(), source: healthSourceStart, kind: codedLauncherErrorKind(err)})
 	// Reserve before launching the goroutine: a task's immediate detour must join this check, even before it runs.
 	if rc, run := s.claimHealthRecheck(ctx, machine, launcher); run {
 		go s.runHealthRecheck(context.WithoutCancel(ctx), machine, launcher, rc, true)
@@ -490,12 +490,12 @@ func terminalMissing(err error) bool {
 // checkStart and start, node/model_config.go check): a directory that is not there, a bad name, mode, effort or model.
 var startRequestErr = lazyre.New(`^directory .* does not exist$|^invalid launcher |^invalid session id |^invalid model$|^unknown permission mode |^unknown effort level |^unsupported agent type |^permission mode and effort are only supported for Claude starts|^普通 Agent 的启动只支持|^新建 Codex 的思考强度由其启动器管理`)
 
-// startRefusalCodes are the node's (and the hub's) coded refusals of the request itself (node/control.go,
+// startRefusalCodes are coded refusals of the request itself by a runtime, the node, or the hub (node/control.go,
 // node/codex_start.go, node/openelsewhere.go…). Codes about the machine's state (engine_missing, runtime_away,
 // not_running, orca_not_registered) are not here: the launcher cannot run there now, and a task may go elsewhere.
 // An engine with no provider of the launcher's kind (launcher_kind_missing, #8140) is the request's: the launcher is
 // not broken, and its check, which runs it on the command line, would pass and clear any record of it.
-var startRefusalCodes = []string{"codex_needs_prompt", "codex_resume", "codex_read_only", "orca_resume", "open_elsewhere", "runtime_session",
+var startRefusalCodes = []string{"bad_request", "codex_needs_prompt", "codex_resume", "codex_read_only", "orca_resume", "open_elsewhere", "runtime_session",
 	proto.CodeResumeUnknown, "identity_conflict", "ultracode_unsupported", "readonly_unsupported", proto.CodeDirectoryUntypable, proto.CodeNodeOutdated,
 	proto.CodeLauncherKindMissing, proto.CodeAgyCompanionOffline}
 

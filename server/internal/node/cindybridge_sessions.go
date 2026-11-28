@@ -141,7 +141,7 @@ func mapCindySessionRow(r cindyDBRow, isRunning, isBlocked bool, aliases map[str
 		row["permission_mode"] = mode
 	}
 	if prev := strings.TrimSpace(r.ListPreview); prev != "" {
-		row["last_text"] = snippet(prev)
+		row["last_text"] = bridgePreview(prev)
 	}
 	return row, sid
 }

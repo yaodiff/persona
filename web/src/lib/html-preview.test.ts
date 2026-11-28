@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { cspFor, previewDocument, relativeRefs, sandboxFor } from "./html-preview";
 
 describe("HTML preview policy", () => {
-  it("is locked down until the user opens it up, and never same-origin", () => {
+  it("keeps scripts and network off by default", () => {
     const off = { scripts: false, network: false };
     expect(sandboxFor(off)).toBe("allow-popups allow-popups-to-escape-sandbox");
     expect(cspFor(off)).toContain("default-src 'none'");
@@ -11,7 +11,15 @@ describe("HTML preview policy", () => {
     expect(cspFor({ scripts: true, network: false })).toContain("script-src 'unsafe-inline'");
     expect(cspFor({ scripts: true, network: false })).toContain("default-src 'none'"); // inline scripts, still no network
     expect(cspFor({ scripts: false, network: true })).toBe("");
-    for (const p of [off, { scripts: true, network: true }]) expect(sandboxFor(p)).not.toContain("allow-same-origin");
+  });
+
+  it.each([
+    { scripts: false, network: false },
+    { scripts: true, network: false },
+    { scripts: false, network: true },
+    { scripts: true, network: true },
+  ])("keeps rendered HTML opaque with scripts=$scripts and network=$network", (policy) => {
+    expect(sandboxFor(policy)).not.toContain("allow-same-origin");
   });
 
   it("puts the policy first, after the doctype", () => {

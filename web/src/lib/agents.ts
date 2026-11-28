@@ -5,6 +5,7 @@ import { useSyncExternalStore } from "react";
 import { t } from "../i18n";
 import { api, errorText, invalidateInFlightGets } from "./api";
 import { SessionList, compareListIds } from "./session-list";
+import type { MarkedAgent } from "./agent-kind";
 import { toast } from "../ui/atoms";
 
 export interface AgentSession {
@@ -20,6 +21,64 @@ export interface AgentSession {
   rankTimeMs: number;
   hasAvatar?: boolean;
   avatarVersion?: string;
+  /** The latest message as the source lists it (older sources leave it out), and whether the user sent it. */
+  previewText?: string;
+  previewIsMine?: boolean;
+  /** When the user pinned it at the source; 0 or absent: not pinned there. */
+  onTopRankTimeMs?: number;
+  /** What is left of the account's allowance at its service, when the source knows (quotaGauge reads it). */
+  quota?: AgentQuota;
+}
+
+/** A source's account allowance as the hub passes it on (server/internal/agents/wire.go AgentQuota). */
+export interface AgentQuota {
+  state: string;
+  /** What is left as a fraction (0–1). */
+  remaining?: number | null;
+  /** What is left as a percentage (0–100). */
+  percent?: number | null;
+  tone?: string;
+  kind?: string;
+  label?: string;
+  /** When it resets: epoch ms or an ISO date. */
+  resetsAt?: number | string | null;
+  checkedAt?: number | string | null;
+  source?: string;
+  sourceNote?: string;
+  stale?: boolean;
+  /** The source's own "show it" flag. Not read: older accounts say false while they have a real figure. */
+  show?: boolean;
+  [more: string]: unknown;
+}
+
+/** How a charge is drawn: ok, low (20% or less), exhausted (nothing left), stale (an old reading, muted). */
+export type QuotaTone = "ok" | "low" | "exhausted" | "stale";
+export interface QuotaGauge {
+  /** 0–1. */
+  level: number;
+  percent: number;
+  tone: QuotaTone;
+  resetsAt?: number;
+}
+
+const finite = (n: unknown): n is number => typeof n === "number" && Number.isFinite(n);
+
+/** The charge to draw for a quota, or null when there is no figure to draw (no quota, or neither remaining nor percent
+ * and not exhausted). `show: false` is not a reason to hide it: accounts made before the switch say false by default. */
+export function quotaGauge(q: AgentQuota | null | undefined): QuotaGauge | null {
+  if (!q || typeof q !== "object") return null;
+  const exhausted = q.state === "exhausted";
+  let level: number | null = null;
+  if (finite(q.percent)) level = q.percent / 100;
+  else if (finite(q.remaining)) level = q.remaining > 1 ? q.remaining / 100 : q.remaining;
+  else if (exhausted) level = 0;
+  if (level === null) return null;
+  level = Math.min(1, Math.max(0, level));
+  if (exhausted) level = 0;
+  const percent = Math.round(level * 100);
+  const tone: QuotaTone = q.stale || q.state === "stale" ? "stale" : level <= 0 ? "exhausted" : level <= 0.2 || q.state === "low" ? "low" : "ok";
+  const reset = typeof q.resetsAt === "string" ? Date.parse(q.resetsAt) : q.resetsAt;
+  return { level, percent, tone, ...(finite(reset) && reset > 0 ? { resetsAt: reset } : {}) };
 }
 
 // Blocks are open-ended: text and tool-call are known, anything else is shown raw.
@@ -81,7 +140,16 @@ export interface AgentSourceStatus {
   enabled: boolean;
   error?: string;
   setup?: "missing" | "disabled" | "no_accounts" | string;
-  accounts?: unknown[];
+  accounts?: AgentAccount[];
+}
+
+/** One of a source's accounts as `/agents` lists it: the personal list's Browse by account groups by `accountId`. */
+export interface AgentAccount {
+  accountId: string;
+  provider?: string;
+  displayName?: string;
+  status?: string;
+  sessionCount?: number;
 }
 
 const SETUP_HINTS: Record<string, string> = {
@@ -199,10 +267,37 @@ export async function restoreAgentSession(s: Pick<AgentSession, "id" | "title">,
 
 // ── pure helpers (tested) ───────────────────────────────
 
-const PROVIDER_LABEL: Record<string, string> = { grok_bot: "Grok Bot", muse: "Muse", cue: "Cue", dots: "Dots", claude_duet: "Claude Duet" };
+const PROVIDER_LABEL: Record<string, string> = { grok_bot: "Grok Bot", muse: "Muse", muse2api: "Muse", cue: "Cue", dots: "Dots", claude_duet: "Claude Duet", gemini_tasks: "Gemini", groq: "Groq" };
 export function providerLabel(p: string): string {
   if (p === "bot") return t("lib-agents.bot");
   return PROVIDER_LABEL[p] ?? (p || t("lib-agents.other"));
+}
+
+// The agent mark (ui/AgentMark.tsx) a provider's product is drawn with, only where the provider is that product's own
+// agent. Dots and Grok Bot are different products: they draw their labels' letters, never ChatGPT's or Grok's marks.
+const PROVIDER_MARK: Record<string, MarkedAgent> = { claude_duet: "claude", gemini_tasks: "gemini" };
+
+/** The `agent` to hand AgentMark for a provider: its product's mark, else its label, whose first letter is drawn ("" would
+ *  be Claude Code's). */
+export function providerMarkAgent(p: string): string {
+  return PROVIDER_MARK[p] ?? providerLabel(p);
+}
+
+/** What the personal list knows of the account a group is keyed by: its name and provider. The name is the account's own
+ *  (`displayName`), else its provider's label; an account `/agents` does not list is named after the provider of its
+ *  loaded sessions, and only one known nowhere by its id. `provider` is "" when nothing says which it is. */
+export function accountGroup(id: string, sources: readonly AgentSourceStatus[] | null | undefined, sessions: readonly Pick<AgentSession, "accountId" | "provider">[]): { name: string; provider: string } {
+  for (const src of sources ?? []) {
+    for (const a of Array.isArray(src.accounts) ? src.accounts : []) {
+      if (!a || typeof a !== "object" || a.accountId !== id) continue;
+      const provider = typeof a.provider === "string" ? a.provider : "";
+      const named = typeof a.displayName === "string" ? a.displayName.trim() : "";
+      if (named) return { name: named, provider };
+      if (provider) return { name: providerLabel(provider), provider };
+    }
+  }
+  const provider = sessions.find((s) => s.accountId === id && s.provider)?.provider ?? "";
+  return provider ? { name: providerLabel(provider), provider } : { name: id, provider: "" };
 }
 
 export const totalUnread = (list: AgentSession[]) => list.reduce((n, s) => n + (s.unreadCount || 0), 0);
@@ -379,6 +474,7 @@ export function useAgentList(): ListState {
       return () => listeners.delete(l);
     },
     () => list,
+    () => list, // a static render (an Inbox detail's Trail names personal Agents, #16770) reads the same list
   );
 }
 
@@ -438,7 +534,7 @@ export function dateBucket(ms: number, now = Date.now()): { key: string; label: 
 
 export function matchesQuery(s: AgentSession, q: string) {
   const needle = q.trim().toLowerCase();
-  return !needle || s.title.toLowerCase().includes(needle) || s.provider.toLowerCase().includes(needle) || providerLabel(s.provider).toLowerCase().includes(needle);
+  return !needle || s.title.toLowerCase().includes(needle) || s.provider.toLowerCase().includes(needle) || providerLabel(s.provider).toLowerCase().includes(needle) || Boolean(s.previewText?.toLowerCase().includes(needle));
 }
 
 function sorter(sort: SortBy) {

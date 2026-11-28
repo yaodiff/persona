@@ -79,11 +79,11 @@ describe("⌘K: recently opened (#2191)", () => {
 
   it("offers Go back to the previous conversation among the commands, naming it; none with nothing to go back to", () => {
     noteChatShown("s:m1/b");
-    expect(render(">")).not.toContain("回到上一个对话");
+    expect(render(">")).not.toContain("返回上一个对话");
     noteChatShown("s:m1/a");
     noteChatShown("s:m1/b");
-    const html = render(">回到");
-    expect(html).toContain("回到上一个对话");
-    expect(html).toMatch(/回到上一个对话<span[^>]*>Release notes<\/span>/);
+    const html = render(">返回");
+    expect(html).toContain("返回上一个对话");
+    expect(html).toMatch(/返回上一个对话<span[^>]*>Release notes<\/span>/);
   });
 });

@@ -82,6 +82,19 @@ describe("the file viewer on a Windows computer", () => {
     expect(host.textContent).toContain("setup.md");
   });
 
+  it("returns to the contextual folder when opened from Machines", async () => {
+    history.replaceState(null, "", "/machines/win/files");
+    try {
+      const show = host.querySelector<HTMLButtonElement>(`button[aria-label="${t("files-nav.show_in_files")}"]`)!;
+      await act(async () => show.click());
+      expect(location.pathname).toBe("/machines/win/files");
+      expect(new URLSearchParams(location.search).get("path")).toBe(String.raw`C:\Users\me\docs`);
+      expect(opened).toEqual([]);
+    } finally {
+      history.replaceState(null, "", "/");
+    }
+  });
+
   it("shows the file in its folder, marked", async () => {
     const show = host.querySelector<HTMLButtonElement>(`button[aria-label="${t("files-nav.show_in_files")}"]`)!;
     await act(async () => show.click());

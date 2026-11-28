@@ -53,6 +53,12 @@ class TouchTargetTest {
                 Case(style, "medium button") { tag, tapped -> JButton("确定", tapped, Modifier.testTag(tag), size = JButtonSize.Medium) },
                 Case(style, "text button") { tag, tapped -> JTextButton("确定", tapped, Modifier.testTag(tag)) },
                 Case(style, "chip") { tag, tapped -> JChip("全部", Modifier.testTag(tag), onClick = tapped) },
+                Case(style, "tray entry") { tag, tapped ->
+                    AssistantTrayEntry("进行中", 3, AssistantTrayTone.Progress, false, "已折叠", tapped, Modifier.testTag(tag))
+                },
+                Case(style, "composer meta") { tag, tapped ->
+                    ComposerMetaChip("默认: agy", PhIcons.Cube, Modifier.testTag(tag), dropdown = true, onClick = tapped)
+                },
                 Case(style, "switch") { tag, tapped -> JSwitch(false, { tapped() }, Modifier.testTag(tag)) },
                 Case(style, "heading action") { tag, tapped -> HeadingAction(PhIcons.Gauge, "用量", tapped, Modifier.testTag(tag)) },
                 Case(style, "toast action", cell = "撤销") { tag, tapped ->

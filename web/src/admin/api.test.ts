@@ -60,22 +60,22 @@ describe("adminApi", () => {
     stub(401, { error: "bad password", code: "bad_password" });
     const err = (await adminApi("/login", "POST", { password: "x" }).catch((e) => e)) as AdminError;
     expect(err.code).toBe("bad_password");
-    expect(errorText(err)).toBe("密码不对");
+    expect(errorText(err)).toBe("密码错误");
     expect(gone).not.toHaveBeenCalled();
   });
 
   it("reports how long to wait when rate limited", async () => {
     stub(429, { error: "too many", code: "rate_limited", retry_after: 30 });
-    expect(errorText(await adminApi("/login", "POST").catch((e) => e))).toBe("试错太多次了，30 秒后再试");
+    expect(errorText(await adminApi("/login", "POST").catch((e) => e))).toBe("尝试次数过多，请在 30 秒后重试。");
     stub(429, { error: "too many", code: "rate_limited" }, { "Retry-After": "12" });
-    expect(errorText(await adminApi("/login", "POST").catch((e) => e))).toBe("试错太多次了，12 秒后再试");
+    expect(errorText(await adminApi("/login", "POST").catch((e) => e))).toBe("尝试次数过多，请在 12 秒后重试。");
   });
 
   it("explains the setup code errors", async () => {
     stub(401, { error: "bad setup code", code: "bad_setup_code" });
     expect(errorText(await adminApi("/setup", "POST").catch((e) => e))).toContain("personad hub admin setup-code");
     stub(403, { error: "setup code required", code: "setup_code_required" });
-    expect(errorText(await adminApi("/setup", "POST").catch((e) => e))).toBe("先输入设置码");
+    expect(errorText(await adminApi("/setup", "POST").catch((e) => e))).toBe("请先输入设置码");
   });
 
   it("keeps a non-JSON error readable", async () => {
@@ -119,7 +119,7 @@ describe("the center and connectors", () => {
     stub(409, { error: "这台 hub 是组里的成员，设备由中心 hub「书房」管理：到它的管理界面去", code: "member_hub" });
     expect(errorText(await adminApi("/devices").catch((e) => e))).toContain("中心 hub「书房」");
     stub(400, { error: "no ssh", code: "ssh_unsupported" });
-    expect(errorText(await addLinkMachine({ id: "a", name: "a", icon: "laptop" }).catch((e) => e))).toContain("电脑来连");
+    expect(errorText(await addLinkMachine({ id: "a", name: "a", icon: "laptop" }).catch((e) => e))).toContain("电脑主动连接");
   });
 });
 

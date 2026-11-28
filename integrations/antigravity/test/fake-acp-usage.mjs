@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { appendFileSync, readFileSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { createInterface } from 'node:readline'
 
@@ -10,6 +10,12 @@ const log = process.argv[process.argv.indexOf('--log-file') + 1]
 const calls = `${directory}/native-calls.jsonl`
 appendFileSync(`${directory}/acp-starts.jsonl`, `${JSON.stringify({ pid: process.pid })}\n`)
 const server = createServer(async (req, res) => {
+  // Agent port discovery probes listeners with GET / (User-Agent persona-ports, docs/lessons/testing.md); it is not a
+  // native call and must not kill the fake.
+  if (req.method !== 'POST') {
+    res.writeHead(404).end('{"message":"Unknown native method"}')
+    return
+  }
   const chunks = []
   for await (const chunk of req) chunks.push(chunk)
   const params = JSON.parse(Buffer.concat(chunks).toString())
@@ -18,6 +24,18 @@ const server = createServer(async (req, res) => {
   if (method === 'RetrieveUserQuotaSummary') {
     res.end(JSON.stringify({ response: JSON.parse(readFileSync(`${directory}/quota.json`, 'utf8')) }))
     return
+  }
+  if (method === 'GetUserStatus') {
+    const statusPath = `${directory}/user-status.json`
+    if (existsSync(statusPath)) {
+      const payload = JSON.parse(readFileSync(statusPath, 'utf8'))
+      if (payload?.httpStatus) {
+        res.writeHead(payload.httpStatus).end(JSON.stringify({ message: payload.message || 'status error' }))
+        return
+      }
+      res.end(JSON.stringify(payload))
+      return
+    }
   }
   res.writeHead(404).end('{"message":"Unknown native method"}')
 })

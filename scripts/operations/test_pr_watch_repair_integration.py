@@ -475,6 +475,38 @@ class RepairIntegrationTests(unittest.TestCase):
         self.assertEqual(self.git("show", "-s", "--format=%P", updated).split(), [self.head, self.main])
         self.assertFalse((self.repo / ".git" / "MERGE_HEAD").exists())
 
+    # #16701: the whitespace gate saw every file the merge brought in, so one blank line at the end of a file main
+    # carries failed every conflict repair, naming a file no worker had edited.
+    def test_conflict_repair_ignores_an_unrelated_blank_line_at_eof_in_main(self):
+        self.conflicting_merge()
+        self.git("checkout", "-q", "main")
+        (self.repo / "main-note.txt").write_text("note\n\n")
+        self.git("add", "main-note.txt")
+        self.git("commit", "-qm", "a main file that ends with a blank line")
+        self.git("push", "-q", "origin", "main")
+        self.main = self.git("rev-parse", "HEAD")
+        self.pr["baseRefOid"] = self.main
+        self.git("checkout", "-q", "fix/example")
+        def resolve(root, edits):
+            (edits / "file.txt").write_text("pr\nmain conflict\n")
+        with self.conflict_worker(resolve), \
+                patch.object(pr_watch_repair, "pr_snapshot", return_value=self.pr), \
+                patch.object(pr_watch_repair, "privacy_scanner_environment", return_value={}):
+            updated = pr_watch_repair.update_branch_with_main("example/one", self.pr, str(self.repo), self.main, {"repair_command": "repair-worker"})
+        self.assertEqual(self.git("rev-parse", "HEAD"), updated)
+        self.assertEqual((self.repo / "main-note.txt").read_text(), "note\n\n")
+
+    def test_conflict_repair_still_refuses_a_blank_line_the_resolution_adds(self):
+        self.conflicting_merge()
+        def resolve(root, edits):
+            (edits / "file.txt").write_text("pr\nmain conflict\n\n")
+        with self.conflict_worker(resolve), \
+                patch.object(pr_watch_repair, "pr_snapshot", return_value=self.pr), \
+                patch.object(pr_watch_repair, "privacy_scanner_environment", return_value={}):
+            with self.assertRaisesRegex(pr_watch_repair.WatchError, "new blank line at EOF"):
+                pr_watch_repair.update_branch_with_main("example/one", self.pr, str(self.repo), self.main, {"repair_command": "repair-worker"})
+        self.assertEqual(self.git("rev-parse", "HEAD"), self.head)
+
     def test_conflict_worker_resolves_only_conflict_and_preserves_merge_parents(self):
         self.conflicting_merge()
         def resolve(root, edits):

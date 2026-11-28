@@ -1,4 +1,5 @@
 {
+  "computer_label": "コンピュータ",
   "reconnecting": "再接続しています",
   "reconnect_failed": "再接続できませんでした：{error}",
   "sidebar": "サイドバー",
@@ -39,6 +40,10 @@
   "memory_last_hour": "直近1時間のメモリ",
   "network_last_hour": "直近1時間のネットワーク：ダウンロード（オレンジ）、アップロード（紫）",
   "view_label": "表示",
+  "view_management": "管理",
+  "view_work": "作業",
+  "view_diagnostics": "診断",
+  "view_back": "戻る",
   "view_cards": "カード",
   "view_capabilities": "機能一覧",
   "view_procs": "ポートとプロセス",

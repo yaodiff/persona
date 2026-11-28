@@ -9,7 +9,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { t } from "../../i18n";
 import { agentName } from "../../lib/agent-kind";
 import { asksEngineSwitch, skipEngineSwitchQuestion } from "../../lib/engine-switch-ask";
-import type { PanelConfig } from "../../lib/model-panel";
+import type { PanelConfig, PanelOverride } from "../../lib/model-panel";
 import { usePanelQuotas } from "../../lib/panel-quotas";
 import { sessionLauncher } from "../../lib/model-switch";
 import { LAUNCHER_SWITCH_FEATURE, launcherEngine, pickPlan, sessionPanel, speedStep, type ModeStep, type PanelOptions } from "../../lib/session-panel";
@@ -105,15 +105,16 @@ export function SessionModelPanel({ session, displayModel, anchor, onClose }: { 
     else if (next) toast(t("chat-modelpanel.switch_scheduled", { target: `${next.provider} · ${next.model}` }), "ok");
     return true;
   };
-  const onApplyCurrent = async (patch: { effort?: string; fast?: boolean }) => {
+  const onApplyCurrent = async (patch: PanelOverride) => {
     const s = latest.current;
     const steps: ModeStep[] = [];
     if (patch.effort && patch.effort !== s.effort) steps.push({ effort: patch.effort });
-    const speed = speedStep(s, patch.fast, true);
+    const speed = speedStep(s, patch.speed, true);
+    if (patch.speed && !speed) return false;
     if (speed) steps.push(speed);
     return apply(steps);
   };
-  const onReload = (provider: string) => void readModels(mid, provider, { again: true, first: provider === own, host: provider === own ? ownHost : undefined });
+  const onReload = (provider: string) => void readModels(mid, provider, { refresh: true, first: provider === own, host: provider === own ? ownHost : undefined });
   const onForget = (provider: string, model: string) => {
     void forgetModel(mid, provider, model, undefined, provider === own ? ownHost : undefined).then((error) => error && toast(error, "error"));
   };

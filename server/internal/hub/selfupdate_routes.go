@@ -3,6 +3,7 @@ package hub
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"slices"
 	"time"
@@ -46,19 +47,36 @@ func (u *updater) routes(api *http.ServeMux) {
 		}
 		writeJSON(w, u.viewIn(u.h.requestLang(r)))
 	})
+	api.HandleFunc("POST /api/v1/hub/update/cancel", func(w http.ResponseWriter, r *http.Request) {
+		if err := u.requestCancel(); err != nil {
+			writeErr(w, http.StatusConflict, err)
+			return
+		}
+		u.broadcastStatus()
+		writeJSON(w, u.viewIn(u.h.requestLang(r)))
+	})
 	api.HandleFunc("POST /api/v1/hub/update/check", func(w http.ResponseWriter, r *http.Request) {
 		if err := u.load(r.Context()); err != nil {
 			writeErr(w, http.StatusServiceUnavailable, i18n.Err("http-status.unavailable"))
 			return
 		}
-		if _, err := u.check(r.Context()); err != nil && !errors.Is(err, errNotRelease) {
+		var body struct {
+			Preview bool `json:"preview"`
+		}
+		if err := decodeJSONBody(w, r, &body, 4<<10); err != nil && !errors.Is(err, io.EOF) {
+			writeBodyErr(w, err, err)
+			return
+		}
+		if _, err := u.checkMode(r.Context(), body.Preview); err != nil && !errors.Is(err, errNotRelease) {
 			writeErr(w, http.StatusBadGateway, err)
 			return
 		}
-		if u.wantsAuto() {
-			go u.install(context.WithoutCancel(r.Context()), true)
-		} else {
-			u.noteHeld(r.Context())
+		if !body.Preview {
+			if u.wantsAuto() {
+				go u.install(context.WithoutCancel(r.Context()), true)
+			} else {
+				u.noteHeld(r.Context())
+			}
 		}
 		writeJSON(w, u.viewIn(u.h.requestLang(r)))
 	})
@@ -68,7 +86,8 @@ func (u *updater) routes(api *http.ServeMux) {
 			return
 		}
 		var body struct {
-			Now bool `json:"now"`
+			Now    bool   `json:"now"`
+			Target string `json:"target"`
 		}
 		// No body (or one that does not decode) is an ordinary update; only an oversized one is refused.
 		if err := decodeJSONBody(w, r, &body, 4<<10); bodyTooLarge(err) {
@@ -76,7 +95,7 @@ func (u *updater) routes(api *http.ServeMux) {
 			return
 		}
 		// The update outlives this request: it runs on the hub's own context.
-		if err := u.begin(context.WithoutCancel(r.Context()), body.Now); err != nil {
+		if err := u.beginTarget(context.WithoutCancel(r.Context()), body.Now, body.Target); err != nil {
 			writeErr(w, http.StatusConflict, err)
 			return
 		}

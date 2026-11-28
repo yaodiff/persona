@@ -214,7 +214,7 @@ func TestRewriteKeepsAFinishedProjectDone(t *testing.T) {
 	}
 	// News revives it, as before.
 	c := prChat(t, e, "a1", "", time.Now())
-	if slug := e.evolveProject("p", "short", nil, "", c, "reopened", time.Now()); slug != "p" {
+	if slug := e.evolveProject("p", "short", nil, "", c, true, "reopened", time.Now()); slug != "p" {
 		t.Fatal(slug)
 	}
 	if p, _ := e.Store.Project("p"); p.Status != "active" {

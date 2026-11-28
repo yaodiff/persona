@@ -530,7 +530,7 @@ func (s *meshStore) UpdateTodo(context.Context, string, *string, *string, *bool,
 func (s *meshStore) FailTodo(context.Context, string, string, time.Time) (*db.TodoRow, error) {
 	return nil, db.ErrTodoNotFound
 }
-func (s *meshStore) AutoDoneTodo(context.Context, string, string, time.Time, time.Time) (*db.TodoRow, bool, error) {
+func (s *meshStore) AutoDoneTodo(context.Context, string, string, time.Time, time.Time, func() error) (*db.TodoRow, bool, error) {
 	return nil, false, db.ErrTodoNotFound
 }
 func (s *meshStore) RetryTodo(context.Context, string, time.Time) (*db.TodoRow, bool, error) {

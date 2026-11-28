@@ -19,15 +19,25 @@ import (
 
 // ---- screen cards ----
 
+func canReadBlockedScreen(sess proto.Session) bool {
+	// Legacy sessions have a terminal. Other sources advertise one explicitly.
+	return sess.Status == proto.StatusBlocked && (sess.SourceKind == "" || sess.Capabilities != nil && sess.Capabilities.Terminal)
+}
+
+// syncScreenAfterHookExpiry checks the session the expired card covered. It can stay blocked without a new status
+// event. The screen read and the checks for a newer card or user handback are shared with the session-list path.
+func (s *Service) syncScreenAfterHookExpiry(machine, session string) {
+	if sess, ok := s.nodeSession(machine, session); ok && canReadBlockedScreen(sess) {
+		go s.createScreenInteraction(machine, sess)
+	}
+}
+
 // syncScreenInteractions turns blocked agents without a hook-driven interaction into "screen" interactions
 // (folder trust, model pickers, any TUI dialog hooks cannot see), and clears them once the agent moves on.
 func (s *Service) syncScreenInteractions(machine string, list []proto.Session) {
 	blocked := map[string]proto.Session{}
 	for _, sess := range list {
-		// A session without a terminal (a source whose capabilities leave it out: Codex app-server, an agent runtime)
-		// has no screen to read a dialog off: it asks through its own cards, and blocked there means it waits in its
-		// own UI (docs/integrations/runtimes.md).
-		if sess.Status == proto.StatusBlocked && (sess.SourceKind == "" || sess.Capabilities != nil && sess.Capabilities.Terminal) {
+		if canReadBlockedScreen(sess) {
 			blocked[sess.SessionID] = sess
 		}
 	}
@@ -89,7 +99,7 @@ func (s *Service) createScreenInteraction(machine string, sess proto.Session) {
 	if wait := screenCardWait(sess, s.hasHooks(machine, sess)); wait > 0 {
 		time.Sleep(wait)
 	}
-	if cur, ok := s.nodeSession(machine, sess.SessionID); !ok || cur.Status != proto.StatusBlocked {
+	if cur, ok := s.nodeSession(machine, sess.SessionID); !ok || !canReadBlockedScreen(cur) {
 		return
 	}
 	text, d, err := s.screenDialog(ctx, machine, sess.SessionID)
@@ -100,11 +110,11 @@ func (s *Service) createScreenInteraction(machine string, sess proto.Session) {
 	if d != nil {
 		id += "_" + d.Rev // another dialog is another card: nothing picked on the last one carries over
 	}
-	ix := proto.Interaction{
+	ix := cleanTitle(proto.Interaction{
 		ID: id, MachineID: machine, SessionID: sess.SessionID, SessionTitle: sess.Title, Cwd: sess.Cwd, Kind: proto.IxScreen,
 		CreatedAt: time.Now().UTC(), ExpiresAt: time.Now().Add(24 * time.Hour).UTC(), Screen: trimScreen(text), Dialog: d,
 		Secret: screen.SecretPrompt(text),
-	}
+	})
 	s.fleet.mu.Lock()
 	if s.screenHandedBackLocked(machine, sess.SessionID, id, d != nil) {
 		s.fleet.mu.Unlock()
@@ -272,6 +282,7 @@ func (s *Service) upgradeScreenCard(machine, session, id string, p *pending) {
 				if p.orphaned != nil {
 					p.orphaned.Stop()
 				}
+				p.stopReminderLocked()
 			}
 			s.fleet.mu.Unlock()
 			if same {
@@ -452,8 +463,11 @@ func screenCardWait(sess proto.Session, hooks bool) time.Duration {
 
 // coversScreen: the interaction stands for what the terminal waits on (a hook's, a Codex approval or overlay
 // question), so no screen card is made beside it. A Codex async question does not: Codex shows no dialog for it,
-// though herdr calls the agent blocked while it is open.
-func coversScreen(p *pending) bool { return !(p.codex && p.ix.ToolName == "request_user_input_async") }
+// though herdr calls the agent blocked while it is open. Nor does a command waiting for input: it is a task of the
+// Agent's, not the Agent's own screen (fleet_ix_command.go).
+func coversScreen(p *pending) bool {
+	return !(p.codex && (p.ix.ToolName == "request_user_input_async" || p.ix.ToolName == proto.CommandInputTool))
+}
 
 // screenAnswer turns an answer to a screen card into session.keys parameters. With a dialog the node checks its
 // revision before pressing anything; an option's keys come from the node's fresh reading of the screen, and the

@@ -73,25 +73,25 @@ describe("iPhone control", () => {
     take("GET").answer(status({ devices: [cable] }));
     await flush();
     await click(host.querySelector('[data-testid="iphone-pair-dev-1"]'));
-    expect(text()).toContain("正在和这台 iPhone 配对…");
+    expect(text()).toContain("正在与此 iPhone 配对…");
     const post = take("POST");
     expect(post.path).toMatch(/\/machines\/mb\/iphone\/pair$/);
     expect(post.body).toEqual({ device: "dev-1" });
     post.answer(status({ devices: [cable], job: { kind: "pair", state: "running", code: "trust_pending", device: "dev-1" } }));
     await flush();
-    expect(text()).toContain("在这台 iPhone 上点「信任」，再输入锁屏密码");
+    expect(text()).toContain("请在这台 iPhone 上轻点「信任」，然后输入锁屏密码");
     expect(host.querySelector('[data-testid="iphone-cancel-dev-1"]')).toBeTruthy();
   });
 
   it("says a Linux computer can't operate iPhones yet, with nothing to install", async () => {
     await render(status({ installed: false, ddi_present: false, code: "bridge_missing" }), false);
-    expect(text()).toContain("这台电脑暂时不能操控 iPhone");
+    expect(text()).toContain("该电脑暂不支持操控 iPhone");
     expect(host.querySelector('[data-testid="iphone-install"]')).toBeNull();
   });
 
   it("points to the iPhone for its consent", async () => {
     await render(status({ devices: [paired] }));
-    expect(text()).toContain("等这台 iPhone 同意");
+    expect(text()).toContain("等待此 iPhone 授权");
     expect(text()).toContain("设置 › 连接器 › 这台 iPhone");
   });
 

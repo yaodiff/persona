@@ -23,7 +23,7 @@ describe("the card's load line", () => {
   }, 30_000);
 
   it("is load per core with one decimal, the raw value only without a core count", async () => {
-    expect(loadLine(25.4, 18)).toBe("负载 每核 1.4");
+    expect(loadLine(25.4, 18)).toBe("每核负载 1.4");
     expect(loadLine(25.4, undefined)).toBe("负载 25.4");
     expect(loadLine(undefined, 18)).toBe("负载 —");
     await initI18n("en");
@@ -35,9 +35,9 @@ describe("the card's load line", () => {
   it("shows under CPU, from the machine's cores or the metrics' system", () => {
     const host = document.createElement("div");
     host.innerHTML = renderToStaticMarkup(<MachineMetricsSummary machine={studio} metrics={metrics} />);
-    expect(host.textContent).toContain("负载 每核 1.4");
+    expect(host.textContent).toContain("每核负载 1.4");
     expect(host.textContent).not.toContain("负载 25.4");
     host.innerHTML = renderToStaticMarkup(<MachineMetricsSummary machine={{ ...studio, system: undefined }} metrics={{ ...metrics, system: { cores: 18 } as MachineMetrics["system"] }} />);
-    expect(host.textContent).toContain("负载 每核 1.4");
+    expect(host.textContent).toContain("每核负载 1.4");
   });
 });

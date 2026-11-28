@@ -1,14 +1,14 @@
 {
   "qr_code": "二维码",
   "qr_file": "{name}-二维码.png",
-  "waiting_scan": "等你在{app}里扫码确认…",
+  "waiting_scan": "正在等待你在 {app} 中扫码确认…",
   "save_qr": "保存二维码",
-  "qr_link": "这里画不出二维码。把下面的链接发到{app}里打开，确认后这里会自动继续。",
+  "qr_link": "此处无法显示二维码。请在 {app} 中打开下方链接，确认后页面会自动继续。",
   "copy_link": "复制链接",
   "link_copied": "已复制链接",
-  "copy_failed": "没复制上",
-  "waiting_confirm": "等你在{app}里确认…",
-  "unsupported": "这个页面显示不了这一步。刷新页面换成最新的网页版，再点「重新开始」。",
-  "unsupported_elsewhere": "这个页面显示不了这一步。刷新页面换成最新的网页版，再点「重新开始」；{elsewhere}",
+  "copy_failed": "复制失败",
+  "waiting_confirm": "正在等待你在 {app} 中确认…",
+  "unsupported": "当前页面无法显示此步骤。请刷新页面加载最新网页版，然后点击「重新开始」。",
+  "unsupported_elsewhere": "当前页面无法显示此步骤。请刷新页面加载最新网页版，然后点击「重新开始」。{elsewhere}",
   "restart": "重新开始"
 }

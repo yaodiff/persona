@@ -120,6 +120,16 @@ const (
 	ChatKindTopic  ChatKind = "topic"
 )
 
+// Known returns the supported chat kind, or empty for an unclassified message.
+func (k ChatKind) Known() ChatKind {
+	switch kind := ChatKind(strings.TrimSpace(string(k))); kind {
+	case ChatKindDirect, ChatKindGroup, ChatKindTopic:
+		return kind
+	default:
+		return ""
+	}
+}
+
 // ThreadMode controls how a channel maps IM chats and topics to Persona conversations when integrations_v2 is enabled.
 type ThreadMode string
 
@@ -142,8 +152,11 @@ func (m ThreadMode) Check() error {
 	}
 }
 
-// Normalized returns m, defaulting an unset value to channel_default.
-func (m ThreadMode) Normalized() ThreadMode {
+// Effective preserves an explicit choice. Thread-capable plugins inherit topic routing in the experiment.
+func (m ThreadMode) Effective(inheritTopics bool) ThreadMode {
+	if m == "" && inheritTopics {
+		return ThreadModePerTopic
+	}
 	if m == "" {
 		return ThreadModeChannelDefault
 	}
@@ -262,6 +275,8 @@ type View struct {
 const (
 	// TargetOverrideTopics: group topic routing sends each topic to its own conversation.
 	TargetOverrideTopics = "topics"
+	// TargetOverrideGroupsAndTopics: each group and each topic has its own conversation.
+	TargetOverrideGroupsAndTopics = "groups_and_topics"
 	// TargetOverrideThreads: per-thread routing sends each thread to its own conversation.
 	TargetOverrideThreads = "threads"
 )

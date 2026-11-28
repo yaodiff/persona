@@ -76,12 +76,15 @@ func TestPlacesThatSealAreKnown(t *testing.T) {
 		"internal/assistant/models_launchers_scope.go": 1, // launchers.machine_keys
 		"internal/assistant/launcher_secrets.go":       1, // sealKey: a reference in key_sealed, launchers.managed / launchers.machine_keys
 		"internal/assistant/keyrotate.go":              1, // the rotation itself
+		"internal/assistant/execution_channels.go":     2, // execution.channels (and its ledger): key and headers
 		"internal/extmgr/manager.go":                   3, // its box, sealKey
 		"internal/extmgr/extensions.go":                1, // hubSealer: the registry's plugin_secrets
 		"internal/extmgr/bots.go":                      1, // bots.feishu
 		"internal/extmgr/bots_register.go":             2, // bots.feishu: the registration's device code and app secret
-		"internal/extmgr/larksync.go":                  1, // larkSyncSeal: bots.feishu.sync, .sync.bots and .sync.bindings (user tokens)
+		"internal/extmgr/larksync_host.go":             1, // larkSyncHost.SealSecret: bots.feishu.sync, .sync.bots and .sync.bindings (user tokens)
 		"internal/extmgr/connectors.go":                1, // connector_secrets
+		"internal/extmgr/secret_kept.go":               1, // secrets.launcher_kept: the launcher and extension secrets a provider gave
+		"internal/extmgr/secret_words.go":              1, // secrets.described: references' words a provider gave
 		"internal/extmgr/extension_market_edit.go":     1, // plugin_markets.token_sealed
 		"internal/extmgr/extension_market_routes.go":   1, // plugin_markets.token_sealed
 		"internal/extension/registry_settings.go":      1, // plugin_secrets
@@ -93,6 +96,7 @@ func TestPlacesThatSealAreKnown(t *testing.T) {
 		"internal/hub/secretkey.go":                            3, // the hub's own secret.key
 		"internal/hub/peer_pair.go":                            2, // the hub's key: linked hubs' tokens
 		"internal/hub/devices_service.go":                      1, // the hub's key: the computers' connector credentials
+		"internal/hub/preview_origin.go":                       1, // the hub's key: self-contained preview session cookies, never stored
 		"internal/hub/push_transport.go":                       1, // a phone's push key (pushcrypto)
 		"internal/pushcrypto/pushcrypto.go":                    1, // HPKE to a phone
 		"internal/webpush/webpush.go":                          1, // RFC 8291 to a browser's subscription keys: a message, never stored

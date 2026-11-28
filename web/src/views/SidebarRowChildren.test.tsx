@@ -62,9 +62,9 @@ describe("a parent's sidebar row (#5120, #14323)", () => {
     const card = { id: "c1", machine_id: "mac", session_id: "child", folded_under: "lead", kind: "question", questions: [{ question: "Which test runner?" }] } as Interaction;
     const html = render({ ...parent, children: { total: 3, working: 2, needs_you: 1 } }, [card]);
     expect(mark(html)).toBe("needs_you");
-    expect(line(html)).toBe("在问你：Which test runner?");
+    expect(line(html)).toBe("向你提问：Which test runner?");
     expect(childLineKind(html)).toBe("needs_you");
-    expect(childLine(html)).toBe("1 个等你确认");
+    expect(childLine(html)).toBe("1 个待你确认");
     expect(badge(html)).toBe("1");
   });
 
@@ -92,7 +92,7 @@ describe("a Working row whose background commands look stuck (#13744)", () => {
     const html = render(bg);
     expect(mark(html)).toBe("working");
     expect(html).toContain("data-bg-stalled");
-    expect(html).toContain("后台命令 3 小时没有动静");
+    expect(html).toContain("后台命令已 3 小时无活动");
   });
   it("shows nothing for a row without the stall, or one that is not Working", () => {
     expect(render({ ...bg, background_stalled_since: undefined })).not.toContain("data-bg-stalled");

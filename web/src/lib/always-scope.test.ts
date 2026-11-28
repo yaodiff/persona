@@ -52,6 +52,27 @@ describe("always permission scope", () => {
     expect(offersAlways({ agent: "pi", tool_name: "Bash", always_honored: true })).toBe(true);
     expect(offersAlways({ agent: "codex", tool_name: "Bash", always_label: "npm test", always_honored: false })).toBe(false);
   });
+  it("explains manager-remembered AlwaysKeys scopes on non-Claude runtimes like Antigravity", () => {
+    expect(alwaysScope({
+      agent: "antigravity", tool_name: "Write", always_honored: true, always_keys: ["tool:Edit(//Users/me/work/**)"],
+    })).toBe(t("chat-interactions.always_scope_directory"));
+    expect(alwaysScope({
+      agent: "antigravity", tool_name: "Read", always_honored: true, always_keys: ["tool:Read(//Users/me/work/**)"],
+    })).toBe(t("chat-interactions.always_scope_directory"));
+    expect(alwaysScope({
+      agent: "antigravity", tool_name: "Bash", always_honored: true, always_keys: ["tool:Bash"],
+    })).toBe(t("chat-interactions.always_scope_commands"));
+    expect(alwaysScope({
+      agent: "antigravity", tool_name: "mcp__persona__todo_list", tool_title: "Persona · todo list",
+      always_honored: true, always_keys: ["tool:mcp__persona__todo_list"],
+    })).toBe(t("chat-interactions.always_scope_tool", { tool: "Persona · todo list" }));
+    // Without always_keys or always_label, a non-Claude card does not invent a whole-tool scope.
+    expect(alwaysScope({ agent: "antigravity", tool_name: "Bash", always_honored: true })).toBe("");
+    // Native always_label still takes precedence for non-assistant ACP rules.
+    expect(alwaysScope({
+      agent: "antigravity", tool_name: "Bash", always_label: "Always allow git status",
+    })).toBe(t("chat-interactions.always_scope_named", { scope: "Always allow git status" }));
+  });
   it("titles the manager's own tools by their name for people", () => {
     expect(cardToolName({ tool_name: "iphone_do", tool_title: "iPhone control" })).toBe("iPhone control");
     expect(cardToolName({ tool_name: "Bash" })).toBe("Bash");

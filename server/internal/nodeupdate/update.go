@@ -18,6 +18,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/osproc"
@@ -55,6 +56,7 @@ type upload struct {
 	At               time.Time
 	Accepted         bool
 	Restarted        bool
+	HandoverArmed    bool
 	PreflightErr     error
 	AdoptionDeadline time.Time
 }
@@ -109,13 +111,48 @@ type Manager struct {
 	restart                 func(string)
 	timer                   *time.Timer
 	sweep                   *time.Timer
-	closed                  bool
+	closed                  atomic.Bool
 	requireResidentHandover bool
 	signer                  Signer
 	logf                    func(format string, args ...any)
 	// Tests can shorten deadlines without modifying the production environment.
-	timeout    time.Duration
-	startWatch func(string, string, string) error
+	timeout      time.Duration
+	startWatch   func(string, string, string) error
+	drainMu      sync.Mutex
+	drainCancel  context.CancelFunc
+	drainDone    chan struct{}
+	activeDrains atomic.Int32
+}
+
+// SetTimeoutForTest overrides the confirmation timeout on a Manager constructed by New.
+// Intended for isolated fixture tests; production always uses ConfirmTimeout.
+func (m *Manager) SetTimeoutForTest(d time.Duration) {
+	if m == nil || d <= 0 {
+		return
+	}
+	m.mu.Lock()
+	m.timeout = d
+	m.mu.Unlock()
+}
+
+func (m *Manager) confirmTimeout() time.Duration {
+	if m.timeout > 0 {
+		return m.timeout
+	}
+	return ConfirmTimeout
+}
+
+// PendingTarget returns the target version of an accepted upload transaction, or "".
+func (m *Manager) PendingTarget(id string) string {
+	if m == nil || id == "" {
+		return ""
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.upload != nil && m.upload.ID == id {
+		return m.upload.Spec.Version
+	}
+	return ""
 }
 
 // New resolves the actual running file once. The executable is never inferred
@@ -503,14 +540,177 @@ func (m *Manager) ResponseWritten(id string) {
 	restart(id)
 }
 
-// PreflightFailed records why a committed reload could not proceed so a repeated commit returns the same error.
-// The installed file and transaction marker still belong to the rollback watchdog.
-func (m *Manager) PreflightFailed(id string, err error) {
+// BeginDrain marks an accepted update transaction as draining active work prior to handover/exec and
+// keeps the marker deadline alive while the resident process drains. This prevents both current watchdogs
+// (via Draining) and older backup watchdogs (via sliding Deadline) from rolling back a legitimate long drain,
+// while preserving #15708 adoption semantics without ever creating a backup or watchdog for adopted binaries.
+func (m *Manager) BeginDrain(id string) error {
+	if m == nil || id == "" {
+		return nil
+	}
+	m.drainMu.Lock()
+	defer m.drainMu.Unlock()
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	if m.closed.Load() || m.upload == nil || m.upload.ID != id || !m.upload.Accepted || m.upload.HandoverArmed {
+		m.mu.Unlock()
+		return nil
+	}
+	exe := m.exe
+	timeout := m.confirmTimeout()
+	adopted := !m.upload.AdoptionDeadline.IsZero()
+	if adopted {
+		m.upload.AdoptionDeadline = time.Now().Add(timeout)
+	}
+	m.mu.Unlock()
+	m.stopDrainLocked()
+	if exe == "" {
+		return nil
+	}
+	if err := locked(exe, func() error {
+		if m.closed.Load() {
+			return nil
+		}
+		p, err := loadPending(markerPath(exe))
+		if os.IsNotExist(err) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if p.ID != id {
+			return nil
+		}
+		if !p.Adopted {
+			p.Draining = true
+		}
+		p.Deadline = time.Now().Add(timeout)
+		return savePending(p)
+	}); err != nil {
+		return err
+	}
+	interval := min(max(timeout/3, 25*time.Millisecond), 30*time.Second)
+	dctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	m.mu.Lock()
+	if m.closed.Load() || m.upload == nil || m.upload.ID != id || !m.upload.Accepted || m.upload.HandoverArmed {
+		m.mu.Unlock()
+		cancel()
+		return nil
+	}
+	m.drainCancel, m.drainDone = cancel, done
+	m.activeDrains.Add(1)
+	m.mu.Unlock()
+	go func() {
+		defer close(done)
+		defer m.activeDrains.Add(-1)
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-dctx.Done():
+				return
+			case <-ticker.C:
+			}
+			if adopted {
+				m.mu.Lock()
+				if m.upload != nil && m.upload.ID == id && !m.upload.AdoptionDeadline.IsZero() {
+					m.upload.AdoptionDeadline = time.Now().Add(timeout)
+				}
+				m.mu.Unlock()
+			}
+			keep := true
+			_ = locked(exe, func() error {
+				p, err := loadPending(markerPath(exe))
+				if err != nil || p.ID != id || (!p.Draining && !p.Adopted) {
+					keep = false
+					return nil
+				}
+				p.Deadline = time.Now().Add(timeout)
+				return savePending(p)
+			})
+			if !keep && !adopted {
+				return
+			}
+		}
+	}()
+	return nil
+}
+
+func (m *Manager) stopDrain() {
+	if m == nil {
+		return
+	}
+	m.drainMu.Lock()
+	defer m.drainMu.Unlock()
+	m.stopDrainLocked()
+}
+
+func (m *Manager) stopDrainLocked() {
+	m.mu.Lock()
+	cancel, done := m.drainCancel, m.drainDone
+	m.drainCancel, m.drainDone = nil, nil
+	m.mu.Unlock()
+	if cancel != nil {
+		cancel()
+		<-done
+	}
+}
+
+// ArmHandover ends pre-exec draining and anchors the rollback confirmation deadline to handover/exec.
+// For adopted installations (#15708), it refreshes the adoption confirmation deadline without touching rollback state.
+func (m *Manager) ArmHandover(id string) error {
+	if m == nil || id == "" {
+		return nil
+	}
+	m.drainMu.Lock()
+	defer m.drainMu.Unlock()
+	m.mu.Lock()
+	if m.upload != nil && m.upload.ID != id {
+		m.mu.Unlock()
+		return nil
+	}
+	exe := m.exe
+	timeout := m.confirmTimeout()
+	if u := m.upload; u != nil && u.ID == id {
+		u.HandoverArmed = true
+		if !u.AdoptionDeadline.IsZero() {
+			u.AdoptionDeadline = time.Now().Add(timeout)
+		}
+	}
+	m.mu.Unlock()
+	m.stopDrainLocked()
+	if exe == "" {
+		return nil
+	}
+	return locked(exe, func() error {
+		p, err := loadPending(markerPath(exe))
+		if os.IsNotExist(err) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if p.ID != id {
+			return nil
+		}
+		p.Draining = false
+		p.Deadline = time.Now().Add(timeout)
+		return savePending(p)
+	})
+}
+
+// PreflightFailed records why a committed reload could not proceed so a repeated commit returns the same error.
+// The installed file and transaction marker still belong to the rollback watchdog, whose deadline is armed now.
+func (m *Manager) PreflightFailed(id string, err error) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
 	if u := m.upload; u != nil && u.ID == id && u.Restarted {
 		u.PreflightErr = err
 	}
+	m.mu.Unlock()
+	_ = m.ArmHandover(id)
 }
 
 func (m *Manager) Abort(id string) error {
@@ -564,8 +764,7 @@ func (m *Manager) Confirm(version string) error {
 // Close removes abandoned uploads; an accepted transaction belongs to the watchdog.
 func (m *Manager) Close() {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.closed = true
+	m.closed.Store(true)
 	if m.sweep != nil {
 		m.sweep.Stop()
 	}
@@ -575,6 +774,10 @@ func (m *Manager) Close() {
 	if m.upload != nil && !m.upload.Accepted {
 		m.clearLocked()
 	}
+	m.mu.Unlock()
+	m.drainMu.Lock()
+	m.stopDrainLocked()
+	m.drainMu.Unlock()
 }
 
 func (m *Manager) expireLocked() {
@@ -607,7 +810,7 @@ func (m *Manager) armSweepLocked() {
 	m.sweep = time.AfterFunc(UploadTTL, func() {
 		m.mu.Lock()
 		defer m.mu.Unlock()
-		if m.closed {
+		if m.closed.Load() {
 			return
 		}
 		m.expireLocked()

@@ -2,9 +2,10 @@
 // workspaces, tabs and panes of its terminal host, agent or plain shell) turned into the rows the page shows, plus the
 // Jump-To filter and which terminals the page keeps alive. Pure, so it is tested without a DOM.
 import { t } from "../i18n";
-import { baseName, sessionTitle, shortPath, stateOf } from "./format";
+import { baseName, sessionTitle, shortPath, activityOf } from "./format";
 import { agentSurface, type AgentSurface } from "./agent-kind";
 import type { AgentState, Session } from "./types";
+import { abilitiesOf, type HostAbilities, type PaneAbilitiesDTO } from "./host-abilities";
 
 // ── what the hub sends (proto/panes.go) ──────────────────
 
@@ -48,6 +49,8 @@ export interface PaneHostDTO {
   new_tab: boolean;
   /** The host can make a Git worktree of a workspace's repository (an older node does not say). */
   worktree?: boolean;
+  /** What the node's menu methods do on this host (#17053); an older node does not say (lib/host-abilities.ts). */
+  abilities?: PaneAbilitiesDTO;
   workspaces: PaneSpaceDTO[];
   tabs: PaneTabDTO[];
   panes: PaneDTO[];
@@ -104,6 +107,8 @@ export interface TermSpace {
   canOpen: boolean;
   /** "New worktree…" can be offered on this workspace (#2431). */
   canWorktree?: boolean;
+  /** What the menus may do with the workspace, its tabs and panes: the host's abilities (lib/host-abilities.ts). */
+  abilities?: HostAbilities;
   tabs: TermTab[];
 }
 
@@ -111,7 +116,7 @@ const HOST_STATUS: Record<string, AgentState> = { working: "working", blocked: "
 
 /** An agent pane's state: the session's own (it knows unread and pending answers) else what the host says. */
 export function paneState(p: PaneDTO, session: Session | undefined): PaneState {
-  if (session) return stateOf(session);
+  if (session) return activityOf(session);
   if (!p.agent) return "shell";
   return HOST_STATUS[p.status ?? ""] ?? "unknown";
 }
@@ -190,7 +195,7 @@ export function buildTerminalTree(res: PanesResponse | undefined, sessions: read
         }))
         .filter((t) => t.panes.length > 0);
       if (tabs.length === 0 && !host.new_tab) continue;
-      out.push({ id: w.id, host: host.kind, label: w.label || w.id, branch: w.branch ?? "", cwd: w.cwd ?? "", canOpen: host.new_tab, canWorktree: host.worktree === true, tabs });
+      out.push({ id: w.id, host: host.kind, label: w.label || w.id, branch: w.branch ?? "", cwd: w.cwd ?? "", canOpen: host.new_tab, canWorktree: host.worktree === true, abilities: abilitiesOf(host), tabs });
     }
   }
   return out;
@@ -223,6 +228,19 @@ export function paneTrail(spaces: readonly TermSpace[], id: string): string {
       if (p) return [sp.label, t.label === sp.label ? "" : t.label, p.title !== t.label ? p.title : ""].filter(Boolean).join(" › ");
     }
   return "";
+}
+
+/** The pane's title and owning workspace label for a compact terminal header breadcrumb. */
+export function paneHeaderInfo(spaces: readonly TermSpace[], id: string): { title: string; workspace: string } {
+  for (const sp of spaces)
+    for (const t of sp.tabs) {
+      const p = t.panes.find((x) => x.id === id);
+      if (p) {
+        const title = t.panes.length > 1 && t.label && t.label !== p.title && t.label !== sp.label ? `${t.label} · ${p.title}` : p.title || t.label;
+        return { title, workspace: sp.label };
+      }
+    }
+  return { title: "", workspace: "" };
 }
 
 /** The pane's working directory, "" when unknown. */

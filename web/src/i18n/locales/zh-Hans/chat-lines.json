@@ -11,8 +11,8 @@
   "recap_newest_written": "最新 · 写于 {ago}",
   "recap_close": "关闭回顾",
   "close": "关闭",
-  "api_transient": "临时故障，过一会儿多半会好",
-  "api_permanent": "要你处理，重试没有用",
+  "api_transient": "临时故障，通常很快会恢复。",
+  "api_permanent": "需要你手动处理，重试无法解决。",
   "reply_failed": "回复未完成",
   "status": "状态码",
   "repeated": "重复",
@@ -26,12 +26,12 @@
   "compacting_to_resend": "正在压缩…",
   "compact_resend_unrecoverable": "无法恢复原消息的附件，请手动压缩后重发。",
   "copy_field": "复制{label}",
-  "fix_it": "去修",
-  "background_done": "后台回报",
+  "fix_it": "修复",
+  "background_done": "后台汇报",
   "background_running": "后台处理中…",
   "model_changed": "模型已从 {from} 切换到 {to}",
   "engine_switched": "已从 {from} 切换到 {to}",
   "engine_handoff_view": "查看交接内容",
-  "engine_continued": "已用摘要接续",
-  "engine_resumed": "已续接原任务"
+  "engine_continued": "已通过摘要继续",
+  "engine_resumed": "已恢复原会话"
 }

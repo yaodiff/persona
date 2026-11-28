@@ -8,7 +8,10 @@ import { machineWithHub } from "../lib/mesh";
 import { openNewAgent } from "../lib/new-agent";
 import { isSpacePinned } from "../lib/pins";
 import { href, navigate, onLinkClick, type Route } from "../lib/router";
-import { spaceTodos, spaceView } from "../lib/space-page";
+import { useWorkspaceCatalog } from "../lib/workspace-catalog";
+import { boardAgentPreset } from "../lib/workspace-agent-preset";
+import { sessionWorkspace } from "../lib/agent-repos";
+import { spaceNameOf, spaceTodos, spaceView } from "../lib/space-page";
 import { useStore } from "../lib/store";
 import { retryAgentList, useFullAgentSessions } from "../lib/sessions";
 import { makeSessionLookup, todoStatus, type TodoTone } from "../lib/todos";
@@ -35,7 +38,7 @@ const TONE: Record<TodoTone, string> = {
   attention: "bg-field text-attention",
 };
 
-export function SpacePage({ mid, space, onToggleSidebar }: { mid: string; space: string; onToggleSidebar: () => void }) {
+export function SpacePage({ mid, space: routeName, workspaceId, onToggleSidebar }: { mid: string; space: string; workspaceId?: string; onToggleSidebar: () => void }) {
   const machines = useStore((s) => s.machines);
   const loaded = useStore((s) => s.loaded);
   // The computer's agents, read as its page reads them (MachineDetail): a hub that pages its Agents list pushes no
@@ -52,7 +55,14 @@ export function SpacePage({ mid, space, onToggleSidebar }: { mid: string; space:
   const online = m?.online !== false;
   const machineName = m ? machineWithHub(mid, machines) : mid;
 
-  const view = useMemo(() => spaceView(sessions, mid, space), [sessions, mid, space]);
+  const catalog = useWorkspaceCatalog(Boolean(workspaceId));
+  const known = workspaceId ? catalog.workspaces.find(w => w.machine_id === mid && w.id === workspaceId) : undefined;
+  const view = useMemo(() => workspaceId
+    ? spaceView(known ? sessions.filter(s => sessionWorkspace(s, catalog.workspaces, catalog.manager) === known) : [], mid)
+    : spaceView(sessions, mid, routeName), [sessions, mid, routeName, workspaceId, known, catalog]);
+  const space = workspaceId ? (view.first && spaceNameOf(view.first)) || "" : routeName;
+  const catalogFailed = workspaceId && (catalog.failedMachines === null || catalog.failedMachines?.includes(mid));
+  const cwd = known?.cwd || view.cwd;
   const linked = useMemo(() => spaceTodos(todos, view.live, mid, space), [todos, view.live, mid, space]);
   const lookup = useMemo(() => makeSessionLookup(sessions), [sessions]);
   const sp = useMemo(() => ({ key: `${mid}/${space}`, machineId: mid, name: space, sessions: view.live.length ? view.live : view.recent }), [mid, space, view]);
@@ -62,7 +72,7 @@ export function SpacePage({ mid, space, onToggleSidebar }: { mid: string; space:
   // Renamed (here or on another device): the workspace this page showed has a new name, and the page follows it.
   const workspace = useRef<string | undefined>(undefined);
   if (view.first) workspace.current = view.first.workspace_id ?? view.first.space_id;
-  const renamedTo = !view.first && workspace.current ? sessions.find((s) => (s.workspace_id ?? s.space_id) === workspace.current && s.space_id)?.space_name : undefined;
+  const renamedTo = !workspaceId && !view.first && workspace.current ? sessions.find((s) => (s.workspace_id ?? s.space_id) === workspace.current && s.space_id)?.space_name : undefined;
   useEffect(() => {
     if (renamedTo && renamedTo !== space) navigate({ name: "space", mid, space: renamedTo }, true);
   }, [renamedTo, space, mid]);
@@ -86,21 +96,23 @@ export function SpacePage({ mid, space, onToggleSidebar }: { mid: string; space:
         <span className="truncate">{machineName}</span>
       </a>
       <h1 className="flex min-w-0 flex-1 items-center gap-1.5 text-[14px] font-semibold text-ink">
-        <span className="truncate">{space}</span>
+        <span className="truncate">{known?.title || routeName}</span>
         {pinned && <span title={t("space-page.pinned")} className="shrink-0 text-accent"><Icon name="pin" size={12} stroke={2.2} /><span className="sr-only">{t("space-page.pinned")}</span></span>}
         {muted && <span title={t("space-page.muted")} className="shrink-0 text-ink-3"><Icon name="bellOff" size={12} stroke={2.2} /><span className="sr-only">{t("space-page.muted")}</span></span>}
       </h1>
-      {view.first && <IconButton icon="more" label={t("space-page.actions")} onClick={(e) => setMenu((x) => (x ? null : e.currentTarget))} />}
+      {space && view.first && <IconButton icon="more" label={t("space-page.actions")} onClick={(e) => setMenu((x) => (x ? null : e.currentTarget))} />}
     </header>
   );
 
-  if (!view.first) {
+  if ((!view.first && !known) || (workspaceId && !full.loaded)) {
     return (
       <div className="flex h-full flex-col">
         {header}
         {/* not found only once the agents are read: until then (or while they can't be) nobody knows */}
-        {!loaded || renamedTo || (!full.loaded && !full.error) ? (
+        {!loaded || renamedTo || (workspaceId && catalog.failedMachines === undefined) || (!full.loaded && !full.error) ? (
           <div className="flex flex-1 items-center justify-center"><Loading /></div>
+        ) : catalogFailed && !known ? (
+          <p role="alert" className="p-4 text-sm text-ink-2">{t("machines-machinedetail.workspaces_failed")}</p>
         ) : !full.loaded ? (
           <div className="flex min-h-0 flex-1 flex-col pb-[10vh]" data-agents="failed">
             <Empty
@@ -120,7 +132,7 @@ export function SpacePage({ mid, space, onToggleSidebar }: { mid: string; space:
             <Empty
               icon="layers"
               title={t("space-page.gone_title")}
-              detail={t("space-page.gone_detail", { name: space, machine: machineName })}
+              detail={t("space-page.gone_detail", { name: routeName, machine: machineName })}
               action={<Button tone="secondary" icon="machine" onClick={() => navigate(machineRoute)}>{t("space-page.back_to_machine_button")}</Button>}
             />
           </div>
@@ -129,8 +141,8 @@ export function SpacePage({ mid, space, onToggleSidebar }: { mid: string; space:
     );
   }
 
-  const first = view.first;
-  const supportSpaces = todosLoaded && todosSupported !== false && spacesSupported !== false;
+
+  const supportSpaces = Boolean(space) && todosLoaded && todosSupported !== false && spacesSupported !== false;
   const spaceTodo = linked.find((x) => x.via === "space");
   const counts = [
     view.counts.needs && stateCount("needs_you", view.counts.needs),
@@ -155,7 +167,7 @@ export function SpacePage({ mid, space, onToggleSidebar }: { mid: string; space:
                 <span className="truncate text-[13px] font-medium text-ink">{machineName}</span>
                 <span className="shrink-0 text-[12px] whitespace-nowrap text-ink-3">{t("space-page.summary_agents", { count: view.live.length })}</span>
               </div>
-              {view.cwd && <p className="mt-0.5 truncate font-mono text-[11.5px] text-ink-3" title={view.cwd}>{shortPath(view.cwd)}</p>}
+              {cwd && <p className="mt-0.5 truncate font-mono text-[11.5px] text-ink-3" title={cwd}>{shortPath(cwd)}</p>}
               {counts && <p className="mt-1 truncate text-[12px] text-ink-2">{counts}</p>}
               {!online && <p className="mt-1 text-[12px] text-ink-3">{t("space-page.machine_offline")}</p>}
             </div>
@@ -169,7 +181,7 @@ export function SpacePage({ mid, space, onToggleSidebar }: { mid: string; space:
               right={
                 <span className="flex items-center gap-1">
                   {unread.length > 0 && <Button tone="quiet" icon="check" onClick={() => setConfirmSeen(unread)}>{markAllSeenLabel()}</Button>}
-                  {online && first.cwd && <Button tone="secondary" icon="plus" onClick={() => openNewAgent({ machineId: mid, cwd: first.cwd })}>{t("space-page.new_agent")}</Button>}
+                  {online && known?.available !== false && known?.online !== false && cwd && <Button tone="secondary" icon="plus" onClick={() => openNewAgent(known ? boardAgentPreset(known) : { machineId: mid, cwd })}>{t("space-page.new_agent")}</Button>}
                 </span>
               }
             />
@@ -183,7 +195,7 @@ export function SpacePage({ mid, space, onToggleSidebar }: { mid: string; space:
           </section>
 
           {/* the todos it hangs on (docs/assistant/todos.md): the space's own, then its agents' */}
-          {todosSupported !== false && (
+          {todosSupported !== false && (space || linked.length > 0) ? (
             <section>
               <Heading
                 title={t("space-page.todos")}
@@ -217,7 +229,7 @@ export function SpacePage({ mid, space, onToggleSidebar }: { mid: string; space:
                 </div>
               )}
             </section>
-          )}
+          ) : null}
 
           {/* agents of this space that are no longer running */}
           {view.recent.length > 0 && (
@@ -259,4 +271,3 @@ function Heading({ title, count, right }: { title: string; count?: number; right
     </div>
   );
 }
-

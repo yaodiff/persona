@@ -1,4 +1,5 @@
 import { CSRF_HEADERS } from "../lib/compatibility";
+import { HubUnreachableError, isNetworkFailure } from "../lib/network-failure";
 // The admin API client (docs/operations/admin.md "API"): a session cookie, not the web client's bearer token. Writes carry the
 // session's CSRF token, which lives in memory only (GET state hands it out again after a reload).
 import { currentLanguage, t } from "../i18n";
@@ -22,7 +23,8 @@ export class AdminError extends Error {
 
 export type Transport = (url: string, init: RequestInit) => Promise<Response>;
 
-let transport: Transport = (url, init) => fetch(url, init);
+// fetch's own rejection is the one TypeError that means the hub was not reached (lib/network-failure.ts)
+let transport: Transport = (url, init) => fetch(url, init).catch((e: unknown) => { throw e instanceof TypeError ? new HubUnreachableError(e) : e; });
 let csrf = "";
 let onLoginRequired: () => void = () => {};
 
@@ -127,7 +129,7 @@ export function errorText(e: unknown): string {
     if (e.code === "rate_limited") return e.retryAfter ? t("admin-api.rate_limited_seconds", { count: e.retryAfter }) : t("admin-api.rate_limited");
     return MESSAGES[e.code] ?? e.message;
   }
-  if (e instanceof TypeError) return t("admin-api.hub_unreachable");
+  if (isNetworkFailure(e)) return t("admin-api.hub_unreachable");
   return e instanceof Error ? e.message : String(e);
 }
 
@@ -225,7 +227,11 @@ export const uninstallExtension = async (id: string, keepData: boolean) =>
 
 const markets = async () => `${await extRoot()}/-/markets`;
 export const getMarkets = async () => adminApi<{ markets?: Market[] }>(await markets()).then((r) => (r.markets ?? []).map(marketView));
-export const addMarket = async (spec: string, token?: string) => adminApi<Market>(await markets(), "POST", token ? { spec, token } : { spec }).then(marketView);
+export const addMarket = async (spec: string, token?: string, keys?: string[]) =>
+  adminApi<Market>(await markets(), "POST", { spec, ...(token ? { token } : {}), ...(keys?.length ? { keys } : {}) }).then(marketView);
+/** A private market's trusted keys (docs/extensions/extensions.md "Private market keys"): add one, remove one by key id. */
+export const addMarketKey = async (id: string, key: string) => adminApi<Market>(`${await markets()}/${enc(id)}/keys`, "POST", { key }).then(marketView);
+export const removeMarketKey = async (id: string, keyID: string) => adminApi<Market>(`${await markets()}/${enc(id)}/keys/${enc(keyID)}`, "DELETE").then(marketView);
 export const removeMarket = async (id: string) => adminApi<{ ok: boolean }>(`${await markets()}/${enc(id)}`, "DELETE");
 export const refreshMarket = async (id: string) => adminApi<Market>(`${await markets()}/${enc(id)}/refresh`, "POST").then(marketView);
 export const setMarketToken = async (id: string, token: string) => adminApi<Market>(`${await markets()}/${enc(id)}/token`, "PUT", { token }).then(marketView);

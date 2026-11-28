@@ -62,8 +62,11 @@ func (n *Node) mergeOpencodeRow(s *proto.Session) {
 	if r.Title != "" {
 		s.Title, s.TitleManual, s.TitleSource = r.Title, r.TitleManual, r.TitleSource
 	}
-	s.OutputTokens = r.OutputTokens
-	s.LastText, s.Model, s.UpdatedAt, s.Rev = r.LastText, r.Model, r.UpdatedAt, r.Rev
+	s.SetOutputTokens(int(r.OutputTokensValue()))
+	if r.LastText != "" {
+		s.LastText = r.LastText
+	}
+	s.Model, s.UpdatedAt, s.Rev = r.Model, r.UpdatedAt, r.Rev
 	s.ContextTokens, s.ContextWindow = r.ContextTokens, r.ContextWindow
 	if r.PermissionMode != "" {
 		s.PermissionMode = r.PermissionMode

@@ -335,6 +335,41 @@ describe("TaskCompletionCheck controlled deps, view separation, and race guards"
     expectNoDefaultSingletons();
   });
 
+  it("renders compact single-row TaskCompletionCheckView with InfoTip explanation and action button (#17938)", async () => {
+    const onRun = vi.fn();
+    await act(async () => root.render(
+      <TaskCompletionCheckView
+        supervised
+        busy={false}
+        compact
+        language="en"
+        onRun={onRun}
+      />,
+    ));
+    expect(section().getAttribute("data-compact")).toBe("true");
+    expect(section().textContent).toContain(t("todos.check_section"));
+    expect(section().textContent).not.toContain(t("todos.check_explanation"));
+    expect(section().textContent).not.toContain(t("todos.check_supervised"));
+
+    const runBtn = section().querySelector<HTMLButtonElement>('[data-testid="task-completion-check-run"]')!;
+    expect(runBtn).toBeTruthy();
+    await act(async () => runBtn.click());
+    expect(onRun).toHaveBeenCalledTimes(1);
+
+    const infoBtn = section().querySelector<HTMLButtonElement>(`button[aria-label="${t("ui-atoms.about", { name: t("todos.check_section") })}"]`)!;
+    expect(infoBtn).toBeTruthy();
+    await act(async () => infoBtn.click());
+    for (let i = 0; i < 40 && !document.querySelector('[role="tooltip"]'); i++) {
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 10));
+      });
+    }
+    const tipText = document.querySelector('[role="tooltip"]')?.textContent ?? "";
+    expect(tipText).toContain(t("todos.check_explanation"));
+    expect(tipText).toContain(t("todos.check_supervised"));
+    expectNoDefaultSingletons();
+  });
+
   it("preserves default api, manager-choice, task-completion-check, and i18n fallbacks when deps are omitted", async () => {
     mocks.checkTaskCompletion.mockResolvedValue(doneCheck({ reason: "Default path result" }));
 

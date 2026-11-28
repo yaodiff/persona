@@ -380,7 +380,7 @@ struct ExtensionsModelTests {
         #expect(kept.first?.value == "old-mac" && kept.first?.missing == true && kept.first?.label.contains("old-mac") == true && kept.count == 3)
         let launchers = [LauncherView(name: "claude", source: "builtin"), LauncherView(name: "work_gw", source: "persona", displayName: "Work gateway"),
                          LauncherView(name: "old_gw", source: "zshrc", hidden: true)]
-        #expect(ExtensionPickerChoice.launchers(current: nil, launchers: launchers).map(\.label) == ["claude", "Work gateway (work_gw)"])
+        #expect(ExtensionPickerChoice.launchers(current: nil, launchers: launchers).map(\.label) == ["Claude Code (claude)", "Work gateway (work_gw)"])
         #expect(ExtensionPickerChoice.launchers(current: "old_gw", launchers: launchers).first?.missing == true, "a hidden one set stays, marked")
         #expect(ExtensionPickerChoice.launchers(current: "", launchers: launchers).count == 2)
     }

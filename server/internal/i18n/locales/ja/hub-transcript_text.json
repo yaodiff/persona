@@ -111,6 +111,7 @@
   "read_only_claude_inbox": "このClaudeのメッセージ経路はPersonaで使えません（不明なバージョンかキーがない）：ここでは表示のみ。返信はコンピューターで",
   "attention_claude_computer": "コンピューターでしか答えられない質問または権限の確認を待っています。次回はtmux内またはPersonaからClaudeを起動すると、スマホで答えられます",
   "attention_claude_desktop_computer": "Claude デスクトップの安全確認またはコンピューター専用の確認を待っています。Claude Code ではコンピューター側でのみ承認できるため、コンピューターで対応してください",
+  "attention_claude_plugin_passed_over": "Claude Code の管理設定ポリシーにより Persona プラグインの権限フックがスキップされたため、この確認はコンピューターでのみ承認できます。コンピューターで承認するか、Persona からターミナルエンジンでセッションを開始するとスマートフォンから承認できます",
   "attention_claude_answer": "質問しています。カードで答えるか、返信するとそれが回答になります",
   "work_agent_first_dialog": "ターミナルでダイアログが開いており、最初のメッセージの再送がブロックされました。ターミナルでダイアログを処理し、最初のメッセージがすでに実行開始していないか確認してから再送してください。",
   "model_refusal": "Claude Code の拒否通知（{subtype}）。",

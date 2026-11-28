@@ -13,6 +13,7 @@ import (
 
 	"github.com/coder/websocket"
 
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/link"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -310,8 +311,7 @@ func (d *Devices) linkRename(l *mgrLink, msg link.Message) {
 	reply := link.Message{Type: "renamed", ID: textfmt.Clip(msg.ID, 64)}
 	ctx, cancel := context.WithTimeout(l.ctx, 30*time.Second)
 	defer cancel()
-	var out devicewire.RenameReply
-	err := d.opts.Hub.Call(ctx, devicewire.MethodRename, devicewire.Rename{MachineID: l.m.cfg.ID, Name: msg.MachineName}, &out)
+	out, err := buswire.Call(ctx, d.opts.Hub, devicewire.RenameMethod, devicewire.Rename{MachineID: l.m.cfg.ID, Name: msg.MachineName})
 	var re *rpc.Error
 	switch {
 	case errors.As(err, &re):

@@ -9,10 +9,11 @@ const example = (name: string) => JSON.parse(readFileSync(new URL(`../../../sche
 const mapOf = (raw: unknown) => readView({ sections: [{ items: [raw] }] }).sections[0]?.items[0] as UIItem | undefined;
 
 describe("UI 12: map component reading and validation", () => {
-  it("bumps UI_VERSION to 12, reports unsupported scene in uiContext, and includes map icon", () => {
-    expect(UI_VERSION).toBe(12);
-    expect(uiContext().ui_version).toBe(12);
-    expect(uiContext().unsupported).toEqual(["scene"]);
+  it("asks for UI version 12 or later, draws scenes too (nothing unsupported), and includes map icon", () => {
+    expect(UI_VERSION).toBe(13);
+    expect(uiContext().ui_version).toBe(13);
+    // scenes render since #13172 (ViewBody11.tsx), so nothing is reported unsupported
+    expect(uiContext().unsupported).toBeUndefined();
     expect(UI_ICONS).toContain("map");
     expect(uiIcon("map")).toBe("map");
   });

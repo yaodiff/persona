@@ -2,6 +2,7 @@
   "kind_inbox": "Item",
   "kind_todo": "To-do",
   "kind_session": "Agent session",
+  "kind_agent": "Personal agent",
   "gone": "No longer in the Inbox",
   "next": "Next",
   "title": "Trail",

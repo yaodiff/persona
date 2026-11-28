@@ -8,6 +8,7 @@ import { credentialOwner, setToken } from "../lib/api";
 import { WorkspaceNaming, WorkspaceNamingPreview } from "./WorkspaceNaming";
 import type { WorkspaceNamingPreview as Preview } from "../lib/workspace-naming";
 import type { TaskRepository } from "../lib/task-repositories";
+import previewMetadata from "../../../spec/fixtures/workspace-naming/preview-metadata.json";
 
 vi.mock("../lib/store", () => ({ useStore: (select: (state: { machines: { id: string; name: string }[] }) => unknown) => select({ machines: [
   { id: "box", name: "First computer" }, { id: "other-box", name: "Second computer" },
@@ -16,8 +17,8 @@ vi.mock("../lib/store", () => ({ useStore: (select: (state: { machines: { id: st
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 type Call = { path: string; init: RequestInit; answer: (body: unknown, status?: number) => void };
 let root: Root, host: HTMLDivElement, calls: Call[];
-const defaults = { base_directory: "{home}/workspace", task_directory_template: "task-{task-id}", branch_template: "persona/{task-id}" };
-const settings = { manager: "assistant", machine_id: "box", workspace_naming_version: "workspace-naming/v1", workspace_rules: {}, effective_workspace_rules: defaults };
+const defaults = previewMetadata.system_defaults;
+const settings = { manager: "assistant", machine_id: "box", workspace_naming_version: "workspace-naming/v1", workspace_rules: {}, effective_workspace_rules: defaults, system_defaults: defaults };
 const button = (label: string) => [...document.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent?.trim() === label)!;
 const click = (label: string) => act(async () => { expect(button(label), label).toBeTruthy(); button(label).click(); });
 const answer = (call: Call, body: unknown, status = 200) => act(async () => call.answer(body, status));
@@ -36,18 +37,25 @@ afterEach(async () => { act(() => root.unmount()); host.remove(); vi.unstubAllGl
 
 it("loads blank defaults on demand and clears a custom override with null", async () => {
   await render(); expect(calls).toHaveLength(0); await click("Workspace naming"); await answer(calls[0], settings);
+  expect(button("Save")).toBeUndefined();
+  const options = button("Preview options");
+  const controls = document.getElementById(options.getAttribute("aria-controls")!)!;
+  expect(controls.hidden).toBe(true);
+  await click("Preview options");
+  expect(controls.hidden).toBe(false);
   const inputs = [...document.querySelectorAll("input")];
+  expect(inputs.every((input) => input.closest(".workspace-naming-field")?.querySelector("label")?.htmlFor === input.id)).toBe(true);
   expect(inputs.map((node) => node.value)).toEqual(["", "", ""]);
   expect(inputs.map((node) => node.placeholder)).toEqual(Object.values(defaults).map((value) => `System default: ${value}`));
   expect(document.querySelector("input[aria-invalid=true]")).toBeNull();
   expect(document.body.textContent).not.toMatch(/Inherited|Restore inheritance|Use inherited|Override/);
   expect(document.body.textContent).toContain("Use {home}");
-  expect(document.querySelectorAll("details")).toHaveLength(1);
+  expect(document.querySelectorAll("details")).toHaveLength(0);
   await type("custom/{task-id}"); await click("Save"); const save = calls.at(-1)!;
   expect(new Headers(save.init.headers).get("X-Persona-Manager")).toBe("assistant");
   expect(JSON.parse(save.init.body as string)).toEqual({ workspace_rules: { base_directory: null, task_directory_template: "custom/{task-id}", branch_template: null } });
   await answer(save, { ...settings, workspace_rules: { task_directory_template: "custom/{task-id}" } });
-  expect(button("Save").disabled).toBe(true);
+  expect(button("Save")).toBeUndefined();
   await type(""); expect(document.querySelectorAll("input")[1].value).toBe("");
   expect(button("Save").disabled).toBe(false);
   await click("Preview naming");
@@ -55,11 +63,54 @@ it("loads blank defaults on demand and clears a custom override with null", asyn
   await answer(calls.at(-1)!, { status: "incomplete", sample: true, diagnostics: [] });
   await click("Save");
   expect(JSON.parse(calls.at(-1)!.init.body as string)).toEqual({ workspace_rules: { base_directory: null, task_directory_template: null, branch_template: null } });
-  await answer(calls.at(-1)!, settings); expect(button("Save").disabled).toBe(true);
+  await answer(calls.at(-1)!, settings); expect(button("Save")).toBeUndefined();
   await act(async () => root.render(<p>Another page</p>));
   await render(); await click("Workspace naming"); await answer(calls.at(-1)!, settings);
   expect(document.querySelectorAll("input")[1].value).toBe("");
   expect(document.querySelectorAll("input")[1].placeholder).toBe(`System default: ${defaults.task_directory_template}`);
+});
+
+it("shows the manager's system defaults independently of saved assistant values", async () => {
+  const serverDefaults = { ...defaults, base_directory: "{home}/projects" };
+  await render();
+  await click("Workspace naming");
+  await answer(calls[0], {
+    ...settings,
+    system_defaults: serverDefaults,
+    workspace_rules: { base_directory: "{home}/custom" },
+    effective_workspace_rules: { ...defaults, base_directory: "{home}/custom" },
+  });
+  const base = document.querySelector<HTMLInputElement>("input")!;
+  expect(base.value).toBe("{home}/custom");
+  expect(base.placeholder).toBe("System default: {home}/projects");
+});
+
+it("leaves unreported defaults blank and stages a reset until Save", async () => {
+  await render(); await click("Workspace naming");
+  await answer(calls[0], { ...settings, system_defaults: undefined, workspace_rules: { base_directory: "/tasks" } });
+  const base = host.querySelector("input")!;
+  expect(base.placeholder).toBe("");
+  expect(button("Save")).toBeUndefined();
+  await click("Use defaults");
+  expect(base.value).toBe("");
+  expect(calls).toHaveLength(1);
+  expect(host.querySelector("footer")?.textContent).toContain("Unsaved changes");
+  await click("Save");
+  expect(JSON.parse(calls.at(-1)!.init.body as string).workspace_rules).toEqual({
+    base_directory: null, task_directory_template: null, branch_template: null,
+  });
+});
+
+it("explains a missing default branch from the preview without displaying a guessed branch", async () => {
+  await render();
+  await click("Workspace naming");
+  await answer(calls[0], { ...settings, system_defaults: defaults });
+  await click("Preview naming");
+  await answer(calls.at(-1)!, { ...previewMetadata, sample: true, status: "incomplete",
+    diagnostics: [{ code: "field_unavailable", field: "branch_template", repo_id: "api", severity: "error" }] });
+  expect(document.querySelector("input[aria-invalid=true]")?.getAttribute("value")).toBe("");
+  expect(document.querySelector("[role=alert]")?.textContent).toContain("The preview uses the repository’s default branch.");
+  expect(document.querySelector("[data-naming-branch]")).toBeNull();
 });
 
 it("keeps failed drafts and refreshes saved values without discarding local edits", async () => {
@@ -92,14 +143,14 @@ it("shows field validation without suggesting a connection problem", async () =>
 
 it("keeps a blank default draft across collapse without saving the fallback as an override", async () => {
   await render(); await click("Workspace naming"); await answer(calls[0], settings);
-  expect([...document.querySelectorAll("details")].every((node) => !node.open)).toBe(true);
+  expect(button("Preview options").getAttribute("aria-expanded")).toBe("false");
   await type("custom/{task-id}"); await click("Workspace naming");
   expect(document.querySelector("input")).toBeNull();
   await click("Workspace naming"); expect(calls).toHaveLength(1);
   expect(document.querySelectorAll("input")[1].value).toBe("custom/{task-id}");
   await type("");
   expect(document.querySelectorAll("input")[1].value).toBe("");
-  expect(button("Save").disabled).toBe(true);
+  expect(button("Save")).toBeUndefined();
 });
 
 it("shows the effective assistant fallback for tasks and clears only the task override", async () => {
@@ -117,7 +168,7 @@ it("shows the effective assistant fallback for tasks and clears only the task ov
   expect(JSON.parse(save.init.body as string)).toEqual({ expected_revision: 4, workspace_rules: { base_directory: null, task_directory_template: null, branch_template: "task/{task-id}" } });
   await answer(save, { todo_id: "todo_example", revision: 5, workspace_rules: { branch_template: "task/{task-id}" } });
   await refreshTask({ todo_id: "todo_example", revision: 5, workspace_rules: { branch_template: "task/{task-id}" } }, { ...settings, effective_workspace_rules: fallback });
-  expect(field.value).toBe(""); expect(button("Save").disabled).toBe(true);
+  expect(field.value).toBe(""); expect(button("Save")).toBeUndefined();
   await click("Preview naming"); expect(JSON.parse(calls.at(-1)!.init.body as string).workspace_rules.task_directory_template).toBeNull();
 });
 
@@ -129,7 +180,7 @@ it("keeps a cleared draft after a failed save and saved-baseline reload, then re
   await click("Reload saved settings"); await answer(calls.at(-1)!, custom);
   expect(document.querySelectorAll("input")[1].value).toBe(""); expect(button("Save").disabled).toBe(false);
   await click("Save"); expect(JSON.parse(calls.at(-1)!.init.body as string).workspace_rules.task_directory_template).toBeNull();
-  await answer(calls.at(-1)!, settings); expect(button("Save").disabled).toBe(true);
+  await answer(calls.at(-1)!, settings); expect(button("Save")).toBeUndefined();
 });
 
 const taskRuleCalls = () => calls.filter((call) => call.path.endsWith("/workspace-rules"));
@@ -188,7 +239,7 @@ it("retains an acknowledged task save when refreshing defaults fails and retries
   await type("saved/{task-id}"); await click("Save");
   await answer(calls.at(-1)!, { todo_id: "todo_example", revision: 5, workspace_rules: { task_directory_template: "saved/{task-id}" } });
   await answer(calls.at(-1)!, { error: "unavailable" }, 503);
-  expect(button("Save").disabled).toBe(true);
+  expect(button("Save")).toBeUndefined();
   expect(document.querySelectorAll("input")[1].value).toBe("saved/{task-id}");
   await click("Reload saved settings");
   await refreshTask({ todo_id: "todo_example", revision: 5, workspace_rules: { task_directory_template: "saved/{task-id}" } });
@@ -250,7 +301,7 @@ it("keeps a cleared task override after a failed save and reload, then retries w
   expect(JSON.parse(retry.init.body as string)).toEqual({ expected_revision: 4, workspace_rules: { base_directory: null, task_directory_template: null, branch_template: null } });
   await answer(retry, { todo_id: "todo_example", revision: 5, workspace_rules: {} });
   await refreshTask({ todo_id: "todo_example", revision: 5, workspace_rules: {} });
-  expect(button("Save").disabled).toBe(true);
+  expect(button("Save")).toBeUndefined();
 });
 
 it("stops retrying when a failed response's removal actually persisted", async () => {
@@ -264,7 +315,7 @@ it("stops retrying when a failed response's removal actually persisted", async (
   await answer(calls.at(-1)!, taskSettings);
   await answer(taskRuleCalls().at(-1)!, { todo_id: "todo_example", revision: 5, workspace_rules: {} });
   await answer(taskRepositoryCalls().at(-1)!, taskRepositories);
-  expect(field.value).toBe(""); expect(button("Save").disabled).toBe(true);
+  expect(field.value).toBe(""); expect(button("Save")).toBeUndefined();
 });
 
 const rootPath = "/home/example/workspace/task-todo_example";
@@ -284,7 +335,7 @@ it("shows the root once with a labeled branch and no routine metadata", async ()
   const text = document.body.textContent ?? "";
   expect(document.querySelector("[data-naming-root]")?.textContent).toBe(rootPath);
   expect(text.split(rootPath).length - 1).toBe(1);
-  expect(document.querySelector("[data-naming-repo]")).toBeNull();
+  expect(document.querySelector("[data-naming-folder]")?.textContent).toBe("web");
   expect(document.querySelector("[data-naming-branch]")?.textContent).toBe("persona/todo_example");
   expect(document.querySelector("dl")).toBeNull();
   expect(document.querySelector("details")).toBeNull();
@@ -309,4 +360,14 @@ it("keeps diagnostics and preview errors visible without a plan", async () => {
   expect(document.body.textContent).toContain("The folder template contains an unsafe path");
   await act(async () => root.render(<WorkspaceNamingPreview error="Couldn’t preview names on this computer." />));
   expect(document.querySelector("[role=alert]")?.textContent).toBe("Couldn’t preview names on this computer.");
+});
+
+
+it("shows a folder-only plan and then one container repository with its named branch source", async () => {
+  await showPreview(named("container", []));
+  expect(host.textContent).toContain("Folder only");
+  expect(host.querySelector("[data-naming-branch]")).toBeNull();
+  await showPreview({ ...named("container", [["web", "site", "task/site"]]), branch_sources: previewMetadata.branch_sources });
+  expect(host.querySelector("[data-naming-repo]")?.textContent).toContain("Starts from the selected branch · release/next");
+  expect(host.textContent).not.toContain("repository’s default branch");
 });

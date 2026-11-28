@@ -24,6 +24,9 @@ type usageAdapter interface {
 	session(path string) string
 	// parser reads one file's lines.
 	parser() tokenuse.Parser
+	// startDir is the directory the session of the file at path started in, as its records say ("" when they do
+	// not): the first one they name (usage_dirs.go).
+	startDir(path string) string
 }
 
 // usageAdapters are the agents whose usage this node meters from files, in the order their files are read (a request
@@ -55,6 +58,21 @@ func (claudeUsage) paths(n *Node, _ time.Time) []string { return n.projectTransc
 func (claudeUsage) parser() tokenuse.Parser             { return tokenuse.ClaudeParser() }
 func (claudeUsage) session(path string) string          { return claudeUsageSession(path) }
 
+// startDir: the session's own transcript's first directory for a subagent's or a workflow agent's file too (theirs
+// is where the session was when it started them); the file's own when that transcript is gone.
+func (claudeUsage) startDir(path string) string {
+	session := claudeUsageSession(path)
+	for dir := filepath.Dir(path); dir != filepath.Dir(dir); dir = filepath.Dir(dir) {
+		if filepath.Base(dir) == session {
+			if cwd := headCwd(filepath.Join(filepath.Dir(dir), session+".jsonl")); cwd != "" {
+				return cwd
+			}
+			break
+		}
+	}
+	return headCwd(path)
+}
+
 // claudeUsageSession is a Claude Code transcript's session: its name (<id>.jsonl), the session folder over a
 // subagent's (<id>/subagents/agent-….jsonl) or a workflow run's agent's (<id>/subagents/workflows/<run>/agent-….jsonl).
 func claudeUsageSession(path string) string {
@@ -77,6 +95,9 @@ type codexUsage struct {
 
 func (c codexUsage) agent() string           { return c.name }
 func (c codexUsage) parser() tokenuse.Parser { return tokenuse.CodexParser(c.name) }
+
+// startDir: the rollout's session_meta's cwd.
+func (codexUsage) startDir(path string) string { return headCwd(path) }
 
 func (c codexUsage) paths(n *Node, since time.Time) []string {
 	var out []string
@@ -133,6 +154,9 @@ type piUsageFiles struct {
 
 func (p piUsageFiles) agent() string           { return p.name }
 func (p piUsageFiles) parser() tokenuse.Parser { return tokenuse.PiParser(p.name) }
+
+// startDir: the session header's cwd.
+func (piUsageFiles) startDir(path string) string { return headCwd(path) }
 
 func (p piUsageFiles) paths(n *Node, _ time.Time) []string {
 	if n.sessionScope != nil {

@@ -57,8 +57,12 @@ class HttpDeviceSettings(
                 item.text("kind").orEmpty(), item.text("role").orEmpty(), item.text("last_seen"), item.text("platform"),
                 item.text("created_at"), item.text("revoked_at")?.takeIf(String::isNotBlank))
         }
+        val onlineIds = (data["online"] as? JsonArray)
+            ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull?.takeIf(String::isNotBlank) }
+            ?.toSet()
+            .orEmpty()
         return PairedDevices(all.filter { it.revokedAt == null }, data.text("current")?.takeIf(String::isNotBlank),
-            all.filter { it.revokedAt != null })
+            all.filter { it.revokedAt != null }, onlineIds)
     }
 
     override suspend fun revoke(credentialId: String) {

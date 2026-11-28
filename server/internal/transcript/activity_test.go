@@ -125,8 +125,9 @@ func TestLastTextSkipsTheBotmuxSentinel(t *testing.T) {
 	if m.LastText != "重试已提交，等它跑完。" {
 		t.Fatalf("the sentinel after text: %q", m.LastText)
 	}
-	parse("说明里提到 BOTMUX_NOTHING_TO_SEND 这个词")
-	if m.LastText != "说明里提到 BOTMUX_NOTHING_TO_SEND 这个词" {
+	const mention = "  说明里提到 BOTMUX_NOTHING_TO_SEND 这个词  "
+	parse(mention)
+	if m.LastText != mention {
 		t.Fatalf("the word inside a line is the text: %q", m.LastText)
 	}
 }

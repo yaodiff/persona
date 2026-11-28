@@ -1127,16 +1127,23 @@ func TestInboxLarkOutboundDeniedOrdinaryBypassPreserved(t *testing.T) {
 		{"Inbox read", originInbox, "lark-cli docs +fetch --doc-id example", "allow"},
 		{"Inbox ol write", originInbox, "ol POST /messages/1/recall", "deny"},
 		{"Inbox ol read", originInbox, "ol GET /messages/1", "allow"},
+		{"Inbox special Agent API write", originInbox, "ol GET /links/open", "deny"},
 		{"ordinary bot send", "", "lark-cli im +messages-send --as bot --text hello", "allow"},
 		{"ordinary bot reply", "", "lark-cli im +messages-reply --as bot --text hello", "allow"},
 		{"ordinary read", "", "lark-cli docs +fetch --doc-id example", "allow"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			needsLarkGateForCommand(t, tc.command)
 			n := codexTestNode(t)
 			fh := withFakeHub(t, n)
 			const sid = "11111111-1111-4111-8111-111111111111"
 			cfg := olCfg()
 			cfg.Gates[0].Command = "ol"
+			if tc.name == "Inbox special Agent API write" {
+				cfg.Gates[0] = proxiedGate("http://example.invalid")
+				cfg.Gates[0].Command = "ol"
+				cfg.Gates[0].PathPrefix = "/agent/v1"
+			}
 			cfg.CLI = &proto.LarkCLI{Bin: "/nonexistent/lark-cli"}
 			n.larkRisks = map[string]string{"\x00docs +fetch": "read", "\x00docs +create": "write"}
 			n.mu.Lock()

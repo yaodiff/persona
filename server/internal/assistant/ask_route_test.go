@@ -859,35 +859,280 @@ func TestRestoredQuestionStaysWithItsSupervisor(t *testing.T) {
 	}
 }
 
-// Without leaders, a non-six-class agent question still goes to the main conversation instead of pushing
-// to the owner, while ask_escalate stays disabled without leaders.
-func TestAskWithoutLeadersIsTheUsers(t *testing.T) {
-	e := newRouteEnv(t, nil, false)
-	e.raise(askQuestion("ix1", "worker-1"))
-	waitFor(t, "the non-owner question routed to main", func() bool {
-		for _, m := range laterFor(e.s, "conv1") {
-			if m.From == cardAgentQuestion && strings.Contains(m.Text, "interaction_id=ix1") {
-				return true
-			}
+// Without leaders, non-six-class permission and question cards on an open supervised task still take askLadder ->
+// routeAsk -> active sigAsk wake-up and askTick reminders on the main conversation instead of deadlocking in
+// handNonOwnerCard's passive keepRelayLater queue (#16291). The main conversation can answer or escalate them, while
+// six-class owner cards, supervising conversations' own cards, closed/needs-user tasks, and agent-supervised workers
+// retain their existing guards.
+func TestAskWithoutLeadersRoutesSupervisedAsksToMain(t *testing.T) {
+	for _, withBackground := range []bool{false, true} {
+		name := "main_only"
+		if withBackground {
+			name = "with_background_supervisor"
 		}
-		return false
-	})
-	if !e.lastShown("ix1").Delegating {
-		t.Fatal("not shown as delegating")
-	}
-	if _, err := runJSON(t, e.s, "conv1", "ask_escalate", map[string]any{"todo_id": e.todo.ID, "reason": "x"}); err == nil {
-		t.Fatal("ask_escalate works without leaders")
-	}
-	e.settle()
-	if n := e.pushesOf("ix1"); n != 0 {
-		t.Fatalf("non-owner question pushed to the user %d times", n)
-	}
-	for _, to := range []string{"conv1", "lead1"} {
-		for _, n := range e.f.noticesTo(to) {
-			if strings.Contains(n, "interaction_id=ix1") {
-				t.Fatalf("%s was handed a leader ask_route signal:\n%s", to, n)
+		t.Run(name, func(t *testing.T) {
+			e := newRouteEnv(t, nil, false)
+			ctx := context.Background()
+			if withBackground {
+				e.s.noBackground = false
+				e.f.known["bg1"] = true
+				convs := []proto.Session{
+					{SessionID: "conv1", MachineID: "server", Cwd: assistantHome, Assistant: true, Status: proto.StatusIdle},
+					{SessionID: "lead1", MachineID: "server", Cwd: assistantHome, Assistant: true, Status: proto.StatusIdle},
+					{SessionID: "bg1", MachineID: "server", Cwd: assistantHome, Assistant: true, Status: proto.StatusIdle},
+				}
+				e.sessions("server", convs...)
+				e.f.setSessions("server", convs...)
+				setSettings(t, e.s, func(v *Settings) { v.BackgroundSupervisor, v.BackgroundSupervisorMachineID = "bg1", "server" })
 			}
-		}
+
+			// Non-six-class IxPermission actively wakes main via sigAsk (never parked in keepRelayLater or routed to bg1),
+			// enters askTick reminders, and can be answered by main.
+			perm := askPermission("ix_perm_nolead", "worker-1")
+			permDone := e.raise(perm)
+			pn := e.noticeWith("conv1", "interaction_id="+perm.ID)
+			if !strings.Contains(pn, "signal=ask") || !strings.Contains(pn, "先交给你处理") {
+				t.Fatalf("main's permission supervision notice lacks sigAsk:\n%s", pn)
+			}
+			if !e.lastShown(perm.ID).Delegating {
+				t.Fatal("routed permission is not shown as delegating")
+			}
+			if hasRelayFrom(e.s, "conv1", cardAgentPermission, "interaction_id="+perm.ID) {
+				t.Fatal("supervised permission fell into handNonOwnerCard keepRelayLater queue")
+			}
+			if withBackground && len(e.f.noticesTo("bg1")) != 0 {
+				t.Fatalf("background supervisor was woken for main-supervised permission: %q", e.f.noticesTo("bg1"))
+			}
+			e.s.askTick(time.Now().Add(2 * askHoldFor))
+			if r := e.noticeWith("conv1", "再交给你处理"); !strings.Contains(r, "interaction_id="+perm.ID) {
+				t.Fatalf("main did not receive askTick reminder for permission:\n%s", r)
+			}
+			if _, err := runJSON(t, e.s, "conv1", "interaction_answer", map[string]any{
+				"machine": "mac", "session_id": "worker-1", "interaction_id": perm.ID,
+				"allow": true, "reason": "Routine git push within task scope",
+			}); err != nil {
+				t.Fatalf("main could not answer routed permission: %v", err)
+			}
+			if r := answerOf(t, permDone); r.Allow == nil || !*r.Allow || r.AnsweredBy != proto.AnsweredByAssistant {
+				t.Fatalf("permission resolution = %+v, want assistant allow", r)
+			}
+
+			// Non-six-class IxQuestion actively wakes main via sigAsk (never parked in keepRelayLater), enters askTick
+			// reminders, and can be escalated to the user via ask_escalate.
+			q := askQuestion("ix_q_nolead", "worker-2")
+			qDone := e.raise(q)
+			qn := e.noticeWith("conv1", "interaction_id="+q.ID)
+			if !strings.Contains(qn, "signal=ask") || !strings.Contains(qn, "用哪个分支？") {
+				t.Fatalf("main's question supervision notice lacks sigAsk:\n%s", qn)
+			}
+			if !e.lastShown(q.ID).Delegating {
+				t.Fatal("routed question is not shown as delegating")
+			}
+			if hasRelayFrom(e.s, "conv1", cardAgentQuestion, "interaction_id="+q.ID) {
+				t.Fatal("supervised question fell into handNonOwnerCard keepRelayLater queue")
+			}
+			if withBackground && len(e.f.noticesTo("bg1")) != 0 {
+				t.Fatalf("background supervisor was woken for main-supervised question: %q", e.f.noticesTo("bg1"))
+			}
+			e.s.askTick(time.Now().Add(2 * askHoldFor))
+			waitFor(t, "main received askTick reminder for question", func() bool {
+				for _, n := range e.f.noticesTo("conv1") {
+					if strings.Contains(n, "interaction_id="+q.ID) && strings.Contains(n, "再交给你处理") {
+						return true
+					}
+				}
+				return false
+			})
+			if _, err := runJSON(t, e.s, "conv1", "ask_escalate", map[string]any{
+				"todo_id": e.todo.ID, "reason": "Need owner choice on branch", "recommend": "feat/x",
+			}); err != nil {
+				t.Fatalf("main could not escalate routed question without leaders: %v", err)
+			}
+			waitFor(t, "escalated question pushed to owner", func() bool { return e.pushesOf(q.ID) == 1 })
+			if ix := e.lastShown(q.ID); ix.Delegating || ix.Delegate == nil || ix.Delegate.Reason != "Need owner choice on branch" {
+				t.Fatalf("escalated question card = %+v %+v", ix, ix.Delegate)
+			}
+			if err := e.s.resolve(q.ID, proto.Resolution{Answers: map[string]string{"用哪个分支？": "feat/x"}}); err != nil {
+				t.Fatal(err)
+			}
+			answerOf(t, qDone)
+
+			e.settle()
+			if n := e.pushesOf(perm.ID); n != 0 {
+				t.Fatalf("answered supervised permission pushed %d times", n)
+			}
+			if n := e.pushesOf(q.ID); n != 1 {
+				t.Fatalf("escalated supervised question pushed %d times, want 1", n)
+			}
+			if got := e.f.noticesTo("lead1"); len(got) != 0 {
+				t.Fatalf("unconfigured leader received notices: %q", got)
+			}
+
+			// Six-class owner cards and supervising conversations' own cards still go directly to the user.
+			now := time.Now().UTC()
+			e.s.fleet.mu.Lock()
+			e.s.fleet.clients.Elicitation = true
+			e.s.fleet.mu.Unlock()
+			confirmOut := proto.Interaction{
+				ID: "ix_confirm_outbound", MachineID: "mac", SessionID: "worker-1", Kind: proto.IxPermission,
+				ToolName: "agent_send", OwnerProposal: true, Summary: "Hand off sensitive details", CreatedAt: now, ExpiresAt: now.Add(time.Hour),
+			}
+			e.s.cardAsks.Store(confirmOut.ID, cardConfirmOutbound)
+			t.Cleanup(func() { e.s.cardAsks.Delete(confirmOut.ID) })
+
+			allow := true
+			ownerCards := []struct {
+				name string
+				ix   proto.Interaction
+				res  proto.Resolution
+			}{
+				{
+					name: "secret_permission",
+					ix: proto.Interaction{
+						ID: "ix_owner_secret", MachineID: "mac", SessionID: "worker-1", Kind: proto.IxPermission,
+						ToolName: "Bash", Summary: "enter password", Secret: true, CreatedAt: now, ExpiresAt: now.Add(time.Hour),
+					},
+					res: proto.Resolution{Allow: &allow},
+				},
+				{
+					name: "form_permission",
+					ix: proto.Interaction{
+						ID: "ix_owner_form", MachineID: "mac", SessionID: "worker-1", Kind: proto.IxPermission,
+						ToolName: "Bash", Fields: []proto.Field{{Key: "otp", Label: "OTP"}},
+						CreatedAt: now, ExpiresAt: now.Add(time.Hour),
+					},
+					res: proto.Resolution{Allow: &allow, Values: map[string]string{"otp": "123456"}},
+				},
+				{
+					name: "user_approval_delete",
+					ix: proto.Interaction{
+						ID: "ix_owner_delete", MachineID: "mac", SessionID: "worker-1", Kind: proto.IxPermission,
+						ToolName: "Bash", Summary: "delete user records permanently",
+						CreatedAt: now, ExpiresAt: now.Add(time.Hour),
+					},
+					res: proto.Resolution{Allow: &allow},
+				},
+				{
+					name: "outward_write_gate",
+					ix: proto.Interaction{
+						ID: "ix_owner_outward", MachineID: "mac", SessionID: "worker-1", Kind: proto.IxPermission,
+						ToolName: "Feishu", Summary: "Send external message", OutwardWrite: true,
+						CreatedAt: now, ExpiresAt: now.Add(time.Hour),
+					},
+					res: proto.Resolution{Allow: &allow},
+				},
+				{
+					name: "confirm_outbound",
+					ix:   confirmOut,
+					res:  proto.Resolution{Allow: &allow},
+				},
+				{
+					name: "secret_question",
+					ix: proto.Interaction{
+						ID: "ix_owner_secret_q", MachineID: "mac", SessionID: "worker-1", Kind: proto.IxQuestion,
+						Secret: true, Questions: []proto.Question{{Question: "API token?"}},
+						CreatedAt: now, ExpiresAt: now.Add(time.Hour),
+					},
+					res: proto.Resolution{Answers: map[string]string{"API token?": "ok"}},
+				},
+				{
+					name: "elicitation",
+					ix: proto.Interaction{
+						ID: "ix_owner_elicit", MachineID: "mac", SessionID: "worker-1", Kind: proto.IxElicitation,
+						Summary: "Sign in form", CreatedAt: now, ExpiresAt: now.Add(time.Hour),
+					},
+					res: proto.Resolution{Action: "decline"},
+				},
+				{
+					name: "main_owner_only_permission",
+					ix: proto.Interaction{
+						ID: "ix_main_own", MachineID: "server", SessionID: "conv1", Kind: proto.IxPermission, OwnerProposal: true,
+						ToolName: "Bash", Summary: "go test ./...", CreatedAt: now, ExpiresAt: now.Add(time.Hour),
+					},
+					res: proto.Resolution{Allow: &allow},
+				},
+			}
+			if withBackground {
+				ownerCards = append(ownerCards, struct {
+					name string
+					ix   proto.Interaction
+					res  proto.Resolution
+				}{
+					name: "background_owner_only_permission",
+					ix: proto.Interaction{
+						ID: "ix_bg_own", MachineID: "server", SessionID: "bg1", Kind: proto.IxPermission, OwnerProposal: true,
+						ToolName: "Bash", Summary: "go test ./...", CreatedAt: now, ExpiresAt: now.Add(time.Hour),
+					},
+					res: proto.Resolution{Allow: &allow},
+				})
+			}
+			for _, tc := range ownerCards {
+				done := e.raise(tc.ix)
+				waitFor(t, tc.name+" pushed to owner", func() bool { return e.pushesOf(tc.ix.ID) == 1 })
+				if e.lastShown(tc.ix.ID).Delegating {
+					t.Errorf("%s was marked delegating", tc.name)
+				}
+				if err := e.s.resolve(tc.ix.ID, tc.res); err != nil {
+					t.Fatal(err)
+				}
+				answerOf(t, done)
+			}
+
+			// Existing supervision state guards stay intact when leaders is empty.
+			if _, _, err := e.s.updateSupervision(ctx, e.todo.ID, func(v *Supervision) bool { v.State = reviewNeedsUser; return true }); err != nil {
+				t.Fatal(err)
+			}
+			if _, _, _, ok := e.s.askLadder(ctx, askPermission("ix_guard_needs_user", "worker-1")); ok {
+				t.Error("askLadder routed permission in supervision state needs_user")
+			}
+			if _, _, _, ok := e.s.askLadder(ctx, askQuestion("ix_guard_q_needs_user", "worker-1")); ok {
+				t.Error("askLadder routed question in supervision state needs_user")
+			}
+			for _, state := range []string{reviewAccepted, reviewCancelled} {
+				closedAt := time.Now().UTC()
+				e.s.todos.mu.Lock()
+				if cur := e.s.todos.todos[e.todo.ID]; cur != nil {
+					cur.DoneAt = &closedAt
+					cur.Supervision.State = state
+				}
+				e.s.todos.mu.Unlock()
+				if _, _, _, ok := e.s.askLadder(ctx, askPermission("ix_guard_"+state, "worker-1")); ok {
+					t.Errorf("askLadder routed permission in supervision state %q", state)
+				}
+				if _, _, _, ok := e.s.askLadder(ctx, askQuestion("ix_guard_q_"+state, "worker-1")); ok {
+					t.Errorf("askLadder routed question in supervision state %q", state)
+				}
+			}
+
+			// agentSupervised workers remain unrouted for non-screen cards when leaders is empty.
+			leaderTodo, err := e.s.createTodo(ctx, "Leader task", "", "conv1", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := e.s.superviseTodo(ctx, leaderTodo.ID, "conv1", nil, 0); err != nil {
+				t.Fatal(err)
+			}
+			if err := e.s.linkTodoAgentWithSource(ctx, leaderTodo.ID, "mac", "task-leader-1", "Leader", "/code/app", "claude", "", sourceLeader, ""); err != nil {
+				t.Fatal(err)
+			}
+			workerTodo, err := e.s.createTodo(ctx, "Worker task", "", leaderRef("mac", "task-leader-1"), "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := e.s.superviseTodo(ctx, workerTodo.ID, leaderRef("mac", "task-leader-1"), nil, 0); err != nil {
+				t.Fatal(err)
+			}
+			if err := e.s.linkTodoAgent(ctx, workerTodo.ID, "mac", "sub-worker-1", "Worker", "/code/app", "claude"); err != nil {
+				t.Fatal(err)
+			}
+			if _, _, _, ok := e.s.askLadder(ctx, askPermission("ix_guard_agent_sup_p", "sub-worker-1")); ok {
+				t.Error("askLadder routed permission for agent-supervised worker")
+			}
+			if _, _, _, ok := e.s.askLadder(ctx, askQuestion("ix_guard_agent_sup_q", "sub-worker-1")); ok {
+				t.Error("askLadder routed question for agent-supervised worker")
+			}
+			e.settle()
+		})
 	}
 }
 

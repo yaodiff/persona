@@ -106,6 +106,9 @@ func TestNotifyUserSaysWhetherADeviceGotItOverTheBus(t *testing.T) {
 
 	// An app that takes notify events: it gets it, and the tool says one device did.
 	app := dialTestApp(t, h, srv)
+	app.wait(t, "the client hello acknowledgment", func(m map[string]any) bool {
+		return m["type"] == "client_hello_ack"
+	})
 	got = notify("The app gets this")
 	if want := inAnyLanguage("assistant-notify.sent_notice", i18n.Args{"count": 1}); !slices.Contains(want, got) {
 		t.Fatalf("with an app notify_user said %q, want one of %q", got, want)

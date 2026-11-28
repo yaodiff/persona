@@ -74,3 +74,41 @@ func TestAssistantAlwaysListAndRevoke(t *testing.T) {
 		t.Fatalf("empty list: %+v, %v", grants, err)
 	}
 }
+
+func TestAssistantAlwaysCopy(t *testing.T) {
+	d, ctx := open(t), context.Background()
+	if err := d.AllowAlways(ctx, "old-main", "Bash", []string{"tool:Bash", "tool:Edit"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.AllowAlways(ctx, "new-main", "Read", []string{"tool:Read"}); err != nil {
+		t.Fatal(err)
+	}
+	copied, err := d.CopyAlways(ctx, "old-main", "new-main")
+	if err != nil || copied != 2 {
+		t.Fatalf("CopyAlways = (%d, %v), want (2, nil)", copied, err)
+	}
+	// Idempotent: repeating does not fail or insert duplicates.
+	if again, err := d.CopyAlways(ctx, "old-main", "new-main"); err != nil || again != 0 {
+		t.Fatalf("repeat CopyAlways = (%d, %v), want (0, nil)", again, err)
+	}
+	for _, key := range []string{"tool:Bash", "tool:Edit", "tool:Read"} {
+		if ok, err := d.AlwaysAllowed(ctx, "new-main", []string{key}); err != nil || !ok {
+			t.Fatalf("new-main missing %q: ok=%v err=%v", key, ok, err)
+		}
+	}
+	// Revoking on new-main removes it there without touching old-main.
+	if err := d.RevokeAlways(ctx, "new-main", alwaysKeyHash("tool:Bash")); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := d.AlwaysAllowed(ctx, "new-main", []string{"tool:Bash"}); err != nil || ok {
+		t.Fatalf("new-main still allows revoked key: ok=%v err=%v", ok, err)
+	}
+	if ok, err := d.AlwaysAllowed(ctx, "old-main", []string{"tool:Bash"}); err != nil || !ok {
+		t.Fatalf("old-main lost grant after new-main revoke: ok=%v err=%v", ok, err)
+	}
+	for _, pair := range [][2]string{{"", "new-main"}, {"old-main", ""}, {"same", "same"}} {
+		if n, err := d.CopyAlways(ctx, pair[0], pair[1]); err != nil || n != 0 {
+			t.Fatalf("CopyAlways(%q, %q) = (%d, %v), want (0, nil)", pair[0], pair[1], n, err)
+		}
+	}
+}

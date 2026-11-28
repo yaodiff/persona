@@ -154,7 +154,9 @@ func TestCodexTerminalLive(t *testing.T) {
 		}
 		from := rolloutSize(rollout)
 		tui.typeLine(t, cmd)
-		tui.until(t, 15*time.Second, "the rollout to record "+cmd, func() bool { return codexSettingsRecorded(rollout, from, c.model, c.effort) })
+		tui.until(t, 15*time.Second, "the rollout to record "+cmd, func() bool {
+			return codexSettingsRecorded(rollout, from, codexTerminalSettings{model: c.model, effort: c.effort})
+		})
 		t.Logf("LIVE %s: recorded", cmd)
 	}
 
@@ -165,7 +167,7 @@ func TestCodexTerminalLive(t *testing.T) {
 		out := tui.text()[shown:]
 		return strings.Contains(out, "'no-such-model' is unavailable") || strings.Contains(out, "include `no-such-model`")
 	})
-	if codexSettingsRecorded(rollout, from, "no-such-model", "") {
+	if codexSettingsRecorded(rollout, from, codexTerminalSettings{model: "no-such-model"}) {
 		t.Error("a refused model was recorded")
 	}
 	t.Logf("LIVE %s: refused", cmd)

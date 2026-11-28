@@ -1,3 +1,4 @@
+import { machineLocation, machinePath, type MachineLocation } from "./machine-route";
 import { assistantPath } from "./compatibility";
 // A tiny history router: the hub serves index.html for every path that isn't a file.
 import { useSyncExternalStore } from "react";
@@ -20,7 +21,7 @@ export type Route =
   | { name: "persona-new" }
   // `view` is the page's `?view=chat|term`; without it the page shows what it showed last (lib/session-view.ts)
   // `at`: the message to land on (?at=<item id>, the hub's links to one message, docs/protocol/deep-links.md)
-  // `standalone`: explicit full-page open for a subagent ("Open as page", prevents redirecting back to parent panel)
+  // `standalone`: explicit full-page open for a subagent or a blocked terminal, even when the chat normally redirects
   | { name: "session"; mid: string; sid: string; view?: SessionView; work?: true; at?: string; standalone?: true }
   // one herdr tab (a slot) of a workspace; `sid` picks its pane (lib/herdr-tree.ts resolveTab)
   | { name: "tab"; mid: string; space: string; slot: string; sid?: string; view?: SessionView; work?: true; at?: string }
@@ -49,9 +50,9 @@ export type Route =
   | { name: "routines" }
   | { name: "kb"; kind?: string; id?: string }
   | { name: "machines" }
-  | { name: "machine"; mid: string }
+  | ({ name: "machine"; mid: string } & MachineLocation)
   // one space of a machine by its name (lib/space-page.ts): its agents, the todos it hangs on, what can be done to it
-  | { name: "space"; mid: string; space: string }
+  | { name: "space"; mid: string; space: string; workspace?: string }
   // the terminal browser (docs/integrations/terminal.md "Standalone terminal"): every pane of every machine; `id` is the terminal opened (an agent
   // session's id, or "pane:<pane>" for a plain shell); `view` is the list beside it, `?view=sessions|terminals`
   // (lib/terminal-list.ts): without it the one this browser chose last
@@ -66,7 +67,7 @@ export type Route =
   | { name: "compare"; id: string }
   // view=calendar: the to-dos' calendar (#2029), its mode and the day it shows ("YYYY-MM-DD"); view=board: the read-only
   // progress board (#12713). Either view keeps the open to-do beside it.
-  | { name: "todos"; id?: string; direction?: string; manager?: string; view?: "calendar" | "board"; mode?: "day" | "week" | "month"; date?: string }
+  | { name: "todos"; id?: string; direction?: string; manager?: string; view?: "list" | "calendar" | "board"; mode?: "day" | "week" | "month"; date?: string }
   | { name: "extension"; extension: string; ui: string }
   // the source subscription pages (#2041), their first state in ?state=
   | { name: "subscriptions" }
@@ -137,8 +138,15 @@ export function parse(path: string, search = ""): Route {
   // An entry of a kind only a feature module draws is unknown while that module is off. Existing recordings are the
   // exception: their data and Core read-only detail stay available.
   if (p[0] === "kb") return p[1] && p[1] !== "recordings" && p[2] && moduleKBKindAt(p[1]) === "absent" ? notFound(path, search) : { name: "kb", kind: p[1], id: p[2] };
-  if (p[0] === "space" && p[1] && p[2]) return { name: "space", mid: p[1], space: p[2] };
-  if (p[0] === "machines") return p[1] ? { name: "machine", mid: p[1] } : { name: "machines" };
+  if (p[0] === "space" && p[1] && p[2]) {
+    const workspace = new URLSearchParams(search).get("workspace");
+    return { name: "space", mid: p[1], space: p[2], ...(workspace && { workspace }) };
+  }
+  if (p[0] === "machines") {
+    if (!p[1]) return { name: "machines" };
+    const view = machineLocation(p, search);
+    return view ? { name: "machine", mid: p[1], ...view } : notFound(path, search);
+  }
   if (p[0] === "terminal") {
     const list = new URLSearchParams(search).get("view");
     const shown = list === "sessions" || list === "terminals" ? { view: list as "sessions" | "terminals" } : {};
@@ -162,8 +170,9 @@ export function parse(path: string, search = ""): Route {
     const direction = q.get("direction");
     if (!id && direction) return { name: "todos", direction, ...(manager && { manager }) };
     const r: Route = { name: "todos", id, ...(id && manager && { manager }) };
-    if (q.get("view") === "board") return { ...r, view: "board" };
-    if (q.get("view") === "calendar") {
+    const view = q.get("view");
+    if (view === "board" || view === "list") return { ...r, view };
+    if (view === "calendar") {
       const mode = q.get("mode");
       const date = q.get("date");
       return {
@@ -241,9 +250,9 @@ export function routePath(r: Route): string {
     case "machines":
       return "/machines";
     case "machine":
-      return `/machines/${encodeURIComponent(r.mid)}`;
+      return machinePath(r.mid, r);
     case "space":
-      return `/space/${encodeURIComponent(r.mid)}/${encodeURIComponent(r.space)}`;
+      return `/space/${encodeURIComponent(r.mid)}/${encodeURIComponent(r.space)}` + (r.workspace ? "?" + new URLSearchParams({ workspace: r.workspace }) : "");
     case "terminal": {
       const path = r.mid && r.id ? `/terminal/${encodeURIComponent(r.mid)}/${encodeURIComponent(r.id)}` : "/terminal";
       return r.view ? `${path}?view=${r.view}` : path;
@@ -262,10 +271,8 @@ export function routePath(r: Route): string {
       return `/compare/${encodeURIComponent(r.id)}`;
     case "todos": {
       const q = new URLSearchParams();
-      if (r.view === "board") {
-        q.set("view", "board");
-      } else if (r.view === "calendar") {
-        q.set("view", "calendar");
+      if (r.view) q.set("view", r.view);
+      if (r.view === "calendar") {
         if (r.mode) q.set("mode", r.mode);
         if (r.date) q.set("date", r.date);
       }
@@ -316,6 +323,12 @@ if (typeof addEventListener !== "undefined") {
   });
 }
 
+/** Redirect the entry just reached by Back or Forward, keeping scroll restoration on its final URL. */
+export function replaceReturnedEntry(url: string, state: unknown) {
+  history.replaceState(state, "", url);
+  returnedTo = location.pathname + location.search;
+}
+
 /** Whether the page now at the address was reached by Back / Forward (once: the next call says no). */
 export function takeReturn(): boolean {
   const back = returnedTo !== "" && returnedTo === location.pathname + location.search;
@@ -330,6 +343,7 @@ export function navigate(r: Route | string, replace = false, state: Record<strin
   // the query is part of the address (/s/…?view=term): the same page with another view is somewhere else.
   // A replace still applies at the same address: reselecting a drill-down as a root clears its entry state (#12055).
   if (to === location.pathname + location.search && !replace) return;
+  if (!replace && typeof r !== "string" && r.name === "machine") state = { ...state, machineBack: location.pathname + location.search };
   returnedTo = "";
   // From inside an open overlay (a drawer's link, a sheet's action): the new page takes the overlay's entry, so Back
   // from it goes to the page under the overlay, not to a dead copy of it (#1996). A replace keeps the entry's state:

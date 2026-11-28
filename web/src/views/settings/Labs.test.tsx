@@ -10,6 +10,7 @@ import { t } from "../../i18n";
 import { allTypes } from "../../lib/configuration/fixtures/shared";
 import type { ConfigurationUpdate } from "../../lib/configuration/contract";
 import { chooseManager, MANAGER_HEADER } from "../../lib/manager-choice";
+import { resetTodosV2StateForTest } from "../../lib/labs-todos-v2";
 import { LabsDialog, LabsSettings, type LabsModule } from "./Labs";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -29,6 +30,7 @@ afterEach(() => {
   act(() => root.unmount());
   host.remove();
   vi.restoreAllMocks();
+  resetTodosV2StateForTest();
   localStorage.clear();
 });
 
@@ -126,7 +128,7 @@ describe("Settings › Labs", () => {
     await click(radios()[1]);
     expect(field().querySelector('[role="alert"]')?.textContent).toBe(t("settings-labs.save_failed"));
     expect(chosen()).toBe(t("settings-labs.terminal_renderer_standard"));
-    expect(field().textContent).not.toContain(t("settings-configuration.saved"));
+    expect(field().querySelector("[aria-live]")?.textContent).not.toContain(t("settings-configuration.saved"));
   });
 
   it("says when the browser won't let it read what is saved", async () => {
@@ -190,7 +192,7 @@ describe("Settings › Labs", () => {
     }
   });
 
-  it("mounts the assistant-scoped Unified Integrations & Extensions toggle for the chosen manager", async () => {
+  it("shows Unified Integrations & Extensions on by default and saves an opt-out for the chosen manager", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
       const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
       if (url.endsWith("/api/v1/assistant")) {
@@ -201,7 +203,7 @@ describe("Settings › Labs", () => {
             headers: { "Content-Type": "application/json" },
           });
         }
-        return new Response(JSON.stringify({ manager: "example", work_guide: false, todos_v2: false, integrations_v2: false }), {
+        return new Response(JSON.stringify({ manager: "example", work_guide: false, todos_v2: false, integrations_v2: true }), {
           status: 200,
           headers: { "Content-Type": "application/json" },
         });
@@ -222,13 +224,13 @@ describe("Settings › Labs", () => {
         t("settings-labs.rollback"),
       ]);
       const toggle = row.querySelector<HTMLButtonElement>('[role="switch"]')!;
-      expect(toggle.getAttribute("aria-checked")).toBe("false");
-      await click(toggle);
       expect(toggle.getAttribute("aria-checked")).toBe("true");
+      await click(toggle);
+      expect(toggle.getAttribute("aria-checked")).toBe("false");
       const putCall = fetchMock.mock.calls.find(([, init]) => init?.method === "PUT");
       expect(putCall).toBeDefined();
       expect(new Headers(putCall?.[1]?.headers).get(MANAGER_HEADER)).toBe("example");
-      expect(JSON.parse(String(putCall?.[1]?.body))).toEqual({ integrations_v2: true, expected_integrations_v2: false });
+      expect(JSON.parse(String(putCall?.[1]?.body))).toEqual({ integrations_v2: false, expected_integrations_v2: true });
     } finally {
       act(() => chooseManager(null));
     }
@@ -254,6 +256,183 @@ describe("Settings › Labs", () => {
       expect(row.textContent).toContain(t("settings-labs.integrations_v2_unsupported"));
       const toggle = row.querySelector<HTMLButtonElement>('[role="switch"]')!;
       expect(toggle.disabled).toBe(true);
+      expect(toggle.getAttribute("aria-checked")).toBe("false");
+    } finally {
+      act(() => chooseManager(null));
+    }
+  });
+
+  it("hides todos_v2 attention preferences when todos_v2 is false and expands them on toggle", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (url.endsWith("/api/v1/assistant")) {
+        if (init?.method === "PUT") {
+          const body = JSON.parse(String(init.body ?? "{}")) as { todos_v2?: boolean };
+          return new Response(JSON.stringify({ manager: "example", work_guide: false, todos_v2: body.todos_v2 === true }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        return new Response(JSON.stringify({ manager: "example", work_guide: false, todos_v2: false }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return new Response("{}", { status: 404 });
+    });
+    chooseManager("example");
+    try {
+      await render();
+      const todosForm = host.querySelector<HTMLElement>('[data-configuration="assistant-todos-v2"]')!;
+      expect(todosForm.querySelector("[data-todos-v2-attention-prefs]")).toBeNull();
+
+      const toggle = todosForm.querySelector<HTMLButtonElement>('[data-configuration-field="todos_v2"] [role="switch"]')!;
+      await click(toggle);
+      const panel = todosForm.querySelector<HTMLElement>("[data-todos-v2-attention-prefs]");
+      expect(panel).not.toBeNull();
+      expect(panel!.textContent).toContain(t("settings-labs.todos_v2_prefs_title"));
+      // Older hub omitting the 4 fields falls back to defaults: all_autonomous, 24h, 48h, true
+      const autoSeenChecked = panel!.querySelector('[data-todos-v2-pref="todos_v2_auto_seen"] [aria-checked="true"]');
+      expect(autoSeenChecked?.textContent).toBe(t("settings-labs.todos_v2_auto_seen_all_autonomous"));
+      const pendingChecked = panel!.querySelector('[data-todos-v2-pref="todos_v2_pending_review_sla_hours"] [aria-checked="true"]');
+      expect(pendingChecked?.textContent).toBe(t("settings-labs.todos_v2_hours", { hours: 24 }));
+      const canWaitChecked = panel!.querySelector('[data-todos-v2-pref="todos_v2_can_wait_sla_hours"] [aria-checked="true"]');
+      expect(canWaitChecked?.textContent).toBe(t("settings-labs.todos_v2_hours", { hours: 48 }));
+      const foldSwitch = panel!.querySelector<HTMLButtonElement>('[data-todos-v2-pref="todos_v2_fold_children"] [role="switch"]')!;
+      expect(foldSwitch.getAttribute("aria-checked")).toBe("true");
+
+      // Turning todos_v2 back off hides the sub-panel immediately
+      await click(toggle);
+      expect(todosForm.querySelector("[data-todos-v2-attention-prefs]")).toBeNull();
+    } finally {
+      act(() => chooseManager(null));
+    }
+  });
+
+  it("displays server attention preferences, saves all 4 individually without expected_todos_v2, and refreshes to-dos", async () => {
+    const serverState: Record<string, unknown> = {
+      manager: "example",
+      work_guide: false,
+      todos_v2: true,
+      todos_v2_auto_seen: "subtasks",
+      todos_v2_pending_review_sla_hours: 12,
+      todos_v2_can_wait_sla_hours: 72,
+      todos_v2_fold_children: false,
+    };
+    const putPayloads: Record<string, unknown>[] = [];
+    let todosRefreshes = 0;
+
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (url.endsWith("/api/v1/assistant")) {
+        if (init?.method === "PUT") {
+          const body = JSON.parse(String(init.body ?? "{}")) as Record<string, unknown>;
+          putPayloads.push(body);
+          Object.assign(serverState, body);
+          return new Response(JSON.stringify(serverState), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        return new Response(JSON.stringify(serverState), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url.split("?")[0].endsWith("/api/v1/todos")) {
+        todosRefreshes++;
+        return new Response(JSON.stringify({ todos: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return new Response("{}", { status: 404 });
+    });
+
+    chooseManager("example");
+    try {
+      await render();
+      const panel = host.querySelector<HTMLElement>("[data-todos-v2-attention-prefs]")!;
+      expect(panel).not.toBeNull();
+
+      // Verify initial server values
+      expect(panel.querySelector('[data-todos-v2-pref="todos_v2_auto_seen"] [aria-checked="true"]')?.textContent)
+        .toBe(t("settings-labs.todos_v2_auto_seen_subtasks"));
+      expect(panel.querySelector('[data-todos-v2-pref="todos_v2_pending_review_sla_hours"] [aria-checked="true"]')?.textContent)
+        .toBe(t("settings-labs.todos_v2_hours", { hours: 12 }));
+      expect(panel.querySelector('[data-todos-v2-pref="todos_v2_can_wait_sla_hours"] [aria-checked="true"]')?.textContent)
+        .toBe(t("settings-labs.todos_v2_hours", { hours: 72 }));
+      const foldSwitch = panel.querySelector<HTMLButtonElement>('[data-todos-v2-pref="todos_v2_fold_children"] [role="switch"]')!;
+      expect(foldSwitch.getAttribute("aria-checked")).toBe("false");
+
+      // 1. Change auto_seen -> "off"
+      const offAutoSeen = [...panel.querySelectorAll<HTMLButtonElement>('[data-todos-v2-pref="todos_v2_auto_seen"] [role="radio"]')]
+        .find((b) => b.textContent === t("settings-labs.todos_v2_auto_seen_off"))!;
+      await click(offAutoSeen);
+      expect(putPayloads.at(-1)).toEqual({ todos_v2_auto_seen: "off" });
+      expect(panel.textContent).toContain(t("settings-configuration.saved"));
+
+      // 2. Change pending_review_sla_hours -> 0
+      const offPending = [...panel.querySelectorAll<HTMLButtonElement>('[data-todos-v2-pref="todos_v2_pending_review_sla_hours"] [role="radio"]')]
+        .find((b) => b.textContent === t("settings-labs.todos_v2_pending_review_sla_off"))!;
+      await click(offPending);
+      expect(putPayloads.at(-1)).toEqual({ todos_v2_pending_review_sla_hours: 0 });
+
+      // 3. Change can_wait_sla_hours -> 24
+      const canWait24 = [...panel.querySelectorAll<HTMLButtonElement>('[data-todos-v2-pref="todos_v2_can_wait_sla_hours"] [role="radio"]')]
+        .find((b) => b.textContent === t("settings-labs.todos_v2_hours", { hours: 24 }))!;
+      await click(canWait24);
+      expect(putPayloads.at(-1)).toEqual({ todos_v2_can_wait_sla_hours: 24 });
+
+      // 4. Toggle fold_children -> true
+      await click(foldSwitch);
+      expect(putPayloads.at(-1)).toEqual({ todos_v2_fold_children: true });
+      expect(foldSwitch.getAttribute("aria-checked")).toBe("true");
+
+      expect(putPayloads).toHaveLength(4);
+      expect(todosRefreshes).toBeGreaterThanOrEqual(4);
+    } finally {
+      act(() => chooseManager(null));
+    }
+  });
+
+  it("shows an error alert and preserves the previous preference value when saving fails", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (url.endsWith("/api/v1/assistant")) {
+        if (init?.method === "PUT") {
+          return new Response(JSON.stringify({ error: "hub unavailable" }), {
+            status: 500,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        return new Response(JSON.stringify({
+          manager: "example",
+          work_guide: false,
+          todos_v2: true,
+          todos_v2_auto_seen: "all_autonomous",
+          todos_v2_pending_review_sla_hours: 24,
+          todos_v2_can_wait_sla_hours: 48,
+          todos_v2_fold_children: true,
+        }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return new Response("{}", { status: 404 });
+    });
+
+    chooseManager("example");
+    try {
+      await render();
+      const panel = host.querySelector<HTMLElement>("[data-todos-v2-attention-prefs]")!;
+      const offBtn = [...panel.querySelectorAll<HTMLButtonElement>('[data-todos-v2-pref="todos_v2_auto_seen"] [role="radio"]')]
+        .find((b) => b.textContent === t("settings-labs.todos_v2_auto_seen_off"))!;
+      await click(offBtn);
+
+      expect(panel.querySelector('[role="alert"]')?.textContent).toContain("hub unavailable");
+      expect(panel.querySelector('[data-todos-v2-pref="todos_v2_auto_seen"] [aria-checked="true"]')?.textContent)
+        .toBe(t("settings-labs.todos_v2_auto_seen_all_autonomous"));
     } finally {
       act(() => chooseManager(null));
     }

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // MachineDetail co-located managers (#14964): shows hosted manager name, online/offline state, deploy mode, version,
-// pending_restart / version-lag hints, Redeploy co-located note, and quick link to Settings › Hub › Assistants.
+// pending_restart / version-lag hints, Redeploy co-located note, and quick link to Settings › Advanced › Assistants.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -27,7 +27,7 @@ const { MachineDetail } = await import("./MachineDetail");
 let host: HTMLDivElement;
 let root: Root;
 const flush = async () => {
-  for (let i = 0; i < 5; i++) await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+  await act(async () => { await vi.dynamicImportSettled(); });
 };
 
 beforeEach(() => {
@@ -47,7 +47,7 @@ afterEach(() => {
 });
 
 describe("MachineDetail hosted managers (#14964)", () => {
-  it("displays hosted managers with deploy mode, version, pending_restart and version-lag hints, and links to Settings › Hub › Assistants", async () => {
+  it("displays hosted managers with deploy mode, version, pending_restart and version-lag hints, and links to Settings › Advanced › Assistants", async () => {
     setRoster({
       default: "m-1",
       managers: [
@@ -59,7 +59,7 @@ describe("MachineDetail hosted managers (#14964)", () => {
     fake.machines = [
       { id: "box", name: "Dev Box", online: true, machine_uid: "uid-box", hostname: "box-host", node_version: "v1-202611241200", node_mismatch: true, can_deploy: true },
     ];
-    act(() => root.render(<MachineDetail mid="box" onToggleSidebar={() => {}} />));
+    act(() => root.render(<MachineDetail subview="management" mid="box" onToggleSidebar={() => {}} />));
     await flush();
 
     const section = host.querySelector('[data-testid="hosted-managers-detail"]')!;
@@ -72,17 +72,17 @@ describe("MachineDetail hosted managers (#14964)", () => {
     expect(section.textContent).toContain("容器助手");
     expect(section.textContent).toContain("容器");
     expect(section.textContent).toContain("版本落后");
-    expect(section.querySelector('[data-testid="manager-version-lag-hint"]')?.textContent).toContain("重启它的助手服务");
+    expect(section.querySelector('[data-testid="manager-version-lag-hint"]')?.textContent).toContain("重启其管理服务");
 
     expect(section.textContent).toContain("离线助手");
-    expect(section.textContent).toContain("hub 自己的");
+    expect(section.textContent).toContain("hub 内置");
     expect(section.textContent).toContain("离线");
     expect(section.textContent).toContain("v1-202611201000");
 
     // MachineDeploy strip includes co-located restart note
     expect(host.querySelector('[data-testid="deploy-co-located-note"]')?.textContent).toContain("主助手");
 
-    // Quick link navigates to Settings › Hub › Assistants
+    // Quick link navigates to Settings › Advanced › Assistants
     const link = section.querySelector<HTMLAnchorElement>('[data-testid="hosted-managers-settings-link"]')!;
     expect(link.getAttribute("href")).toBe("/settings?tab=managers");
     act(() => void link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 })));
@@ -95,7 +95,7 @@ describe("MachineDetail hosted managers (#14964)", () => {
       managers: [{ id: "m-1", name: "别机助手", online: true, machine_uid: "uid-other", host: "other-host", deploy: "service" }],
     });
     fake.machines = [{ id: "box", name: "Dev Box", online: true, machine_uid: "uid-box", hostname: "box-host" }];
-    act(() => root.render(<MachineDetail mid="box" onToggleSidebar={() => {}} />));
+    act(() => root.render(<MachineDetail subview="management" mid="box" onToggleSidebar={() => {}} />));
     await flush();
     expect(host.querySelector('[data-testid="hosted-managers-detail"]')).toBeNull();
     expect(host.querySelector('[data-testid="deploy-co-located-note"]')).toBeNull();

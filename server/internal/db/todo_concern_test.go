@@ -28,7 +28,7 @@ func TestConcernClosesOnlyByItsReport(t *testing.T) {
 	if _, err := d.EditTodo(ctx, "todo_concern", TodoEdit{Done: &done}, base.Add(time.Minute)); !errors.Is(err, ErrConcernUnreported) {
 		t.Fatalf("closed by hand: %v", err)
 	}
-	if _, ok, err := d.AutoDoneTodo(ctx, "todo_concern", "looks finished", base.Add(time.Minute), base); err != nil || ok {
+	if _, ok, err := d.AutoDoneTodo(ctx, "todo_concern", "looks finished", base.Add(time.Minute), base, nil); err != nil || ok {
 		t.Fatalf("closed by the judge: %v %v", ok, err)
 	}
 	for _, accepted := range []bool{true, false} {

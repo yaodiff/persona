@@ -677,8 +677,9 @@ struct RecordingDayOutboxTests {
         let march = dayEntry(day: "2026-03-07", tz: "America/New_York")
         let shortDay = try utc("2026-03-09T04:00:00Z")
         #expect(Outbox.ageLimit(of: march, keepDays: 1) == shortDay)
-        // The phone's value is read within 1…7.
-        #expect(Outbox.ageLimit(of: november, keepDays: 0) == Outbox.ageLimit(of: november, keepDays: 1))
+        // The phone's value is read within 1…7 days; 0 is forever, which the watch keeps as long as it may
+        // (#16577: "`0` means forever, while the watch stays capped at 7 days"; #16642).
+        #expect(Outbox.ageLimit(of: november, keepDays: 0) == week)
         #expect(Outbox.ageLimit(of: november, keepDays: 30) == Outbox.ageLimit(of: november, keepDays: 7))
         var undated = november
         undated.day = nil

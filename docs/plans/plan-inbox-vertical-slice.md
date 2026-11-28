@@ -119,9 +119,9 @@ their own. Each new package states its layer in its package comment (`//persona:
 
 The kernel is a typed registration seam (D2). `Kernel` is an opaque struct with unexported fields, and only
 `(*Registry).Register` makes one. Its members are either the few services every module uses (its routes, the access
-check, body errors and, from S4, publishing events) or slots that each replace a central-list line; never a domain
-method and never a store. A module takes its own dependencies through its own constructor, from the composition root
-in assistant.New. saved is its first user, so it starts with the services and no slots:
+check, body errors and publishing events, which moved from S4 to #15222) or slots that each replace a central-list
+line; never a domain method and never a store. A module takes its own dependencies through its own constructor, from
+the composition root in assistant.New. saved is its first user, so it starts with the services and no slots:
 
 ```go
 type Module interface {
@@ -138,7 +138,7 @@ reg.Seal()                                          // registering after Seal is
 func (k Kernel) Route(r Route) // r from NewRoute(pattern, fn): a relayed route, in assistantwire.Routes or InboxRoutes
 func (k Kernel) Full(r *http.Request) bool
 func (k Kernel) BodyError(w http.ResponseWriter, err, bad error)
-func (k Kernel) Publish(ctx context.Context, ev assistantwire.Event) // S4: one contract struct per event kind
+func (k Kernel) Publish(ctx context.Context, ev assistantwire.Event) // #15222, moved from S4: a struct per event kind
 
 // Slots, added in steps S4 and S5.
 func (k Kernel) Bus(m BusMethod) // m from NewBusMethod[P, R](name, fn): params decoded into P once
@@ -408,8 +408,8 @@ repository and the facade; and the client steps wait for the client domain guard
   still name `extension_context.go`, whose header now points to the Inbox file.
 
 ### S4. Routes, bus methods, hooks and snapshot through the kernel
-- **Change:** the kernel gains Bus, TurnSettled, Connected, Snapshot and Publish; it lands after agentref, the shared
-  session identity after #12899. An Inbox module in package assistant registers through the sealed kernel the unchanged
+- **Change:** the kernel gains Bus, TurnSettled, Connected, Snapshot and Publish (Publish moved to #15222, as built
+  below); it lands after agentref, the shared session identity after #12899. An Inbox module in package assistant registers through the sealed kernel the unchanged
   `inboxRoutes` body, the 8 bus methods (`inboxRequest` split per method, each a `NewBusMethod` over the existing
   assistantwire request and reply types), `inboxAgentTurnSettled` (its hook takes `agentref.Ref`: turnEnded parses the
   ref once, and a turn whose ids do not parse calls no hook and is logged, since that is bad input, not a defect), the
@@ -427,6 +427,26 @@ repository and the facade; and the client steps wait for the client domain guard
   passes with every golden unchanged; `./internal/archguard` passes; X6's measures are in the PR.
 - *Revised 2026-11-22 in #10613:* the turn hook takes `agentref.Ref`, bus methods and events are typed, and the repair
   PRs' closing is recorded; agentref comes after #12899, not with it.
+- *Built in #15418:* the slots are `Kernel.Bus` (values from `seam.NewBusMethod`), `Kernel.TurnSettled`,
+  `Kernel.Connected` and `Kernel.Snapshot` (`docs/server/architecture.md` "Validated and sealed"), and the Inbox is the
+  module "inbox" (`server/internal/assistant/inbox_module.go`), registered where `s.inboxRoutes()` was; its route
+  functions stay as they were and register through its Kernel (`routesThrough`). The bus methods' params and answers
+  that had no type became `server/internal/assistantwire/inbox_bus.go`, whose JSON a test compares with the maps the
+  switch built. Two parts of the text above did not hold on main, so they did not land: the Inbox in package
+  `assistant` builds no `map[string]any` app event (`inbox.changed` and `inbox.needs_you` already carry assistantwire
+  structs, and the extension manager builds the apps' `{"type":"inbox"}`), so `Kernel.Publish`, `assistantwire.Event`
+  and the golden per event kind moved to their first user, saved's events (#15222); and `TestDomainLayers` with a
+  base refuses a count line the merge base lacks, so no `app-bridge-call` count starts: the Inbox's hook matches an open item's Agent link with `agentref.Ref.IsSame`
+  and goes on with that link's ids. None of the 57 lines in 26 test files that build `&Service{}` without `New`
+  reaches a path that reads the kernel (`Service.snapshot`, `BusHub.request`, `BusHub.onHello`, `turnEnded`), so
+  nothing stays package-level. A bus method's name must be one a domain lists as a module's (`addModuleMethods`,
+  `server/internal/assistantwire/module_methods.go`), so a name the central dispatch answers is a defect at
+  `NewBusMethod`; the seam cannot see the central switch's cases at run time without a second list kept by hand, so
+  that no listed name is one of them is archguard's `TestModuleBusMethodsAreNoCentralCase`, which reads the cases of
+  `BusHub.request`, of the functions it hands the name to and of the extension manager's and the devices' `Request`.
+  The Inbox's own guard is archguard's `TestCentralFilesNameNoInboxCode`: `service.go` keeps, besides the two fields,
+  the register line and `s.inbox.lang`, the Inbox names of `Service.call` and the conversation views, in its
+  shrink-only list.
 
 ### S5. The Inbox's tools through the kernel
 - **Change:** the five tools register as one block after ask_escalate, through the tool placement the registry stage

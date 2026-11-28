@@ -166,9 +166,7 @@ func (f *File) ensureColdInputStructure(ctx context.Context) error {
 	if err := readNavigationLines(ctx, fh, f.win, 1, f.base, func(seq int, line []byte) {
 		items := navigationInputLine(seq, line, &meta)
 		if tl := meta.tree; tl.uuid != "" && !tl.sidechain && !meta.Sidechain && !meta.Codex {
-			rec := tl.rec(items)
-			rec.raw = nil
-			tree.add(rec)
+			tree.add(tl.rec(items))
 		}
 		meta.tree = treeLine{}
 		for i := range items {

@@ -56,6 +56,8 @@ import { useReveal } from "./search-reveal";
 
 // a finished reply's Sources row (#9132): its chunk loads only for a turn that looked something up on the web
 const TurnSources = lazy(() => import("./TurnSources").then((m) => ({ default: m.TurnSources })));
+// botmux sessions as in Lark: only a botmux session's chat needs them
+const BotmuxPart = lazy(() => import("./BotmuxMessages"));
 // Out-of-band tool views (UI v12 route maps, etc.): lazy-loaded only when a turn carries Fold.tool_views or tool_result.tool_views
 const ToolViews = lazy(() => import("./ToolViews").then((m) => ({ default: m.ToolViews })));
 const InlineUserBubble = lazy(() => import("./InlineUserBubble").catch(() => ({ default: ({ render }: { render: () => ReactNode }) => render() })));
@@ -131,7 +133,7 @@ export function UserBubble({ msg, mid, sid, pending, sendState, starting, onDele
     const bubble = <BubbleText text={text} quotes={split?.quotes} forwards={forwards} blocks={msg.contexts} fromCard={fromCard?.view}
       ts={pending || starting ? undefined : msg.ts} mid={mid} sid={sid} own={own} pending={pending && !starting} inline={inline} />;
     return (
-      <div className="ml-auto flex max-w-[min(100%,488px)] min-w-0 flex-col items-end gap-1.5 pl-[12%]" style={pending ? { animation: `fade-up 300ms ${EASE} both` } : undefined} data-user-bubble data-source-fingerprint={msg.rawInput?.[0]?.source_fingerprint} data-send-state={sendState} data-items={pending || starting ? undefined : [msg.id, ...msg.images.map((i) => i.id)].join(" ")}>
+      <div className="ml-auto flex max-w-[min(100%,488px)] min-w-0 flex-col items-end gap-1.5 pl-[12%]" style={pending ? { animation: `fade-up 300ms ${EASE} both` } : undefined} data-user-bubble data-source-fingerprint={msg.rawInput?.[0]?.source_fingerprint} data-send-state={sendState} data-items={pending || starting || sendState ? undefined : [msg.id, ...msg.images.map((i) => i.id)].join(" ")}>
         {msg.images.length > 0 && (
           <div className="flex flex-wrap justify-end gap-1.5">
             {msg.images.map((im) => (
@@ -468,7 +470,7 @@ export const SegmentView = memo(function SegmentView({
       {mounted ? <Fragment>
       {/* the first message the conversation's new engine got (#5054): the switch divider above it, the user's words below */}
       {seg.engineSwitch && <EngineSwitchDivider sw={seg.engineSwitch} id={seg.id} item={switchItem(seg)} mid={mid} sid={sid} />}
-      {trace && seg.user?.rawInput && !seg.user.promptHidden && !seg.user.sourceInTrace ? <RawInjectedInput items={seg.user.rawInput} mid={mid} sid={sid} /> : seg.user && (seg.user.source ? <SourceMessage msg={seg.user} mid={mid} sid={sid} /> : seg.user.injected ? <InjectedHint msg={seg.user} sid={sid} /> : seg.user.parts ? <MergedBubble msg={seg.user} mid={mid} sid={sid} /> : seg.user.from ? <PeerMessage msg={seg.user} /> : isLoopTick(seg.user) ? <LoopTick msg={seg.user} /> : <UserBubble msg={seg.user} mid={mid} sid={sid} />)}
+      {trace && seg.user?.rawInput && !seg.user.promptHidden && !seg.user.sourceInTrace ? <RawInjectedInput items={seg.user.rawInput} mid={mid} sid={sid} /> : seg.user && (seg.user.source ? <SourceMessage msg={seg.user} mid={mid} sid={sid} /> : seg.user.injected ? <InjectedHint msg={seg.user} sid={sid} /> : seg.user.botmux ? <Suspense fallback={null}><BotmuxPart msg={seg.user} mid={mid} sid={sid} bubble={(m) => <UserBubble msg={m} mid={mid} sid={sid} />} /></Suspense> : seg.user.parts ? <MergedBubble msg={seg.user} mid={mid} sid={sid} /> : seg.user.from ? <PeerMessage msg={seg.user} /> : isLoopTick(seg.user) ? <LoopTick msg={seg.user} /> : <UserBubble msg={seg.user} mid={mid} sid={sid} />)}
       {/* the reply below came from another model than the one before it (cindy: after the message that started it) */}
       {seg.modelChange && <ModelChangeDivider from={seg.modelChange.from} to={seg.modelChange.to} />}
       {/* Work stays collapsed above the single latest-text slot. */}
@@ -479,6 +481,7 @@ export const SegmentView = memo(function SegmentView({
       {!trace && toolViews.length > 0 && <Suspense key="tool-views" fallback={null}><ToolViews views={toolViews} /></Suspense>}
       {!live && <Fragment key="before-words">{beforeWords}</Fragment>}
       {(latestItem || streaming !== undefined) && <Suspense key="latest-text" fallback={null}><LatestAnswer item={streaming === undefined ? latestItem : undefined} streaming={streaming} mid={mid} sid={sid} noCloseout={noCloseout || undefined} done={(!live && !busy) || undefined} cut={(!live && seg.cut) || undefined} usage={usage} usageMs={usageMs} ttftMs={!live && !trace ? seg.ttftMs : undefined} /></Suspense>}
+      {own.some(botmuxStep) && <Suspense key="botmux-replies" fallback={null}><BotmuxPart steps={own} mid={mid} /></Suspense>}
       {sourced && <Suspense key="turn-sources" fallback={null}><TurnSources steps={own} /></Suspense>}
       {changes && <LazyTurnChanges key="turn-changes" changes={changes} mid={mid} sid={sid} cwd={cwd} />}
       </Fragment> : <div className="whitespace-pre-wrap" style={{ blockSize: "var(--seg-est)" }} data-segment-placeholder>{placeholder}</div>}
@@ -492,6 +495,11 @@ const SOURCES_HEIGHT = 28;
 /** A step that may name web pages: a web call, or folded work that carries some (lib/turn-sources.ts reads them). */
 function webStep(s: Step): boolean {
   return s.kind === "tool" ? s.use.tool_name === "WebSearch" || s.use.tool_name === "WebFetch" : s.kind === "fold" && Boolean(s.item.fold?.sources?.length);
+}
+
+/** A step that sent a reply to Lark (completed, successful `botmux send`), or folded work that holds some. */
+function botmuxStep(s: Step): boolean {
+  return s.kind === "tool" ? s.use.botmux?.kind === "reply" && Boolean(s.result) && !s.result?.is_error : s.kind === "fold" && Boolean(s.item.fold?.botmux?.length);
 }
 
 /** The message's transcript item that carried the switch's block (its rest is fetched from it when the hub cut it). */

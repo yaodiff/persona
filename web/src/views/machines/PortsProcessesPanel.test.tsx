@@ -136,9 +136,9 @@ afterEach(() => {
 });
 
 describe("PortsProcessesPanel", () => {
-  it("is lazy-loaded from Machines.tsx via lazyPage without idle preloading", () => {
-    const src = readFileSync(join(__dirname, "../Machines.tsx"), "utf8");
-    expect(src).toMatch(/lazyPage\(\(\) => import\("\.\/machines\/PortsProcessesPanel"\)\.then\(\(m\) => m\.PortsProcessesPanel\)\)/);
+  it("is lazy-loaded from MachineViews.tsx via lazyPage without idle preloading", () => {
+    const src = readFileSync(join(__dirname, "MachineViews.tsx"), "utf8");
+    expect(src).toMatch(/lazyPage\(\(\) => import\("\.\/PortsProcessesPanel"\)\.then\(\(m\) => m\.PortsProcessesPanel\)\)/);
     expect(src).not.toMatch(/PortsProcessesPanel.*idle:\s*true/);
   });
 

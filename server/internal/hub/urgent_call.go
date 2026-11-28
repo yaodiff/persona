@@ -15,8 +15,8 @@ import (
 	"github.com/nwverse/persona/server/internal/apns"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/bus"
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/lazyre"
-	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/relayproto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -26,13 +26,9 @@ import (
 // phone opens it, reports the call and asks the manager for the matter. The hub keeps no state about calls.
 
 func init() {
-	handleBus(assistantwire.MethodCallRing, func(h *Hub, ctx context.Context, c *busConn, params json.RawMessage) (any, error) {
-		var p assistantwire.CallRingRequest
-		if err := json.Unmarshal(params, &p); err != nil {
-			return nil, &rpc.Error{Code: bus.CodeInvalidParams, Message: assistantwire.MethodCallRing + ": " + err.Error()}
-		}
+	handleTypedBus(assistantwire.CallRingMethod, assistantwire.MethodCallRing+": ", func(h *Hub, ctx context.Context, c *busConn, p assistantwire.CallRingRequest) (assistantwire.CallRingResult, error) {
 		if p.Call.ID == "" || p.Call.Title == "" {
-			return nil, &rpc.Error{Code: bus.CodeInvalidParams, Message: assistantwire.MethodCallRing + ": id and title are required"}
+			return assistantwire.CallRingResult{}, &rpc.Error{Code: bus.CodeInvalidParams, Message: assistantwire.MethodCallRing + ": id and title are required"}
 		}
 		return h.push.ringCall(ctx, c.managerID(), p.Call), nil
 	})
@@ -52,10 +48,8 @@ func init() {
 func (h *Hub) refreshAssistantTools() {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	var res struct {
-		Tools []proto.Tool `json:"tools"`
-	}
-	if err := h.callBus(ctx, assistantwire.AssistantID, assistantwire.MethodTools, nil, &res); err != nil {
+	res, err := buswire.Call(ctx, h.managerCaller(assistantwire.AssistantID), assistantwire.ToolsMethod, assistantwire.SessionRef{})
+	if err != nil {
 		h.logf("assistant: tools: %v", err)
 		return
 	}
@@ -222,7 +216,7 @@ func (p *Pusher) ringOne(d Device, payload map[string]any, call assistantwire.Ca
 		CollapseID: "call:" + call.ID, Expiration: p.now().Add(time.Duration(voipTTL(call.TTL)) * time.Second).Unix(), Body: body}
 	res, err := p.direct.Send(context.Background(), r)
 	for _, wait := range p.retryWaits {
-		if err == nil && !directRetryable(res.Status) {
+		if (err == nil && !directRetryable(res.Status)) || errors.Is(err, apns.ErrInvalidDeviceToken) {
 			break
 		}
 		time.Sleep(wait)

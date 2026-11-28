@@ -2,6 +2,7 @@ package assistantwire
 
 import (
 	"github.com/nwverse/persona/server/internal/aiwire"
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/extwire"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -138,6 +139,25 @@ const (
 	MethodModelsLaunchers = "models.launchers"
 )
 
+var (
+	ModelsUsableMethod    = buswire.Method[ModelsUsableParams, ModelsUsableResult]{Name: MethodModelsUsable}
+	ModelsLaunchersMethod = buswire.Method[buswire.None, ModelsLaunchersResult]{Name: MethodModelsLaunchers}
+)
+
+type ModelsUsableParams struct {
+	Purpose string `json:"purpose"`
+}
+
+type ModelsUsableResult struct {
+	Usable   bool   `json:"usable"`
+	Provider string `json:"provider,omitempty"`
+	Model    string `json:"model,omitempty"`
+}
+
+type ModelsLaunchersResult struct {
+	Launchers []GatewayLauncher `json:"launchers"`
+}
+
 // GatewayLauncher is one of models.launchers' launchers: its name and its gateway's address as configured (the hub
 // trims it to the root and keeps the ones the plugin may reach).
 type GatewayLauncher struct {
@@ -159,6 +179,14 @@ var modelRoutes = []string{
 	"GET /api/v1/model-config/providers/{id}/models",
 	"PATCH /api/v1/model-config/purposes/{id}",
 	"PUT /api/v1/model-config/purposes/{id}",
+	"GET /api/v1/execution/channels", // the four dimensions' channels and matrix (execution_routes.go)
+	"PUT /api/v1/execution/channels/{name}",
+	"DELETE /api/v1/execution/channels/{name}",
+	"POST /api/v1/execution/channels/rollback",
+	"GET /api/v1/execution/catalog",
+	"POST /api/v1/execution/validate",
+	"GET /api/v1/assistant/conversations/{id}/model/last-good", // a conversation's last known good execution (execution_lastgood.go)
+	"POST /api/v1/assistant/conversations/{id}/model/restore",
 	"GET /api/v1/launchers",
 	"GET /api/v1/launchers/presets",
 	"POST /api/v1/launchers/test",
@@ -172,6 +200,7 @@ var modelRoutes = []string{
 	"PUT /api/v1/launchers/{name}",
 	"DELETE /api/v1/launchers/{name}",
 	"POST /api/v1/launchers/{name}/check",
+	"POST /api/v1/launchers/{name}/refresh-key", // ask a key's provider extension again (launcher_secrets.go)
 	"GET /api/v1/launchers/health",
 	"POST /api/v1/launchers/health/check",
 	"POST /api/v1/launchers/{name}/restore",
@@ -185,8 +214,10 @@ var modelRoutes = []string{
 	"GET /api/v1/model-profiles",
 	"GET /api/v1/model-profiles/{id}/candidates",
 	"PUT /api/v1/model-profiles/{id}",
+	"DELETE /api/v1/model-profiles",
 	"DELETE /api/v1/model-profiles/{id}",
 	"POST /api/v1/model-profiles/{id}/apply",
+	"POST /api/v1/model-profiles/deactivate",
 	"POST /api/v1/model-profiles/rollback",
 }
 

@@ -2,6 +2,6 @@
   "copy": "复制",
   "cancel": "取消",
   "loading": "加载中",
-  "load_failed": "没取到数据",
+  "load_failed": "无法加载数据",
   "retry": "重试"
 }

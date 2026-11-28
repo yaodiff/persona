@@ -1,7 +1,7 @@
 {
   "title": "History",
   "sessions": "History",
-  "content": "Session or terminal",
+  "content": "Session or tab",
   "back": "Back to History",
   "terminal_unavailable": "Terminal unavailable",
   "pick_session": "Open a session",

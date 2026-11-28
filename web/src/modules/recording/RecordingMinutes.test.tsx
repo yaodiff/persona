@@ -10,6 +10,7 @@ import { minutesKeptUntil } from "./recording-view";
 import { setRosterDefault } from "../../lib/manager-choice";
 import { toast } from "../../ui/atoms";
 import overviewCases from "../../../../spec/fixtures/minutes-overview/cases.json";
+import debateCases from "../../../../spec/fixtures/minutes-debates/cases.json";
 import { EntryDetail } from "../../views/knowledge/KBDetail";
 import "./test-register";
 
@@ -72,7 +73,9 @@ afterEach(async () => {
 describe("recording minutes in Knowledge detail", () => {
   it("renders the metadata and sections in wire order before the profile", async () => {
     await load();
-    expect([...section().querySelectorAll("h3")].map((h) => h.textContent)).toEqual(["Design review", "Key points", "Decisions", "Action items", "Open questions"]);
+    expect([...section().querySelectorAll("h3, h4")].map((h) => `${h.tagName} ${h.textContent}`)).toEqual([
+      "H3 Design review", "H4 Key points", "H4 Decisions", "H4 Action items", "H4 Open questions",
+    ]);
     for (const text of ["2026-11-10 14:00–14:30", "Location: Room 3", "Attendees: Ada · Bo", "Ada · Export limit", "Bo · Add coverage · Friday · Due 2026-11-13", "Per-entry limit?"]) expect(section().textContent).toContain(text);
     expect(section().textContent).not.toContain("A short profile.");
     expect(host.textContent!.indexOf("Design review")).toBeLessThan(host.textContent!.indexOf("A short profile."));
@@ -231,7 +234,7 @@ describe("recording minutes in Knowledge detail", () => {
     const minutes = data.detail.minutes!;
     delete minutes.where; delete minutes.attendees; delete minutes.points; minutes.decisions = []; delete minutes.open;
     await load(data);
-    expect([...section().querySelectorAll("h3")].map((h) => h.textContent)).toEqual(["Design review", "Action items"]);
+    expect([...section().querySelectorAll("h3, h4")].map((h) => `${h.tagName} ${h.textContent}`)).toEqual(["H3 Design review", "H4 Action items"]);
     expect(section().textContent).not.toContain("Location:");
     expect(section().textContent).not.toContain("Attendees:");
     expect(section().querySelector<HTMLButtonElement>("[aria-label^='Go to transcript']")!.disabled).toBe(true);
@@ -362,7 +365,7 @@ describe("the minutes' summary card", () => {
   });
   const withOverview = (o: unknown = overview()) => { const data = fixture(); data.detail.minutes!.overview = o; return data; };
   const headings = () => [...section().querySelectorAll("h3, h4, h5")].map((h) => `${h.tagName} ${h.textContent}`);
-  const legacy = ["H3 Design review", "H3 Key points", "H3 Decisions", "H3 Action items", "H3 Open questions"];
+  const legacy = ["H3 Design review", "H4 Key points", "H4 Decisions", "H4 Action items", "H4 Open questions"];
   const card = () => section().querySelector<HTMLElement>("[data-minutes-overview]");
   const labelOf = (b: { who: string | null; decision: boolean }) => (b.decision ? "Decision" : b.who ?? "");
 
@@ -551,5 +554,199 @@ describe("the minutes' summary card", () => {
     expect(section().querySelector<HTMLButtonElement>("[aria-label='Go to transcript at 14:00:25']")!.disabled).toBe(true);
     click("Add to to-dos");
     expect(writes().map((w) => w.url)).toEqual([`${minutesPath}/todos`]);
+  });
+});
+
+// #16728: real disagreements in both layouts (docs/assistant/meeting-minutes.md "Disagreements (#16728)").
+describe("disagreements in the minutes (#16728)", () => {
+  const sampleDebates = () => [
+    {
+      question: "Should the export cap count items or recordings?",
+      topic: "Export",
+      status: "settled",
+      at: 12,
+      positions: [
+        { stance: "Per item: one large file should not fail the whole export", at: 12, who: "Ada" },
+        { stance: "Per recording: easier to explain", at: 20.5 },
+      ],
+      outcome: { text: "Per item for this release", at: 20.5, decision: 0 },
+    },
+    {
+      question: "Should the weekly digest default to on?",
+      status: "open",
+      at: 60,
+      positions: [
+        { stance: "Default on so new users see the recap", at: 60, who: "Ada" },
+        { stance: "Default off to avoid unsolicited email", at: 60, who: "Bo" },
+      ],
+    },
+  ];
+  const headings = () => [...section().querySelectorAll("h3, h4, h5")].map((h) => `${h.tagName} ${h.textContent}`);
+
+  it("renders disagreements after Core conclusions and before topic cards in the summary card, and jumps to transcript and linked decision (unfolding if folded)", async () => {
+    const data = fixture();
+    data.detail.minutes!.decisions = [
+      { text: "Keep the cap", at: 20.5 },
+      { text: "Move the release date", at: 60 },
+    ];
+    data.detail.minutes!.overview = {
+      headline: "Export ships per item",
+      conclusions: [{ text: "Export ships with the 4 MB cap", strong: ["4 MB"], at: 20.5 }],
+      groups: [
+        {
+          title: "Project progress",
+          topics: [
+            {
+              title: "Export",
+              icon: "progress",
+              bullets: [
+                { text: "Point 1", at: 12, who: "Ada" },
+                { text: "Point 2", at: 12 },
+                { text: "Point 3", at: 12 },
+                { text: "Point 4", at: 12 },
+                // Decision 0 sits behind the 4-bullet fold.
+                { text: "Keep the cap", strong: ["the cap"], at: 20.5, decision: true },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    data.detail.minutes!.debates = sampleDebates();
+    await load(data);
+    expect(headings()).toEqual([
+      "H3 Export ships per item",
+      "H4 Core conclusions",
+      "H4 Disagreements",
+      "H5 Should the export cap count items or recordings?",
+      "H5 Should the weekly digest default to on?",
+      "H4 Project progress",
+      "H5 Export",
+      "H4 Action items",
+      "H4 Open questions",
+    ]);
+    const debatesEl = section().querySelector<HTMLElement>("[data-minutes-debates]")!;
+    expect(debatesEl.tagName).toBe("SECTION");
+    const cards = [...debatesEl.querySelectorAll<HTMLElement>("article[data-minutes-debate]")];
+    expect(cards).toHaveLength(2);
+    expect(cards[0].textContent).toContain("settled");
+    expect(cards[0].textContent).toContain("Outcome: Per item for this release");
+    expect(cards[1].textContent).toContain("still disagreed");
+    // Clicking a position's timestamp jumps to its transcript line.
+    const posTime = cards[0].querySelector<HTMLButtonElement>("[data-minutes-debate-position] [aria-label='Go to transcript at 14:00:12']")!;
+    expect(posTime.getAttribute("aria-controls")).toBe("recording-line-0");
+    act(() => posTime.click());
+    expect(document.activeElement).toBe(document.getElementById("recording-line-0"));
+    // Clicking the outcome's Decision link unfolds the topic card and jumps to and highlights the linked decision.
+    expect(document.getElementById("recording-decision-0")).toBeNull();
+    const decisionBtn = cards[0].querySelector<HTMLButtonElement>("[data-minutes-debate-decision='0']")!;
+    expect(decisionBtn.getAttribute("aria-label")).toBe("Go to decision: Keep the cap");
+    act(() => decisionBtn.click());
+    const targetDecision = document.getElementById("recording-decision-0")!;
+    expect(targetDecision).not.toBeNull();
+    expect(document.activeElement).toBe(targetDecision);
+    expect(targetDecision.classList.contains("bg-accent-tint")).toBe(true);
+  });
+
+  it("renders disagreements after Action items and before Open questions in the legacy layout, and jumps to the linked decision", async () => {
+    const data = fixture();
+    data.detail.minutes!.debates = sampleDebates();
+    await load(data);
+    expect(headings()).toEqual([
+      "H3 Design review",
+      "H4 Key points",
+      "H4 Decisions",
+      "H4 Action items",
+      "H4 Disagreements",
+      "H5 Should the export cap count items or recordings?",
+      "H5 Should the weekly digest default to on?",
+      "H4 Open questions",
+    ]);
+    const decisionBtn = section().querySelector<HTMLButtonElement>("[data-minutes-debate-decision='0']")!;
+    act(() => decisionBtn.click());
+    const target = document.getElementById("recording-decision-0")!;
+    expect(target).not.toBeNull();
+    expect(document.activeElement).toBe(target);
+    expect(target.classList.contains("bg-accent-tint")).toBe(true);
+  });
+
+  it("omits the status word for an unknown status and never derives a decision link from outcome.at", async () => {
+    const data = fixture();
+    data.detail.minutes!.debates = [
+      {
+        question: "Escalate to security review?",
+        status: "escalated",
+        at: 12,
+        positions: [
+          { stance: "Escalate now", at: 12, who: "Ada" },
+          { stance: "Ship behind flag", at: 20.5 },
+        ],
+        outcome: { text: "Ignored on unknown status", at: 20.5, decision: 0 },
+      },
+      {
+        question: "Same timestamp as decision 0 but no hub link?",
+        status: "settled",
+        at: 12,
+        positions: [
+          { stance: "Option A", at: 12 },
+          { stance: "Option B", at: 20.5 },
+        ],
+        // outcome.at matches decisions[0].at (20.5), but outcome.decision is absent: the web must NOT invent a link.
+        outcome: { text: "Picked A", at: 20.5 },
+      },
+    ];
+    await load(data);
+    const cards = [...section().querySelectorAll<HTMLElement>("article[data-minutes-debate]")];
+    expect(cards).toHaveLength(2);
+    expect(cards[0].getAttribute("data-debate-status")).toBe("unknown");
+    expect(cards[0].textContent).not.toContain("still disagreed");
+    expect(cards[0].textContent).not.toContain("settled");
+    expect(cards[0].querySelector("[data-minutes-debate-outcome]")).toBeNull();
+    expect(cards[1].querySelector("[data-minutes-debate-outcome]")!.textContent).toContain("Outcome: Picked A");
+    expect(cards[1].querySelector("[data-minutes-debate-decision]")).toBeNull();
+  });
+
+  it("disables debate timestamps on a trimmed recording while keeping the decision link working", async () => {
+    const data = fixture();
+    data.detail.meta!.trimmed_at = "2026-11-25T02:00:00Z";
+    delete data.detail.segments;
+    delete data.detail.summary;
+    data.detail.minutes!.debates = sampleDebates();
+    await load(data);
+    const times = [...section().querySelectorAll<HTMLButtonElement>("[data-minutes-debates] [aria-label^='Go to transcript']")];
+    expect(times.length).toBeGreaterThanOrEqual(4);
+    expect(times.every((b) => b.disabled)).toBe(true);
+    const decisionBtn = section().querySelector<HTMLButtonElement>("[data-minutes-debate-decision='0']")!;
+    expect(decisionBtn.disabled).toBe(false);
+    act(() => decisionBtn.click());
+    expect(document.activeElement).toBe(document.getElementById("recording-decision-0"));
+  });
+
+  // The shared fixture (spec/fixtures/minutes-debates/cases.json): renders every case in both layouts and verifies
+  // empty / malformed cases render no Disagreements section at all.
+  it.each(debateCases.cases.map((c) => [c.name, c] as const))("renders the shared debates fixture's %s", async (_, c) => {
+    const data = fixture();
+    data.detail.minutes = { ...(c.input.minutes as object), markdown: c.expected.markdown ?? "" } as typeof data.detail.minutes;
+    await load(data);
+    const debatesEl = section().querySelector<HTMLElement>("[data-minutes-debates]");
+    if (c.expected.debates.length === 0) {
+      expect(debatesEl).toBeNull();
+      return;
+    }
+    expect(debatesEl).not.toBeNull();
+    const cards = [...debatesEl!.querySelectorAll<HTMLElement>("article[data-minutes-debate]")];
+    expect(cards).toHaveLength(c.expected.debates.length);
+    c.expected.debates.forEach((want, i) => {
+      expect(cards[i].querySelector("h5")!.textContent).toBe(want.question);
+      expect(cards[i].querySelectorAll("[data-minutes-debate-position]")).toHaveLength(want.positions.length);
+      if (want.status === "open") expect(cards[i].textContent).toContain("still disagreed");
+      else if (want.status === "settled") expect(cards[i].textContent).toContain("settled");
+      else {
+        expect(cards[i].textContent).not.toContain("still disagreed");
+        expect(cards[i].textContent).not.toContain("settled");
+      }
+      if (want.outcome) expect(cards[i].querySelector("[data-minutes-debate-outcome]")!.textContent).toContain(want.outcome.text);
+      else expect(cards[i].querySelector("[data-minutes-debate-outcome]")).toBeNull();
+    });
   });
 });

@@ -2,6 +2,7 @@ package node
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -232,12 +233,14 @@ func TestResumeAfterFinishedTerminalClosedOpensNewTab(t *testing.T) {
 	}
 }
 
-// fakeOrca is an Orca-like host for the in-memory ownership: no metadata marks, no foreground names, agent processes
-// by pane.
+// fakeOrca is an Orca-like host for the in-memory ownership: no metadata marks, no foreground names; whether a pane
+// holds its shell at rest (restingShell) by pane, unknown (an error) for the others. An agent process (procs) is no
+// answer either way: the grace close never asks it (#17039).
 type fakeOrca struct {
 	host.Host
 	panes  []host.Agent
 	procs  map[string][]int
+	rest   map[string]bool
 	closed []string
 }
 
@@ -251,6 +254,13 @@ func (h *fakeOrca) Read(context.Context, host.PaneRef, host.ReadOpts) (string, e
 }
 func (h *fakeOrca) PaneProcesses(_ context.Context, p host.PaneRef) ([]int, error) {
 	return h.procs[p.String()], nil
+}
+func (h *fakeOrca) PaneShellAtRest(_ context.Context, p host.PaneRef) (bool, error) {
+	rest, ok := h.rest[p.String()]
+	if !ok {
+		return false, errors.New("cannot tell")
+	}
+	return rest, nil
 }
 func (h *fakeOrca) RenameSpace(context.Context, string, string) error { return nil }
 func (h *fakeOrca) RenameSlot(context.Context, string, string) error  { return nil }
@@ -268,31 +278,34 @@ func (h *fakeOrca) Spaces(context.Context) ([]host.Space, error)          { retu
 func (h *fakeOrca) Run(context.Context, host.PaneRef, string) error       { return nil }
 func (h *fakeOrca) NameAgent(context.Context, host.PaneRef, string) error { return nil }
 
-// On Orca, which keeps no marks, only the terminals the node itself opened for Agents are closed, and only with no
-// agent process in them; an Orca terminal the user opened is not.
+// On Orca, which keeps no marks, only the terminals the node itself opened for Agents are closed, and only when Orca
+// proves the shell at rest in them: not one running something else (busy), not one Orca cannot read (quiet: no agent
+// process, but a quiet dev server or an editor looks the same to the scan), and never an Orca terminal the user
+// opened.
 func TestFinishedOrcaTerminalUsesNodeRecord(t *testing.T) {
 	n, home := testNode(t)
 	cwd := mkdir(t, filepath.Join(home, "proj"))
-	agentPane, userPane, busyPane := "orca:wt1:a", "orca:wt1:u", "orca:wt1:b"
-	o := &fakeOrca{procs: map[string][]int{busyPane: {42}}}
-	for _, p := range []string{agentPane, userPane, busyPane} {
+	agentPane, userPane, busyPane, quietPane := "orca:wt1:a", "orca:wt1:u", "orca:wt1:b", "orca:wt1:q"
+	o := &fakeOrca{rest: map[string]bool{agentPane: true, userPane: true, busyPane: false}}
+	for _, p := range []string{agentPane, userPane, busyPane, quietPane} {
 		o.panes = append(o.panes, host.Agent{PaneID: p, TabID: p + "-tab", WorkspaceID: "wt1", Cwd: cwd})
 	}
 	n.hosts = host.NewRegistry(o)
 	n.panes = map[string]string{}
-	n.agentTerminalOpened(o, host.ParsePane(agentPane))
-	n.agentTerminalOpened(o, host.ParsePane(busyPane))
+	for _, p := range []string{agentPane, busyPane, quietPane} {
+		n.agentTerminalOpened(o, host.ParsePane(p), sidA)
+	}
 	t0 := time.Now()
-	got := rounds(t, n, t0, 0, testGrace)
-	if !slices.Equal(got[1], []string{agentPane}) || !slices.Equal(o.closed, []string{agentPane}) {
+	got := rounds(t, n, t0, 0, testGrace, 3*testGrace)
+	if !slices.Equal(got[1], []string{agentPane}) || len(got[2]) != 0 || !slices.Equal(o.closed, []string{agentPane}) {
 		t.Fatalf("closed %q (host %q)", got, o.closed)
 	}
 	// A restarted node has no record: nothing is guessed.
 	n.mu.Lock()
 	n.agentTerms = nil
 	n.mu.Unlock()
-	o.procs = nil
-	if got := rounds(t, n, t0, 2*testGrace, 4*testGrace); len(got[0]) != 0 || len(got[1]) != 0 {
+	o.rest = map[string]bool{busyPane: true, quietPane: true, userPane: true}
+	if got := rounds(t, n, t0, 4*testGrace, 6*testGrace); len(got[0]) != 0 || len(got[1]) != 0 {
 		t.Fatalf("closed an unrecorded terminal: %q", got)
 	}
 }
@@ -301,7 +314,7 @@ func TestFinishedOrcaTerminalUsesNodeRecord(t *testing.T) {
 // inherit the record).
 func TestAgentTerminalOpenedSkipsMarkingHosts(t *testing.T) {
 	n, _, _ := herdrNode(t)
-	n.agentTerminalOpened(n.hosts.Get(host.Herdr).(host.Launcher), host.PaneRef{Kind: host.Herdr, ID: "w1:p1"})
+	n.agentTerminalOpened(n.hosts.Get(host.Herdr).(host.Launcher), host.PaneRef{Kind: host.Herdr, ID: "w1:p1"}, sidA)
 	if len(n.agentTerms) != 0 {
 		t.Fatalf("recorded %v", n.agentTerms)
 	}

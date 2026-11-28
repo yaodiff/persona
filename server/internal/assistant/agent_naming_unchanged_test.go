@@ -20,7 +20,7 @@ func TestAgentNamePeriodicReturningRawTitleCountsChange(t *testing.T) {
 	if !s.agentNamesLocked(context.Background()) {
 		t.Fatal("ledger load")
 	}
-	rec := agentNameRecord{Machine: "server", Session: "s1", Title: "Fix PDF images", RawTitle: c.Title, Changes: 1, NamedAt: time.Now().Add(-25 * time.Hour), NamedOutput: c.OutputTokens - 1}
+	rec := agentNameRecord{Machine: "server", Session: "s1", Title: "Fix PDF images", RawTitle: c.Title, Changes: 1, NamedAt: time.Now().Add(-25 * time.Hour), NamedOutput: int(c.OutputTokensValue()) - 1}
 	if err := s.putAgentNameLocked(context.Background(), agentNameKey("server", "s1"), rec); err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +68,7 @@ func TestAgentNameConcisePromptUnchangedDoesNotRetry(t *testing.T) {
 			if rec.Changes != 0 || calls.Load() != 1 {
 				t.Fatalf("unchanged title counted a change or repeated: changes=%d calls=%d", rec.Changes, calls.Load())
 			}
-			c.OutputTokens++
+			c.SetOutputTokens(int(c.OutputTokensValue()) + 1)
 			c.UpdatedAt = now.Add(25 * time.Hour)
 			c.Status = proto.StatusWorking
 			if agentNameDue(s.settings(context.Background()), rec, c, now.Add(25*time.Hour)) != periodic {

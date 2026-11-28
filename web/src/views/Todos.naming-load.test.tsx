@@ -37,7 +37,7 @@ it("keeps the same Todo title and notes mounted and saveable after its naming im
   Object.assign(getState(), { todos: [{ ...todo }], todosLoaded: true, todosError: null, todosSupported: true,
     machines: [], sessions: {}, interactions: [], answered: {} });
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-    const path = String(input).replace("/api/v1", "");
+    const path = new URL(String(input), "http://hub").pathname.replace("/api/v1", "");
     if (path === "/todos/todo-example" && init?.method === "PATCH") {
       const patch = JSON.parse(String(init.body)); writes.push(patch); Object.assign(todo, patch);
       return json({ todo: { ...todo } });

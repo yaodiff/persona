@@ -269,7 +269,9 @@ func TestSupervisorRuns(t *testing.T) {
 	ctx := context.Background()
 	m, _ := s.fleetMachine("mac")
 	ft.f.hello.Assistant.MachineID = "mac"
-	ft.sessions("mac", proto.Session{SessionID: "bg", Agent: "claude", Cwd: m.assistantCwd(), Status: proto.StatusIdle, Model: "listed-model", Effort: "high", OutputTokens: 1234})
+	reviewer := proto.Session{SessionID: "bg", Agent: "claude", Cwd: m.assistantCwd(), Status: proto.StatusIdle, Model: "listed-model", Effort: "high"}
+	reviewer.SetOutputTokens(1234)
+	ft.sessions("mac", reviewer)
 	waitUntil(t, func() bool { _, ok := s.nodeSession("mac", "bg"); return ok })
 	if model, effort := s.supervisorRuns(ctx, "bg", supervisorOther); model != "listed-model" || effort != "high" {
 		t.Fatalf("as its node lists it: %q %q", model, effort)

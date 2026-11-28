@@ -102,7 +102,7 @@ func TestQuietAgentKindSnapshot(t *testing.T) {
 					calls[c.Device+"/"+c.Method]++
 				}
 				f.mu.Unlock()
-				wantCalls := quietKindNodeCalls(test.path, test.launcher, database != nil)
+				wantCalls := quietKindNodeCalls(test.path, test.launcher)
 				if !maps.Equal(calls, wantCalls) {
 					t.Errorf("node calls = %v, want %v", calls, wantCalls)
 				}
@@ -144,16 +144,12 @@ func TestQuietAgentKindSnapshot(t *testing.T) {
 
 // These are the calls the existing start paths make without looking up an Agent kind.
 // Count the request's calls so an extra session, launcher or other node read fails the test.
-func quietKindNodeCalls(path, launcher string, stored bool) map[string]int {
+func quietKindNodeCalls(path, launcher string) map[string]int {
 	if path == "repair" {
 		calls := map[string]int{"*/devices.list": 5, "server/session.start": 1}
-		checks := 2 // the storeless setup also checks the built-in launcher
-		if stored {
-			checks = 1
-		}
 		for _, machine := range []string{"server", "l4", "box"} {
 			calls[machine+"/launchers.list"] = 1
-			calls[machine+"/launchers.check"] = checks
+			calls[machine+"/launchers.check"] = 1 // only the discovered "work" launcher
 		}
 		return calls
 	}

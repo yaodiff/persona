@@ -68,7 +68,8 @@ func getChannelListByID(t *testing.T, s *Service) map[string]channel.View {
 }
 
 func boundThreadFor(s *Service, channelID, key string) string {
-	if t := s.channelThreadOf(context.Background(), channelID, key); t != nil {
+	ctx := context.Background()
+	if t := s.lookupThreadBinding(ctx, s.storedThreadBindingForTest(channelID, key, s.integrationsV2On(ctx))); t != nil {
 		return t.SessionID
 	}
 	return ""
@@ -96,6 +97,96 @@ func featureValue(features []channel.Feature, id string) (bool, bool) {
 		}
 	}
 	return false, false
+}
+
+func TestIntegrationsV2DualTopicRollback(t *testing.T) {
+	for _, startOn := range []bool{false, true} {
+		t.Run(fmt.Sprintf("start_v2=%t", startOn), func(t *testing.T) {
+			ctx := context.Background()
+			s, f, _ := threadsChannelService(t, true)
+			st := s.store().(*memStore)
+			const legacy = "oc_group:omt_topic"
+			topic := channelTopicRouteKey("oc_group", "omt_topic")
+			clock := &fakeClock{now: time.Date(2026, 11, 24, 9, 0, 0, 0, time.UTC)}
+			s.setChannelTestClock(clock.Now)
+			receive := func(id, text, thread string, structured bool) {
+				t.Helper()
+				m := channel.Message{ID: id, Text: text, Thread: thread}
+				if structured {
+					m.ChatID, m.ChatKind, m.TopicID = "oc_group", channel.ChatKindTopic, "omt_topic"
+				}
+				raw, err := json.Marshal(m)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := s.ChannelReceive(ctx, ChannelReceive{Channel: "examplechat", Message: raw}); err != nil {
+					t.Fatal(err)
+				}
+				waitAdmissionDrained(t, s)
+			}
+
+			if !startOn {
+				setIntegrationsV2(t, s, false)
+			}
+			assertIntegrationsV2Flag(t, s, startOn)
+			rec := channelAPIRequest(t, s, http.MethodPut, "/api/v1/channels/examplechat", "full", `{"thread_mode":"per_topic","thread_idle_hours":2}`)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("seed routing mode: %d %s", rec.Code, rec.Body.String())
+			}
+			// Seed the single-key state left by an older routing version.
+			key := legacy
+			if startOn {
+				receive("seed", "old structured topic", "", true)
+				key = topic
+			} else {
+				receive("seed", "old legacy thread", legacy, false)
+			}
+			session := boundThread(s, key)
+			if session == "" || f.sent() != 1 {
+				t.Fatalf("seed route: session=%q starts=%d, want one bound conversation", session, f.sent())
+			}
+			registerAssistantSession(f, session)
+
+			// Lark topic messages carry both keys on every delivery.
+			for i, v2 := range []bool{startOn, !startOn, startOn} {
+				if i > 0 {
+					setIntegrationsV2ViaHTTP(t, s, v2, !v2)
+				}
+				clock.advance(45 * time.Minute)
+				receive(fmt.Sprintf("topic_%d", i), "follow-up in the same topic", legacy, true)
+				f.mu.Lock()
+				sends := len(f.sentOnce)
+				f.mu.Unlock()
+				if f.sent() != 1 || sends != i+1 || lastSendOnceSession(f) != session {
+					t.Fatalf("v2=%t: starts=%d sends=%d session=%q, want one start and %d sends to %q",
+						v2, f.sent(), sends, lastSendOnceSession(f), i+1, session)
+				}
+			}
+			var stored map[string]*channelPrefs
+			if found, err := st.Setting(ctx, channelsKey, &stored); !found || err != nil {
+				t.Fatalf("read stored bindings: found=%t err=%v", found, err)
+			}
+			now := clock.Now()
+			for _, key := range []string{legacy, topic} {
+				got := stored["examplechat"].Threads[key]
+				if got == nil || got.SessionID != session || !got.At.Equal(now) {
+					t.Fatalf("stored binding %q = %+v, want %q at %v", key, got, session, now)
+				}
+			}
+
+			// A plugin can send /new using only its current routing format.
+			resetThread := legacy
+			if startOn {
+				resetThread = ""
+			}
+			receive("reset", "/new", resetThread, startOn)
+			setIntegrationsV2ViaHTTP(t, s, !startOn, startOn)
+			receive("after_reset", "start fresh", legacy, true)
+			if f.sent() != 2 {
+				t.Fatalf("/new followed by rollback started %d conversations total, want 2", f.sent())
+			}
+		})
+	}
 }
 
 // TestIntegrationsV2CombinedRollbackSuite exercises the full combined integrations_v2 lifecycle in one
@@ -141,11 +232,11 @@ func TestIntegrationsV2CombinedRollbackSuite(t *testing.T) {
 		return map[string]any{}, nil
 	})
 
-	now := time.Date(2026, 11, 24, 9, 0, 0, 0, time.UTC)
+	clock := &fakeClock{now: time.Date(2026, 11, 24, 9, 0, 0, 0, time.UTC)}
 	newReloadedService := func(t *testing.T) *Service {
 		t.Helper()
 		svc := newServiceOn(t, f, st)
-		svc.chans.now = func() time.Time { return now }
+		svc.setChannelTestClock(clock.Now)
 		return svc
 	}
 
@@ -169,6 +260,7 @@ func TestIntegrationsV2CombinedRollbackSuite(t *testing.T) {
 
 	// --- Step 1: Legacy baseline (integrations_v2=false) ---
 	t.Run("step1_legacy_baseline_off", func(t *testing.T) {
+		setIntegrationsV2(t, s, false)
 		assertIntegrationsV2Flag(t, s, false)
 
 		byID := getChannelListByID(t, s)
@@ -217,7 +309,7 @@ func TestIntegrationsV2CombinedRollbackSuite(t *testing.T) {
 		}
 		registerAssistantSession(f, legacyExSess)
 
-		now = now.Add(5 * time.Hour)
+		clock.advance(5 * time.Hour)
 		if err := s.channelForward(ctx, "examplechat", channel.Message{
 			ID: "s1_ex_leg_2", Text: "legacy thread 2", ChatID: "oc_g1", ChatKind: channel.ChatKindGroup, Thread: "legacy:t1",
 		}); err != nil {
@@ -264,6 +356,16 @@ func TestIntegrationsV2CombinedRollbackSuite(t *testing.T) {
 		setIntegrationsV2ViaHTTP(t, s, true, false)
 		assertIntegrationsV2Flag(t, s, true)
 
+		// Before any preference is saved, a legacy-only plugin continues the conversation opened while off.
+		if err := s.channelForward(ctx, "legacybot", channel.Message{
+			ID: "after-toggle", Text: "follow-up", Thread: "old_chat:root_1",
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if got := lastSendOnceSession(f); got != legacyBotSess {
+			t.Fatalf("inherited topic mode sent follow-up to %q, want existing conversation %q", got, legacyBotSess)
+		}
+
 		// Stale optimistic lock must fail with 409 configuration_conflict without toggling off.
 		wConflict, _ := permissionSettingsRequest(t, s, http.MethodPut, "/api/v1/assistant", s.managerIdentity(), "full",
 			`{"integrations_v2":false,"expected_integrations_v2":false}`)
@@ -295,8 +397,12 @@ func TestIntegrationsV2CombinedRollbackSuite(t *testing.T) {
 			if d.ThreadMode != tc.mode || d.ThreadIdleHours != tc.idle {
 				t.Fatalf("PUT %s: mode=%q idle=%d, want %q/%d", tc.id, d.ThreadMode, d.ThreadIdleHours, tc.mode, tc.idle)
 			}
-			if d.TargetOverride == nil || d.TargetOverride.Mode != channel.TargetOverrideTopics {
-				t.Fatalf("PUT %s under integrations_v2=true: target_override=%+v, want topics", tc.id, d.TargetOverride)
+			wantOverride := channel.TargetOverrideTopics
+			if tc.mode == channel.ThreadModePerGroupAndTopic {
+				wantOverride = channel.TargetOverrideGroupsAndTopics
+			}
+			if d.TargetOverride == nil || d.TargetOverride.Mode != wantOverride {
+				t.Fatalf("PUT %s: target_override=%+v, want %s", tc.id, d.TargetOverride, wantOverride)
 			}
 		}
 
@@ -378,7 +484,7 @@ func TestIntegrationsV2CombinedRollbackSuite(t *testing.T) {
 
 		// 2c. Idle-timeout rotation on examplechat (thread_idle_hours=2):
 		// +1h30m continues groupSess1 (refreshing timestamp); +2h05m rotates to a new session.
-		now = now.Add(90 * time.Minute)
+		clock.advance(90 * time.Minute)
 		if err := s.channelForward(ctx, "examplechat", channel.Message{
 			ID: "s2_g1_keep", Text: "within 2h", ChatID: "oc_g1", ChatKind: channel.ChatKindGroup,
 		}); err != nil {
@@ -388,7 +494,7 @@ func TestIntegrationsV2CombinedRollbackSuite(t *testing.T) {
 			t.Fatalf("s2_g1_keep: starts=%d session=%q want %q", f.sent(), lastSendOnceSession(f), groupSess1)
 		}
 
-		now = now.Add(2*time.Hour + 5*time.Minute)
+		clock.advance(2*time.Hour + 5*time.Minute)
 		if err := s.channelForward(ctx, "examplechat", channel.Message{
 			ID: "s2_g1_rotate", Text: "past 2h idle", ChatID: "oc_g1", ChatKind: channel.ChatKindGroup,
 		}); err != nil {
@@ -448,6 +554,10 @@ func TestIntegrationsV2CombinedRollbackSuite(t *testing.T) {
 	t.Run("step3_rollback_off_reload_and_preserve_config", func(t *testing.T) {
 		setIntegrationsV2ViaHTTP(t, s, false, true)
 		assertIntegrationsV2Flag(t, s, false)
+		w, patched := permissionSettingsRequest(t, s, http.MethodPut, "/api/v1/assistant", s.managerIdentity(), "full", `{"timezone":"UTC"}`)
+		if w.Code != http.StatusOK || patched.IntegrationsV2 {
+			t.Fatalf("sparse PUT after rollback: %d %s", w.Code, w.Body.String())
+		}
 
 		// Immediate rollback of target_override while preserving stored thread_mode and thread_idle_hours.
 		if d := getChannelDetail(t, s, "examplechat"); d.ThreadMode != channel.ThreadModePerGroupAndTopic || d.ThreadIdleHours != 2 ||
@@ -482,7 +592,7 @@ func TestIntegrationsV2CombinedRollbackSuite(t *testing.T) {
 		}
 
 		// Advance clock 10h (> examplechat's 2h idle timeout, < topicbot/legacybot's 24h, < 30d legacy TTL).
-		now = now.Add(10 * time.Hour)
+		clock.advance(10 * time.Hour)
 		starts := f.sent()
 
 		// Structured group without m.Thread reverts to channel default target m1.
@@ -551,7 +661,7 @@ func TestIntegrationsV2CombinedRollbackSuite(t *testing.T) {
 
 		exDetail := getChannelDetail(t, s, "examplechat")
 		if exDetail.ThreadMode != channel.ThreadModePerGroupAndTopic || exDetail.ThreadIdleHours != 2 ||
-			exDetail.TargetOverride == nil || exDetail.TargetOverride.Mode != channel.TargetOverrideTopics {
+			exDetail.TargetOverride == nil || exDetail.TargetOverride.Mode != channel.TargetOverrideGroupsAndTopics {
 			t.Fatalf("re-enabled examplechat detail = %+v", exDetail)
 		}
 		if syncOn, _ := featureValue(exDetail.Features, channel.FeatureSync); !syncOn {
@@ -653,8 +763,6 @@ func TestIntegrationsV2LegacyClientPartialChannelUpdatePreservesRoutingConfig(t 
 		v.MachineID = "server"
 		v.Main = "m1"
 	})
-	setIntegrationsV2ViaHTTP(t, s, true, false)
-
 	// Save v2 routing configuration and seed an active thread binding.
 	rec := channelAPIRequest(t, s, http.MethodPut, "/api/v1/channels/examplechat", "full",
 		`{"thread_mode":"per_group_and_topic","thread_idle_hours":18}`)
@@ -662,7 +770,7 @@ func TestIntegrationsV2LegacyClientPartialChannelUpdatePreservesRoutingConfig(t 
 		t.Fatalf("seed PUT: %d %s", rec.Code, rec.Body.String())
 	}
 	routeKey := channelGroupRouteKey("oc_keep_me")
-	if !s.bindChannelThread("examplechat", routeKey, "server", "c1") {
+	if !s.seedThreadBinding("examplechat", routeKey, "server", "c1") {
 		t.Fatal("failed to bind channel thread")
 	}
 
@@ -722,6 +830,8 @@ func TestIntegrationsV2LegacyPluginThreadOnlyMatrix(t *testing.T) {
 	}{
 		{"v2_off_cap_threads_on", false, true, channel.ThreadModeChannelDefault, true, true},
 		{"v2_off_cap_threads_off", false, false, channel.ThreadModeChannelDefault, false, false},
+		{"v2_on_unset_cap_threads_on", true, true, "", true, true},
+		{"v2_on_unset_cap_threads_off", true, false, "", false, false},
 		{"v2_on_channel_default", true, true, channel.ThreadModeChannelDefault, false, false},
 		{"v2_on_per_group_and_topic_cap_on", true, true, channel.ThreadModePerGroupAndTopic, true, true},
 		{"v2_on_per_group_and_topic_cap_off", true, false, channel.ThreadModePerGroupAndTopic, true, true},
@@ -733,7 +843,7 @@ func TestIntegrationsV2LegacyPluginThreadOnlyMatrix(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			s, f, sent := threadsChannelService(t, tc.capThreads)
 			setIntegrationsV2(t, s, tc.v2On)
-			if tc.mode != channel.ThreadModeChannelDefault {
+			if tc.mode != "" {
 				rec := channelAPIRequest(t, s, http.MethodPut, "/api/v1/channels/examplechat", "full",
 					fmt.Sprintf(`{"thread_mode":%q}`, tc.mode))
 				if rec.Code != http.StatusOK {

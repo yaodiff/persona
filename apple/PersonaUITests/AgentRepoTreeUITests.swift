@@ -32,6 +32,54 @@ final class AgentRepoTreeUITests: XCTestCase {
         }
     }
 
+    @MainActor func testHerdrRemovedTreeFollowsTheRepositoryFold() throws {
+        guard ProcessInfo.processInfo.environment["PERSONA_HERDR_REPOSITORIES"] == "1" else {
+            throw XCTSkip("requires MOCK_HERDR_REPOSITORIES=1")
+        }
+        let app = launch(extra: ["-AppleLanguages", "(en)", "-AppleLocale", "en_US"])
+        let all = app.buttons["agents.filter.all"]
+        XCTAssertTrue(all.waitForExistence(timeout: 20))
+        let headings = app.buttons.matching(identifier: "agents.project")
+            .matching(NSPredicate(format: "label BEGINSWITH %@", "repo-fixture"))
+        let heading = headings.firstMatch
+        let removed = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Removed tree agent")).firstMatch
+        bringUp(removed, in: app, columnX: all.frame.midX)
+        XCTAssertTrue(removed.exists && removed.isHittable)
+        shot(app, "herdr-repository-tree")
+        let window = app.windows.firstMatch
+        let from = window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.35))
+        for _ in 0..<8 where !heading.isHittable {
+            from.press(forDuration: 0.05, thenDragTo: from.withOffset(CGVector(dx: 0, dy: 220)))
+        }
+        XCTAssertTrue(heading.isHittable)
+        XCTAssertEqual(headings.count, 1)
+        XCTAssertTrue(removed.exists)
+        heading.tap()
+        let hidden = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: removed)
+        XCTAssertEqual(XCTWaiter().wait(for: [hidden], timeout: 5), .completed)
+        heading.tap()
+    }
+
+    @MainActor func testHerdrLoneWorkspaceKeepsItsMarksAndActions() throws {
+        guard ProcessInfo.processInfo.environment["PERSONA_HERDR_REPOSITORIES"] == "1" else {
+            throw XCTSkip("requires MOCK_HERDR_REPOSITORIES=1")
+        }
+        let app = launch(extra: ["-AppleLanguages", "(en)", "-AppleLocale", "en_US"])
+        let all = app.buttons["agents.filter.all"]
+        XCTAssertTrue(all.waitForExistence(timeout: 20))
+        let heading = app.buttons.matching(identifier: "agents.project")
+            .matching(NSPredicate(format: "label BEGINSWITH %@", "notes-fixture")).firstMatch
+        app.bringAboveTabBar(heading)
+        XCTAssertTrue(heading.isHittable)
+        XCTAssertTrue(heading.label.contains("Pinned"))
+        XCTAssertTrue(heading.label.contains("offline"))
+        shot(app, "herdr-lone-workspace")
+        heading.coordinate(withNormalizedOffset: CGVector(dx: 0.24, dy: 0.5)).press(forDuration: 1.2)
+        let copyPath = app.buttons.matching(NSPredicate(format: "identifier == %@ OR label == %@", "worktree.copyPath", "Copy Path")).firstMatch
+        XCTAssertTrue(copyPath.waitForExistence(timeout: 5))
+        shot(app, "herdr-workspace-actions")
+    }
+
     /// A repository's header holds no ⋯: what it offered (open, pin, mute, rename the space) is its long-press menu.
     @MainActor func testARepositorysActionsAreItsLongPressMenu() throws {
         let app = launch()

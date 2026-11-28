@@ -1,10 +1,12 @@
 package seam
 
 import (
+	"context"
 	"net/http"
 	"slices"
 	"strconv"
 
+	"github.com/nwverse/persona/server/internal/agentref"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/domainkit/defect"
 )
@@ -96,16 +98,21 @@ func (r Route) made(op string) {
 	}
 }
 
-// Registry is one assistant Service's registrations: its ports, the modules and routes registered so far, and
-// whether New has sealed it. Only NewRegistry makes one.
+// Registry is one assistant Service's registrations: its ports, the modules, routes, bus methods and hooks registered
+// so far, and whether New has sealed it. Only NewRegistry makes one. Modules register only while New runs; the
+// Service reads what they registered (Answer and the hooks) once New has returned it, so nothing guards the tables.
 type Registry struct {
-	routes   RouteTable
-	access   Access
-	bodies   BodyErrors
-	defects  Defects
-	modules  []ModuleName
-	patterns map[string]ModuleName
-	sealed   bool
+	routes    RouteTable
+	access    Access
+	bodies    BodyErrors
+	defects   Defects
+	modules   []ModuleName
+	patterns  map[string]ModuleName
+	methods   map[string]registeredMethod // bus.go
+	settled   hooks[func(context.Context, agentref.Ref)]
+	connected hooks[func(context.Context)]
+	parts     hooks[func(context.Context, *assistantwire.Snapshot)]
+	sealed    bool
 }
 
 // NewRegistry is an open registry over package assistant's ports. A nil port is a defect.
@@ -121,7 +128,10 @@ func NewRegistry(routes RouteTable, access Access, bodies BodyErrors, defects De
 	case defects == nil:
 		defect.Raise(op, "the Defects port is nil")
 	}
-	return &Registry{routes: routes, access: access, bodies: bodies, defects: defects, patterns: map[string]ModuleName{}}
+	return &Registry{routes: routes, access: access, bodies: bodies, defects: defects, patterns: map[string]ModuleName{},
+		methods: map[string]registeredMethod{}, settled: hooks[func(context.Context, agentref.Ref)]{kind: "TurnSettled"},
+		connected: hooks[func(context.Context)]{kind: "Connected"},
+		parts:     hooks[func(context.Context, *assistantwire.Snapshot)]{kind: "Snapshot"}}
 }
 
 // Register has m register through a Kernel of its own. A zero name, a name another module took, or a call after Seal
@@ -152,16 +162,22 @@ func (r *Registry) Seal() {
 
 // open raises a defect unless r is a registry NewRegistry made that is not sealed yet.
 func (r *Registry) open(op string) {
-	if r == nil || r.routes == nil {
-		defect.Raise(op, "a Registry comes from NewRegistry")
-	}
+	r.made(op)
 	if r.sealed {
 		defect.Raise(op, "the registry is sealed: modules register while assistant.New runs")
 	}
 }
 
-// Kernel is what one module registers through. The zero Kernel belongs to no registry; only Registry.Register makes
-// one, for the module it registers.
+// made raises a defect unless r is a registry NewRegistry made.
+func (r *Registry) made(op string) {
+	if r == nil || r.routes == nil {
+		defect.Raise(op, "a Registry comes from NewRegistry")
+	}
+}
+
+// Kernel is what one module registers through: the services every module uses (Route, Full, BodyError) and the
+// slots that each replace a central line of package assistant (Bus in bus.go; TurnSettled, Connected and Snapshot in
+// hooks.go). The zero Kernel belongs to no registry; only Registry.Register makes one, for the module it registers.
 type Kernel struct {
 	reg    *Registry
 	module ModuleName

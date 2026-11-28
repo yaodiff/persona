@@ -5,12 +5,18 @@ import (
 	"time"
 )
 
-// Node RPC method names for opt-in managed bare repository mirrors under ~/.persona/repos/.
+// Node RPC method names for managed bare repository mirrors under ~/.persona/repos/.
 const (
 	MethodRepoMirrorEnsure = "repo.mirror.ensure"
 	MethodRepoMirrorStatus = "repo.mirror.status"
 	MethodRepoMirrorRemove = "repo.mirror.remove"
 )
+
+// MirrorColdFetchTimeout is the Node's cold build budget.
+const MirrorColdFetchTimeout = 10 * time.Minute
+
+// MirrorEnsureTimeout leaves time beyond the cold fetch for the Node to return its result.
+const MirrorEnsureTimeout = MirrorColdFetchTimeout + time.Minute
 
 // Bounds and defaults for mirror TTL fetches and low-frequency periodic auto-sync.
 const (

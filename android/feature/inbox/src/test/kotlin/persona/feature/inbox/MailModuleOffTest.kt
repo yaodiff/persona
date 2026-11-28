@@ -85,11 +85,19 @@ private class RecordingMail : MailTransport {
 }
 
 /** An Inbox whose stored text for the item is [context] (the hub's `context` of `GET /api/v1/inbox/{id}`). */
-private class StoredInbox(private val base: FakeInboxRepository, private val context: String?, mail: MailTransport? = null) : InboxRepository by base {
+private class StoredInbox(
+    private val base: FakeInboxRepository,
+    private val context: String?,
+    mail: MailTransport? = null,
+    var clipping: StoredMailClipping = StoredMailClipping.Unknown,
+) : InboxRepository by base {
     val contexts = mutableListOf<String>()
     val done = mutableListOf<Pair<String, Boolean>>()
     override val mailTransport = MutableStateFlow(mail)
-    override suspend fun personaContext(itemId: String): String? { contexts += itemId; return context }
+    override suspend fun personaContext(itemId: String): PersonaContext? {
+        contexts += itemId
+        return context?.let { PersonaContext(it, clipping) }
+    }
     override suspend fun setDone(itemId: String, done: Boolean) { this.done += itemId to done }
     override suspend fun item(itemId: String): InboxRecord? = null
 }
@@ -112,6 +120,7 @@ class MailModuleOffTest {
 
     private fun text(id: Int): String = ApplicationProvider.getApplicationContext<Context>().getString(id)
     private val offLine get() = text(R.string.inbox_mail_module_off)
+    private val clippedLine get() = text(R.string.inbox_mail_module_off_clipped)
     private fun shown(text: String, substring: Boolean = false) = rule.onAllNodesWithText(text, substring = substring).fetchSemanticsNodes().isNotEmpty()
     private fun waitFor(text: String, substring: Boolean = false) = rule.waitUntil(5_000) { shown(text, substring) }
 
@@ -121,10 +130,15 @@ class MailModuleOffTest {
         }
     }
 
-    private fun inbox(context: String?, record: InboxRecord? = mailRecord(), mail: MailTransport? = null): StoredInbox {
+    private fun inbox(
+        context: String?,
+        record: InboxRecord? = mailRecord(),
+        mail: MailTransport? = null,
+        clipping: StoredMailClipping = StoredMailClipping.Unknown,
+    ): StoredInbox {
         val base = FakeInboxRepository()
         base.snapshot.value = InboxSnapshot(records = listOfNotNull(record))
-        return StoredInbox(base, context, mail)
+        return StoredInbox(base, context, mail, clipping)
     }
 
     /** What only a live mail offers: sending, flags, attachments. */
@@ -185,6 +199,35 @@ class MailModuleOffTest {
         waitFor(text(R.string.inbox_mail_stored_empty))
         waitFor(offLine)
         assertFalse(shown(text(R.string.inbox_mail_load_failed)))
+    }
+
+    @Test fun storedOnlyClippedTextAddsThatTheTextIsCutShort() {
+        val mail = RecordingMail()
+        val repository = inbox(Stored, clipping = StoredMailClipping.Clipped)
+        show(MailAccess.StoredOnly) { MailScreen(repository, mail, MailRoute(ItemId), navigator) }
+        waitFor(clippedLine)
+        // The stored text itself still renders; only the notice changes.
+        assertTrue(shown("Can you review it by Friday?", substring = true))
+        // The plain sentence (which ends at "kept.") is not the clipped notice.
+        assertFalse(shown(offLine))
+        // Knowing the text was clipped asks no mail route.
+        rule.waitForIdle()
+        assertEquals(emptyList<String>(), mail.asked)
+        assertEquals(listOf(ItemId), repository.contexts.distinct())
+    }
+
+    @Test fun storedOnlyWholeTextKeepsThePlainLineWithoutAClippingClaim() {
+        val repository = inbox(Stored, clipping = StoredMailClipping.Whole)
+        show(MailAccess.StoredOnly) { MailScreen(repository, RecordingMail(), MailRoute(ItemId), navigator) }
+        waitFor(offLine)
+        assertFalse(shown(clippedLine))
+    }
+
+    @Test fun storedOnlyUnknownClippingKeepsTodaysPlainLine() {
+        val repository = inbox(Stored, clipping = StoredMailClipping.Unknown)
+        show(MailAccess.StoredOnly) { MailScreen(repository, RecordingMail(), MailRoute(ItemId), navigator) }
+        waitFor(offLine)
+        assertFalse(shown(clippedLine))
     }
 
     @Test fun storedOnlyAnAiDraftForTheMailIsNotOfferedForSending() {
@@ -252,6 +295,8 @@ class MailModuleOffShotsTest {
         var dark by mutableStateOf(false)
         var access by mutableStateOf(MailAccess.Live)
         var fontScale by mutableStateOf(1f)
+        // Unknown keeps the matrix's existing plain notice; the clipping loop below drives the three states.
+        var clipping by mutableStateOf(StoredMailClipping.Unknown)
         val mail = RecordingMail()
         val base = FakeInboxRepository()
         base.snapshot.value = InboxSnapshot(records = listOf(mailRecord()))
@@ -261,7 +306,7 @@ class MailModuleOffShotsTest {
                 val density = androidx.compose.ui.platform.LocalDensity.current
                 CompositionLocalProvider(LocalMailAccess provides access,
                     androidx.compose.ui.platform.LocalDensity provides androidx.compose.ui.unit.Density(density.density, fontScale)) {
-                    key(style, dark, access, fontScale) {
+                    key(style, dark, access, fontScale, clipping) {
                         Box(Modifier.testTag("shot").width(400.dp).height(1100.dp).background(PersonaTheme.palette.background)) {
                             MailScreen(repository, mail, MailRoute(ItemId), navigator)
                         }
@@ -269,10 +314,17 @@ class MailModuleOffShotsTest {
                 }
             }
         }
-        val offLine = ApplicationProvider.getApplicationContext<Context>().getString(R.string.inbox_mail_module_off)
+        val resources = ApplicationProvider.getApplicationContext<Context>()
+        val offLine = resources.getString(R.string.inbox_mail_module_off)
+        val clippedLine = resources.getString(R.string.inbox_mail_module_off_clipped)
+        fun readyLine(): String = when {
+            access == MailAccess.Live -> "The live message goes on"
+            clipping == StoredMailClipping.Clipped -> clippedLine
+            else -> offLine
+        }
         fun capture(name: String) {
             rule.waitUntil(5_000) {
-                rule.onAllNodesWithText(if (access == MailAccess.Live) "The live message goes on" else offLine, substring = true).fetchSemanticsNodes().isNotEmpty()
+                rule.onAllNodesWithText(readyLine(), substring = true).fetchSemanticsNodes().isNotEmpty()
             }
             rule.mainClock.advanceTimeBy(1_000)
             rule.waitForIdle()
@@ -285,6 +337,15 @@ class MailModuleOffShotsTest {
         // The stored page at the largest text size: the line wraps and nothing is cut off.
         style = AppStyle.Glass; dark = false; access = MailAccess.StoredOnly; fontScale = 2f
         capture("mail-off-$language-glass-light-font2.png")
+        // The three clipping notices (#15995), Glass in light and dark for this language: clipped says the text is
+        // cut short, whole and unknown keep today's plain sentence.
+        fontScale = 1f
+        for (c in StoredMailClipping.entries) for (d in listOf(false, true)) {
+            repository.clipping = c
+            clipping = c
+            dark = d
+            capture("mail-off-${c.name.lowercase()}-$language-glass-${if (d) "dark" else "light"}.png")
+        }
     }
 
     @Config(sdk = [35], qualifiers = "en-w400dp-h1100dp-xhdpi") @Test fun english() = shots("en")

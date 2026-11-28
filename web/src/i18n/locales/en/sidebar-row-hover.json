@@ -5,7 +5,7 @@
   "model": "Model",
   "source": "Source",
   "status": "Status",
-  "tab": "Terminal",
+  "tab": "Tab",
   "todo": "To-do",
   "tool": "Tool",
   "workspace": "Workspace"

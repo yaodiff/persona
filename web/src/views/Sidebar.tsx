@@ -1,6 +1,7 @@
 import { pendingPlanCounts } from "../lib/pending-plan-counts";
 import { loadFeed, useFeed } from "../lib/feed";
-import { saveAgentsDisplay, useAgentsDisplay, useBotmuxHidden, useShowFilter, useSortByActivity, type AgentsDisplay, type DisplayChange } from "../lib/agents-display";
+import { saveAgentsDisplay, useAgentsDisplay, useAgentsDisplayEditable, useBotmuxHidden, useBotmuxShown, useShowFilter, useSortByActivity, type AgentsDisplay, type DisplayChange } from "../lib/agents-display";
+import { useBotmuxMode } from "../lib/botmux-mode";
 import { activityOrder, useActivityDates } from "../lib/agent-sort";
 import { useSidebarEngaged } from "../lib/sidebar-engaged";
 import { setChatList, useChatList } from "../lib/agent-chat-list";
@@ -11,7 +12,7 @@ import { launchDisplayEngine } from "../lib/new-agent";
 import { storedValue, storeValue } from "../lib/compatibility";
 // Beautiful UI's Sidebar Nav: workspace row, quick search, sections, one gliding highlight. Persona's main conversation
 // is the first entry (the app opens on the assistant); a new conversation and a new agent are the "+" of their sections (#1239).
-import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { Fragment, lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { t } from "../i18n";
 import { NARROW, useMedia } from "../lib/viewport";
 import { AGENT_FILTERS, agentFilter, applyFilter, arrangeSpaces, extendKept, filterCounts, isBotmux, isSpaceMuted, matchesFilter, matchingKeys, removeKept, shownFilters, unreadOf, withoutBotmux, type AgentFilter, type FilterCounts } from "../lib/agent-filter";
@@ -20,6 +21,7 @@ import { pagedFilterOf, resetAgentListFilters, setAgentListFilters, useAgentList
 import { AgentChatListRow, AgentFilterButton, AgentFilterChips } from "./agents/AgentChatListControls";
 import { agentGrouping, AGENT_GROUPINGS, type AgentGrouping, buildAgentGroups, buildSpaces, heldPlace, hostsOf, isHeldSeen, isQuiet, needsSeenOf, sessionHost, splitAgentSessions, type AgentGroup, type Space } from "../lib/agent-groups";
 import { isMuted } from "../lib/session-actions";
+import { engineName } from "../lib/engine-names";
 import { heldOrderFor, holdNotedSeen, noteShownUnseen, releaseAllSeen, releaseSeen, useHeldSeenOrder, useSeenRowsMode, useSeenRowsNoticed, useSeenVisit } from "../lib/seen-rows";
 import { reportBoundary } from "../lib/error-reports";
 import { isChunkError, reloadForStaleChunk, reloadPage } from "./PageBoundary";
@@ -35,12 +37,13 @@ import { firstAndCurrent } from "../lib/persona-nav";
 import { recentConversations } from "../lib/conversation-origins";
 import { isBackgroundSupervisor } from "../lib/background-supervisor";
 import { setRecentMore, useRecentCount, useRecentMore } from "../lib/sidebar-recent";
-import { countsLabel, directionExternal, directionLabel, useDirectionNames, useLeaderCounts, visibleSectionCounts } from "../lib/direction-names";
+import { countsLabel, directionExternal, directionHint, directionLabel, useDirectionNames, useLeaderCounts, userCheckLabel, visibleSectionCounts } from "../lib/direction-names";
 import { resolveSidebarDirections, sidebarConversations, SidebarDirectionsSection, type SidebarDirectionEntry } from "./SidebarDirections";
 import { conversationPage } from "../lib/conversation-page";
 import { href, navigate, onLinkClick, showsSession, type Route } from "../lib/router";
 import { useScrollMemory } from "../lib/scroll-memory";
-import { retryFullAgentSessions, useAgentSessions, useFullAgentSessions } from "../lib/sessions";
+import { boundedCounts, hasAgentViews, retryFullAgentSessions, useAgentSessions, useFullAgentSessions } from "../lib/sessions";
+import type { FoldedCounts } from "../lib/folded-counts";
 import { heldAsWorking, rowCards } from "../lib/supervisor-held";
 import { isInFlightLaunch } from "../lib/launch-handoff";
 import { getState, refresh, refreshTodos, useHubUnreachable, useStore } from "../lib/store";
@@ -48,25 +51,23 @@ import { SESSIONS_SIDE_FOLD_FEATURE } from "../lib/side-fold";
 import { conversationTitle } from "./assistant/conversations";
 import { sameManager, useShownManager } from "../lib/manager-choice";
 import { agentGroupLabel, agentTreeState, buildTodoTree, shareTree, worstTreeState, type TodoTree } from "../lib/todo-tree";
-import { consumeBoardSidebarTree } from "../features/todos/board-consumer";
 import { openTodoFromTag, sortTodos, TODO_STATUS_INFO, type TodoStatus } from "../lib/todos";
 import type { Machine, Session } from "../lib/types";
 import { Collapse, cx, EASE, Kbd, Menu, sidebarFoldMotion, useMenu, useNow, type MenuItem } from "../ui/atoms";
-import { StatusMark } from "../ui/StatusMark";
+import { StateTally, StatusMark } from "../ui/StatusMark";
 import { NoticeDot } from "../ui/NoticeDot";
 import { Icon } from "../ui/icons";
 import { HubNoticeLine as HubNoticeLineContent } from "./agents/HubNoticeRow";
 import { DeleteSessionDialog, RenameDialog, RenameSpaceDialog } from "./chat/SessionDialogs";
 import { AGENT_ARCHIVES_FEATURE } from "../lib/agent-archives";
-import { AgentRowMenu, MarkSeenDialog as MarkSeenDialogContent, SpaceMenu } from "./AgentMenus";
-import { NodeMenu } from "./NodeMenu";
+import { AgentRowMenu, MarkSeenDialog as MarkSeenDialogContent, NodeMenu, SpaceMenu } from "./AgentMenus";
 import { NodePrompt as NodePromptContent } from "./NodePrompt";
 import { SidebarUsage as SidebarUsageContent } from "./UsageBars";
 import type { MenuNode } from "../lib/node-actions";
 import type { MenuAt } from "../ui/menu-model";
 import { useSidebarTerminals } from "../lib/sidebar-terminals";
 import { usePanes } from "../lib/terminal-panes";
-import { buildTerminalTree, shellsOnly, type TermSpace } from "../lib/terminals";
+import { buildTerminalTree, filterTerminalTree, shellsOnly, type TermSpace } from "../lib/terminals";
 import type { LinkTargetSpace } from "./LinkTodoDialog";
 import { lazyDialog } from "./LazyOverlay";
 import { lazyPage } from "../lib/lazy-page";
@@ -81,24 +82,26 @@ import { ListError } from "../ui/ListError";
 import { SESSION_LIST_STYLE } from "../ui/list-metrics";
 import { RUNTIME_AGENTS_PATH, supportsPagedAgents, runtimeActiveAt, runtimeAgents, runtimeIdentity, runtimeNeedsYou, runtimeOrder, runtimeParentIdentity, runtimePlace, runtimeRemoval } from "../lib/runtime-list";
 import { JUST_FINISHED_KEY, SESSIONS_CATALOG_FEATURE, SESSIONS_JUST_FINISHED_FEATURE, SESSIONS_QUICK_FILTERS_FEATURE, SESSIONS_TODO_FEATURE, type GroupDimension, type TodoNames } from "../lib/session-groups";
-import { SESSIONS_LIST_FEATURE, type ListCounts, type ListFilters } from "../lib/session-list";
+import { filterQuery, SESSIONS_LIST_FEATURE, type ListCounts, type ListFilters } from "../lib/session-list";
+import { followHinted } from "../lib/hinted-read";
 import { heldCounts } from "../lib/seen-outbox";
 import { heldSidesOf, useHeldVersion } from "../lib/use-child-sessions";
 import { NoComputers, useAddComputer } from "./machines/AddComputerEntry";
-import { BADGE_CLASS, DOT_CLASS, type GoFn, GroupCount, holdsRow, morePagesMenu, type NavPage, type NodeMenuFn, pageIconStyle, pageLabel, type RegFn, rowKey, type RowMenuFn, Section, SidebarGroup, GroupFoldButton, useActiveKey, useGo, useNavPages } from "./SidebarParts";
-import { NavRow, PersonalAgents, PersonaRow, SessionRow, SubHeading } from "./SidebarRows";
-import { GroupBranch, LooseSection, MachineSection, RepoMachineSection, SessionTally, type SpaceMenuFn, type WorkspaceTreeActions, SpaceSection, TodoTreeView } from "./SidebarTree";
+import { BADGE_CLASS, DOT_CLASS, type GoFn, GroupCount, HISTORY_ICON, holdsRow, morePagesMenu, type NavPage, type NodeMenuFn, pageIconStyle, pageLabel, type RegFn, rowKey, type RowMenuFn, Section, SidebarGroup, GroupFoldButton, useActiveKey, useGo, useNavPages } from "./SidebarParts";
+import { NavRow, PersonalAgents, PersonaRow, SessionRow, SubHeading, unreadShown } from "./SidebarRows";
+import { GroupBranch, LooseSection, MachineSection, RepoMachineSection, SessionTally, ShellSpaceSection, type SpaceMenuFn, type WorkspaceTreeActions, SpaceSection, TodoTreeView } from "./SidebarTree";
 import { CollapseButton, PagesTally } from "./SidebarRail";
 import type { PageSection } from "../lib/sidebar-pages";
 import { WindowedRows } from "./WindowedRows";
 import { scoped, useScope, useScoped, useScopedInteractions, useScopedMachines, useScopedTodos } from "../lib/current-assistant";
+import { useTodoBoard } from "../lib/todo-owner-needs";
 import { AssistantSwitcher } from "./AssistantSwitcher";
 import { sidebarPending } from "./sidebar-pending";
 import { usePendingWorkSessions } from "./sidebar-pending-sessions";
 import { useMainWaiting } from "./assistant/use-main-waiting";
 // Declared in the files split out of this one; re-exported so the files that import them from here stay as they are.
 export { useNavPages, type NavPage } from "./SidebarParts";
-export { AgentRow, PersonaRow, SessionRow } from "./SidebarRows";
+export { AgentRow, PersonaRow, SessionRow, ShellRow } from "./SidebarRows";
 export { SidebarRail } from "./SidebarRail";
 
 // The "herdr isn't running" rows (#1916) draw nothing until a computer's herdr is read as stopped, so their code, its
@@ -106,6 +109,7 @@ export { SidebarRail } from "./SidebarRail";
 // the chunk is in, never suspending: a Suspense here would hold the sidebar's other updates (a navigation) while it
 // loads. A chunk that will not load is reported, and the next mount asks again.
 const HerdrNoticesContent = lazyPage(() => import("./agents/HerdrNotices").then((m) => m.HerdrNotices));
+const SidebarSpacesLazy = lazy(() => import("./SidebarSpaces").then((m) => ({ default: m.SidebarSpaces })));
 export const HerdrNotices = memo(function HerdrNotices() {
   const [ready, setReady] = useState(HerdrNoticesContent.ready);
   useEffect(() => {
@@ -127,6 +131,7 @@ const HubNoticeLine = memo(HubNoticeLineContent);
 const NodePrompt = memo(NodePromptContent);
 const SidebarUsage = memo(SidebarUsageContent);
 const LinkTodoDialog = memo(lazyDialog(() => import("./LinkTodoDialog").then((m) => m.LinkTodoDialog)));
+const BotmuxModeChip = lazy(() => import("./BotmuxModeChip"));
 // Menus and edit controls load on intent; the ordinary sidebar keeps its first-screen budget (#12017).
 const ConversationRowMenu = lazy(() => import("./ConversationRowMenu"));
 const SidebarConversationArrange = lazy(() => import("./assistant/SidebarConversationArrange"));
@@ -182,31 +187,13 @@ function reveal(el: HTMLElement): boolean {
   return false;
 }
 
-/** Keep group headings below Persona at every text size, without doing layout work on scroll. The observer's first
- *  report, after the browser's own layout and before the frame is painted, sets it: reading the row's height here made
- *  the browser lay out the whole sidebar there and then. */
-function useStickyTop(ref: React.RefObject<HTMLElement | null>) {
-  useLayoutEffect(() => {
-    const nav = ref.current;
-    const pinned = nav?.querySelector<HTMLElement>(":scope > [data-sidebar-sticky]");
-    if (!nav || !pinned) return;
-    const observer = new ResizeObserver(([e]) => nav.style.setProperty("--sidebar-sticky-top", `${e?.borderBoxSize?.[0]?.blockSize ?? pinned.getBoundingClientRect().height}px`));
-    observer.observe(pinned);
-    return () => { observer.disconnect(); nav.style.removeProperty("--sidebar-sticky-top"); };
-  }, [ref]);
-}
-
-/** The gliding highlight under a list of rows (Beautiful UI's Sidebar Nav): rows register under their keys, and the
- *  one under the pointer gets the box; the open row has its own fill (CURRENT_ROW), so the box doesn't take it away.
- *  The list is the box's scroll container (`nav`). The open row is kept in view from when it opens until the list is
- *  touched (wheel, pointer, keys): it may come later, and rows loading above it push it down.
- *  The box is measured after each render and again whenever the list's layout moves without one (#2476): a group
- *  folding or opening (its Collapse animates, then ends), rows arriving or changing height, scrolling. It covers only
- *  the part of its row on show and goes away when the row is folded away or gone (lib/glide.ts).
- *  The row under the pointer is kept in a ref and the box in a small store only GlideHighlight reads: hovering
- *  re-measures and moves the box without re-rendering the list that holds the rows. */
+/** The gliding highlight under a list of rows (Beautiful UI's Sidebar Nav): rows register under their keys, and a
+ *  hovered non-active row gets the box; the open row owns CURRENT_ROW, so the box fades out instead of overlapping it
+ *  when the pointer leaves or lands on the active row. When `track` (the scroller) is provided, the box mounts inside
+ *  it and scrolls natively on the compositor without scroll-listener wobble. */
 function useGlide(activeKey: string) {
   const nav = useRef<HTMLDivElement>(null);
+  const track = useRef<HTMLDivElement>(null);
   const rows = useRef(new Map<string, HTMLElement>());
   const lastKey = useRef<string | null>(null);
   const following = useRef(false);
@@ -217,17 +204,17 @@ function useGlide(activeKey: string) {
   const sizes = useRef<ResizeObserver | null>(null);
   const measure = useRef(() => {});
   measure.current = () => {
-    const n = nav.current;
-    // the box rests under the open row when the pointer is away, so it glides from there; that row's fill covers it
-    const el = rows.current.get(hovered.current ?? active.current);
+    const host = track.current ?? nav.current;
+    const k = hovered.current;
+    const el = k && k !== active.current ? rows.current.get(k) : undefined;
     let next: GlideBox | null = null;
-    if (n && el?.isConnected) {
+    if (host && el?.isConnected && host.contains(el)) {
       const clips: Span[] = [];
-      for (let p = el.parentElement; p && p !== n; p = p.parentElement) if (clipsOverflow(getComputedStyle(p).overflowY)) clips.push(p.getBoundingClientRect());
-      next = glideBox(el.getBoundingClientRect(), clips, n.getBoundingClientRect(), n.scrollTop);
+      for (let p = el.parentElement; p && p !== host; p = p.parentElement) if (clipsOverflow(getComputedStyle(p).overflowY)) clips.push(p.getBoundingClientRect());
+      next = glideBox(el.getBoundingClientRect(), clips, host.getBoundingClientRect(), host.scrollTop);
     }
-    // only a real move updates
-    box.set((b) => (next ? (b.on && sameBox(b.at, next) ? b : { at: next, on: true }) : b.on ? { at: b.at, on: false } : b));
+    // only a real move updates; snap into position when revealing from hidden instead of sliding from a stale row
+    box.set((b) => (next ? (b.on && sameBox(b.at, next) ? b : { at: next, on: true, snap: !b.on }) : b.on ? { at: b.at, on: false } : b));
   };
   useEffect(() => {
     const n = nav.current;
@@ -244,21 +231,22 @@ function useGlide(activeKey: string) {
     sizes.current = ro;
     // the list and its blocks (sections) change height as a group inside folds or opens, and as rows come and go;
     // the rows themselves are observed as they register (one growing moves the rest)
+    const scroller = track.current;
     const watch = () => {
       ro.observe(n);
       for (const c of n.children) ro.observe(c);
+      if (scroller) for (const c of scroller.children) ro.observe(c);
       for (const el of rows.current.values()) ro.observe(el);
     };
     watch();
     const mo = new MutationObserver(() => (ro.disconnect(), watch(), soon()));
     mo.observe(n, { childList: true });
-    // a Collapse's transition ending (it may end without a size change, e.g. its opacity) and scrolling inside the list
+    if (scroller) mo.observe(scroller, { childList: true });
+    // a Collapse's transition ending (it may end without a size change, e.g. its opacity)
     n.addEventListener("transitionend", soon);
-    n.addEventListener("scroll", soon, { passive: true, capture: true });
     return () => {
       events.forEach((e) => n.removeEventListener(e, stop));
       n.removeEventListener("transitionend", soon);
-      n.removeEventListener("scroll", soon, { capture: true });
       mo.disconnect();
       ro.disconnect();
       sizes.current = null;
@@ -307,12 +295,12 @@ function useGlide(activeKey: string) {
     measure.current();
   });
   const highlight = <GlideHighlight box={box} />;
-  return { nav, reg, hover, highlight };
+  return { nav, track, reg, hover, highlight };
 }
 
-/** Where the box is: `at` is the last place it was on show; a box that goes away (`on` false) fades out there, and
- *  glides from there back. */
-type GlideState = { at: GlideBox | null; on: boolean };
+/** Where the box is: `at` is the last place it was on show; a box that goes away (`on` false) fades out there;
+ *  `snap` suppresses the transform slide when appearing directly from hidden. */
+type GlideState = { at: GlideBox | null; on: boolean; snap?: boolean };
 
 /** The box's place outside React state, so moving it re-renders only GlideHighlight. */
 function glideStore() {
@@ -335,8 +323,8 @@ function glideStore() {
 
 function GlideHighlight({ box }: { box: ReturnType<typeof glideStore> }) {
   // box.get is the server snapshot too: the shell views are also rendered to a string (shell-views.test)
-  const { at, on } = useSyncExternalStore(box.subscribe, box.get, box.get);
-  return <span aria-hidden data-glide className="pointer-events-none absolute inset-x-2.5 rounded-[7px] bg-hover" style={glideStyle(at, on, EASE)} />;
+  const { at, on, snap } = useSyncExternalStore(box.subscribe, box.get, box.get);
+  return <span aria-hidden data-glide className="pointer-events-none absolute rounded-[7px] bg-hover" style={glideStyle(at, on, EASE, snap)} />;
 }
 
 /** Recent's Show more / Show less, as the Agents block's Recent (not running) draws its own. */
@@ -344,7 +332,13 @@ const MORE_BUTTON = "whitespace-nowrap rounded-[7px] px-2 py-1 text-left text-[1
 
 const NO_CONVERSATIONS: Session[] = [];
 
-export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActions, active = true }: { route: Route; onSearch: () => void; onNewAgent: () => void; onNavigate?: () => void; workspaceActions?: WorkspaceTreeActions; active?: boolean }) {
+/** A folded Persona chats or Recent heading's count of the chats it hides that are Unread (#13425): the Agents list's
+ *  folded tally (StateTally), so the mark and its number read as they do there, spoken as chats. Nothing at 0. */
+function UnreadTally({ n }: { n: number }) {
+  return n > 0 ? <StateTally chats counts={{ needs_you: 0, working: 0, bg_waiting: 0, unread: n }} /> : null;
+}
+
+export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActions, active = true, hideCollapse = false }: { route: Route; onSearch: () => void; onNewAgent: () => void; onNavigate?: () => void; workspaceActions?: WorkspaceTreeActions; active?: boolean; hideCollapse?: boolean }) {
   const bindings = useBindings();
   const searchHint = jumpHint(bindings);
   const assistant = useStore((s) => s.assistant);
@@ -408,16 +402,23 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActi
   // the main row sits above the pages, so"Persona chats"waits for the assistant (a hub without it has none)
   const chats = !!assistant;
   // a conversation row's ⋯ / right click (iOS: its long press)
-  const [convMenu, setConvMenu] = useState<{ s: Session; anchor: HTMLElement; at?: MenuAt } | null>(null);
+  const [convMenu, setConvMenu] = useState<{ s: Session; anchor: HTMLElement; at?: MenuAt; main?: boolean } | null>(null);
   // one function for the sidebar's life: the conversation rows and the main row keep their memo across pushes
   const onConvMenu = useCallback<RowMenuFn>((s, anchor, at) => setConvMenu((m) => (!at && m?.anchor === anchor ? null : { s, anchor, at })), []);
+  const onMainMenu = useCallback<RowMenuFn>((s, anchor, at) => setConvMenu((m) => (!at && m?.anchor === anchor ? null : { s, anchor, at, main: true })), []);
+  if (convMenu?.main && convMenu.s.session_id !== assistant?.main) setConvMenu(null);
   const [personaFolded, togglePersona] = useFolded("persona", false, { holds: activeKey === "history" || activeKey === "j:new" || directions.some((d) => activeKey === `j:${d.id}`) || recent.some((c) => activeKey === `j:${c.session_id}`) });
   // 最近 folds on its own too (#6228): the choice is kept in this browser, and it opens by itself while it holds the
   // open conversation, so folding never hides where a message lands. The Agents block's Recent uses another key.
   const [recentFolded, toggleRecent] = useFolded("recent-chats", false, { holds: recent.some((c) => activeKey === `j:${c.session_id}`) });
+  // Folded, the Persona chats heading and Recent's still say how many of the chats they hide are Unread (#13425), with
+  // the folded tally the Agents list's groups use (StateTally); open, each row marks its own. The rows are the store's,
+  // which the seen outbox already holds seen (lib/store.ts holdSeen), so a chat just opened is not counted
+  // A pinned direction counts through its conversation; an external one (#12557) has no chat row, so no Unread mark.
+  const unreadPinned = directions.filter((d) => d.conversation !== undefined && unreadShown(d.conversation)).length;
+  const unreadRecent = recent.filter(unreadShown).length;
   const leaderTotal = visibleSectionCounts(counts, directions.map((d) => d.id), recentFolded ? [] : recent.map((c) => c.session_id));
-  const { nav, reg, hover, highlight } = useGlide(activeKey);
-  useStickyTop(nav);
+  const { nav, track, reg, hover, highlight } = useGlide(activeKey);
   const go = useGo(onNavigate);
   const [holdsSeen, setHoldsSeen] = useState(false);
 
@@ -427,7 +428,7 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActi
   const directionRow = (d: SidebarDirectionEntry) => {
     if (d.conversation) {
       const c = d.conversation;
-      return <SessionRow key={c.session_id} s={c} k={`j:${c.session_id}`} reg={reg} hover={hover} active={activeKey === `j:${c.session_id}`} to={conversationPage(c.session_id, c.machine_id, c.manager)} go={go} label={directionName(d)} hint={countsLabel(counts.get(c.session_id), t) || undefined} hintFull showState={false} workingMark={counts.get(c.session_id)?.running ?? false} keepTrailing onMenu={onConvMenu} menuLabel={t("conversation-menu.actions")} />;
+      return <SessionRow key={c.session_id} s={c} k={`j:${c.session_id}`} reg={reg} hover={hover} active={activeKey === `j:${c.session_id}`} to={conversationPage(c.session_id, c.machine_id, c.manager)} go={go} label={directionName(d)} hint={directionHint(counts.get(c.session_id), t) || undefined} hintFull showState={false} workingMark={counts.get(c.session_id)?.running ?? false} keepTrailing onMenu={onConvMenu} menuLabel={t("conversation-menu.actions")} />;
     }
     const { machine_id: mid, session_id: sid } = d.external ?? {};
     const key = mid && sid ? `s:${mid}/${sid}` : `j:${d.id}`;
@@ -441,26 +442,28 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActi
       state: "idle",
       assistant: !mid || !sid,
     };
-    return <SessionRow key={d.id} s={s} k={key} reg={reg} hover={hover} active={activeKey === key} to={mid && sid ? { name: "session", mid, sid } : null} go={go} label={label} hint={countsLabel(counts.get(d.id), t) || undefined} hintFull showState={false} workingMark={counts.get(d.id)?.running ?? false} keepTrailing />;
+    return <SessionRow key={d.id} s={s} k={key} reg={reg} hover={hover} active={activeKey === key} to={mid && sid ? { name: "session", mid, sid } : null} go={go} label={label} hint={directionHint(counts.get(d.id), t) || undefined} hintFull showState={false} workingMark={counts.get(d.id)?.running ?? false} keepTrailing />;
   };
 
   const recentRow = (c: Session) => (
-    <SessionRow key={c.session_id} s={c} k={`j:${c.session_id}`} reg={reg} hover={hover} active={activeKey === `j:${c.session_id}`} to={conversationPage(c.session_id, c.machine_id, c.manager)} go={go} label={conversationTitle(c)} hint={countsLabel(counts.get(c.session_id), t) || undefined} hintFull keepTrailing showState={false} onMenu={onConvMenu} menuLabel={t("conversation-menu.actions")} />
+    <SessionRow key={c.session_id} s={c} k={`j:${c.session_id}`} reg={reg} hover={hover} active={activeKey === `j:${c.session_id}`} to={conversationPage(c.session_id, c.machine_id, c.manager)} go={go} label={conversationTitle(c)} hint={directionHint(counts.get(c.session_id), t) || undefined} hintFull keepTrailing showState={false} onMenu={onConvMenu} menuLabel={t("conversation-menu.actions")} />
   );
 
   return (
     <aside data-sidebar-root className="flex h-full w-full flex-col bg-canvas">
       <div className="px-2.5 pt-2.5">
-        <div className="mb-2 flex items-center gap-1">
+        <div className={cx("flex items-center gap-1", hideCollapse ? "mb-1" : "mb-2")}>
           <div className="min-w-0 flex-1"><AssistantSwitcher phase={phase} online={online} total={total} route={route} /></div>
-          {/* folds the column to the rail of icons (a wide screen; the drawer closes by its scrim) */}
-          {!narrow && <CollapseButton collapsed={false} chord={bindings["left-sidebar"]} />}
+          {/* folds the column to the rail of icons (a wide screen; macOS desktop hosts it in MacBayTools; the drawer closes by its scrim) */}
+          {!narrow && !hideCollapse && <CollapseButton collapsed={false} chord={bindings["left-sidebar"]} />}
         </div>
-        <button type="button" onClick={onSearch} className="touch-hit mb-1 flex h-8 w-full items-center gap-2 rounded-control bg-inset px-2.5 text-left shadow-hairline transition-colors hover:bg-hover">
-          <Icon name="search" size={12} stroke={2} className="text-ink-3" />
-          <span className="min-w-0 flex-1 truncate text-[12.5px] text-ink-3">{t("sidebar.search_sessions")}</span>
-          <span className="hidden sm:inline-flex [@media(hover:none)]:hidden"><Kbd>{searchHint}</Kbd></span>
-        </button>
+        {!hideCollapse && (
+          <button type="button" onClick={onSearch} className="touch-hit mb-1 flex h-8 w-full items-center gap-2 rounded-control bg-inset px-2.5 text-left shadow-hairline transition-colors hover:bg-hover">
+            <Icon name="search" size={12} stroke={2} className="text-ink-3" />
+            <span className="min-w-0 flex-1 truncate text-[12.5px] text-ink-3">{t("sidebar.search_sessions")}</span>
+            <span className="hidden sm:inline-flex [@media(hover:none)]:hidden"><Kbd>{searchHint}</Kbd></span>
+          </button>
+        )}
       </div>
 
       {/* scroll-pt: a row reached by Tab doesn't stop under the pinned Persona row — about 62px with its 主对话 line
@@ -468,19 +471,21 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActi
       {/* isolate: the rows' own layers (the sticky Persona row and group headers at z-30, chips, segments) stay inside this
           column, so the usage popover that opens upward over it from the bottom is never drawn under them */}
       <div className="relative flex min-h-0 flex-1 flex-col">
-      <div ref={nav} data-sidebar-rows data-row-scroller onMouseLeave={() => hover(null)} className="relative isolate min-h-0 flex-1 scroll-pt-16 overflow-y-auto overscroll-contain px-2.5 pb-3">
-        {highlight}
+      <div ref={nav} data-sidebar-rows onMouseLeave={() => hover(null)} className="relative isolate flex min-h-0 flex-1 flex-col scroll-pt-16 px-2.5">
         {/* the main conversation is the column's first row, Main chat with the home symbol, and only there (#2004, #5109); it
-            stays at the top while the rest scrolls (#5581), with a solid divider above the sticky groups */}
-        <div data-sidebar-sticky className="sticky top-0 z-30 flex flex-col gap-px bg-canvas pt-1">
-          <PersonaRow reg={reg} hover={hover} active={activeKey === "persona"} go={go} main={mainConversation} chord={bindings.persona} waiting={mainWaiting.count} onMenu={onConvMenu} />
+            stays at the top while the rest scrolls (#5581), with a solid divider above the scrollable rows */}
+        <div data-sidebar-sticky className="sticky top-0 z-30 flex shrink-0 flex-col gap-px bg-canvas pt-1">
+          <PersonaRow reg={reg} hover={hover} active={activeKey === "persona"} go={go} main={assistant?.main ? (conversationOf(assistant.main) ?? mainConversation) : mainConversation} chord={bindings.persona} waiting={mainWaiting.count} onMenu={onMainMenu} />
           <span aria-hidden data-persona-divider className="mx-2 my-1 h-px shrink-0 bg-line" />
         </div>
+        <div ref={track} data-row-scroller data-sidebar-scroller className="relative min-h-0 flex-1 -mx-2.5 overflow-y-auto overscroll-contain px-2.5 pb-3">
+        {highlight}
         {/* a phone's drawer has Pages as its grid of icons; every other group (#9071) is a section, as on a wide screen */}
-        {narrow && <NavGrid pages={sections.find((g) => !g.id)?.pages ?? []} more={more} activeKey={activeKey} go={go} onNavigate={onNavigate} />}
+        {narrow && <NavGrid showHubNotice={active} pages={sections.find((g) => !g.id)?.pages ?? []} more={more} activeKey={activeKey} go={go} onNavigate={onNavigate} />}
+        <Suspense fallback={null}><SidebarSpacesLazy route={route} reg={reg} hover={hover} activeKey={activeKey} go={go} /></Suspense>
         {sections
           .filter((g) => (g.id ? g.pages.length > 0 : !narrow))
-          .map((g, i) => <PageGroup key={g.id || "pages"} group={g} more={g.id ? [] : more} first={i === 0 && !narrow} reg={reg} hover={hover} activeKey={activeKey} go={go} />)}
+          .map((g, i) => <PageGroup showHubNotice={active} key={g.id || "pages"} group={g} more={g.id ? [] : more} first={i === 0 && !narrow} reg={reg} hover={hover} activeKey={activeKey} go={go} />)}
 
         {chats && (
           <Section
@@ -494,12 +499,15 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActi
               <>
                 {/* folded, what the leaders have going stays: the working arc while anything under one runs, and their
                     tasks waiting on you (#6626: the arc, never "在做 N" as well) */}
-                {(countsLabel(leaderTotal, t) || (personaFolded && leaderTotal.running)) && (
+                {(countsLabel(leaderTotal, t) || userCheckLabel(leaderTotal, t) || (personaFolded && leaderTotal.running)) && (
                   <span data-direction-counts data-running={leaderTotal.running || undefined} className="flex min-w-0 items-center gap-1 text-[11px] tabular-nums text-ink-3">
                     {leaderTotal.running && <StatusMark state="working" size="sm" />}
-                    <span className="truncate">{countsLabel(leaderTotal, t)}</span>
+                    {countsLabel(leaderTotal, t) && <span className="truncate font-semibold text-attention">{countsLabel(leaderTotal, t)}</span>}
+                    {countsLabel(leaderTotal, t) && userCheckLabel(leaderTotal, t) && <span aria-hidden>·</span>}
+                    {userCheckLabel(leaderTotal, t) && <span data-direction-user-check className="truncate">{userCheckLabel(leaderTotal, t)}</span>}
                   </span>
                 )}
+                {personaFolded && <UnreadTally n={unreadPinned + unreadRecent} />}
                 <SectionAdd icon="compose" label={t("sidebar.new_chat")} to={{ name: "persona-new" }} go={go} active={activeKey === "j:new"} />
               </>
             }
@@ -512,7 +520,7 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActi
                 </Suspense>
               ) : recent.length > 0 && (
                 <>
-                  <SubHeading label={t("sidebar.recent_chats")} folded={recentFolded} onToggle={toggleRecent} help={t("sidebar.recent_chats_help")} />
+                  <SubHeading label={t("sidebar.recent_chats")} folded={recentFolded} onToggle={toggleRecent} help={t("sidebar.recent_chats_help")} tally={recentFolded && <UnreadTally n={unreadRecent} />} />
                   <Collapse open={!recentFolded} sidebarFold>
                     <div className="sidebar-indent" inert={recentFolded || undefined}>
                       {recent.map(recentRow)}
@@ -550,11 +558,29 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActi
 
         {active && (workBrowserReady ? <PendingAgents route={route} reg={reg} hover={hover} go={go} onNewAgent={onNewAgent} onNavigate={onNavigate} />
           : !(narrow && route.name === "agent-list") && <AgentsBlock reg={reg} hover={hover} activeKey={activeKey} go={go} onNewAgent={onNewAgent} onNavigate={onNavigate} workspaceActions={workspaceActions} foldable onHoldsSeen={setHoldsSeen} />)}
-        {!workBrowserReady && <NavRow k="terminal" reg={reg} hover={hover} active={activeKey === "terminal"} to={{ name: "terminal" }} go={go} label={t("work-entry.title")} icon="clock" />}
+        {!workBrowserReady && <NavRow k="terminal" reg={reg} hover={hover} active={activeKey === "terminal"} to={{ name: "terminal" }} go={go} label={t("work-entry.title")} icon={HISTORY_ICON} />}
+        </div>
       </div>
       <SeenRowsNoticeHost shown={holdsSeen} onNavigate={onNavigate} />
       </div>
-      {convMenu && <Suspense fallback={null}><ConversationRowMenu s={convMenu.s} main={convMenu.s.session_id === assistant?.main} leader={isLeader(convMenu.s.session_id)} builtIn={isBackgroundSupervisor(assistant, convMenu.s.session_id)} anchor={convMenu.anchor} at={convMenu.at} onClose={() => setConvMenu(null)} onArrange={ownChats.includes(convMenu.s) ? () => setArranging(true) : undefined} /></Suspense>}
+      {convMenu && (() => {
+        const activeSession = conversationOf(convMenu.s.session_id) ?? convMenu.s;
+        return (
+          <Suspense fallback={null}>
+            <ConversationRowMenu
+              s={activeSession}
+              main={activeSession.session_id === assistant?.main}
+              leader={isLeader(activeSession.session_id)}
+              builtIn={isBackgroundSupervisor(assistant, activeSession.session_id)}
+              anchor={convMenu.anchor}
+              at={convMenu.at}
+              onClose={() => setConvMenu(null)}
+              onNavigate={onNavigate}
+              onArrange={ownChats.includes(activeSession) ? () => setArranging(true) : undefined}
+            />
+          </Suspense>
+        );
+      })()}
       {/* subscription rate-limit windows (#2432): nothing is drawn without data */}
       <SidebarUsage />
       <NodePrompt />
@@ -585,7 +611,7 @@ function PendingAgents({ route, reg, hover, go, onNewAgent, onNavigate }: {
           label={label} title={[label, machineWithHub(row.machineId, machines)].filter(Boolean).join(" · ")} icon="chat" dot="needs_you"
           badge={row.cards.length > 1 ? row.cards.length : undefined} badgeTone="attention" />;
       })}
-      <NavRow k="work:all" reg={reg} hover={hover} active={false} to={{ name: "terminal" }} go={go} label={t("work-entry.all")} icon="list" />
+      <NavRow k="work:all" reg={reg} hover={hover} active={false} to={{ name: "terminal" }} go={go} label={t("work-entry.all")} icon={HISTORY_ICON} />
     </Section>
   );
 }
@@ -609,7 +635,7 @@ export function AgentsList({ route, onNewAgent, workspaceActions }: { route: Rou
         <div ref={nav} onMouseLeave={() => hover(null)} className="relative mx-auto max-w-[640px] px-2.5 pb-6">
           {highlight}
           {none ? <NoComputers body={t("agentspage.no_computers_body")} onAdd={adding.open} /> : <AgentsBlock reg={reg} hover={hover} activeKey={activeKey} go={go} onNewAgent={onNewAgent} workspaceActions={workspaceActions} add={false} onHoldsSeen={setHoldsSeen} />}
-          <NavRow k="terminal" reg={reg} hover={hover} active={activeKey === "terminal"} to={{ name: "terminal" }} go={go} label={t("work-entry.title")} icon="clock" />
+          <NavRow k="terminal" reg={reg} hover={hover} active={activeKey === "terminal"} to={{ name: "terminal" }} go={go} label={t("work-entry.title")} icon={HISTORY_ICON} />
         </div>
         {adding.dialog}
       </div>
@@ -620,11 +646,16 @@ export function AgentsList({ route, onNewAgent, workspaceActions }: { route: Rou
 
 /** A group of the sidebar's pages (Pages, or a group #9071 brought: an extension's or the user's own), folding under
  *  its own title (#2524), each fold kept apart; Pages ends with More. */
-function PageGroup({ group, more, first, reg, hover, activeKey, go }: { group: PageSection<NavPage>; more: NavPage[]; first: boolean; reg: RegFn; hover: (k: string | null) => void; activeKey: string; go: GoFn }) {
+function PageGroup({ showHubNotice, group, more, first, reg, hover, activeKey, go }: { showHubNotice: boolean; group: PageSection<NavPage>; more: NavPage[]; first: boolean; reg: RegFn; hover: (k: string | null) => void; activeKey: string; go: GoFn }) {
   const [folded, toggle] = useFolded(group.id ? `pages:${group.id}` : "pages", false, { all: false, holds: more.some((p) => p.k === activeKey) });
   return (
     <Section top title={group.title ?? t("sidebar.pages")} folded={folded} onToggle={toggle} right={folded ? <PagesTally pages={[...group.pages, ...more]} /> : undefined} first={first}>
-      {group.pages.map((p) => <NavRow key={p.k} {...p} reg={reg} hover={hover} active={activeKey === p.k} go={go} />)}
+      {group.pages.map((p) => (
+        <Fragment key={p.k}>
+          <NavRow {...p} reg={reg} hover={hover} active={activeKey === p.k} go={go} />
+          {showHubNotice && p.k === "settings" && <HubNoticeLine />}
+        </Fragment>
+      ))}
       {more.length > 0 && <MorePages more={more} reg={reg} hover={hover} activeKey={activeKey} go={go} />}
     </Section>
   );
@@ -636,12 +667,14 @@ export function navGridColumns(n: number): number {
 }
 
 /** The pages as two rows of icons in a phone's drawer: one tap away like the list, a third of its height. */
-export function NavGrid({ pages, more = [], activeKey, go, onNavigate }: { pages: NavPage[]; more?: NavPage[]; activeKey: string; go: GoFn; onNavigate?: () => void }) {
+export function NavGrid({ showHubNotice, pages, more = [], activeKey, go, onNavigate }: { showHubNotice?: boolean; pages: NavPage[]; more?: NavPage[]; activeKey: string; go: GoFn; onNavigate?: () => void }) {
   const [menu, setMenu] = useState<HTMLElement | null>(null);
   const moreActive = more.some((p) => p.k === activeKey);
   const moreBadge = more.find((p) => p.badge !== undefined);
+  const columns = navGridColumns(pages.length + (more.length ? 1 : 0));
+  const settingsIndex = pages.findIndex((p) => p.k === "settings");
   return (
-    <nav aria-label={t("sidebar.pages")} className="mb-1 grid gap-0.5" style={{ gridTemplateColumns: `repeat(${navGridColumns(pages.length + (more.length ? 1 : 0))}, minmax(0, 1fr))` }}>
+    <nav aria-label={t("sidebar.pages")} className="mb-1 grid gap-0.5" style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}>
       {pages.map((p) => {
         const active = activeKey === p.k;
         return (
@@ -652,7 +685,7 @@ export function NavGrid({ pages, more = [], activeKey, go, onNavigate }: { pages
             title={p.title ?? p.label}
             aria-label={pageLabel(p)}
             aria-current={active ? "page" : undefined}
-            className={cx("relative z-10 flex min-h-12 min-w-0 flex-col items-center justify-center gap-1 rounded-[9px] px-0.5 py-1.5 transition-[background-color,transform] duration-150 active:scale-[0.96]", active ? "bg-hover" : "hover:bg-hover")}
+            className={cx("relative z-10 flex min-h-12 min-w-0 flex-col items-center justify-center gap-1 rounded-[9px] py-1.5 transition-[background-color,transform] duration-150 active:scale-[0.96]", p.k !== "settings" && "px-0.5", active ? "bg-hover" : "hover:bg-hover")}
           >
             <span className={cx("relative", active ? "text-ink" : "text-ink-3")} style={pageIconStyle(p.color, active)}>
               <Icon name={p.icon} size={17} stroke={1.8} />
@@ -681,6 +714,11 @@ export function NavGrid({ pages, more = [], activeKey, go, onNavigate }: { pages
           <span className={cx("w-full truncate text-center text-[11px] leading-tight", moreActive ? "font-medium text-ink" : "text-ink-2")}>{t("sidebar.more_pages")}</span>
         </button>
       )}
+      {showHubNotice && settingsIndex >= 0 && (
+        <div className="col-span-full empty:hidden" style={{ gridRowStart: Math.floor(settingsIndex / columns) + 2 }}>
+          <HubNoticeLine onNavigate={onNavigate} />
+        </div>
+      )}
       {menu && <Menu anchor={menu} onClose={() => setMenu(null)} align="right" width={220} header={t("sidebar.more_pages")} items={morePagesMenu(more, activeKey, onNavigate)} />}
     </nav>
   );
@@ -694,19 +732,21 @@ export function NavGrid({ pages, more = [], activeKey, go, onNavigate }: { pages
 function MorePages({ more, reg, hover, activeKey, go }: { more: NavPage[]; reg: RegFn; hover: (k: string | null) => void; activeKey: string; go: GoFn }) {
   const [folded, toggle] = useFolded("pages-more", true, { all: false, holds: more.some((p) => p.k === activeKey) });
   const counted = more.filter((p) => p.badge !== undefined);
+  const moreLabel = t("sidebar.more_pages_count", { count: more.length });
+  const countedTitle = counted.map(pageLabel).join(t("sidebar.list_separator"));
   return (
     <>
       <button
         type="button"
         onClick={toggle}
         aria-expanded={!folded}
-        title={counted.map(pageLabel).join(t("sidebar.list_separator")) || undefined}
+        aria-label={moreLabel}
+        title={countedTitle || moreLabel}
         className="touch-hit relative z-10 flex w-full items-center gap-2 rounded-[7px] px-2 sidebar-row text-left transition-[background-color,transform] duration-150 hover:bg-hover active:scale-[0.98] [@media(pointer:coarse)]:min-h-11"
       >
         <span className="text-ink-3"><Icon name="more" size={14} stroke={1.8} /></span>
         <span className="min-w-0 flex-1 truncate text-[13px] text-ink-2">{t("sidebar.more_pages")}</span>
         {folded && counted.length > 0 && <span aria-hidden className={cx("size-1.5 rounded-full", DOT_CLASS[counted[0].badgeTone ?? "accent"])} />}
-        <span className="text-[11px] text-ink-3 tabular-nums">{more.length}</span>
         <Icon name="chevron" size={10} stroke={2.4} className="shrink-0 text-ink-3 transition-transform" style={{ ...sidebarFoldMotion(!folded), transform: folded ? "rotate(-90deg)" : "none" }} />
       </button>
       <Collapse open={!folded} sidebarFold>
@@ -767,7 +807,8 @@ function AgentsBlock(props: AgentsBlockProps) {
   // every session, and By to-do only on a hub that lists sessions by to-do; pins need the complete list too.
   // A filter or view the hub's paged list cannot ask for (model, pinned, search scope, several computers, the chat list…)
   // is answered by the complete list, which has every one of them: never a filter that half works
-  const paged = pagedAgentList({ bounded, byTodo, todosSupported, pins, stored, several }) && !chatList && pagedFilterOf(dimFilters) !== null;
+  const typedViews = useStore(hasAgentViews);
+  const paged = shown !== "state" && !(typedViews && showFilter) && pagedAgentList({ bounded, byTodo, todosSupported, pins, stored, several }) && !chatList && pagedFilterOf(dimFilters) !== null;
   const display: AgentsDisplayProps = { showFilter, dimFilters, chatList, displayValue };
   const chooseGrouping = useCallback((g: AgentGrouping) => {
     storeValue("persona.agentGrouping", g);
@@ -843,6 +884,7 @@ const PAGED_DIMENSION: Record<Exclude<AgentGrouping, "repo">, GroupDimension> = 
 
 const NO_EXCLUDED_IDS: ReadonlySet<string> = new Set();
 
+
 /** The Filter's options on the paged list: the loaded sessions' harnesses, projects and models (the hub counts none of them)
  *  and the hub's own counts of the computers. Only drawn while the Filter is on, so the list does not follow every push
  *  for it otherwise. */
@@ -870,17 +912,20 @@ function PagedFilterChips({ filters, machines }: { filters: AgentDimensionFilter
   return <AgentFilterChips filters={filters} onChange={setAgentListFilters} facets={facets} />;
 }
 
-function BoundedAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, add = true, grouping, todosUnread = false, chooseGrouping, showFilter, dimFilters, chatList, displayValue, onHoldsSeen }: AgentsBlockProps & AgentsDisplayProps & { grouping: Exclude<AgentGrouping, "repo">; /** By to-do shown by status: its to-dos cannot be read */ todosUnread?: boolean; chooseGrouping: (g: AgentGrouping) => void }) {
+function BoundedAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, add = true, foldable = false, grouping, todosUnread = false, chooseGrouping, showFilter, dimFilters, chatList, displayValue, onHoldsSeen }: AgentsBlockProps & AgentsDisplayProps & { grouping: Exclude<AgentGrouping, "repo">; /** By to-do shown by status: its to-dos cannot be read */ todosUnread?: boolean; chooseGrouping: (g: AgentGrouping) => void }) {
+  const [blockFolded, toggleBlock] = useFolded("agents", false, { all: false, holds: dimFilters.query.trim() !== "" });
+  const folded = foldable && blockFolded;
   const machines = useStore(selectSidebarMachines);
   const mutes = useStore((s) => s.mutes);
   const scope = useScope();
   const seenMode = useSeenRowsMode();
   const visit = useSeenVisit();
   const heldOrder = useMemo(() => heldOrderFor(seenMode, visit), [seenMode, visit]);
-  const rootRows = useSyncExternalStore(runtimeAgents.subscribe, runtimeAgents.getSnapshot, runtimeAgents.getSnapshot).rows;
+  const rootAgents = useSyncExternalStore(runtimeAgents.subscribe, runtimeAgents.getSnapshot, runtimeAgents.getSnapshot);
+  const rootRows = rootAgents.rows;
   useEffect(() => {
-    if (seenMode === "stay" && rootRows.length) noteShownUnseen(needsSeenOf(rootRows, mutes), rootRows);
-  }, [seenMode, rootRows, mutes]);
+    if (!folded && seenMode === "stay" && rootRows.length) noteShownUnseen(needsSeenOf(rootRows, mutes), rootRows);
+  }, [folded, seenMode, rootRows, mutes]);
   const allLaunches = useStore((s) => s.launches);
   const launches = useMemo(() => Object.values(allLaunches).filter((launch) => launch.phase !== "ready"), [allLaunches]);
   // Keep actively starting/sending launches out of the paged list and its groups until handoff completes so a newly
@@ -961,7 +1006,7 @@ function BoundedAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate,
   const listMenu = useMenu();
   const machineOrder = useMemo(() => machines.map((m) => m.id), [machines]);
   const rowOrder = useMemo(() => machineSessionPresentation(machines), [machines]);
-  const rowNeedsYou = useCallback((s: Session) => runtimeNeedsYou(s) && !rowCards(getState().interactions, s.machine_id, s.session_id).heldOnly, []);
+  const rowNeedsYou = useCallback((s: Session) => s.view ? s.view.counted === true : runtimeNeedsYou(s) && !rowCards(getState().interactions, s.machine_id, s.session_id).heldOnly, []);
   const listItems = agentListItems({ archives, hover, onNavigate, display: { value: displayValue, sort: sortByActivity, filter: showFilter } });
   const pagedHeldRows = useMemo(() => {
     if (listQuery.trim()) return [];
@@ -1008,29 +1053,82 @@ function BoundedAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate,
     chips: <>{showFilter && <PagedFilterChips filters={dimFilters} machines={machines} />}{todosUnread && <div className="-mx-1"><TodosUnread /></div>}</>,
     heldSeen: pagedHeld,
   }), [grouping, todoNames, groupings, chooseGrouping, quick, rowOrder, byUpdate, engaged, narrowed, listQuery, showFilter, dimFilters, machines, todosUnread, pagedHeld]);
+  const trimmedQuery = listQuery.trim();
+  const quickSelect = quick?.select ?? SHOW_ALL;
+  const quickExclude = quick?.exclude ?? SHOW_ALL;
+  const tallyFilters = useMemo((): ListFilters => ({
+    ...(trimmedQuery ? { q: trimmedQuery } : {}),
+    ...quickSelect,
+    ...narrowed,
+    ...quickExclude,
+  }), [trimmedQuery, quickSelect, narrowed, quickExclude]);
+  const tallyScoped = Object.keys(tallyFilters).length > 0;
+  const rootsMode = runtimeAgents.isRoots();
+  const crossMode = runtimeAgents.isCrossMachineHierarchy();
+  const tallyPath = `${RUNTIME_AGENTS_PATH}&${rootsMode ? `roots=1&${crossMode ? "cross_machine_hierarchy=1&" : ""}` : ""}${filterQuery(tallyFilters)}`;
+  const [scopedTally, setScopedTally] = useState<{ path: string; counts: ListCounts } | null>(null);
+  useEffect(() => {
+    if (!folded || !tallyScoped) return;
+    return followHinted<ListCounts>("sessions_list", tallyPath, (c) => {
+      if (c?.state) setScopedTally({ path: tallyPath, counts: c });
+    }, () => {});
+  }, [folded, tallyScoped, tallyPath]);
+  const tallyCounts = useMemo((): FoldedCounts => {
+    const effective = tallyScoped
+      ? (scopedTally?.path === tallyPath ? scopedTally.counts : null)
+      : (rootAgents.counts && runtimeAgents.usesPageCounts() ? holdCounts(rootAgents.counts, rootRows) : rootAgents.counts);
+    const base = effective ? boundedCounts(effective, false) : { needs: 0, working: 0, waiting: 0, unread: 0 };
+    const terms = trimmedQuery ? trimmedQuery.toLowerCase().split(/\s+/) : null;
+    const pendingLaunches = (!quickSelect.state || quickSelect.state === "working") && quickSelect.waiting !== "1" && !quickSelect.pane_source
+      ? launches.filter((l) =>
+        isInFlightLaunch(l)
+        && !l.session
+        && (!dimFilters.machines.length || dimFilters.machines.includes(l.machineId))
+        && (!terms || terms.every((term) => [l.text, l.nameHint, l.cwd, l.launcher, l.displayLauncher, l.displayEngine, l.model, l.displayModel, l.machineId, machines.find((m) => m.id === l.machineId)?.name].join("\n").toLowerCase().includes(term))),
+      ).length
+      : 0;
+    return {
+      needs_you: base.needs,
+      working: base.working + pendingLaunches,
+      bg_waiting: base.waiting,
+      unread: base.unread,
+    };
+  }, [tallyScoped, scopedTally, tallyPath, rootAgents.counts, rootRows, holdCounts, quickSelect, launches, dimFilters.machines, trimmedQuery, machines]);
   return <div data-sidebar-agents ref={groupsRef}>
     {/* the complete list's title row (#6662): fold all, the ⋯ with its sorts and the archived Agents, and "+" */}
-    <div className={cx(SESSION_LIST_STYLE.heading, TITLE_ROW_TOUCH)}>
-      <span className={AGENTS_TITLE}>Agents</span>
-      <GroupFoldButton groups={groupsRef} onAction={() => hover(null)} />
+    <div className={cx("group/sec relative", SESSION_LIST_STYLE.heading, TITLE_ROW_TOUCH)}>
+      {foldable ? (
+        <button type="button" aria-expanded={!folded} onClick={toggleBlock} className="touch-hit relative z-10 flex min-w-0 flex-1 items-center gap-1 whitespace-nowrap text-left text-[11px] font-semibold text-ink-3 hover:text-ink-2">
+          <span className="min-w-0 truncate">Agents</span>
+          <Icon name="chevron" size={10} stroke={2.4} className="shrink-0 opacity-0 transition-[opacity,transform] group-hover/sec:opacity-100 [@media(hover:none)]:opacity-100" style={{ ...sidebarFoldMotion(!folded), transform: folded ? "rotate(-90deg)" : "none" }} />
+        </button>
+      ) : (
+        <span className={AGENTS_TITLE}>Agents</span>
+      )}
+      {folded && <StateTally counts={tallyCounts} />}
+      <GroupFoldButton groups={groupsRef} onAction={() => hover(null)} block={foldable ? { folded, toggle: toggleBlock } : undefined} flat={chatList} />
       {showFilter && <PagedFilterButton filters={dimFilters} machines={machines} chatList={chatList} onToggleChatList={() => { setChatList(!chatList); hover(null); }} />}
       {listItems.length > 0 && <ListMenuButton open={Boolean(listMenu.anchor)} onClick={listMenu.open} />}
       {add && <AgentsAdd onNewAgent={onNewAgent} onNavigate={onNavigate} className={TITLE_ICON_TOUCH} />}
     </div>
     {listMenu.anchor && <Menu anchor={listMenu.anchor} onClose={listMenu.close} align="right" items={listItems} />}
-    <HubNoticeLine />
-    <HerdrNotices />
-    {launches.length > 0 && <Section title={t("sidebar.launching")} folded={launchesFolded} onToggle={toggleLaunches} right={<GroupCount n={launches.length} label={t("sidebar.launching_count", { count: launches.length })} />}>
-      {launches.map((launch) => <NavRow key={launch.id} k={`s:${launch.machineId}/${launch.id}`} reg={reg} hover={hover} active={activeKey === `s:${launch.machineId}/${launch.id}`} to={{ name: "session", mid: launch.machineId, sid: launch.id }} go={go} icon={launch.phase === "failed" ? "retry" : "agent"} agent={launch.phase === "failed" ? undefined : launchDisplayEngine(launch)} label={launch.text || baseName(launch.cwd) || t("sidebar.launch_untitled")} hint={launch.phase === "failed" ? t("sidebar.launch_failed") : t("sidebar.launch_background")} />)}
-    </Section>}
-    <PagedSessionList root={runtimeAgents} path={RUNTIME_AGENTS_PATH} identity={runtimeIdentity} compare={runtimeOrder} removeIdentity={runtimeRemoval} parentOf={sideFold ? undefined : runtimeParentIdentity} excludeIdentities={inFlightLaunchIds} event="sessions_list" grouping={pagedGrouping}
-      activeAt={runtimeActiveAt} needsYou={rowNeedsYou} isOpen={(s) => activeKey === `s:${s.machine_id}/${s.session_id}`}
-      catalog={catalog} justFinished={justFinished} placeOf={runtimePlace} failureText={agentsReadFailed} holdCounts={holdCounts}
-      machineOrder={machineOrder} label={(dimension, id) => dimension === "machine" ? machineWithHub(id, machines) : id}
-      renderRow={(s, within) => {
-        const k = `s:${s.machine_id}/${s.session_id}`;
-        return <SessionRow s={s} k={k} reg={reg} hover={hover} active={activeKey === k} to={{ name: "session", mid: s.machine_id, sid: s.session_id }} go={go} onMenu={onRowMenu} showTodoTag={within !== "todo"} />;
-      }} />
+    {!folded && <>
+      <HerdrNotices />
+      {launches.length > 0 && <Section title={t("sidebar.launching")} folded={launchesFolded} onToggle={toggleLaunches} right={<GroupCount n={launches.length} label={t("sidebar.launching_count", { count: launches.length })} />}>
+        {launches.map((launch) => <NavRow key={launch.id} k={`s:${launch.machineId}/${launch.id}`} reg={reg} hover={hover} active={activeKey === `s:${launch.machineId}/${launch.id}`} to={{ name: "session", mid: launch.machineId, sid: launch.id }} go={go} icon={launch.phase === "failed" ? "retry" : "agent"} agent={launch.phase === "failed" ? undefined : launchDisplayEngine(launch)} label={launch.text || baseName(launch.cwd) || t("sidebar.launch_untitled")} hint={launch.phase === "failed" ? t("sidebar.launch_failed") : t("sidebar.launch_background")} />)}
+      </Section>}
+      <PagedSessionList root={runtimeAgents} path={RUNTIME_AGENTS_PATH} identity={runtimeIdentity} compare={runtimeOrder} removeIdentity={runtimeRemoval} parentOf={sideFold ? undefined : runtimeParentIdentity} excludeIdentities={inFlightLaunchIds} event="sessions_list" grouping={pagedGrouping}
+        activeAt={runtimeActiveAt} needsYou={rowNeedsYou} isOpen={(s) => activeKey === `s:${s.machine_id}/${s.session_id}`}
+        catalog={catalog} justFinished={justFinished} placeOf={runtimePlace} failureText={agentsReadFailed} holdCounts={holdCounts}
+        machineOrder={machineOrder} label={(dimension, id) => dimension === "machine" ? machineWithHub(id, machines) : id}
+        renderRow={(s, within, group) => {
+          const k = `s:${s.machine_id}/${s.session_id}`;
+          // under a group's heading the row leaves out what the heading says: its computer (a space of the catalog's sits
+          // under its computer's heading, or the list has one computer, #13522), its space, its to-do
+          const where = [within === "machine" || (within === "group" && group?.places[0]?.machine) ? "" : machineWithHub(s.machine_id, machines), within === "group" ? "" : s.space_name || baseName(s.cwd)];
+          return <SessionRow s={s} k={k} reg={reg} hover={hover} active={activeKey === k} to={{ name: "session", mid: s.machine_id, sid: s.session_id }} go={go} onMenu={onRowMenu} hint={where.filter(Boolean).join(" · ")} showTodoTag={within !== "todo"} />;
+        }} />
+    </>}
     {rowMenu && <AgentRowMenu s={rowMenu.s} anchor={rowMenu.anchor} at={rowMenu.at} onClose={() => setRowMenu(null)} onRename={setRenaming} onDelete={setDeleting} onLinkTodo={setLinkTarget} />}
     {renaming && <RenameDialog open session={renaming} onClose={() => setRenaming(null)} />}
     {deleting && <DeleteSessionDialog open session={deleting} machineName={machineWithHub(deleting.machine_id, machines)} onClose={() => setDeleting(null)} />}
@@ -1164,9 +1262,12 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
   const todosLoaded = useStore((s) => s.todosLoaded);
   const todosUnread = useTodosUnread();
   const shownManagerName = useShownManager();
-  const todosV2 = useStore((s) => Boolean(s.assistant && sameManager(s.assistant.manager ?? shownManagerName, shownManagerName) && s.assistant.todos_v2 === true));
-  const rawTodoBoard = useStore((s) => s.todoBoard);
-  const serverBoard = todosV2 ? rawTodoBoard : null;
+  const foldPreference = useStore((s) => {
+    const a = s.assistant;
+    return a && sameManager(a.manager ?? shownManagerName, shownManagerName) && a.todos_v2 === true
+      ? a.todos_v2_fold_children !== false : undefined;
+  });
+  const todosV2 = foldPreference !== undefined;
   // the Filter menu's choices and the words ⌘K's "Filter Agents list" put on it (#6589): the list has no field of its own
   // (both come from AgentsBlock: off in Settings › Agents, the Filter is not drawn and holds nothing)
   const setDimFilters = setAgentListFilters;
@@ -1187,6 +1288,21 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
   const shownGrouping = todosSupported === false && grouping === "todo" ? "machine" : todosFailed ? "state" : grouping;
   const catalog = useWorkspaceCatalog(shownGrouping === "repo");
   const agentRepos = useAgentReposModule(shownGrouping === "repo");
+  const wantsV2Tree = todosV2 && shownGrouping === "todo" && !chatList;
+  const [v2Sidebar, setV2Sidebar] = useState<typeof import("../features/todos/board-sidebar-tree")>();
+  useEffect(() => {
+    if (!wantsV2Tree || v2Sidebar) return;
+    let active = true;
+    void import("../features/todos/board-sidebar-tree").then(
+      (mod) => { if (active) setV2Sidebar(mod); },
+      (err: unknown) => {
+        if (active && !reloadForStaleChunk(err)) reportBoundary(err, "sidebar_todo_tree", isChunkError(err));
+      },
+    );
+    return () => { active = false; };
+  }, [wantsV2Tree, v2Sidebar]);
+  const serverBoard = useTodoBoard(scope, wantsV2Tree);
+  const olderClosed = useStore((s) => wantsV2Tree ? s.olderClosedTodos : undefined);
   const availableGroupings = useGroupings();
   // the title row's ⋯ (#2812): the archived Agents
 
@@ -1239,6 +1355,24 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
     if (filter !== "all") setKept((cur) => extendKept(cur, matching));
   }, [loaded, filter, matching]);
   const filtered = filter !== "all" || dimActive;
+  const panesOn = useStore((s) => s.features.includes("terminal_panes"));
+  const sidebarTerminals = useSidebarTerminals();
+  // Shells sit alongside Agents in their workspace. The quick filters describe Agents only.
+  const wantsShells = (panesOn || sidebarTerminals) && !chatList && filter === "all" && (shownGrouping === "machine" || shownGrouping === "space");
+  const { listing: panes, refresh: refreshPanes } = usePanes(machines, wantsShells);
+  const visibleShellTrees = useMemo(() => {
+    if (!wantsShells) return undefined;
+    const machineFilter = dimFilters.machines.length > 0 ? new Set(dimFilters.machines) : null;
+    const query = dimFilters.query.trim();
+    const out: Record<string, TermSpace[]> = {};
+    for (const m of machines) {
+      if (machineFilter && !machineFilter.has(m.id)) continue;
+      let spaces = shellsOnly(buildTerminalTree(panes[m.id]?.data, []));
+      if (query) spaces = filterTerminalTree(spaces, query, machineWithHub(m.id, machines));
+      if (spaces.length > 0) out[m.id] = spaces;
+    }
+    return Object.keys(out).length ? out : undefined;
+  }, [wantsShells, machines, panes, dimFilters.machines, dimFilters.query]);
   const { needs, unread, working, bg_waiting, feishu, terminal } = useMemo(() => filterCounts(live, mutes), [live, mutes]);
   // A session can change its text or timestamp without changing any filter's count.
   const filterTotals = useMemo(() => ({ needs, unread, working, bg_waiting, feishu, terminal }), [needs, unread, working, bg_waiting, feishu, terminal]);
@@ -1262,7 +1396,7 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
   const groups = useMemo(() => {
     if (shownGrouping === "space" || shownGrouping === "repo" || shownGrouping === "machine") return [];
     if (shownGrouping === "todo") return [];
-    return buildAgentGroups(unpinned, machines, "state", mutes, rowOrder, heldOrder);
+    return buildAgentGroups(unpinned, machines, "state", mutes, undefined, heldOrder);
   }, [unpinned, machines, shownGrouping, mutes, todos, rowOrder, heldOrder]);
   // by todo waits for the first GET /todos: the socket pushes the sessions before it answers, and a tree drawn without
   // the todos puts every agent under No to-do for a moment, then moves them under their todos (#2812); the chat list's
@@ -1289,11 +1423,13 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
   const keepEmptyGroups = !filtered && live.length + offline.length > 0;
   const todoTree = useMemo(() => {
     if (shownGrouping !== "todo" || !todosLoaded) return undefined;
-    const built = serverBoard
-      ? consumeBoardSidebarTree(unpinned, machines, todos, serverBoard, mutes, Date.now(), { keepEmpty: keepEmptyGroups, compareSessions: rowOrder })
-      : buildTodoTree(unpinned, machines, todos, mutes, Date.now(), { keepEmpty: keepEmptyGroups, compareSessions: rowOrder, todosV2 });
+    const options = { keepEmpty: keepEmptyGroups, compareSessions: rowOrder };
+    const now = Date.now();
+    const built = wantsV2Tree && v2Sidebar
+      ? v2Sidebar.buildV2SidebarTree(unpinned, machines, todos, mutes, now, { ...options, board: serverBoard, foldChildren: foldPreference !== false, olderClosed })
+      : buildTodoTree(unpinned, machines, todos, mutes, now, options);
     return shareTree(lastTodoTree.current, byUpdate ? activity.todoTreeByUpdate(built) : built);
-  }, [unpinned, machines, shownGrouping, mutes, todos, todosLoaded, keepEmptyGroups, rowOrder, byUpdate, activity, todosV2, serverBoard]);
+  }, [unpinned, machines, shownGrouping, mutes, todos, todosLoaded, keepEmptyGroups, rowOrder, byUpdate, activity, wantsV2Tree, v2Sidebar, foldPreference, serverBoard, olderClosed]);
   lastTodoTree.current = todoTree;
   const repoMachines = useMemo(() => {
     if (shownGrouping !== "repo" || !agentRepos.mod) return [];
@@ -1302,9 +1438,13 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
   }, [unpinned, machines, shownGrouping, agentRepos.mod, catalog, shown, pinnedAgents, filtered, showEmptyWorkspaces, botmuxHidden, rowOrder, byUpdate, activity]);
   const machineTree = useMemo(() => {
     if (shownGrouping !== "machine") return [];
-    const built = buildMachineTree(machines, unpinned, { pins, hideEmpty: filtered });
+    const built = buildMachineTree(machines, unpinned, {
+      pins,
+      hideEmpty: filtered,
+      keepMachine: visibleShellTrees ? (id) => Boolean(visibleShellTrees[id]?.length) : undefined,
+    });
     return byUpdate ? activity.machineTreeByUpdate(built) : built;
-  }, [shownGrouping, machines, unpinned, pins, filtered, byUpdate, activity]);
+  }, [shownGrouping, machines, unpinned, pins, filtered, visibleShellTrees, byUpdate, activity]);
   // by todo a group mixes hosts (herdr, botmux…): when the list has more than one, rows outside herdr name theirs (#1836)
   const mixedHosts = useMemo(() => shownGrouping === "todo" && hostsOf(live).size > 1, [shownGrouping, live]);
   const unreadShown = filter === "unread" ? unreadOf(shown) : [];
@@ -1327,13 +1467,6 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
     setKept((cur) => removeKept(cur, keys));
     hover(null);
   }, [hover]);
-  // Settings › Appearance › Show terminals in sidebar (off): the plain shells of each machine's terminal host, under its agents in "By machine"
-  const showTerminals = useSidebarTerminals() && shownGrouping === "machine";
-  const { listing: panes, refresh: refreshPanes } = usePanes(machines, showTerminals);
-  const shellTrees = useMemo(() => {
-    if (!showTerminals) return undefined;
-    return Object.fromEntries(machines.map((m) => [m.id, shellsOnly(buildTerminalTree(panes[m.id]?.data, []))])) as Record<string, TermSpace[]>;
-  }, [showTerminals, machines, panes]);
   const [rowMenu, setRowMenu] = useState<{ s: Session; anchor: HTMLElement; at?: MenuAt } | null>(null);
   const [spaceMenu, setSpaceMenu] = useState<{ sp: Space; anchor: HTMLElement; at?: MenuAt; fold?: MenuNode["fold"] } | null>(null);
   const [nodeMenu, setNodeMenu] = useState<{ node: MenuNode; at: MenuAt; header?: string } | null>(null);
@@ -1443,8 +1576,6 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
       {/* what filters the list, only while something does: the chips and Reset, Search as Code's plan bar */}
       {showFilter && <AgentFilterChips filters={dimFilters} onChange={setDimFilters} facets={facets} plan={searchPlan} />}
       {/* "herdr is not running on <computer>" with "Start" (#1916): before a message to an agent there fails */}
-      {/* the one line about the hub (#2897): updating, rolled back, a newer version or image */}
-      {!folded && <HubNoticeLine />}
       {/* a GitHub star, once this browser started enough Agents and nothing waits (#5761) */}
       {!folded && <HerdrNotices />}
 
@@ -1458,7 +1589,7 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
 
       {todosFailed && <TodosUnread />}
 
-      {!listNote && filtered && shown.length === 0 && pinnedAgents.length === 0 && (
+      {!listNote && filtered && shown.length === 0 && pinnedAgents.length === 0 && !visibleShellTrees && (
         <div className="mt-2 flex items-center gap-2 px-2 py-1.5 text-[12px] text-ink-3">
           <span className="min-w-0 flex-1 truncate">{filter !== "all" ? t("sidebar.filter_empty", { filter: AGENT_FILTERS.find((f) => f.key === filter)!.label }) : t("sidebar.no_match")}</span>
           <button type="button" onClick={() => { choose("all"); setDimFilters(DEFAULT_DIMENSION_FILTERS); }} className="touch-hit relative z-10 shrink-0 whitespace-nowrap rounded-control px-1.5 py-0.5 text-[12px] font-medium text-accent-ink hover:bg-hover">{t("sidebar.show_all")}</button>
@@ -1496,9 +1627,29 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
           }} />
         </div>
       ) : shownGrouping === "space" ? <>
-      {active.map((sp) => (
-        <SpaceSection key={sp.key} sp={sp} machineName={machines.length > 1 ? machineWithHub(sp.machineId, machines) : undefined} reg={reg} hover={hover} activeKey={activeKey} go={go} pinned={isSpacePinned(sp.machineId, sp.name, pins)} muted={isSpaceMuted(sp, mutes)} onMenu={onSpaceMenu} onRowMenu={onRowMenu} onNavigate={onNavigate} />
-      ))}
+      {active.map((sp) => {
+        const matched = visibleShellTrees?.[sp.machineId]?.filter((ts) => ts.label === sp.name);
+        const online = machines.find((m) => m.id === sp.machineId)?.online !== false;
+        return <SpaceSection key={sp.key} sp={sp} machineName={machines.length > 1 ? machineWithHub(sp.machineId, machines) : undefined} shells={matched?.length ? matched : undefined} online={online} reg={reg} hover={hover} activeKey={activeKey} go={go} pinned={isSpacePinned(sp.machineId, sp.name, pins)} muted={isSpaceMuted(sp, mutes)} onMenu={onSpaceMenu} onRowMenu={onRowMenu} onNodeMenu={onNodeMenu} onNavigate={onNavigate} />;
+      })}
+      {visibleShellTrees && machines.flatMap((m) =>
+        (visibleShellTrees[m.id] ?? [])
+          .filter((ts) => !active.some((sp) => sp.machineId === m.id && sp.name === ts.label))
+          .map((ts) => (
+            <ShellSpaceSection
+              key={`shell:${m.id}/${ts.host}:${ts.id}`}
+              mid={m.id}
+              online={m.online}
+              sp={ts}
+              machineName={machines.length > 1 ? machineWithHub(m.id, machines) : undefined}
+              reg={reg}
+              hover={hover}
+              activeKey={activeKey}
+              go={go}
+              onNodeMenu={onNodeMenu}
+            />
+          )),
+      )}
 
       {idle.length > 0 && (
         <Section title={t("sidebar.idle_spaces", { count: idle.length })} folded={idleFolded} onToggle={toggleIdle}>
@@ -1512,7 +1663,7 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
       {loose.length > 0 && <LooseSection sessions={loose} reg={reg} hover={hover} activeKey={activeKey} go={go} onRowMenu={onRowMenu} />}
 
       </> : shownGrouping === "machine" ? machineTree.map((m) => (
-        <MachineSection key={m.key} m={m} shells={shellTrees?.[m.machine.id]} {...tree} />
+        <MachineSection key={m.key} m={m} shells={visibleShellTrees?.[m.machine.id]} {...tree} />
       )) : shownGrouping === "repo" ? (
         repoMachines.map((m) => (
           <RepoMachineSection key={m.key} m={m} flat={repoMachines.length <= 1} machines={machines} reg={reg} hover={hover} activeKey={activeKey} go={go} onRowMenu={onRowMenu} {...workspaceActions} />
@@ -1596,10 +1747,15 @@ const GroupingBar = memo(function GroupingBar({ groupings, selection, onChoose }
 /** Quick filters describe the visible inventory; an empty Lark filter is never offered. */
 const FilterBar = memo(function FilterBar({ selection, counts, onChoose }: { selection: AgentFilter; counts: FilterCounts; onChoose: (f: AgentFilter) => void }) {
   const keys = shownFilters(selection, counts);
-  if (keys.length < 2) return null;
+  const format = useBotmuxMode();
+  const shown = useBotmuxShown();
+  const editable = useAgentsDisplayEditable();
+  const botmuxMode = shown !== true ? "hide" : format;
+  const showBotmuxChip = counts.feishu > 0 || shown === false;
+  if (keys.length < 2 && !showBotmuxChip) return null;
   return (
     <div className="mt-1.5 flex flex-wrap gap-0.5 px-1">
-      <div role="radiogroup" aria-label={t("sidebar.quick_filters")} className="contents">
+      {keys.length > 1 && <div role="radiogroup" aria-label={t("sidebar.quick_filters")} className="contents">
       {keys.map((k) => {
         const f = AGENT_FILTERS.find((x) => x.key === k)!;
         const on = k === selection;
@@ -1623,7 +1779,8 @@ const FilterBar = memo(function FilterBar({ selection, counts, onChoose }: { sel
           </button>
         );
       })}
-      </div>
+      </div>}
+      {showBotmuxChip && <Suspense fallback={null}><BotmuxModeChip mode={botmuxMode} disabled={!editable} /></Suspense>}
     </div>
   );
 });
@@ -1633,7 +1790,7 @@ function AgentSection({ group, byTodo, showHost, reg, hover, activeKey, go, onRo
   const [folded, toggle] = useFolded(group.key, group.folded, { follow: true, holds: holdsRow(group.sessions, activeKey) });
   const row = (s: Session) => {
     const key = `s:${s.machine_id}/${s.session_id}`;
-    return <SessionRow key={key} s={s} k={key} reg={reg} hover={hover} active={activeKey === key} to={{ name: "session", mid: s.machine_id, sid: s.session_id }} go={go} host={showHost && sessionHost(s) !== "herdr" ? sessionHost(s) : undefined} showTodoTag={!byTodo} onMenu={onRowMenu} />;
+    return <SessionRow key={key} s={s} k={key} reg={reg} hover={hover} active={activeKey === key} to={{ name: "session", mid: s.machine_id, sid: s.session_id }} go={go} host={showHost && sessionHost(s) !== "herdr" ? engineName(sessionHost(s)) : undefined} showTodoTag={!byTodo} onMenu={onRowMenu} />;
   };
 
   const statusInfo = group.todoStatus ? TODO_STATUS_INFO[group.todoStatus as TodoStatus] : undefined;
@@ -1660,7 +1817,7 @@ function AgentSection({ group, byTodo, showHost, reg, hover, activeKey, go, onRo
   );
 
   const heldRows = stay ? (group.heldSeen ?? []) : [];
-  const counted = stay ? Math.max(0, group.sessions.length - heldRows.length) : group.sessions.length;
+  const counted = group.state === "needs_you" ? group.sessions.filter((s) => s.view ? s.view.counted : true).length : stay ? Math.max(0, group.sessions.length - heldRows.length) : group.sessions.length;
   const countNode = <GroupCount n={counted} label={t("sidebar.agent_count", { count: counted })} />;
   const rightNode = group.todoStatus ? (
     <span className={cx("text-[11px] font-semibold tracking-normal normal-case", statusTone)}>

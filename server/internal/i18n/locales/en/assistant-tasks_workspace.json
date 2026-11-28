@@ -1,4 +1,5 @@
 {
+  "leader_placement_pending": "The leader’s workspace on this computer is not confirmed yet. Retry the worker after the leader is ready.",
   "infer": "Cannot infer the task workspace on {machine}; choose a workspace explicitly",
   "resolve": "Cannot resolve the task workspace {path}",
   "unavailable": "Workspace {path} is not an available absolute directory",
@@ -20,5 +21,8 @@
   "own_checkout_dirty_files": "The previous workspace has uncommitted changes. Commit or stash them, then retry (task_retry). You can also choose a different branch in a new workspace. Changed files include {files}.",
   "own_checkout_in_use": "This to-do's earlier checkout {path} (branch {branch}) is in use by Agent {owner}; wait for that Agent to finish or stop it, then start again",
   "own_checkout_unverified": "Persona could not confirm that {path} is still this to-do's clean checkout of branch {branch}; check it, then plan the task with workspace {\"existing\": \"{path}\"} to continue there, or remove it",
-  "own_path_taken": "The folder for this task's checkout, {path}, already holds files, so no new checkout was made there; if it is this to-do's earlier work, plan the task with workspace {\"existing\": \"{path}\"} to continue there, or remove it"
+  "own_path_taken": "The folder for this task's checkout, {path}, already holds files, so no new checkout was made there; if it is this to-do's earlier work, plan the task with workspace {\"existing\": \"{path}\"} to continue there, or remove it",
+  "scratch_unsupported": "Computer {machine} runs an older Persona Node that does not support managed scratch workspaces; upgrade the node or provide an explicit cwd. No agent was started",
+  "scratch_create": "The managed scratch workspace was not prepared; no agent was started",
+  "scratch_path": "The node returned no absolute managed scratch directory path; no agent was started"
 }

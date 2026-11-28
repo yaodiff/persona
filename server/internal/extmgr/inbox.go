@@ -10,6 +10,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/ai"
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/connector"
 )
 
@@ -228,7 +229,7 @@ func (h *Manager) collectInbox(ctx context.Context, round inboxRound) error {
 	r.Epoch, r.Seq = h.inbox.epoch, h.inbox.seq.Add(1)
 	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), inboxRoundWait)
 	defer cancel()
-	if err := h.callAssistant(cctx, assistantwire.MethodInboxCollected, r, nil); err != nil {
+	if _, err := buswire.Call(cctx, assistantCaller(h.callAssistant), assistantwire.InboxCollectedMethod, r); err != nil {
 		h.inbox.held.Store(&r)
 		h.inbox.owed.Store(true) // read again, whole, when it is back
 		h.logf("inbox: hand the round to the manager: %v", err)

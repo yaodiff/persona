@@ -26,6 +26,7 @@ func TestTaskAntigravityCompanionUnavailable(t *testing.T) {
 		t.Fatal("unavailable companion dispatched")
 	}
 	f.launcherList = []proto.Launcher{{Name: "agy", Agent: "agy", Source: "agy", Assistant: true}}
+	s.invalidateLauncherListCache("server")
 	known, err = s.checkTaskLauncher(context.Background(), "server", "agy", &TaskExecution{MachineID: "server", Launcher: "agy", Agent: "agy"})
 	if !known || err != nil {
 		t.Fatalf("restored companion refused: %v %v", known, err)
@@ -60,6 +61,7 @@ func TestTaskAntigravityReconnectResumesConversation(t *testing.T) {
 	binding, _ := s.resolveModel(context.Background(), "task.job")
 	sends := f.sent()
 	f.launcherList = []proto.Launcher{{Name: "agy", Agent: "agy", Source: "zshrc"}}
+	s.invalidateLauncherListCache("server")
 	if _, err := runNow(t, s, "job"); err == nil {
 		t.Fatal("disconnected run admitted")
 	}
@@ -71,6 +73,7 @@ func TestTaskAntigravityReconnectResumesConversation(t *testing.T) {
 		t.Fatal("refusal changed binding")
 	}
 	f.launcherList = connected
+	s.invalidateLauncherListCache("server")
 	resumed, err := runNow(t, s, "job")
 	if err != nil || resumed.SessionID != first.SessionID {
 		t.Fatalf("did not resume: %+v %v", resumed, err)

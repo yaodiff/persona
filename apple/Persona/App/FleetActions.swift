@@ -16,15 +16,15 @@ nonisolated enum FleetActions {
 
     /// `interactionID` as the activity has it: "group|id" for another group's request (FleetMerge), the hub's id alone
     /// for the default group's or one the hub pushed (the hub the activity's token went to: the first group).
-    static func run(_ action: Action, _ interactionID: String) async {
+    static func run(_ action: Action, _ interactionID: String, occurrence: String? = nil) async {
         do {
             let (named, id) = FleetMerge.split(interactionID)
             let r = resolution(action)
-            try await AppModel.shared.outside(HubStore.client(group: named)) { try await $0.resolve(id, r) }
-            await LiveActivityController.shared.resolvedLocally(interactionID)
+            try await AppModel.shared.outside(HubStore.client(group: named)) { try await $0.resolve(id, r, occurrence: occurrence) }
+            await LiveActivityController.shared.resolvedLocally(interactionID, occurrence: occurrence)
         } catch {
-            if (error as? APIError)?.status == 410 { // already settled elsewhere: just drop it from the activity
-                await LiveActivityController.shared.resolvedLocally(interactionID)
+            if (error as? APIError)?.status == 410 { // already settled elsewhere: just drop that occurrence from the activity
+                await LiveActivityController.shared.resolvedLocally(interactionID, occurrence: occurrence)
             }
             let title = switch action {
             case .allow: NotificationActions.failureTitle(action: NotificationActions.allow)

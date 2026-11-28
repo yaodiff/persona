@@ -11,6 +11,8 @@ import { ClientModel } from '../models/ClientModel';
 import { SessionSpace } from '../models/SessionSpace';
 import { Wire } from '../models/Wire';
 import { nativeEnvironment } from '../platform/NativeEnvironment';
+import { Haptics } from '../platform/Haptics';
+import { NeedsYouPulseDot, WorkingArcSpinner } from './StatusMotionMarks';
 
 class InfoLine {
   readonly id: string;
@@ -153,13 +155,22 @@ export struct PhoneSessionHeading {
     Text(tr(key)).width('100%').fontSize(15).maxFontScale(Tokens.interfaceScaleFor(15)).fontWeight(500)
       .fontColor(Colors.secondary).padding({left:16,top:18,bottom:8})
   }
+  @Builder statusDot() {
+    if (this.words.state === 'working') {
+      WorkingArcSpinner({ diameter: 11, tint: Colors.working, surface: Color.Transparent, showCoreDot: false })
+    } else if (this.words.state === 'needs_you') {
+      NeedsYouPulseDot({ dotSize: 7, tint: Colors.needs, surface: Colors.canvas, bordered: false })
+    } else {
+      Circle().width(7).height(7).fill(this.tone()).accessibilityLevel('no')
+    }
+  }
   @Builder summary() {
     Column({space:6}) {
       Text(this.heading).width('100%').fontSize(22).maxFontScale(Tokens.interfaceScaleFor(22)).fontWeight(600)
         .fontColor(Colors.ink).maxLines(2).textOverflow({overflow:TextOverflow.Ellipsis}).id('session.info.title')
       Row({space:5}) {
         Row({space:4}) {
-          Circle().width(7).height(7).fill(this.tone()).accessibilityLevel('no')
+          this.statusDot()
           Text(this.words.status).fontSize(12).maxFontScale(Tokens.interfaceScaleFor(12)).fontWeight(600)
             .fontColor(this.tone()).maxLines(1)
         }.padding({left:7,right:7,top:4,bottom:4}).backgroundColor(Colors.control).borderRadius(50)
@@ -205,14 +216,14 @@ export struct PhoneSessionHeading {
         Row({space:6}) {
           if (this.model.connected) {
             this.emblem()
-            Circle().width(7).height(7).fill(this.tone())
+            this.statusDot()
           } else LoadingProgress().width(12).height(12)
           Text(this.model.connected ? this.heading : tr('offline')).fontSize(13).maxFontScale(Tokens.interfaceScaleFor(13))
             .fontWeight(600).fontColor(Colors.ink).maxLines(1).textOverflow({overflow:TextOverflow.Ellipsis}).flexShrink(1)
         }.padding({left:12,right:12})
       }.padding(0).constraintSize({maxWidth:'100%'}).height(28*Math.min(nativeEnvironment.fontScale,Tokens.navigationTextMaxScale))
         .backgroundColor(Colors.control).accessibilityText(tr('agent_reading_expand_header').replace('{title}',this.model.connected ? this.heading : tr('offline')))
-        .onClick(() => this.expand()).id('chat.compactTitle')
+        .onClick(() => { Haptics.tap(); this.expand(); }).id('chat.compactTitle')
     }.width('100%').height(40).justifyContent(FlexAlign.Center)
   }
   build() {
@@ -222,7 +233,7 @@ export struct PhoneSessionHeading {
         .maxLines(1).textOverflow({overflow:TextOverflow.Ellipsis})
       Row({space:4}) {
         this.emblem()
-        Circle().width(7).height(7).fill(this.tone())
+        this.statusDot()
         Text() {
           if (this.model.connected && ['needs_you','working','unread'].includes(this.words.state)) {
             Span(this.words.status).fontColor(this.tone()).fontWeight(600)
@@ -233,7 +244,7 @@ export struct PhoneSessionHeading {
       }.justifyContent(FlexAlign.Center).constraintSize({maxWidth:'100%'})
     }.width('100%').alignItems(HorizontalAlign.Center).justifyContent(FlexAlign.Center).constraintSize({minHeight:44})
       .onAreaChange((_:Area,area:Area) => { this.available = Number(area.width); })
-      .onClick(() => { this.info.open(this.model).catch(() => undefined); }).accessibilityGroup(true).accessibilityRole(AccessibilityRoleType.BUTTON)
+      .onClick(() => { Haptics.tap(); this.info.open(this.model).catch(() => undefined); }).accessibilityGroup(true).accessibilityRole(AccessibilityRoleType.BUTTON)
       .accessibilityText(tr('phone_session_info_action').replace('{title}',this.heading)).id('chat.title')
       .bindSheet(this.info.shown,this.contents(),{height:'56%',detents:['56%',SheetSize.LARGE],dragBar:true,showClose:false,
         backgroundColor:Colors.grouped,onWillDismiss:(action:DismissSheetAction) => { this.info.close(); action.dismiss(); }})

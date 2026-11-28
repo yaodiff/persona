@@ -9,6 +9,7 @@ import (
 	"github.com/nwverse/persona/server/internal/host"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/screen"
 )
 
 // Agents other than Claude Code that Persona starts without Claude's flags: a compatible CLI (on the PATH as traex), and a
@@ -25,9 +26,13 @@ func ompOptionsRefusal(ctx context.Context) error {
 	return refusal("omp_options", i18n.T(i18n.From(ctx), "rpc-errors.omp_options"), nil)
 }
 
+func ompStartModelHost(kind string) bool {
+	return kind == proto.EngineHerdr || kind == proto.EngineOrca
+}
+
 // Both the model picker and the start verify that this launcher runs omp and forwards the requested model.
 func (n *Node) checkOmpStartModel(ctx context.Context, launcher, model string) error {
-	if launcher != ompAgent || n.startKind(ctx) != proto.EngineHerdr {
+	if launcher != ompAgent || !ompStartModelHost(n.startKind(ctx)) {
 		return ompOptionsRefusal(ctx)
 	}
 	if _, managed := n.managedLauncher(launcher); managed || n.runtimeOfIn(ctx, launcher) != nil {
@@ -60,8 +65,8 @@ func (n *Node) startAgentType(launcher, declared string) string {
 	if l, ok := n.managedLauncher(launcher); ok && l.AgentType() == traexAgent {
 		return traexAgent
 	}
-	if n.agentKindOf(launcher, "") == agyAgent {
-		return agyAgent
+	if kind := n.agentKindOf(launcher, ""); kind == agyAgent || kind == traexAgent {
+		return kind
 	}
 	return launcherAgentType(launcher)
 }
@@ -145,12 +150,23 @@ func (n *Node) startOtherAgent(ctx context.Context, launch host.Launcher, cwd, l
 		argShells = nil
 	}
 	command := n.launcherCommand(launcher)
-	var model string
-	if selected := executionOption(options).Model; kind == ompAgent && resume == "" && selected != "" {
-		model = selected
+	var model, effort string
+	execution := executionOption(options)
+	if kind == traexAgent && resume == "" {
+		model, effort = execution.Model, execution.Effort
+		if model != "" {
+			command += " -m " + shellQuote(model)
+		}
+		if effort != "" {
+			command += " -c " + shellQuote("model_reasoning_effort="+effort)
+		}
+	} else if kind == ompAgent && resume == "" && execution.Model != "" {
+		model = execution.Model
 		command += " --model " + shellQuote(model)
+	}
+	if model != "" || effort != "" {
 		if prompt != "" {
-			command += " --" // omp takes the first message as positional text, even when it begins with a dash.
+			command += " --" // The first message is positional text, even when it begins with a dash.
 		}
 	}
 	cmd := withHerdrAgent(typedHerdrAgent(launch, kind, shells...), otherAgentCommand(command, resume, prompt, argShells...))
@@ -164,11 +180,16 @@ func (n *Node) startOtherAgent(ctx context.Context, launch host.Launcher, cwd, l
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
 	var grace time.Time // when a family start gives up on the extension reporting the session (pifamily.go)
+	answered := ""      // the last dialog screen answered, not answered again while it stays drawn
+	dialogLooks := 0
 	for {
 		select {
 		case <-ctx.Done():
-			screen, _ := n.readPane(context.Background(), pane, "recent-unwrapped", 30)
-			return nil, fmt.Errorf("wait for %s session: %w\n%s", kind, ctx.Err(), lastLines(screen, 12))
+			shown, _ := n.readPane(context.Background(), pane, "recent-unwrapped", 30)
+			if strings.TrimSpace(shown) == "" { // A dialog at the top of a tall pane leaves the recent rows blank (#2351).
+				shown, _ = n.readPane(context.Background(), pane, "visible", 30)
+			}
+			return nil, fmt.Errorf("wait for %s session: %w\n%s", kind, ctx.Err(), lastLines(shown, 12))
 		case <-ticker.C:
 		}
 		if err := n.refreshHosts(ctx); err != nil {
@@ -191,6 +212,34 @@ func (n *Node) startOtherAgent(ctx context.Context, launch host.Launcher, cwd, l
 		}
 		n.mu.Unlock()
 		if id == "" {
+			if kind != traexAgent || resume != "" || confirmed != "" {
+				continue
+			}
+			// TraeX waits for folder access before it creates a writer. Only answer that startup question.
+			text, err := n.readPane(ctx, pane, "visible", screen.DialogLines)
+			d := screen.ParseDialog(text)
+			if err != nil || d == nil || len(d.Options) < 2 {
+				dialogLooks = 0
+				continue
+			}
+			var keys []string
+			if strings.HasPrefix(d.Question, "Do you trust the contents of this directory?") {
+				_, keys = matchStartDialog(codexStartDialogs, text, false)
+			}
+			if keys != nil {
+				dialogLooks = 0
+				if text != answered {
+					if err := n.sendKeys(ctx, pane, keys...); err != nil {
+						return nil, n.startTabFailed(ctx, launch, created, ws, resume, err)
+					}
+					answered = text
+				}
+				continue
+			}
+			dialogLooks++
+			if dialogLooks >= unknownDialogLooks {
+				return nil, n.startTabFailed(ctx, launch, created, ws, resume, unknownDialogError(d))
+			}
 			continue
 		}
 		if piFamily(kind) && id == otherSession(agent) {
@@ -202,11 +251,24 @@ func (n *Node) startOtherAgent(ctx context.Context, launch host.Launcher, cwd, l
 				continue
 			}
 		}
-		n.putAgentState(ctx, launch, id, sessionState{Pane: pane, Launcher: launcher, Cwd: cwd, Model: model, StartedAt: time.Now().UTC()})
+		st := sessionState{Pane: pane, Launcher: launcher, Cwd: cwd, Model: model, ModelEffort: effort, StartedAt: time.Now().UTC()}
+		if resume != "" {
+			if previous, ok := n.state.get(id); ok {
+				if kind == traexAgent {
+					model, effort = previous.Model, previous.ModelEffort
+					st.Model, st.ModelEffort = model, effort
+				}
+				st.Cwd = keepSpaceCwd(previous.Cwd, st.Cwd)
+			}
+		}
+		n.putAgentState(ctx, launch, id, st)
+		if effort != "" {
+			n.noteModes(id, "", effort)
+		}
 		n.bindPane(pane, id)
 		session := n.sessionFor(id, agent)
 		session.Agent = kind
-		n.holdResume(ctx, launch, pane, id, agentLaunch{Agent: kind, Launcher: launcher, ID: id, Model: model})
+		n.holdResume(ctx, launch, pane, id, agentLaunch{Agent: kind, Launcher: launcher, ID: id, Model: model, Effort: effort})
 		return session, nil
 	}
 }

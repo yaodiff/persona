@@ -95,7 +95,7 @@ nonisolated struct AssistantTaskChats: Equatable, Sendable {
     /// By page (group and the manager the Persona page shows): each manager has its own tasks.
     private var byPage: [String: AssistantTaskChats] = [:]
     /// The page a read is on its way for: one for a page left meanwhile doesn't land.
-    @ObservationIgnored private var loading: String?
+    @ObservationIgnored private var loading: (page: String, task: Task<AssistantTaskChats?, Never>)?
 
     /// What is known of the page `api` reads.
     func known(on api: APIClient?) -> AssistantTaskChats { api.flatMap { byPage[Self.page($0)] } ?? .none }
@@ -107,14 +107,24 @@ nonisolated struct AssistantTaskChats: Equatable, Sendable {
 
     /// Reads the tasks and runs again; what was known stays when the hub cannot say (offline, no tasks there).
     func refresh(_ api: APIClient?) async {
-        guard let api else { return }
+        guard let api, !Task.isCancelled else { return }
         let page = Self.page(api)
-        guard loading != page else { return }
-        loading = page
-        defer { if loading == page { loading = nil } }
-        async let r = try? api.scheduleRuns()
-        guard let tasks = try? await api.scheduledTasks(), let runs = await r, loading == page else { return }
-        update(tasks: tasks, runs: runs, on: api)
+        if let loading, loading.page == page, !loading.task.isCancelled { return }
+        loading?.task.cancel()
+        let read = Task<AssistantTaskChats?, Never> {
+            async let r = try? api.scheduleRuns()
+            guard let tasks = try? await api.scheduledTasks(), let runs = await r, !Task.isCancelled else { return nil }
+            return AssistantTaskChats(tasks: tasks, runs: runs)
+        }
+        loading = (page, read)
+        // SwiftUI replaces its task even on the same page when the chat count changes.
+        // Mark the cancelled read immediately so its replacement can start while the transport unwinds.
+        let next = await withTaskCancellationHandler {
+            await read.value
+        } onCancel: { read.cancel() }
+        guard loading?.task == read else { return }
+        loading = nil
+        if !Task.isCancelled, let next, next != byPage[page] { byPage[page] = next }
     }
 
     private static func page(_ api: APIClient) -> String { api.group + "\u{0}" + (api.shownManager ?? "") }

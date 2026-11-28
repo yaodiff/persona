@@ -8,6 +8,7 @@
   "launcher": "Launcher failing",
   "mismatch": "Version mismatch",
   "updating": "Updating",
+  "waiting_restart": "Waiting to restart",
   "with_value": "{name} · {value}",
   "per_core": "{value} per core",
   "load_definition": "Load is the number of threads running or waiting for a CPU, averaged over a minute (Linux also counts threads waiting for the disk). It isn't a percentage: above 1 per core, some threads are waiting. On a Mac, work at background priority may run on only some of the cores, so threads can wait while CPU stays low.",

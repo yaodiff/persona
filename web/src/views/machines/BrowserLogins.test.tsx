@@ -128,7 +128,7 @@ describe("BrowserLogins", () => {
     act(() => typeIn(search, "zzz"));
     await settle();
     expect(listed()).toEqual([]);
-    expect(host.textContent).toContain("没有网站包含「zzz」");
+    expect(host.textContent).toContain("未找到匹配「zzz」的网站");
   });
 
   it("clears the checked sites in one DELETE after asking, and keeps the rest", async () => {
@@ -143,7 +143,7 @@ describe("BrowserLogins", () => {
     await flush();
     act(() => button("清除 2 个")!.click());
     await flush();
-    expect(document.body.textContent).toContain("清除 2 个网站的登录？");
+    expect(document.body.textContent).toContain("清除 2 个网站的登录状态？");
     expect(deletes).toEqual([]); // nothing until confirmed
     act(() => button("清除")!.click());
     await flush();
@@ -162,7 +162,7 @@ describe("BrowserLogins", () => {
     const item = [...document.body.querySelectorAll<HTMLElement>("[role=menuitem]")].find((e) => e.textContent?.includes("清除登录"));
     act(() => item!.click());
     await flush();
-    expect(document.body.textContent).toContain("清除 a.example 的登录？");
+    expect(document.body.textContent).toContain("清除 a.example 的登录状态？");
     act(() => button("清除")!.click());
     await flush();
     expect(deletes).toEqual(["?site=a.example"]);

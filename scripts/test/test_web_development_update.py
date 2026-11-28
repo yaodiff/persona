@@ -1,5 +1,6 @@
 """Isolated Git, process and history fixtures for Web development updates."""
 import contextlib
+import errno
 import fcntl
 import gzip
 import hashlib
@@ -150,6 +151,7 @@ if args == ['tool', 'dist', 'list']:
         root = self.root / "history"
         root.mkdir()
         (root / "keep").write_bytes(b"a" * (2 * 1024 * 1024))
+        os.link(root / "keep", root / "same")
         (root / "empty").touch()
         (root / "link").symlink_to("keep")
         (root / "skip").mkdir()
@@ -168,7 +170,7 @@ if args == ['tool', 'dist', 'list']:
         self.assertEqual((events[-1]["item_done"], events[-1]["percent"]), (2, 100))
         self.assertNotIn(str(root), json.dumps(events))
         with tarfile.open(archive) as stream:
-            self.assertEqual(stream.getnames(), ["root-0", "root-0/empty", "root-0/keep", "root-0/link"])
+            self.assertEqual(stream.getnames(), ["root-0", "root-0/empty", "root-0/keep", "root-0/same", "root-0/link"])
 
     def test_progress_throttles_counters_and_resets_metrics_on_step_change(self):
         elapsed = 0
@@ -258,7 +260,7 @@ pathlib.Path({str(resumed)!r}).touch()
                             process.wait(timeout=3)
                     store = Path(request["runtime"])/"update/development-backups"
                     self.assertFalse((self.root/"result.json").exists())
-                    self.assertTrue(any(store.glob(".incomplete-*")))
+                    self.assertFalse(any(store.glob(".incomplete-*")))
                     if phase == "failed-resume":
                         self.assertTrue(paused.exists())
                         self.assertTrue((store/"coordination-pending.json").exists())
@@ -271,8 +273,11 @@ pathlib.Path({str(resumed)!r}).touch()
                             self.assertTrue(interrupted.exists(), "child did not get graceful SIGINT")
                         with self.assertRaises(ProcessLookupError):
                             os.killpg(int(entered.read_text()), 0)
-                    with self.assertRaisesRegex(ValueError, "coordination|incomplete"):
-                        webdev.snapshot(request)
+                    if phase == "failed-resume":
+                        with self.assertRaisesRegex(ValueError, "coordination"):
+                            webdev.preflight(request)
+                    else:
+                        webdev.preflight(request)
                 finally:
                     if child_group is not None:
                         try:
@@ -310,6 +315,138 @@ pathlib.Path({str(resumed)!r}).touch()
         self.assertTrue((unrelated/"keep").exists())
         self.assertTrue((self.root/"events").read_text().endswith("pause\nresume\n"))
         self.assertFalse((store/"coordination-pending.json").exists())
+
+    def test_slim_history_restores_live_state_and_respects_explicit_roots(self):
+        request = self.history_fixture()
+        runtime = Path(request["runtime"])
+        previous = runtime / "web.prev"
+        previous.mkdir()
+        (previous / "index.html").write_text("stale")
+        kept = ["managers/assistant/manager.json", "profiles/default/model", "personas/custom/look",
+                "skills/custom/SKILL.md", "uploads/image", "data/web.prev/note", "unknown/state"]
+        for name in kept:
+            path = runtime / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("{}" if name.endswith(".json") else name)
+        backup = request["config"]["backup"]
+        original_quiesce = backup["quiesce"]
+        for layout in ("default", "extra-root", "knowledge", "active-web"):
+            with self.subTest(layout=layout):
+                manager = runtime / kept[0]
+                backup["quiesce"] = original_quiesce
+                backup.pop("extra_roots", None)
+                manager.write_text("{}")
+                if layout == "extra-root":
+                    backup["extra_roots"] = [str(previous)]
+                elif layout == "knowledge":
+                    kb = previous / "notes"
+                    kb.mkdir()
+                    # Capture the final write made while the external pause drains.
+                    backup["quiesce"] = [sys.executable, "-c",
+                        "import pathlib,sys; pathlib.Path(sys.argv[1]).write_text(sys.argv[2])",
+                        str(manager), json.dumps({"kb_dir": str(kb)})]
+                elif layout == "active-web":
+                    (runtime / "web").rename(runtime / "unused-web")
+                    (runtime / "web").symlink_to(previous)
+                receipt = webdev.snapshot(request)
+                snapshot = runtime / "update/development-backups" / receipt["id"]
+                destination = self.root / layout
+                webdev.extract_history(snapshot, destination)
+                restored = destination / "root-0"
+                self.assertEqual((restored / "web.prev").exists(), layout != "default")
+                for name in [*kept, "hub.json", "data/history.txt", "secret.key", "web/index.html"]:
+                    self.assertEqual((restored / name).read_bytes(), (runtime / name).read_bytes())
+                self.assertEqual((snapshot / "database-0.dump").read_bytes()[5:], (self.root / "database.json").read_bytes())
+
+    def test_archive_programs_after_external_resume(self):
+        request = self.history_fixture()
+        events = self.root / "events"
+        steps = []
+        def observe(event):
+            step = event["step"]
+            if steps and steps[-1] == step:
+                return
+            steps.append(step)
+            if step in ("database_dump", "archive_files", "resume_writers"):
+                self.assertEqual(events.read_text().splitlines(), ["pause"])
+            if step in ("archive_programs", "verify_snapshot"):
+                self.assertEqual(events.read_text().splitlines(), ["pause", "resume"])
+        webdev.snapshot(request, webdev.Progress("backing_up", observe))
+        self.assertEqual(steps, ["preflight", "quiesce", "database_dump", "archive_files", "resume_writers",
+                                 "archive_programs", "verify_snapshot"])
+
+    def test_packaging_interrupt_releases_lock_and_keeps_last_recovery_point(self):
+        request = self.history_fixture()
+        store = Path(request["runtime"]) / "update/development-backups"
+        first = webdev.snapshot(request)
+        def interrupt(*args):
+            self.assertEqual((self.root / "events").read_text().splitlines(), ["pause", "resume"] * 2)
+            self.assertFalse((store / "coordination-pending.json").exists())
+            raise InterruptedError()
+        with patch.object(webdev, "archive_programs", interrupt), self.assertRaises(InterruptedError):
+            webdev.snapshot(request)
+        self.assertEqual(list(store.glob("snapshot-*")), [store / first["id"]])
+        self.assertFalse(list(store.glob(".incomplete-*")))
+        self.assertEqual(webdev.snapshot(request)["retained"], 2)
+
+    def test_program_preimages_survive_atomic_replacement_and_reject_in_place_changes(self):
+        request = self.history_fixture()
+        program = Path(request["executables"]["personad"])
+        original = program.read_bytes()
+        replacement = self.root / "replacement"
+        replacement.write_bytes(b"later install")
+        request["config"]["backup"]["resume"] = ["mv", str(replacement), str(program)]
+        receipt = webdev.snapshot(request)
+        store = Path(request["runtime"]) / "update/development-backups"
+        snapshot = store / receipt["id"]
+        self.assertEqual(gzip.decompress((snapshot / "program-personad.gz").read_bytes()), original)
+        self.assertEqual(program.read_bytes(), b"later install")
+
+        request["config"]["backup"]["resume"] = [sys.executable, "-c",
+            "import pathlib, sys; pathlib.Path(sys.argv[1]).write_bytes(b'changed in place')", str(program)]
+        with self.assertRaisesRegex(ValueError, "installed program changed"):
+            webdev.snapshot(request)
+        self.assertEqual(list(store.glob("snapshot-*")), [snapshot])
+        self.assertFalse(list(store.glob(".incomplete-*")))
+        self.assertFalse((store / "coordination-pending.json").exists())
+
+    def test_host_node_storage_and_recovery_with_both_v1_layouts(self):
+        request = self.history_fixture()
+        platform = "linux-amd64"
+        nodes = self.root / "nodes"
+        nodes.mkdir()
+        request.update(platform=platform, from_commit="b" * 40, from_version="saved", from_build=123,
+                       node_directory=str(nodes))
+        original = Path(request["executables"]["personad"]).read_bytes()
+        for layout in ("linked", "legacy", "different", "no-hard-links"):
+            node = nodes / ("personad-" + platform)
+            node.write_bytes(b"different node" if layout == "different" else original)
+            unsupported = OSError(errno.EOPNOTSUPP, "fixture store has no hard links")
+            with (patch.object(os, "link", side_effect=unsupported) if layout == "no-hard-links" else contextlib.nullcontext()):
+                receipt = webdev.snapshot(request)
+            path = Path(request["runtime"]) / "update/development-backups" / receipt["id"]
+            package = path / ("node-" + platform + ".gz")
+            program = path / "program-personad.gz"
+            if layout == "legacy":
+                # Older writers compressed the node separately, with its own gzip header and hash.
+                package.unlink()
+                with gzip.open(package, "wb") as stream:
+                    stream.write(node.read_bytes())
+                manifest = json.loads((path / "manifest.json").read_text())
+                manifest["files"][package.name] = webdev.digest(package)
+                (path / "manifest.json").write_text(json.dumps(manifest))
+            self.assertEqual(package.samefile(program), layout == "linked")
+            manifest = webdev.verify(path)
+            # Follow the offline operator procedure using the recorded files and native hashes.
+            for entry, expected in [(manifest["programs"]["personad"], original),
+                                    (manifest["nodes"][platform], node.read_bytes())]:
+                restored = gzip.decompress((path / entry["file"]).read_bytes())
+                self.assertEqual(restored, expected)
+                self.assertEqual(hashlib.sha256(restored).hexdigest(), entry["sha256"])
+            work = self.root / layout
+            work.mkdir()
+            out = webdev.prepare_backup(dict(request, backup_id=receipt["id"], work=str(work), candidate=None))
+            self.assertEqual(gzip.decompress((Path(out["artifacts"]) / "personad-linux-amd64.gz").read_bytes()), original)
 
     def test_builtin_quiesce_custom_directory_and_retention(self):
         request = self.history_fixture()
@@ -481,6 +618,48 @@ pathlib.Path({str(resumed)!r}).touch()
         with self.assertRaisesRegex(ValueError, "checksum"):
             webdev.prepare_backup(dict(request, work=str(work), backup_id=snapshot.name))
 
+    def test_stale_staging_is_removed_only_under_lock_without_recovery_marker(self):
+        request = self.history_fixture()
+        store = Path(request["runtime"]) / "update/development-backups"
+        store.mkdir(parents=True, mode=0o700)
+        stale = store / ".incomplete-earlier"
+        stale.mkdir()
+        outside = self.root / "keep"
+        outside.mkdir()
+        (stale / "link").symlink_to(outside)
+        (store / ".incomplete-link").symlink_to(outside)
+        marker = store / "coordination-pending.json"
+        with (store / ".lock").open("a") as lock:
+            webdev.lock_backup(lock)
+            with self.assertRaisesRegex(ValueError, "another backup"):
+                webdev.preflight(request)
+            self.assertTrue(stale.is_dir())
+        marker.touch()
+        events = []
+        with self.assertRaisesRegex(ValueError, "coordination"):
+            webdev.snapshot(request, webdev.Progress("backing_up", events.append))
+        self.assertEqual([e["step"] for e in events], ["preflight"])
+        self.assertTrue(stale.is_dir())
+        marker.unlink()
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            receipt = webdev.snapshot(request)
+        self.assertIn("removed an incomplete snapshot", output.getvalue())
+        self.assertFalse(stale.exists())
+        self.assertTrue(outside.is_dir())
+        self.assertTrue((store / ".incomplete-link").is_symlink())
+        self.assertEqual(receipt["retained"], 1)
+
+    def test_failed_verification_cleans_staging_and_preserves_published_snapshots(self):
+        request = self.history_fixture()
+        first = webdev.snapshot(request)
+        store = Path(request["runtime"]) / "update/development-backups"
+        with patch.object(webdev, "verify", side_effect=ValueError("invalid snapshot")), self.assertRaises(ValueError):
+            webdev.snapshot(request)
+        self.assertEqual(list(store.glob(".incomplete-*")), [])
+        self.assertEqual([p.name for p in store.glob("snapshot-*")], [first["id"]])
+        self.assertEqual(webdev.snapshot(request)["retained"], 2)
+
     def test_resume_failure_and_unknown_coordination_block_retry(self):
         request = self.history_fixture()
         request["config"]["backup"]["resume"] = [self.tool("resume-fails", "raise SystemExit(2)\n")]
@@ -515,7 +694,7 @@ pathlib.Path({str(resumed)!r}).touch()
                 with self.subTest(operation=operation.__name__), self.assertRaisesRegex(ValueError, "another backup or prepare is in progress"):
                     operation(payload)
 
-    def test_real_writer_is_quiesced_for_the_whole_snapshot(self):
+    def test_real_writer_is_quiesced_across_the_database_and_history_capture(self):
         request = self.history_fixture()
         runtime = Path(request["runtime"])
         pause, paused, ready = self.root/"pause", self.root/"paused", self.root/"writer-ready"
@@ -565,6 +744,76 @@ else: raise SystemExit(3)
             time.sleep(.01)
         else:
             self.fail("writer did not resume paired writes")
+
+    def test_snapshot_excludes_hub_meeting_audio_from_knowledge_bases(self):
+        rec_id = "0f8fad5b-d9cb-469f-a165-70867728950e"
+        for layout in ("default", "external-kb", "extra-manager"):
+            with self.subTest(layout=layout), tempfile.TemporaryDirectory(dir=self.root) as directory:
+                previous_root = self.root
+                self.root = Path(directory)
+                try:
+                    request = self.history_fixture()
+                    runtime = Path(request["runtime"])
+                    if layout == "default":
+                        kb = runtime / "data"
+                        root_prefix = "root-0/data"
+                    elif layout == "external-kb":
+                        kb = self.root / "external-kb"
+                        kb.mkdir()
+                        manager_dir = runtime / "managers/assistant"
+                        manager_dir.mkdir(parents=True)
+                        (manager_dir / "manager.json").write_text(json.dumps({"kb_dir": str(kb)}))
+                        root_prefix = None
+                    else:
+                        extra_mgr = runtime / "managers/m-extra"
+                        extra_mgr.mkdir(parents=True)
+                        (extra_mgr / "manager.json").write_text(json.dumps({"database_url": "extra-db"}))
+                        kb = extra_mgr / "data"
+                        root_prefix = "root-0/managers/m-extra/data"
+
+                    audio_files = [
+                        kb / f"recordings/{rec_id}/attachments/audio/0.pcm",
+                        kb / f"recordings/{rec_id}/attachments/audio/index.json",
+                        kb / "recordings/sample-meeting/attachments/audio/marker.bin",
+                    ]
+                    for path in audio_files:
+                        path.parent.mkdir(parents=True, exist_ok=True)
+                        path.write_bytes(b"ephemeral-audio-" + path.name.encode())
+
+                    kept_files = {
+                        f"recordings/{rec_id}/meta.json": b'{"id":"' + rec_id.encode() + b'"}',
+                        f"recordings/{rec_id}/hub_segments.json": b'{"rev":1}',
+                        f"recordings/{rec_id}/attachments/p1.jpg": b"meeting-photo",
+                        f"recordings/{rec_id}/attachments/audio.jpg": b"photo-named-audio",
+                        "chats/c1/attachments/audio/note.ogg": b"chat-audio-attachment",
+                    }
+                    for rel, body in kept_files.items():
+                        target = kb / rel
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        target.write_bytes(body)
+
+                    receipt = webdev.snapshot(request)
+                    snapshot = runtime / "update/development-backups" / receipt["id"]
+                    with tarfile.open(snapshot / "files.tar.gz") as archive:
+                        names = archive.getnames()
+                    if root_prefix is None:
+                        manifest = json.loads((snapshot / "manifest.json").read_text())
+                        root_prefix = f"root-{manifest['roots'].index(str(kb.resolve()))}"
+                    for name in names:
+                        if f"{root_prefix}/recordings/" in name and ("/attachments/audio/" in name or name.endswith("/attachments/audio")):
+                            self.fail(f"development snapshot contains hub meeting audio member {name}")
+                    for rel in kept_files:
+                        self.assertIn(f"{root_prefix}/{rel}", names)
+
+                    destination = self.root / "extracted"
+                    webdev.extract_history(snapshot, destination)
+                    restored_kb = destination / root_prefix
+                    for rel, body in kept_files.items():
+                        self.assertEqual((restored_kb / rel).read_bytes(), body)
+                    self.assertFalse((restored_kb / f"recordings/{rec_id}/attachments/audio").exists())
+                    self.assertFalse((restored_kb / "recordings/sample-meeting/attachments/audio").exists())
+                finally:
+                    self.root = previous_root
 
 
 if __name__ == "__main__":

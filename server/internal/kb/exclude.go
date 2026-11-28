@@ -159,7 +159,8 @@ func UserUnsupported(kind string, u UserUpdate) []IgnoredField {
 		for _, f := range []struct {
 			name string
 			set  bool
-		}{{"project_mode", u.ProjectMode != nil}, {"source_urls", u.SourceURLs != nil}} {
+		}{{"project_mode", u.ProjectMode != nil}, {"source_urls", u.SourceURLs != nil}, {"parent", u.Parent != nil},
+			{"milestones", u.Milestones != nil}, {"milestone", u.Milestone != nil}} {
 			if f.set {
 				out = append(out, IgnoredField{Field: f.name, Reason: kind + " entries do not use " + f.name})
 			}

@@ -54,6 +54,24 @@ describe("快速筛选（iOS AgentFilter）", () => {
     expect(matchingKeys(after, "all", none).size).toBe(0);
   });
 
+  it("counts exactly the Agents listed by In a tab when tab associations change", () => {
+    const herdr = session("herdr", "idle", { pane_id: "w1:p1" });
+    const orca = session("orca", "working", { pane_id: "orca:w2:p1" });
+    const desktop = session("desktop", "idle", { space_kind: "codex_app", pane_id: "w1:p2" });
+    const lark = session("lark", "idle", { pane_id: "botmux:group/topic" });
+    const unbound = session("unbound", "working");
+    const before = [herdr, orca, desktop, lark, unbound];
+    const kept = matchingKeys(before, "terminal", none);
+    expect(ids(applyFilter(before, "terminal", none, kept))).toEqual(["herdr", "orca"]);
+    expect(filterCounts(before, none).terminal).toBe(2);
+
+    const after = [{ ...herdr, pane_id: undefined }, { ...orca, state: "offline" as const }, desktop, lark, unbound,
+      session("new", "needs_you", { pane_id: "w1:p3" })];
+    const shown = applyFilter(after, "terminal", none, kept);
+    expect(ids(shown)).toEqual(["new"]);
+    expect(filterCounts(after, none).terminal).toBe(shown.length);
+  });
+
   it("全部标为已读只标完成未看的", () => {
     expect(ids(unreadOf([session("a", "unread"), session("b", "idle"), session("c", "needs_you"), session("d", "unread")]))).toEqual(["a", "d"]);
   });

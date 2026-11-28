@@ -179,6 +179,24 @@ func (m *Manifest) RepositoryHosts() []string {
 	return out
 }
 
+// TextLookups are the manifest's contributions to text_lookup whose languages hold to the point's rules. An omitted
+// languages list means ["en"]; any other list claims nothing.
+func (m *Manifest) TextLookups() []TextLookupItem {
+	var items []TextLookupItem
+	_ = json.Unmarshal(m.Contributes["text_lookup"], &items)
+	var out []TextLookupItem
+	for _, it := range items {
+		langs := it.Languages
+		if langs == nil {
+			langs = []string{"en"}
+		}
+		if len(langs) == 1 && langs[0] == "en" {
+			out = append(out, it)
+		}
+	}
+	return out
+}
+
 // Topics are the events the plugin is told about, each once.
 func (m *Manifest) Topics() []string {
 	var out []string
@@ -223,8 +241,12 @@ func (m *Manifest) Providers() []ProviderItem {
 
 // Channels are the plugin's contributions to channel.
 func (m *Manifest) Channels() []channel.Item {
+	raw := m.Contributes["channel"]
+	if len(raw) == 0 {
+		return nil
+	}
 	var out []channel.Item
-	_ = json.Unmarshal(m.Contributes["channel"], &out)
+	_ = json.Unmarshal(raw, &out)
 	return out
 }
 

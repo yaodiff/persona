@@ -155,9 +155,16 @@ func TestUpdateTerminalAuthorityRechecksActivityAndBinding(t *testing.T) {
 
 func TestUpdateRemoteResumeRequiresExplicitUnambiguousArguments(t *testing.T) {
 	endpoint := "unix:///tmp/synthetic-control.sock"
-	got, thread := updateRemoteResume([]string{"/usr/bin/codex", "resume", "--remote", endpoint, remoteRaw})
-	if got != endpoint || thread != remoteRaw {
-		t.Fatalf("explicit remote resume: %q %q", got, thread)
+	for _, args := range [][]string{
+		{"/usr/bin/codex", "resume", "--remote", endpoint, remoteRaw},
+		// The form Persona's own Codex start writes (codex_start.go), with or without --no-alt-screen.
+		{"codex", "--remote", endpoint, "resume", remoteRaw},
+		{"/usr/bin/codex", "--remote", endpoint, "--no-alt-screen", "resume", remoteRaw},
+	} {
+		got, thread := updateRemoteResume(args)
+		if got != endpoint || thread != remoteRaw {
+			t.Fatalf("explicit remote resume %v: %q %q", args, got, thread)
+		}
 	}
 	for _, args := range [][]string{
 		{"codex", "resume", remoteRaw},
@@ -166,6 +173,14 @@ func TestUpdateRemoteResumeRequiresExplicitUnambiguousArguments(t *testing.T) {
 		{"codex", "resume", "--remote", endpoint, "not-an-id"},
 		{"codex", "resume", "--remote", "wss://example.com", remoteRaw},
 		{"claude", "resume", "--remote", endpoint, remoteRaw},
+		{"codex", "--remote", endpoint, "resume", remoteRaw, "a prompt"},
+		{"codex", "--remote", endpoint, "resume", "--last"},
+		{"codex", "--remote", endpoint, "-c", "model=x", "resume", remoteRaw},
+		{"codex", "--remote", endpoint, "--no-alt-screen", "--no-alt-screen", "resume", remoteRaw},
+		{"codex", "--remote", "wss://example.com", "resume", remoteRaw},
+		{"codex", "--remote", endpoint, "resume"},
+		{"codex", "--remote", endpoint, remoteRaw},
+		{"claude", "--remote", endpoint, "resume", remoteRaw},
 	} {
 		if ep, id := updateRemoteResume(args); ep != "" || id != "" {
 			t.Fatalf("ambiguous command bound a source: %+v", args)

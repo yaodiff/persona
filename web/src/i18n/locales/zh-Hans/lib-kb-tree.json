@@ -1,0 +1,17 @@
+{
+  "state_open": "未验收",
+  "state_accepted": "已验收",
+  "state_not_accepted": "未通过",
+  "why_self": "不能移动至自身下方",
+  "why_below": "目标位于当前项目下方",
+  "why_here": "已位于当前位置",
+  "warn_deep": "共 {levels} 层，超过建议的 {suggested} 层",
+  "flag_accepted": "已验收",
+  "flag_not_accepted": "未通过",
+  "no_tag": "无标签",
+  "also_under_other": "另属于 {count} 个标签",
+  "sub_count_other": "{count} 个子项目",
+  "root": "项目",
+  "root_by_tag": "按标签",
+  "root_count_other": "{count} 个项目"
+}

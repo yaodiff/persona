@@ -21,6 +21,7 @@ import (
 
 func (s *Service) trackConversationRoutes() {
 	s.handle("GET /api/v1/assistant/tracks/{slug}/conversations", s.trackConversations)
+	s.handle("GET /api/v1/assistant/tracks/launchers", s.trackLaunchers)
 }
 
 func (s *Service) trackConversations(w http.ResponseWriter, r *http.Request) {

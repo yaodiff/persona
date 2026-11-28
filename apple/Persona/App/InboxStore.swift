@@ -8,7 +8,23 @@ import UIKit
 /// in the background; a failure puts the item back.
 @MainActor @Observable
 final class InboxStore {
-    static let shared = InboxStore()
+    private static var instance: InboxStore?
+    private static weak var launchModel: AppModel?
+
+    static var shared: InboxStore {
+        if let instance { return instance }
+        let store = InboxStore()
+        instance = store
+        if let launchModel { store.restoreLaunchCache(for: launchModel) }
+        return store
+    }
+
+    /// AppModel's registry and links are ready. If counting badges already requested the inbox during
+    /// startup, install its saved rows now; otherwise the first reader loads them as before.
+    static func bindAfterLaunch(to model: AppModel) {
+        launchModel = model
+        instance?.restoreLaunchCache(for: model)
+    }
 
     private(set) var items: [InboxItem] {
         didSet { itemsRevision &+= 1 }
@@ -18,11 +34,17 @@ final class InboxStore {
     /// How triage stands on the hub (new items held back until the model sorts them), with every list; nil from an
     /// older hub, and until the first list of this run (it is not kept on disk: an old count must not show offline).
     private(set) var triage: InboxTriageStatus?
+    /// Core's retained Lark/mail facts for this hub, kept only in memory; nil means unknown, not an empty archive.
+    private(set) var storedSources: InboxStoredSources?
     private(set) var loading = false
     /// A listing came from the hub since launch: what is cached on disk may be from before a source was added.
     private(set) var listed = false
     var error: String?
+    /// Identifies this visit, even when the owner switches back to the same hub.
+    @ObservationIgnored private(set) var hubVisit: UInt64 = 0
     @ObservationIgnored private var reloading: Task<Void, Never>?
+    private let cacheFolder: URL?
+    @ObservationIgnored private var cacheOwner: () -> String?
     /// Done marks the hub may not have yet, by `InboxItem.key`, laid over every list that comes in (#2201): a list from
     /// before the hub took a mark must not bring a swiped-away item back.
     @ObservationIgnored private var marks = InboxMarks()
@@ -34,6 +56,24 @@ final class InboxStore {
         let items: [InboxItem]
         let cursor: String?
         let hub: URL?
+        /// Independent of cursor eligibility: optimistically changed items still belong to their pairing.
+        var owner: String? = nil
+
+        /// The old record identified its source only alongside a clean cursor. Unattributed rows must be
+        /// refreshed before they can be shown under a pairing's name.
+        func forHub(group: String?, registry: HubRegistry, demo: Bool) -> Saved {
+            let empty = Saved(items: [], cursor: nil, hub: nil)
+            guard let group else { return empty }
+            if let owner {
+                if demo { return owner == "demo" ? self : empty }
+                return registry.members(group).contains { owner == Self.owner(of: $0) } ? self : empty
+            }
+            guard !demo, let hub, cursor != nil else { return empty }
+            let groups = Set(registry.hubs.filter { $0.config.url == hub }.map(\.group))
+            return groups == [group] ? self : empty
+        }
+
+        static func owner(of pairing: PairedHub) -> String { "pairing:" + pairing.id }
 
         var storedCursor: (value: String, hub: URL)? {
             guard let cursor, let hub else { return nil }
@@ -52,20 +92,39 @@ final class InboxStore {
     /// Hubs that answered without a cursor (older ones): they are asked with the tag instead.
     @ObservationIgnored private var withoutDeltas: Set<URL> = []
 
-    private init() {
-        let saved = Self.loadSaved()
+    init(saved: Saved, cacheFolder: URL?, cacheOwner: @escaping () -> String? = { nil }) {
+        self.cacheFolder = cacheFolder
+        self.cacheOwner = cacheOwner
         items = saved.items
         if !saved.items.isEmpty, let stored = saved.storedCursor {
             cursor = stored
             cursorRevision = itemsRevision
         }
-        teachLarkSync()
+    }
+
+    private convenience init() {
+        self.init(saved: .init(items: [], cursor: nil, hub: nil), cacheFolder: nil)
         let leaving = [UIApplication.didEnterBackgroundNotification, UIApplication.willTerminateNotification]
         for name in leaving {
             NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { @Sendable _ in
                 MainActor.assumeIsolated { InboxStore.shared.saver.flush() }
             }
         }
+    }
+
+    private func restoreLaunchCache(for model: AppModel) {
+        cacheOwner = { [weak model] in
+            guard let model else { return nil }
+            if model.isDemo { return "demo" }
+            guard let group = model.hub?.group else { return nil }
+            return model.registry.primary(group).map(Saved.owner(of:))
+        }
+        let saved = Self.loadSaved().forHub(group: model.hub?.group, registry: model.registry, demo: model.isDemo)
+        guard !saved.items.isEmpty else { return }
+        items = saved.items
+        cursor = saved.storedCursor
+        cursorRevision = cursor == nil ? nil : itemsRevision
+        teachLarkSync()
     }
 
     /// The current record, or the bare item array written before cursors were kept. One key keeps each pair atomic.
@@ -76,9 +135,9 @@ final class InboxStore {
 
     /// A locally edited or overlaid list deliberately has no cursor: the next launch then reads the whole hub list.
     static func makeSaved(items: [InboxItem], cursor: (value: String, hub: URL)?, cursorRevision: UInt64?,
-                          itemsRevision: UInt64, marksEmpty: Bool) -> Saved {
+                          itemsRevision: UInt64, marksEmpty: Bool, owner: String? = nil) -> Saved {
         let keep = !items.isEmpty && marksEmpty && cursorRevision == itemsRevision
-        return Saved(items: items, cursor: keep ? cursor?.value : nil, hub: keep ? cursor?.hub : nil)
+        return Saved(items: items, cursor: keep ? cursor?.value : nil, hub: keep ? cursor?.hub : nil, owner: owner)
     }
 
     /// A delta certifies its result only when its exact base stayed unchanged while the request was out. A whole list
@@ -223,31 +282,38 @@ final class InboxStore {
     private func reopenFromHistory(_ item: InboxItem) {
         guard let api = AppModel.shared.api?.manager(item.manager), history.contains(where: { $0.key == item.key }) else { return }
         Haptics.tap()
+        let epoch = historyEpoch
         Task {
+            guard epoch == historyEpoch else { return }
             do {
                 try await api.setInboxDone(item.id, false)
+                guard epoch == historyEpoch else { return }
                 history.removeAll { $0.key == item.key }
                 reload()
             } catch {
-                AppModel.shared.show(error)
+                if epoch == historyEpoch { AppModel.shared.show(error) }
             }
         }
     }
 
-    /// Entering or leaving Demo Mode: the other side's items must not show for a moment.
+    /// Switch away before another hub's first reload, including entering or leaving Demo Mode.
     func forget() {
-        historyEpoch += 1
+        hubVisit &+= 1
+        reloading?.cancel()
+        reloading = nil
+        loading = false
+        listed = false
+        listTag = nil
+        marks = InboxMarks()
+        sending.removeAll()
+        moving.removeAll()
+        unsentReplies.removeAll()
         cursor = nil
         cursorRevision = nil
         items = []
-        history = []
-        historyMore = true
-        historyNext = nil
-        doneDays = nil
-        groupLoading = []
-        groupComplete = []
-        groupNext = [:]
+        scopeChanged()
         triage = nil
+        storedSources = nil
         error = nil
         save()
     }
@@ -274,16 +340,25 @@ final class InboxStore {
 
     /// Pulls the list (bursts of `inbox` events collapse into one request).
     func reload() {
-        guard reloading == nil else { return }
-        reloading = Task {
-            defer { reloading = nil }
-            await fetchListing()
+        guard let api = AppModel.shared.api else { return }
+        reload(from: api)
+    }
+
+    @discardableResult
+    func reload(from api: APIClient) -> Task<Void, Never> {
+        if let reloading { return reloading }
+        let visit = hubVisit
+        let task = Task {
+            guard visit == hubVisit else { return }
+            defer { if visit == hubVisit { reloading = nil } }
+            await fetchListing(api, visit: visit)
         }
+        reloading = task
+        return task
     }
 
     /// `reload`'s request: with the held list's tag, so a list the hub still has costs a 304, nothing decoded or written.
-    private func fetchListing() async {
-        guard let api = AppModel.shared.api else { return }
+    private func fetchListing(_ api: APIClient, visit: UInt64) async {
         let hub = api.config.url
         let held = listTag.flatMap { $0.hub == hub && $0.revision == itemsRevision ? $0.etag : nil }
         let baseRevision = itemsRevision
@@ -291,20 +366,25 @@ final class InboxStore {
         loading = true
         let seq = marks.beginList()
         defer {
-            loading = false
-            marks.endList(seq)
+            if visit == hubVisit {
+                loading = false
+                marks.endList(seq)
+            }
         }
         do {
             if withoutDeltas.contains(hub) {
                 let answer = try await api.inboxListing(connectors: Self.drawsConnectors, etag: held)
+                guard visit == hubVisit else { return }
                 if let listing = answer.listing {
                     apply(marks.lay(listing.items, seq: seq))
                     if listing.triage != triage { triage = listing.triage }
+                    if storedSources != listing.storedSources { storedSources = listing.storedSources }
                 }
                 listTag = answer.etag.map { (etag: $0, hub: hub, revision: itemsRevision) }
             } else {
                 let since = Self.since(cursor: cursor, for: hub)
                 let listing = try await api.inboxListing(connectors: Self.drawsConnectors, since: since)
+                guard visit == hubVisit else { return }
                 let isDelta = listing.delta == true && since != InboxListing.noCursor
                 let baseUnchanged = itemsRevision == baseRevision && cursor?.hub == hub && cursor?.value == since
                 let clean = Self.listingIsCleanForDisk(isDelta: isDelta, baseWasClean: baseWasClean,
@@ -314,6 +394,7 @@ final class InboxStore {
                 } else {
                     apply(marks.lay(listing.items, seq: seq))
                 }
+                if storedSources != listing.storedSources { storedSources = listing.storedSources }
                 if listing.triage != triage { triage = listing.triage }
                 let oldCursor = cursor
                 let oldRevision = cursorRevision
@@ -333,7 +414,7 @@ final class InboxStore {
             listed = true
             error = nil
         } catch {
-            if let shown = error.shown { self.error = shown }
+            if visit == hubVisit, let shown = error.shown { self.error = shown }
         }
     }
 
@@ -342,10 +423,12 @@ final class InboxStore {
     /// With another assistant than the default current it is that one that collects: named, it answers with its own
     /// list alone, so the merged list is read after it.
     func refresh() async {
+        guard let api = AppModel.shared.api else { return }
+        let visit = hubVisit
         cursor = nil
         cursorRevision = nil
         save()
-        if let api = AppModel.shared.api, let manager = AppModel.shared.assistantManagerID {
+        if let manager = AppModel.shared.assistantManagerID {
             // A collection that failed must not look like one that worked (the hub answers 502 for it): its words show
             // as a failed refresh's do. An offline assistant is said on the page itself.
             var failed: String?
@@ -354,40 +437,44 @@ final class InboxStore {
             } catch {
                 if (error as? APIError)?.code != "assistant_offline" { failed = error.shown }
             }
-            await fetchListing()
-            if let failed { self.error = failed }
+            guard visit == hubVisit else { return }
+            await fetchListing(api, visit: visit)
+            if visit == hubVisit, let failed { self.error = failed }
         } else {
-            await fetch { try await $0.refreshInbox(connectors: Self.drawsConnectors) }
+            await fetch(api, visit: visit)
         }
     }
 
     /// The connectors' items (GitHub…) are drawn on iOS and visionOS (#2611, #2736); the watch fetches its own (WatchModel, #2727).
     private static let drawsConnectors = true
 
-    private func fetch(_ load: (APIClient) async throws -> InboxListing) async {
-        guard let api = AppModel.shared.api else { return }
+    private func fetch(_ api: APIClient, visit: UInt64) async {
         loading = true
         let seq = marks.beginList()
         defer {
-            loading = false
-            marks.endList(seq)
+            if visit == hubVisit {
+                loading = false
+                marks.endList(seq)
+            }
         }
         do {
-            let listing = try await load(api)
+            let listing = try await api.refreshInbox(connectors: Self.drawsConnectors)
+            guard visit == hubVisit else { return }
             apply(marks.lay(listing.items, seq: seq))
+            if storedSources != listing.storedSources { storedSources = listing.storedSources }
             listed = true
             if listing.triage != triage { triage = listing.triage }
             error = nil
         } catch {
-            if let shown = error.shown { self.error = shown }
+            if visit == hubVisit, let shown = error.shown { self.error = shown }
         }
     }
 
     /// Capture items and their cursor eligibility together before the throttle retains the write.
     private func save() {
         let saved = Self.makeSaved(items: items, cursor: cursor, cursorRevision: cursorRevision,
-                                   itemsRevision: itemsRevision, marksEmpty: marks.isEmpty)
-        saver.run { StateCache.save(Self.stateName, saved) }
+                                   itemsRevision: itemsRevision, marksEmpty: marks.isEmpty, owner: cacheOwner())
+        saver.run { [cacheFolder] in StateCache.save(Self.stateName, saved, in: cacheFolder) }
     }
 
     private func apply(_ list: [InboxItem]) {
@@ -404,9 +491,10 @@ final class InboxStore {
     /// back what that request held. Filing ends with a toast and its Undo, which brings back what was filed.
     func setDone(_ list: [InboxItem], _ done: Bool, undoable: Bool = true) {
         guard let api = AppModel.shared.api else { return }
+        let roster = AppModel.shared.managerRoster
         run(list, done: done, action: .done) { targets in
             var sent = try await InboxBulk.byManager(Self.managers(targets)) { manager, mine in
-                try await self.fileDone(mine, done, api: api.manager(AppModel.shared.itemManager(manager)))
+                try await self.fileDone(mine, done, api: api.manager(roster.map { $0.naming(manager) } ?? manager))
             }
             if undoable, !sent.result.changed.isEmpty { sent.undo = .legacy(sent.result.changed) }
             return sent
@@ -418,11 +506,12 @@ final class InboxStore {
     /// handled there). Same as above: shown at once, put back on a failure, a toast whose Undo sends the hub's `undo`.
     func clean(_ list: [InboxItem]) {
         guard let api = AppModel.shared.api else { return }
+        let roster = AppModel.shared.managerRoster
         let action = InboxBulk.Action.dismiss
         run(list, done: true, action: action) { targets in
             let groups = Self.managers(targets)
             if groups.count == 1, let g = groups.first {
-                let api = api.manager(AppModel.shared.itemManager(g.key))
+                let api = api.manager(roster.map { $0.naming(g.key) } ?? g.key)
                 let (result, undo) = try await InboxBulk.perform(action, targets, manager: g.key,
                                                                  bulk: { try await api.bulkInbox($0.rawValue, $1) },
                                                                  legacy: { try await self.fileDone($0, true, api: api) })
@@ -431,7 +520,7 @@ final class InboxStore {
             // Several managers' items: each its own request. Each manager keeps its own `undo`, so Undo brings back what
             // moved with the Done request.
             var sent = try await InboxBulk.byManager(groups) { manager, mine in
-                let api = api.manager(AppModel.shared.itemManager(manager))
+                let api = api.manager(roster.map { $0.naming(manager) } ?? manager)
                 return try await InboxBulk.perform(action, mine, bulk: { try await api.bulkInbox($0.rawValue, $1) },
                                                    legacy: { try await self.fileDone($0, true, api: api) }).result
             }
@@ -450,9 +539,12 @@ final class InboxStore {
         items = InboxBulk.marking(items, keys: Set(before.keys), done: done, now: now, by: action)
         let tokens = before.keys.map { ($0, marks.put($0, .init(doneAt: done ? now : nil, doneBy: done ? action.doneBy : nil))) }
         done ? Haptics.success() : Haptics.tap()
+        let visit = hubVisit
         Task {
+            guard visit == hubVisit else { return }
             do {
                 let sent = try await send(targets)
+                guard visit == hubVisit else { return }
                 items = InboxBulk.settle(items, before: before, result: sent.result)
                 // The managers that failed: their items as they were; the others' stay filed (#1850).
                 let lost = Set(sent.lost.map(\.key))
@@ -464,7 +556,10 @@ final class InboxStore {
                 if !lost.isEmpty { items = InboxBulk.rollback(items, before: before.filter { lost.contains($0.key) }) }
                 save()
                 if InboxBulk.changedSince(sent.result) > 0 { reload() }
-                let button = sent.undo.map { u in Toast.Action(title: String(localized: "Undo")) { [weak self] in self?.undo(u, done: done) } }
+                let button = sent.undo.map { u in Toast.Action(title: String(localized: "Undo")) { [weak self] in
+                    guard let self, visit == self.hubVisit else { return }
+                    self.undo(u, done: done)
+                } }
                 let head = InboxBulk.message(done: done, result: sent.result, action: action)
                 if let failure = sent.failure, !lost.isEmpty {
                     AppModel.shared.toast = Toast(InboxBulk.partly(head, lost: lost.count, error: failure), style: .error, action: button)
@@ -473,6 +568,7 @@ final class InboxStore {
                     AppModel.shared.toast = Toast(head, style: .success, action: button)
                 }
             } catch {
+                guard visit == hubVisit else { return }
                 for (key, token) in tokens { marks.settle(key, token: token, taken: false) }
                 items = InboxBulk.rollback(items, before: before.filter { !marks.out($0.key) })
                 AppModel.shared.show(error)
@@ -529,7 +625,7 @@ final class InboxStore {
         return InboxBulkResult(changed: changed, unchanged: [], skipped: [])
     }
 
-    func setDone(_ item: InboxItem, _ done: Bool, haptic: Bool = true) {
+    func setDone(_ item: InboxItem, _ done: Bool, haptic: Bool = true, api injected: APIClient? = nil) {
         guard let i = items.firstIndex(where: { $0.key == item.key }) else {
             if !done { reopenFromHistory(item) }
             return
@@ -540,11 +636,15 @@ final class InboxStore {
         let key = item.key
         let token = marks.put(key, .init(doneAt: items[i].doneAt, doneBy: items[i].doneBy))
         if haptic { Haptics.tap() }
+        let visit = hubVisit
+        let api = injected ?? AppModel.shared.api?.manager(AppModel.shared.itemManager(item.manager))
         Task {
             do {
-                try await AppModel.shared.api?.manager(AppModel.shared.itemManager(item.manager)).setInboxDone(item.id, done)
+                try await api?.setInboxDone(item.id, done)
+                guard visit == hubVisit else { return }
                 marks.settle(key, token: token, taken: true)
             } catch {
+                guard visit == hubVisit else { return }
                 marks.settle(key, token: token, taken: false)
                 // back to the done state it had, on the copy now shown (a list meanwhile may be fresher), unless a newer mark is out
                 if !marks.out(key), let j = items.firstIndex(where: { $0.key == key }) {
@@ -558,14 +658,15 @@ final class InboxStore {
 
     /// Files an outbox-restored hand-off whose item may not be listed yet. The optimistic path is used when it is;
     /// otherwise the same single-item request goes directly to its manager.
-    func setDone(id: String, manager: String?, done: Bool) {
+    func setDone(id: String, manager: String?, done: Bool, api: APIClient) {
         if let item = items.first(where: { $0.key == InboxItem.key(id: id, manager: manager) }) {
-            setDone(item, done, haptic: false)
+            setDone(item, done, haptic: false, api: api)
             return
         }
+        let visit = hubVisit
         Task {
-            do { try await AppModel.shared.api?.manager(AppModel.shared.itemManager(manager)).setInboxDone(id, done) }
-            catch { AppModel.shared.show(error) }
+            do { try await api.setInboxDone(id, done) }
+            catch { if visit == hubVisit { AppModel.shared.show(error) } }
         }
     }
 
@@ -584,12 +685,16 @@ final class InboxStore {
             tokens.append((items[i].key, marks.put(items[i].key, .init(doneAt: items[i].doneAt, doneBy: "read", reason: items[i].reason))))
         }
         Haptics.success()
+        let visit = hubVisit
         Task {
+            guard visit == hubVisit else { return }
             do {
                 _ = try await AppModel.shared.api?.manager(AppModel.shared.itemManager(item.manager)).muteInbox(item.id, tag: option.tag)
+                guard visit == hubVisit else { return }
                 for (key, token) in tokens { marks.settle(key, token: token, taken: true) }
                 AppModel.shared.toast = Toast(String(localized: "Muted “\(option.name)”. It won’t come to the Inbox anymore."), style: .success)
             } catch {
+                guard visit == hubVisit else { return }
                 for (key, token) in tokens { marks.settle(key, token: token, taken: false) }
                 // back to how they were, on the copies now shown, unless a newer mark is out
                 let was = Dictionary(before.map { ($0.key, $0) }, uniquingKeysWith: { a, _ in a })
@@ -629,8 +734,9 @@ final class InboxStore {
               api injected: APIClient? = nil) async -> Bool {
         let key = item.key
         guard let api = injected ?? AppModel.shared.api?.manager(AppModel.shared.itemManager(item.manager)), !sending.contains(key) else { return false }
+        let visit = hubVisit
         sending.insert(key)
-        defer { sending.remove(key) }
+        defer { if visit == hubVisit { sending.remove(key) } }
         let before = items.first { $0.key == key }
         if let i = items.firstIndex(where: { $0.key == key }) {
             items[i].doneAt = .now
@@ -641,11 +747,13 @@ final class InboxStore {
         Haptics.tap()
         do {
             try await api.inboxReply(item.id, text: text, changes: changes, card: card)
+            guard visit == hubVisit else { return false }
             marks.settle(key, token: token, taken: true)
             Haptics.success()
             AppModel.shared.toast = Toast(String(localized: "Sent and marked as done"), style: .success)
             return true
         } catch {
+            guard visit == hubVisit else { return false }
             marks.settle(key, token: token, taken: false)
             if let before, !marks.out(key), let i = items.firstIndex(where: { $0.key == key }) {
                 items[i].doneAt = before.doneAt
@@ -680,12 +788,17 @@ final class InboxStore {
         let targets = Self.actionable(list, in: items)
         guard Self.canMerge(targets), let first = targets.first, let api = AppModel.shared.api else { return }
         let manager = first.manager
-        Task { await runMerge(targets, manager: manager, api: api.manager(AppModel.shared.itemManager(manager)), done: done) }
+        let visit = hubVisit
+        Task {
+            guard visit == hubVisit else { return }
+            await runMerge(targets, manager: manager, api: api.manager(AppModel.shared.itemManager(manager)), visit: visit, done: done)
+        }
     }
 
-    private func runMerge(_ targets: [InboxItem], manager: String?, api: APIClient, done: @MainActor () -> Void) async {
+    private func runMerge(_ targets: [InboxItem], manager: String?, api: APIClient, visit: UInt64, done: @MainActor () -> Void) async {
         do {
             let r = try await api.mergeInbox(targets)
+            guard visit == hubVisit else { return }
             var survivor = r.item
             if survivor.manager == nil { survivor.manager = manager }
             if survivor.version == nil { survivor.version = items.first { $0.key == survivor.key }?.version }
@@ -693,10 +806,14 @@ final class InboxStore {
             items = items.filter { !gone.contains($0.key) }.map { $0.key == survivor.key ? survivor : $0 }
             save()
             Haptics.success()
-            let button = r.undoID.map { id in Toast.Action(title: String(localized: "Undo")) { [weak self] in self?.undoMerge(id, manager: manager) } }
+            let button = r.undoID.map { id in Toast.Action(title: String(localized: "Undo")) { [weak self] in
+                guard let self, visit == self.hubVisit else { return }
+                self.undoMerge(id, manager: manager)
+            } }
             AppModel.shared.toast = Toast(String(localized: "Merged \(r.members.count + 1) rows into one"), style: .success, action: button)
             done()
         } catch {
+            guard visit == hubVisit else { return }
             AppModel.shared.show(error)
             reload()
         }
@@ -704,15 +821,20 @@ final class InboxStore {
 
     private func undoMerge(_ id: String, manager: String?) {
         guard let api = AppModel.shared.api?.manager(AppModel.shared.itemManager(manager)) else { return }
+        let visit = hubVisit
         Task {
+            guard visit == hubVisit else { return }
             do {
-                for var it in try await api.undoInboxMerge(id) {
+                let changed = try await api.undoInboxMerge(id)
+                guard visit == hubVisit else { return }
+                for var it in changed {
                     if it.manager == nil { it.manager = manager }
                     if let i = items.firstIndex(where: { $0.key == it.key }) { items[i] = it }
                 }
                 reload() // the members are listed again
                 AppModel.shared.toast = Toast(String(localized: "Split into separate rows again"), style: .success)
             } catch {
+                guard visit == hubVisit else { return }
                 AppModel.shared.show(error)
             }
         }
@@ -723,13 +845,16 @@ final class InboxStore {
     func addTodos(_ list: [InboxItem], due: InboxDue, done: @escaping @MainActor () -> Void = {}) {
         let targets = Self.actionable(list, in: items)
         guard !targets.isEmpty, let api = AppModel.shared.api else { return }
+        let visit = hubVisit
         Task {
+            guard visit == hubVisit else { return }
             var made: [(manager: String?, made: [InboxTodoReply.Made])] = []
             var failure: Error?
             var count = 0
             for (manager, mine) in Self.managers(targets).map({ ($0.key, $0.items) }) {
                 do {
                     let r = try await api.manager(AppModel.shared.itemManager(manager)).todoInbox(mine, due: due)
+                    guard visit == hubVisit else { return }
                     for var it in r.changed {
                         if it.manager == nil { it.manager = manager }
                         if let i = items.firstIndex(where: { $0.key == it.key }) {
@@ -740,6 +865,7 @@ final class InboxStore {
                     count += r.todos.count
                     if !r.todos.isEmpty { made.append((manager, r.todos)) }
                 } catch {
+                    guard visit == hubVisit else { return }
                     failure = error
                 }
             }
@@ -751,7 +877,10 @@ final class InboxStore {
             }
             guard count > 0, failure == nil else { return }
             Haptics.success()
-            let button = Toast.Action(title: String(localized: "Undo")) { [weak self] in self?.undoTodos(made) }
+            let button = Toast.Action(title: String(localized: "Undo")) { [weak self] in
+                guard let self, visit == self.hubVisit else { return }
+                self.undoTodos(made)
+            }
             AppModel.shared.toast = Toast(String(localized: "Added \(count) to your to-dos"), style: .success, action: button)
             done()
         }
@@ -759,10 +888,14 @@ final class InboxStore {
 
     private func undoTodos(_ groups: [(manager: String?, made: [InboxTodoReply.Made])]) {
         guard let api = AppModel.shared.api else { return }
+        let visit = hubVisit
         Task {
+            guard visit == hubVisit else { return }
             do {
                 for g in groups {
-                    for var it in try await api.manager(AppModel.shared.itemManager(g.manager)).undoInboxTodo(g.made) {
+                    let changed = try await api.manager(AppModel.shared.itemManager(g.manager)).undoInboxTodo(g.made)
+                    guard visit == hubVisit else { return }
+                    for var it in changed {
                         if it.manager == nil { it.manager = g.manager }
                         if let i = items.firstIndex(where: { $0.key == it.key }) { items[i] = it }
                     }
@@ -770,6 +903,7 @@ final class InboxStore {
                 save()
                 AppModel.shared.toast = Toast(String(localized: "Taken out of your to-dos"), style: .success)
             } catch {
+                guard visit == hubVisit else { return }
                 AppModel.shared.show(error)
                 reload()
             }
@@ -803,15 +937,19 @@ final class InboxStore {
         items[i].doc?.set(row: row.ref, field: status.field, to: value)
         moving.insert(key)
         Haptics.tap()
+        let visit = hubVisit
         Task {
-            defer { moving.remove(key) }
+            guard visit == hubVisit else { return }
+            defer { if visit == hubVisit { moving.remove(key) } }
             do {
                 var fresh = try await api.inboxDocStatus(item.id, .init(ref: row.ref, field: status.field, value: value))
+                guard visit == hubVisit else { return }
                 if fresh.manager == nil { fresh.manager = item.manager }
                 if let j = items.firstIndex(where: { $0.key == item.key }) { items[j] = fresh }
                 save()
                 AppModel.shared.toast = Toast(String(localized: "Changed “\(status.name)” to \(value)"), style: .success)
             } catch {
+                guard visit == hubVisit else { return }
                 if let j = items.firstIndex(where: { $0.key == item.key }) { items[j] = before }
                 AppModel.shared.show(error)
             }

@@ -267,15 +267,6 @@ func TestBashrcAliasLaunchers(t *testing.T) {
 	}
 }
 
-// No alias that starts claude in ~/.bashrc: plain claude, as with zsh.
-func TestBashrcWithoutLaunchers(t *testing.T) {
-	list, _, _, _ := mergeLaunchers(asBash(t, `alias ll="ls -l"`, launcherScript))
-	list = withoutInstalledWorkAgents(list)
-	if len(list) != 1 || list[0].Name != "claude" {
-		t.Fatalf("got %v", list)
-	}
-}
-
 // What the rc files print is not the script's: Ubuntu's /etc/bash.bashrc prints a sudo hint until the user has run
 // sudo once (#6310), other rc files a greeting, and an exit trap prints after the script. None of it is a launcher,
 // and the last PATH entry (where a wrapper script is) stays whole.
@@ -321,7 +312,7 @@ func TestLauncherOutputReadsOnlyBetweenMarkers(t *testing.T) {
 	}{
 		"framed":          {hint + launcherBegin + body + launcherEnd + "bye\n", []string{"kcc"}},
 		"no end marker":   {hint + launcherBegin + body, []string{"kcc"}},
-		"no begin marker": {hint + body, []string{"claude"}},
+		"no begin marker": {hint + body, nil},
 	} {
 		list, _, _, _ := mergeLaunchers(c.out)
 		var names []string

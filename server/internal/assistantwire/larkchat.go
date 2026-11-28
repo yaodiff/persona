@@ -20,6 +20,8 @@ type ChatTarget struct {
 	SessionID string `json:"session_id,omitempty"`
 	// TodoID is set only on a to-do reminder's cards: a reply still goes to the conversation, with that to-do as data.
 	TodoID string `json:"todo_id,omitempty"`
+	// Space is the domain space slug when starting a new conversation for a space-bound topic.
+	Space string `json:"space,omitempty"`
 }
 
 // The kinds of a ChatTarget.
@@ -80,8 +82,9 @@ type ChatCardRef struct {
 	Kind            string    `json:"kind,omitempty"`
 	MachineID       string    `json:"machine_id,omitempty"`
 	SessionID       string    `json:"session_id,omitempty"`
-	Thread          string    `json:"thread,omitempty"`  // the topic it was posted into (ChatCard.Thread)
-	ChatID          string    `json:"chat_id,omitempty"` // the group chat of that topic (ChatCard.ChatID); "" in the owner's DM
+	CreatedAt       time.Time `json:"created_at,omitzero"` // occurrence this message asks, for safe same-ID replacement handling
+	Thread          string    `json:"thread,omitempty"`    // the topic it was posted into (ChatCard.Thread)
+	ChatID          string    `json:"chat_id,omitempty"`   // the group chat of that topic (ChatCard.ChatID); "" in the owner's DM
 	At              time.Time `json:"at"`
 	ExpiresAt       time.Time `json:"expires_at,omitzero"` // the decision deadline when posted; a live prepared card may extend it
 	ApprovalBatchID string    `json:"approval_batch_id,omitempty"`
@@ -169,6 +172,12 @@ type ChatOpenTodo struct {
 	Text                 string
 	Where                string
 }
+
+// FeishuTopicMayOpenTodo holds the pairing of a run started in an unbound main_decides topic.
+const FeishuTopicMayOpenTodo = "topic_may_open_todo"
+
+// FeishuReadChatKey is the persisted run extension for the chat that asked /read.
+const FeishuReadChatKey = "read_chat"
 
 // What noting a topic message as its to-do's decision came to (larkhost.Host.TopicDecision).
 const (

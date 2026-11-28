@@ -26,7 +26,7 @@ describe("main conversation runtime", () => {
   });
 
   it("separates no main from startup", () => {
-    expect(mainRuntimeSummary(undefined)).toBe("主对话还没开始");
+    expect(mainRuntimeSummary(undefined)).toBe("主对话尚未启动");
     expect(mainRuntimeSummary(undefined, undefined, true)).toBe("主对话 · 启动中…");
   });
 
@@ -48,7 +48,7 @@ describe("main conversation runtime", () => {
     const claude = { ...report, harness: "claude" };
     expect(mainRuntimeDetails("main", { ...claude, mode: "interactive" }).runtime).toBe("Claude Code（交互式）");
     expect(mainRuntimeDetails("main", { ...claude, mode: "print", mode_note: "tmux is not installed on this computer" }))
-      .toEqual({ place: "execution-host", runtime: "Claude Code（打印模式）", note: "交互式 Claude Code 没有启动起来：tmux is not installed on this computer" });
+      .toEqual({ place: "execution-host", runtime: "Claude Code（打印模式）", note: "交互式 Claude Code 启动失败：tmux is not installed on this computer" });
     expect(mainRuntimeDetails("main", claude).runtime).toBe("Claude Code"); // the switch off: as before
   });
 

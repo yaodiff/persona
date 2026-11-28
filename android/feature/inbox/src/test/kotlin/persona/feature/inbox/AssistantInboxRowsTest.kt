@@ -83,7 +83,7 @@ class AssistantInboxRowsTest {
             return lookedUp
         }
         override suspend fun refresh() = Unit
-        override suspend fun personaContext(itemId: String) = context
+        override suspend fun personaContext(itemId: String) = context?.let { PersonaContext(it) }
         override fun conversation(feedId: String, startPosition: Long?) = flowOf(LarkConversation())
         override suspend fun loadOlder(feedId: String) = Unit
         override suspend fun refreshConversation(feedId: String) = Unit

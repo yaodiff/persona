@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/bus"
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
@@ -337,50 +338,36 @@ var (
 )
 
 func init() {
-	handleBus(devicewire.MethodLinkSwitchBegin, func(h *Hub, ctx context.Context, c *busConn, params json.RawMessage) (any, error) {
-		var p devicewire.LinkSwitchBegin
-		if err := json.Unmarshal(params, &p); err != nil {
-			return nil, linkSwitchInvalid(devicewire.MethodLinkSwitchBegin + ": " + err.Error())
-		}
-		begun, err := h.beginLinkSwitch(ctx, c, p)
-		if err != nil {
-			return nil, err
-		}
-		return begun, nil
-	})
-	handleBus(devicewire.MethodLinkSwitchEnd, func(h *Hub, ctx context.Context, c *busConn, params json.RawMessage) (any, error) {
-		var p devicewire.LinkSwitchEnd
-		if err := json.Unmarshal(params, &p); err != nil {
-			return nil, linkSwitchInvalid(devicewire.MethodLinkSwitchEnd + ": " + err.Error())
-		}
-		return h.endLinkSwitch(ctx, c, p)
+	handleTypedBus(devicewire.LinkSwitchBeginMethod, devicewire.MethodLinkSwitchBegin+": ", (*Hub).beginLinkSwitch)
+	handleTypedBus(devicewire.LinkSwitchEndMethod, devicewire.MethodLinkSwitchEnd+": ", func(h *Hub, ctx context.Context, c *busConn, p devicewire.LinkSwitchEnd) (buswire.None, error) {
+		return buswire.None{}, h.endLinkSwitch(ctx, c, p)
 	})
 }
 
 // beginLinkSwitch is devices.link_switch.begin from manager c.
-func (h *Hub) beginLinkSwitch(ctx context.Context, c *busConn, p devicewire.LinkSwitchBegin) (*devicewire.LinkSwitchBegun, error) {
+func (h *Hub) beginLinkSwitch(ctx context.Context, c *busConn, p devicewire.LinkSwitchBegin) (devicewire.LinkSwitchBegun, error) {
 	mid := p.MachineID
 	run := &linkSwitchRun{operation: clip(p.Operation, 64), by: clip(p.By, 16), manager: c.managerID()}
 	if run.operation == "" {
-		return nil, linkSwitchInvalid(devicewire.MethodLinkSwitchBegin + ": operation is required")
+		return devicewire.LinkSwitchBegun{}, linkSwitchInvalid(devicewire.MethodLinkSwitchBegin + ": operation is required")
 	}
 	h.machineAdd.Lock() // as a rename: the entry is read and written whole, one change at a time; and one end at a time
 	defer h.machineAdd.Unlock()
 	if err := ctx.Err(); err != nil {
-		return nil, err // the manager stopped waiting while this waited for its turn: nothing begins
+		return devicewire.LinkSwitchBegun{}, err // the manager stopped waiting while this waited for its turn: nothing begins
 	}
 	if err := h.linkSwitchReady(ctx, c, p, run.operation); err != nil {
-		return nil, err
+		return devicewire.LinkSwitchBegun{}, err
 	}
 	now := h.linkSwitch.clock()
 	run.until = now.Add(linkSwitchFor)
 	if err := h.linkSwitch.claim(mid, run, now); err != nil {
-		return nil, linkSwitchRefusal(devicewire.LinkSwitchCodeChanged, "the computer is being moved, removed or switched")
+		return devicewire.LinkSwitchBegun{}, linkSwitchRefusal(devicewire.LinkSwitchCodeChanged, "the computer is being moved, removed or switched")
 	}
 	// Asked, before anything changes: a hub that stops from here on finds the switch in the audit.
 	if err := h.linkSwitchRecord(ctx, c, mid, run.operation, run.by, switchBegin, nil); err != nil {
 		h.linkSwitch.drop(mid, run.operation)
-		return nil, fmt.Errorf("the switch's audit: %w", err)
+		return devicewire.LinkSwitchBegun{}, fmt.Errorf("the switch's audit: %w", err)
 	}
 	err := h.swapMachineKind(ctx, mid, kindLink, func(mc MachineConfig) error {
 		switch {
@@ -393,21 +380,21 @@ func (h *Hub) beginLinkSwitch(ctx context.Context, c *busConn, p devicewire.Link
 	})
 	if err != nil {
 		h.beginFailed(ctx, c, mid, run)
-		return nil, linkSwitchSwapErr(err)
+		return devicewire.LinkSwitchBegun{}, linkSwitchSwapErr(err)
 	}
 	code, err := h.newPairCode(ctx, mid)
 	if err != nil {
 		h.undoBegin(ctx, c, mid, run, "")
-		return nil, fmt.Errorf("the computer's pairing code: %w", err)
+		return devicewire.LinkSwitchBegun{}, fmt.Errorf("the computer's pairing code: %w", err)
 	}
 	hash := hashToken(code.Token)
 	if err := h.linkSwitchRecord(ctx, c, mid, run.operation, run.by, switchBegun, map[string]any{"pair_hash": hash}); err != nil {
 		h.undoBegin(ctx, c, mid, run, hash)
-		return nil, fmt.Errorf("the switch's audit: %w", err)
+		return devicewire.LinkSwitchBegun{}, fmt.Errorf("the switch's audit: %w", err)
 	}
 	h.linkSwitch.begun(mid, run.operation, hash)
 	h.logf("[%s] link switch %s begun (asked by %s, through %s)", mid, run.operation, run.by, run.manager)
-	return &devicewire.LinkSwitchBegun{Link: code.PairURL, PairHash: hash}, nil
+	return devicewire.LinkSwitchBegun{Link: code.PairURL, PairHash: hash}, nil
 }
 
 // undoBegin takes back a begin that could not finish: its code (hash, when it made one) and its kind. When either
@@ -513,62 +500,62 @@ func linkSwitchSwapErr(err error) error {
 // with begin. An end is final: once one is recorded, the same answers again and nothing changes (a switch that
 // succeeded answers a rollback already_succeeded); an operation the hub never saw begin, or one a later switch came
 // after, changes nothing either. A rollback's hash must be that switch's code's.
-func (h *Hub) endLinkSwitch(ctx context.Context, c *busConn, p devicewire.LinkSwitchEnd) (any, error) {
+func (h *Hub) endLinkSwitch(ctx context.Context, c *busConn, p devicewire.LinkSwitchEnd) error {
 	mid, op := p.MachineID, clip(p.Operation, 64)
 	rollBack := p.Outcome == devicewire.LinkSwitchRolledBack
 	switch {
 	case p.Outcome != devicewire.LinkSwitchSucceeded && !rollBack:
-		return nil, linkSwitchInvalid(devicewire.MethodLinkSwitchEnd + ": unknown outcome")
+		return linkSwitchInvalid(devicewire.MethodLinkSwitchEnd + ": unknown outcome")
 	case mid == "" || op == "":
-		return nil, linkSwitchInvalid(devicewire.MethodLinkSwitchEnd + ": machine_id and operation are required")
+		return linkSwitchInvalid(devicewire.MethodLinkSwitchEnd + ": machine_id and operation are required")
 	}
 	h.machineAdd.Lock() // before what it reads: a begin under way is either done or not begun
 	defer h.machineAdd.Unlock()
 	st, err := h.linkSwitchOpOf(ctx, mid, op)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if h.ownsMachine(c, mid) != nil {
-		return nil, h.endMovedLinkSwitch(ctx, c, mid, op, p.PairHash, rollBack, st)
+		return h.endMovedLinkSwitch(ctx, c, mid, op, p.PairHash, rollBack, st)
 	}
 	switch st.ended {
 	case switchSucceeded:
 		if rollBack {
-			return nil, linkSwitchRefusal(devicewire.LinkSwitchCodeSucceeded, "this switch succeeded; nothing is undone")
+			return linkSwitchRefusal(devicewire.LinkSwitchCodeSucceeded, "this switch succeeded; nothing is undone")
 		}
-		return map[string]any{}, nil
+		return nil
 	case switchRolledBack, switchBeginFailed:
 		switch {
 		case !rollBack:
-			return nil, linkSwitchInvalid("this switch did not succeed: it was undone")
+			return linkSwitchInvalid("this switch did not succeed: it was undone")
 		case h.linkSwitchEntryGone(mid):
-			return nil, linkSwitchGone() // as the first answer said: the computer is gone since
+			return linkSwitchGone() // as the first answer said: the computer is gone since
 		}
-		return map[string]any{}, nil
+		return nil
 	}
 	if !st.known || !st.latest {
 		if rollBack {
 			h.logf("[%s] link switch %s rolled back, which is no switch under way here: nothing to undo", mid, op)
-			return map[string]any{}, nil
+			return nil
 		}
-		return nil, linkSwitchInvalid("no such switch under way")
+		return linkSwitchInvalid("no such switch under way")
 	}
 	if p.PairHash != "" && p.PairHash != st.pairHash {
-		return nil, linkSwitchInvalid("pair_hash is not this switch's code")
+		return linkSwitchInvalid("pair_hash is not this switch's code")
 	}
 	if !rollBack {
 		if !st.begun {
-			return nil, linkSwitchInvalid("this switch made no pairing code")
+			return linkSwitchInvalid("this switch made no pairing code")
 		}
 		if err := h.linkSwitchRecord(ctx, c, mid, op, "", switchSucceeded, nil); err != nil {
-			return nil, fmt.Errorf("the switch's audit: %w", err)
+			return fmt.Errorf("the switch's audit: %w", err)
 		}
 		h.linkSwitch.finish(mid, linkSwitchEnded{op, switchSucceeded, st.manager, st.pairHash})
-		return map[string]any{}, nil
+		return nil
 	}
 	revoked, err := h.revokeLinkSwitch(ctx, mid, st.pairHash)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	var refused error // the kind is not this switch's to put back: the switch is over all the same
 	var re *rpc.Error
@@ -579,17 +566,14 @@ func (h *Hub) endLinkSwitch(ctx context.Context, c *busConn, p devicewire.LinkSw
 	case errors.Is(err, errSwapKind):
 		refused = linkSwitchSwapErr(err)
 	default:
-		return nil, err // tried again: what was revoked stays revoked
+		return err // tried again: what was revoked stays revoked
 	}
 	if err := h.linkSwitchRecord(ctx, c, mid, op, "", switchRolledBack, map[string]any{"credentials_revoked": revoked}); err != nil {
-		return nil, fmt.Errorf("the switch's audit: %w", err)
+		return fmt.Errorf("the switch's audit: %w", err)
 	}
 	h.linkSwitch.finish(mid, linkSwitchEnded{op, switchRolledBack, st.manager, st.pairHash})
 	h.logf("[%s] link switch %s rolled back: %d credentials revoked", mid, op, revoked)
-	if refused != nil {
-		return nil, refused
-	}
-	return map[string]any{}, nil
+	return refused
 }
 
 // endMovedLinkSwitch is an end from a manager that does not carry the computer (any more: it moved, or was removed,

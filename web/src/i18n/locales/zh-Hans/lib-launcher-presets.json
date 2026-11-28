@@ -1,14 +1,14 @@
 {
   "kind_api": "直接 API",
   "kind_launcher": "Claude Code 启动器",
-  "name_invalid": "启动 ID 只能用字母、数字、_ 和 -，以字母或 _ 开头",
-  "name_reserved": "不能叫 {name}",
-  "display_name_invalid": "显示名最多 64 个字，不能换行",
+  "name_invalid": "启动 ID 仅支持字母、数字、_ 和 -，且须以字母或 _ 开头",
+  "name_reserved": "不能命名为 {name}",
+  "display_name_invalid": "显示名称最多 64 个字符，且不能换行",
   "purpose_assistant": "主对话",
-  "purpose_agent_new": "新开的 Agent",
-  "assigned": "现在用它：{purposes}。",
+  "purpose_agent_new": "新建 Agent",
+  "assigned": "已应用于：{purposes}。",
   "kept": "{purpose}：{reason}",
-  "kept_customized": "没有改，你选过别的模型，保留你的选择。",
-  "kept_incompatible": "没有改，它跑不了这个供应商。",
-  "kept_failed": "没改成，可以在「模型配置」里手动选。"
+  "kept_customized": "未更改，你此前已选择其他模型，将保留原有设置。",
+  "kept_incompatible": "未更改，该场景不支持此供应商。",
+  "kept_failed": "未能更改，请前往「模型配置」手动选择。"
 }

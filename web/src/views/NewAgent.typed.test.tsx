@@ -142,13 +142,13 @@ describe("New agent: a typed model ID (#1644)", () => {
     forgetStatus = 500;
     await open();
     await openPanel();
-    const forget = () => document.body.querySelector<HTMLButtonElement>('button[aria-label="忘记「vendor/model-x」"]');
+    const forget = () => document.body.querySelector<HTMLButtonElement>('button[aria-label="移除「vendor/model-x」"]');
     act(() => forget()!.click());
     expect(forget()).toBeNull(); // gone before the hub answers
     await flush();
     const del = requests.find((r) => r.method === "DELETE")!;
     expect(del.url).toContain("/machines/mac/launchers/claude/models/custom?model=vendor%2Fmodel-x");
     expect(forget()).not.toBeNull(); // back
-    expect(document.body.textContent).toMatch(/没能忘记「vendor\/model-x」：.*数据库暂时不可用/);
+    expect(document.body.textContent).toMatch(/无法移除「vendor\/model-x」：.*数据库暂时不可用/);
   });
 });

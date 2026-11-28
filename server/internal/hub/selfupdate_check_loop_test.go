@@ -48,7 +48,8 @@ func TestUpdateCheckLoopPreservesInstall(t *testing.T) {
 					before := u.view()
 					app := appClient(h)
 					manifest := update.Manifest{Version: "v2-202611021700", Build: 202611021700, Commit: h.build.Commit,
-						Files: map[string]update.File{"linux-amd64": {Name: "personad-linux-amd64.gz"}}}
+						Edition: update.ThisEdition.Marker(),
+						Files:   map[string]update.File{"linux-amd64": {Name: "personad-linux-amd64.gz"}}}
 					if reply == "current" {
 						manifest.Version, manifest.Build = h.version, h.build.Number
 					}
@@ -62,7 +63,7 @@ func TestUpdateCheckLoopPreservesInstall(t *testing.T) {
 							return &http.Response{StatusCode: http.StatusNotFound, Header: make(http.Header), Body: io.NopCloser(strings.NewReader("")), Request: r}, nil
 						}
 						checks <- time.Now()
-						if r.URL.Path != "/dl/latest.json" {
+						if r.URL.Path != testFeedPath() {
 							t.Errorf("check started another install: %s", r.URL.Path)
 						}
 						status := http.StatusOK

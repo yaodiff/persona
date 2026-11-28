@@ -15,15 +15,18 @@ import (
 
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/link"
+	"github.com/nwverse/persona/server/internal/osproc"
 	"github.com/nwverse/persona/server/internal/taskworkspace"
 	"github.com/nwverse/persona/server/internal/workspacenaming"
 )
 
 type workspaceJournal struct {
 	taskworkspace.Record
-	Identities map[string]string `json:"identities"`
-	Tombstones []string          `json:"tombstones"`
-	InFlight   bool              `json:"in_flight"`
+	Identities           map[string]string `json:"identities"`
+	Tombstones           []string          `json:"tombstones"`
+	InFlight             bool              `json:"in_flight"`
+	LocalGitIdentity     string            `json:"local_git_identity,omitempty"`
+	LastGitStderrSummary string            `json:"last_git_stderr_summary,omitempty"`
 }
 type workspaceExecutor struct {
 	n                *Node
@@ -32,7 +35,10 @@ type workspaceExecutor struct {
 	locks            []*os.File
 	mirrorRepos      []string
 	mirrorTTLSeconds int
+	coldFetchTimeout time.Duration
 }
+
+var errWorkspaceSymlink = errors.New("symbolic link")
 
 func workspaceNoLinks(path string) error {
 	if !filepath.IsAbs(path) || filepath.Clean(path) != path {
@@ -52,7 +58,7 @@ func workspaceNoLinks(path string) error {
 			return err
 		}
 		if st.Mode()&os.ModeSymlink != 0 {
-			return errors.New("symbolic link")
+			return errWorkspaceSymlink
 		}
 	}
 	return nil
@@ -130,28 +136,60 @@ func (e *workspaceExecutor) claimDir(path string) error {
 // Each command is bounded, noninteractive, and stores no raw stderr or URL in an
 // error. The inherited locks outlive a crashed Node while Git is still running.
 func (e *workspaceExecutor) git(ctx context.Context, dir string, args ...string) (string, error) {
+	return e.gitWithTimeout(ctx, taskworkspace.GitTimeout, dir, args...)
+}
+
+func (e *workspaceExecutor) gitWithTimeout(ctx context.Context, timeout time.Duration, dir string, args ...string) (string, error) {
 	e.journal.InFlight = true
 	if err := e.save(); err != nil {
 		return "", err
 	}
-	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir, "--no-pager", "-c", "core.hooksPath=" + filepath.Join(filepath.Dir(e.path), "hooks"), "-c", "core.quotepath=off", "-c", "core.fsmonitor=false", "-c", "gc.auto=0"}, args...)...)
 	cmd.Env = taskworkspace.GitEnv(os.Environ())
+	if e.journal.LocalGitIdentity != "" {
+		cmd.Env = append(cmd.Env, "GIT_NO_LAZY_FETCH=1", "GIT_ALLOW_PROTOCOL=")
+	}
 	cmd.WaitDelay = time.Second
+	stopGitTransportOnCancel(cmd, args)
 	workspaceInheritLocks(cmd, e.locks)
 	var out workspaceOutput
+	stderr := keptOutput{tailMost: workspaceGitStderrTail}
 	cmd.Stdout = &out
-	cmd.Stderr = io.Discard
+	cmd.Stderr = &stderr
 	err := cmd.Run()
+	if err != nil && ctx.Err() != nil {
+		err = ctx.Err()
+	}
+	if err != nil {
+		e.journal.LastGitStderrSummary = workspaceGitStderrSummary(stderr.String())
+	}
 	e.journal.InFlight = false
 	if saveErr := e.save(); saveErr != nil {
 		return "", saveErr
 	}
 	if out.overflow {
-		return "", errors.New("output limit")
+		if err == nil {
+			err = errors.New("output limit")
+		}
+		return "", err
 	}
 	return strings.TrimSpace(out.String()), err
+}
+
+func stopGitTransportOnCancel(cmd *exec.Cmd, args []string) {
+	if len(args) == 0 || args[0] != "fetch" && args[0] != "ls-remote" {
+		return
+	}
+	// Stop the transport helper and pack writer before returning the slot.
+	cmd.SysProcAttr = osproc.GroupAttr()
+	cmd.Cancel = func() error {
+		if err := osproc.StopGroup(cmd.Process.Pid, true); err != nil {
+			return cmd.Process.Kill()
+		}
+		return nil
+	}
 }
 
 type workspaceOutput struct {
@@ -173,7 +211,7 @@ func workspaceReadGit(ctx context.Context, dir string, args ...string) (string, 
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir, "--no-pager", "-c", "core.quotepath=off", "-c", "core.fsmonitor=false", "-c", "gc.auto=0"}, args...)...)
-	cmd.Env = append(taskworkspace.GitEnv(os.Environ()), "GIT_OPTIONAL_LOCKS=0")
+	cmd.Env = append(taskworkspace.GitEnv(os.Environ()), "GIT_OPTIONAL_LOCKS=0", "GIT_NO_LAZY_FETCH=1", "GIT_ALLOW_PROTOCOL=")
 	cmd.WaitDelay = time.Second
 	var out workspaceOutput
 	cmd.Stdout = &out
@@ -230,18 +268,32 @@ func (n *Node) taskWorkspace(ctx context.Context, method string, raw, start json
 	}
 	// A digest detects accidental changes; re-resolve on the target to validate
 	// paths and templates rather than trusting a caller-computed digest.
-	preview := workspacenaming.Resolve(req.Plan.Source, workspacenaming.NodeContext{Home: n.home, PersonaHome: n.dir})
-	if preview.Plan == nil || preview.Plan.Digest != req.Plan.Digest || n.offLimits(req.Plan.RootPath) != nil || workspaceNoLinks(req.Plan.RootPath) != nil {
+	preview := n.resolveWorkspacePlan(req.Plan.Source)
+	if preview.Plan == nil || preview.Plan.Digest != req.Plan.Digest {
 		return taskworkspace.Record{Error: taskworkspace.Failure("invalid_path", "validation", req.OperationID, "", req.Plan.RootPath)}, nil
 	}
+	if problem := n.workspacePlanPathProblem(preview.Plan); problem != nil {
+		return taskworkspace.Record{Error: taskworkspace.Failure(problem.Code, "validation", req.OperationID, problem.RepoID, req.Plan.RootPath)}, nil
+	}
+	remoteRepos := 0
 	for _, source := range req.Plan.Source.Repositories.Repositories {
+		// An existing receipt must remain inspectable and cleanable if the source
+		// checkout disappears. The local store is attested before any Git use.
+		if source.Local != nil {
+			continue
+		}
+		remoteRepos++
 		if !n.workspaceSourceAllowed(source) {
 			return taskworkspace.Record{Error: taskworkspace.Failure("source_invalid", "validation", req.OperationID, source.RepoID, "")}, nil
 		}
 	}
-	control := filepath.Join(n.dir, "task-workspaces")
-	if workspaceNoLinks(control) != nil {
-		return nil, errors.New("workspace control path unavailable")
+	control, err := n.workspaceControlDir("task-workspaces")
+	if err != nil {
+		var problem *taskworkspace.Problem
+		if errors.As(err, &problem) {
+			return taskworkspace.Record{Error: taskworkspace.Failure(problem.Code, "validation", req.OperationID, "", req.Plan.RootPath)}, nil
+		}
+		return nil, err
 	}
 	if err := os.MkdirAll(control, 0700); err != nil {
 		return nil, err
@@ -347,6 +399,10 @@ func (n *Node) taskWorkspace(ctx context.Context, method string, raw, start json
 		if j.Launch != nil && j.Launch.SessionID == "" && j.Launch.ExpectedSessionID != "" {
 			e.observedLaunch(ctx)
 		}
+		if j.State == "ready" && !e.owned(j.Plan.RootPath) {
+			j.Error = taskworkspace.Failure("identity_mismatch", method, j.OperationID, "", j.Plan.RootPath)
+			return j.Record, nil
+		}
 		for i := range j.Repositories {
 			r := &j.Repositories[i]
 			if r.State == "materializing" && e.checkRegistration(ctx, r) == "" {
@@ -370,7 +426,11 @@ func (n *Node) taskWorkspace(ctx context.Context, method string, raw, start json
 		if j.Cleanup != nil {
 			return e.fail("resource_conflict", "prepare", "", j.Plan.RootPath), nil
 		}
-		result := e.prepare(ctx)
+		// The Node RPC context may have no deadline. Bound preparation,
+		// including time queued for network Git, with the shared RPC budget.
+		prepareCtx, cancel := context.WithTimeout(ctx, taskworkspace.PrepareTimeout(remoteRepos))
+		defer cancel()
+		result := e.prepare(prepareCtx)
 		if err = e.save(); err != nil {
 			return nil, err
 		}
@@ -385,6 +445,9 @@ func (n *Node) taskWorkspace(ctx context.Context, method string, raw, start json
 		}
 		if j.State != "ready" || j.Cleanup != nil || !workspacenaming.ValidOperationID(req.UseID) {
 			return e.fail("not_ready", method, "", j.Plan.RootPath), nil
+		}
+		if !e.owned(j.Plan.RootPath) {
+			return e.fail("identity_mismatch", method, "", j.Plan.RootPath), nil
 		}
 		for i := range j.Repositories {
 			if code := e.inspect(ctx, &j.Repositories[i]); code != "" {
@@ -462,14 +525,26 @@ func (e *workspaceExecutor) adopt(ctx context.Context, req taskworkspace.Request
 	j.InputDigest = taskworkspace.InputKey(req.Plan)
 	j.State = "preparing"
 	j.Repositories = reused
+	if len(reused) == 0 {
+		j.LocalGitIdentity = ""
+	}
 	j.Cleanup = nil
 	j.Error = nil
 	return e.save()
 }
+
+func (e *workspaceExecutor) privateCommonDir(repoID string) string {
+	return filepath.Join(filepath.Dir(e.path), "git", taskworkspace.Hash(repoID)+".git")
+}
+
 func (e *workspaceExecutor) prepare(ctx context.Context) taskworkspace.Record {
 	j := &e.journal
 	j.State = "preparing"
+	j.LastGitStderrSummary = ""
 	if !e.owned(j.Plan.RootPath) {
+		if len(j.Plan.Repositories) == 0 && j.Identities[j.Plan.RootPath] != "" {
+			return e.fail("identity_mismatch", "reserve", "", j.Plan.RootPath)
+		}
 		if err := e.claimDir(j.Plan.RootPath); err != nil {
 			return e.fail("path_conflict", "reserve", "", j.Plan.RootPath)
 		}
@@ -477,7 +552,12 @@ func (e *workspaceExecutor) prepare(ctx context.Context) taskworkspace.Record {
 	for index, p := range j.Plan.Repositories {
 		i := slices.IndexFunc(j.Repositories, func(r taskworkspace.Instance) bool { return r.RepoID == p.RepoID })
 		if i < 0 {
-			j.Repositories = append(j.Repositories, taskworkspace.Instance{RepoID: p.RepoID, Input: j.Plan.Source.Repositories.Repositories[index], RelativePath: p.RelativePath, Path: p.AbsolutePath, CommonDir: filepath.Join(filepath.Dir(e.path), "git", taskworkspace.Hash(p.RepoID)+".git"), TaskBranch: p.TaskBranch, State: "pending"})
+			input := j.Plan.Source.Repositories.Repositories[index]
+			common := e.privateCommonDir(p.RepoID)
+			if input.Local != nil {
+				common = input.Local.CommonDir
+			}
+			j.Repositories = append(j.Repositories, taskworkspace.Instance{RepoID: p.RepoID, Input: input, RelativePath: p.RelativePath, Path: p.AbsolutePath, CommonDir: common, TaskBranch: p.TaskBranch, State: "pending"})
 			i = len(j.Repositories) - 1
 			if err := e.save(); err != nil {
 				return e.fail("persistence_failed", "reserve", p.RepoID, p.AbsolutePath)

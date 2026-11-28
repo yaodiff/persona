@@ -120,7 +120,7 @@ describe("the main conversation's readiness", () => {
     expect(calls).not.toContain("POST /api/v1/assistant/conversations");
     expect(textarea().value).toBe("帮我看看日程");
     // not nothing (#4480): a line says why, and the card is nudged
-    expect(host.querySelector('[data-testid="composer-nudge"]')?.textContent).toContain("还没发出去：先添加电脑");
+    expect(host.querySelector('[data-testid="composer-nudge"]')?.textContent).toContain("暂未发送：先添加电脑");
     expect(host.querySelector('[data-testid="readiness-card"]')?.getAttribute("data-nudged")).toBe("1");
 
     // the button opens the step (add a computer: how, in place); the nudge drew it anew, so it is looked up again
@@ -144,7 +144,7 @@ describe("the main conversation's readiness", () => {
     expect(document.body.textContent).toContain("设置 › 模型供应商");
     // a key alone is not enough today: the computer comes first (#4480)
     const note = document.body.querySelector('[data-testid="help-model-computer"]')?.textContent ?? "";
-    expect(note).toContain("只粘贴 API Key、不接电脑，还开始不了");
+    expect(note).toContain("仅粘贴 API Key 而未连接电脑时，暂时无法开始使用");
     expect(note).toContain("先添加一台");
     expect(textarea().value).toBe("");
     expect(host.textContent).not.toContain("今天我有哪些会");
@@ -169,7 +169,7 @@ describe("the main conversation's readiness", () => {
     expect(how).toBeTruthy();
     act(() => how!.click());
     const dialog = document.body.querySelector('[role="dialog"]')?.textContent ?? "";
-    expect(dialog).toContain("Persona 用的是 小林的 MacBook 上的 Claude Code 命令行，Claude 桌面版登录了也不算");
+    expect(dialog).toContain("Persona 使用的是 小林的 MacBook 上的 Claude Code 命令行工具，Claude 桌面版的登录状态并不通用");
     expect(dialog).toContain("claude auth login");
   });
 
@@ -213,7 +213,7 @@ describe("the main conversation's readiness", () => {
     const card = host.querySelector('[data-testid="readiness-failure"]');
     expect(card?.getAttribute("data-code")).toBe("claude_missing");
     expect(card?.textContent).toContain("还没装 Claude Code");
-    expect(card?.textContent).toContain("怎么安装");
+    expect(card?.textContent).toContain("如何安装");
     expect(card?.textContent).toContain("详情");
     // the draft is back in the box, not lost
     expect(textarea().value).toBe("你好");
@@ -230,7 +230,7 @@ describe("the main conversation's readiness", () => {
     act(() => host.querySelector<HTMLButtonElement>('[data-testid="composer-blocked"]')!.click());
     await flush();
     // the machines page's own flow, not the how-to pointing at the admin page
-    expect(document.body.textContent).toContain("这台电脑的系统");
+    expect(document.body.textContent).toContain("操作系统");
     expect(document.body.textContent).not.toContain("打开管理界面");
   });
 
@@ -248,7 +248,7 @@ describe("the main conversation's readiness", () => {
     expect(blocked.textContent).toBe("先确认电脑");
     act(() => blocked.click());
     await flush();
-    expect(document.body.textContent).toContain("有一台电脑想加入：小林的 MacBook");
+    expect(document.body.textContent).toContain("一台电脑请求加入：小林的 MacBook");
     const before = calls.filter((c) => c === "GET /api/v1/assistant/readiness").length;
     const yes = [...document.body.querySelectorAll("button")].find((b) => b.textContent === "是我的电脑")!;
     await act(async () => yes.click());

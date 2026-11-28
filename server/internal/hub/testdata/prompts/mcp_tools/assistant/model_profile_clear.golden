@@ -1,0 +1,9 @@
+{
+  "name": "model_profile_clear",
+  "description": "With owner approval, delete all saved profiles and rollback history. Keep current model settings.",
+  "input_schema": {
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  }
+}

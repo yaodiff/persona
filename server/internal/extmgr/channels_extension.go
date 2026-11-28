@@ -137,6 +137,7 @@ func (h *Manager) extensionChannelCall(extensionID, method string, params json.R
 		if strings.TrimSpace(in.Message.ID) == "" {
 			return nil, errors.New("a message without an id")
 		}
+		in.Message.ChatKind = in.Message.ChatKind.Known()
 		go h.channelReceive(id, in.Message)
 		return struct{}{}, nil
 	case channel.MStatus:

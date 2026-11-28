@@ -11,6 +11,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
+	"github.com/nwverse/persona/server/internal/taskworkspace"
 )
 
 func workspaceTaskService(t *testing.T) (*Service, *fakeHub) {
@@ -47,9 +48,12 @@ func workspacePlan(t *testing.T, s *Service, choice string) *TaskPlan {
 	return readonlyFeedPlan(t, s, "workspace-chat")
 }
 
-func TestTaskWorkspaceNewUsesEngineAndPersistsActualCwd(t *testing.T) {
+func TestTaskWorkspaceNewUsesEngineOnOlderNodeAndPersistsActualCwd(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		s, f := workspaceTaskService(t)
+		f.nodes["task.workspace.capabilities"] = func(string, json.RawMessage) (any, error) {
+			return taskworkspace.Capabilities{Capability: taskworkspace.Capability, Start: true}, nil
+		}
 		p := workspacePlan(t, s, `"new"`)
 		if len(f.starts) != 0 {
 			t.Fatal("preview started an agent")

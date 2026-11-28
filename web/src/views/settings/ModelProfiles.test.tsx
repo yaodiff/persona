@@ -88,7 +88,7 @@ it("lists a profile's Agent presets and says when none is in use", async () => {
   expect(host.textContent).toContain(t("settings-modelprofiles.none_active"));
   act(() => [...host.querySelectorAll("button")].find((b) => b.textContent?.includes("economy"))!.click()); await flush();
   const rows = [...document.querySelectorAll('[data-testid="model-profile-tiers"] li')].map((li) => li.textContent);
-  expect(rows).toEqual(["quickclaude", "reviewfast · m-review · highCode review"]);
+  expect(rows).toEqual(["quickClaude Code", "reviewfast · m-review · highCode review"]);
  } finally {
   await act(async () => root.unmount()); host.remove();
  }

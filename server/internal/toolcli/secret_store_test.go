@@ -78,9 +78,16 @@ func TestSecretStoreReadsOnlyAfterApprovalAndSendsCiphertext(t *testing.T) {
 	}
 }
 func TestSecretStoreRefusesPlaintextAndUnsafeSources(t *testing.T) {
-	for _, raw := range []string{`{"operation":"create","vault":"Dev","title":"x","category":"PASSWORD","fields":[{"name":"password","value":"do-not-forward"}]}`, `{"operation":"create","vault":"Dev","title":"x","category":"PASSWORD","fields":[{"name":"password","file":"x","type":"OTP"}]}`} {
+	for _, raw := range []string{
+		`{"operation":"create","vault":"Dev","title":"x","category":"PASSWORD","fields":[{"name":"password","value":"do-not-forward"}]}`,
+		`{"operation":"create","vault":"Dev","title":"x","category":"PASSWORD","fields":[{"name":"password","file":"x","type":"UNSUPPORTED"}]}`,
+		`{"operation":"create","vault":"Dev","title":"x","category":"PASSWORD","fields":[{"name":"password","delete":true}]}`,
+		`{"operation":"edit","vault":"Dev","item":"item1","fields":[{"name":"password","delete":true,"file":"x"}]}`,
+		`{"operation":"edit","vault":"Dev","item":"item1","fields":[{"name":"password","delete":true,"type":"STRING"}]}`,
+		`{"operation":"create","vault":"Dev","title":"x","category":"LOGIN","fields":[{"name":"totp_secret","type":"OTP"}]}`,
+	} {
 		if _, _, err := storeManifest([]byte(raw)); err == nil {
-			t.Fatal("unsafe manifest accepted")
+			t.Fatalf("unsafe manifest accepted: %s", raw)
 		}
 	}
 	dir := t.TempDir()
@@ -97,5 +104,67 @@ func TestSecretStoreRefusesPlaintextAndUnsafeSources(t *testing.T) {
 	_ = os.Symlink(path, link)
 	if b, err := readPrivateFile(link, 100); err == nil || b != nil {
 		t.Fatal("symlink accepted")
+	}
+}
+
+func TestSecretStoreOTPEditRetypeAndDelete(t *testing.T) {
+	const otpSecret = "JBSWY3DPEHPK3PXP"
+	path := filepath.Join(t.TempDir(), "otp")
+	if err := os.WriteFile(path, []byte(otpSecret), 0600); err != nil {
+		t.Fatal(err)
+	}
+	priv, _ := ecdh.P256().GenerateKey(rand.Reader)
+	old := call
+	t.Cleanup(func() { call = old })
+
+	call = func(_ context.Context, _ string, args any) (proto.ToolResult, error) {
+		raw, _ := json.Marshal(args)
+		var in struct {
+			Phase  string                 `json:"phase"`
+			Target wire.SecretStoreTarget `json:"target"`
+			KeyID  string                 `json:"key_id"`
+			Sealed []byte                 `json:"sealed"`
+		}
+		_ = json.Unmarshal(raw, &in)
+		if in.Phase == "prepare" {
+			b, _ := json.Marshal(wire.SecretStoreResult{
+				Target: in.Target,
+				KeyID:  "edit-key",
+				Key:    base64.StdEncoding.EncodeToString(priv.PublicKey().Bytes()),
+			})
+			return proto.TextResult(string(b), false), nil
+		}
+		k, _ := hpke.NewDHKEMPrivateKey(priv)
+		plain, err := hpke.Open(k, hpke.HKDFSHA256(), hpke.AES256GCM(), proto.SecretStoreInfo(in.KeyID), in.Sealed)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer clear(plain)
+		var vals []proto.SecretStoreValue
+		if err := json.Unmarshal(plain, &vals); err != nil {
+			t.Fatal(err)
+		}
+		if len(vals) != 1 || vals[0].Name != "backup_otp" || string(vals[0].Value) != otpSecret {
+			t.Fatalf("unexpected sealed values: %+v", vals)
+		}
+		return proto.TextResult(`{"references":{"totp_secret":"op://v/i/totp","backup_otp":"op://v/i/backup"},"deleted":["dup_field"]}`, false), nil
+	}
+
+	manifest, _ := json.Marshal(storeFileManifest{
+		Operation: "edit",
+		Vault:     "Dev",
+		Item:      "item123",
+		Fields: []storeFileField{
+			{Name: "totp_secret", Type: "OTP"},
+			{Name: "dup_field", Delete: true},
+			{Name: "backup_otp", Type: "OTP", File: path},
+		},
+	})
+	var out, errs bytes.Buffer
+	if code := Main(context.Background(), []string{"secret_store", string(manifest)}, strings.NewReader(""), &out, &errs); code != 0 {
+		t.Fatalf("exit %d, %s", code, errs.String())
+	}
+	if !strings.Contains(out.String(), `"deleted":["dup_field"]`) || strings.Contains(out.String()+errs.String(), otpSecret) {
+		t.Fatalf("unexpected output: %s", out.String())
 	}
 }

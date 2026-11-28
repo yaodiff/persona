@@ -89,9 +89,15 @@
     <string name="settings_devices_empty_detail">ペアリング後、ここでデバイスの確認や取り消しができます。</string>
     <string name="settings_devices_unnamed">名前のないデバイス</string>
     <string name="settings_devices_this">このデバイス</string>
+    <string name="settings_devices_online">オンライン</string>
+    <string name="settings_devices_group_devices">デバイス</string>
+    <string name="settings_devices_group_browsers">ブラウザー</string>
+    <string name="settings_devices_group_links">コンピューター</string>
+    <string name="settings_devices_group_integrations">連携・制限付きアクセス</string>
     <string name="settings_devices_platform_role">%1$s、%2$s</string>
     <string name="settings_devices_role_full">フルアクセス</string>
     <string name="settings_devices_role_answer">回答のみ</string>
+    <string name="settings_devices_role_scoped">アクセス制限</string>
     <string name="settings_devices_role_unknown">役割の情報なし</string>
     <string name="settings_devices_added">追加日時：%1$s</string>
     <string name="settings_devices_last_used">最終使用：%1$s</string>
@@ -135,6 +141,8 @@
     <string name="settings_not_provided">情報なし</string>
     <string name="settings_about_build">ビルド番号</string>
     <string name="settings_devices_watch">ウォッチ</string>
+    <string name="settings_devices_web">Web</string>
+    <string name="settings_devices_link">Persona Link</string>
     <string name="settings_devices_phone_unknown">スマートフォン（プラットフォームの情報なし）</string>
     <string name="settings_devices_platform_unknown">プラットフォームの情報なし</string>
     <string name="settings_devices_no_record">記録なし</string>

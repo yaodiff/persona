@@ -17,7 +17,7 @@ import (
 
 // Live replies of the Claude sessions Persona starts (#1309, docs/integrations/claude-integration.md "MessageDisplay").
 //
-// Their live replies plugin has Claude Code's MessageDisplay hook (hooksplugin.go, doctor.go displayHooks; loaded while
+// Their live replies plugin has Claude Code's MessageDisplay hook (hooksplugin.go, generated.go displayHooks; loaded while
 // the machine's setting is on, setLiveReplies): as Claude shows a reply in the
 // terminal it hands the hook each batch of newly completed lines, often seconds before the transcript has them (a
 // reply that ends in a tool call is written only once the tool is done). The hook passes the batch to the node

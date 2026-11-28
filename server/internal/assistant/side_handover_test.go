@@ -771,3 +771,122 @@ func TestExternalPRDedupUpgradeCompatibilityPreservesLegacyReceipt(t *testing.T)
 		t.Fatalf("post-restart watch after handover delivered %d total review notice(s) to conv1, want 1", n)
 	}
 }
+
+func TestAgySideConversationNotHandedOverWhileAgyRuntimeUnlisted(t *testing.T) {
+	ctx := context.Background()
+	s, f := newQuietService(t)
+	setSuperviseTimingsForTest(s, superviseTimings{gather: time.Hour, every: time.Hour, urgent: time.Hour})
+
+	const (
+		agySide  = "agy-11111111-1111-1111-1111-111111111111"
+		agyOther = "agy-99999999-9999-9999-9999-999999999999"
+		agyDel   = "agy-22222222-2222-2222-2222-222222222222"
+	)
+	f.known[agySide] = true
+	f.known[agyDel] = true
+	f.setSessions("server",
+		proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle},
+		proto.Session{
+			SessionID:    agySide,
+			MachineID:    "server",
+			Agent:        "agy",
+			Assistant:    true,
+			Status:       proto.StatusIdle,
+			SourceKind:   proto.SourceRuntime,
+			Capabilities: &proto.SessionCapabilities{SupervisionPolicy: true},
+		},
+		proto.Session{
+			SessionID:    agyDel,
+			MachineID:    "server",
+			Agent:        "agy",
+			Assistant:    true,
+			Status:       proto.StatusIdle,
+			SourceKind:   proto.SourceRuntime,
+			Capabilities: &proto.SessionCapabilities{SupervisionPolicy: true},
+		},
+	)
+
+	todo1, err := s.createTodo(ctx, "Agy side task", "Verify agy runtime restart", agySide, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.superviseTodo(ctx, todo1.ID, agySide, []string{"Verified"}, 30, "plan"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.updateSupervision(ctx, todo1.ID, func(v *Supervision) bool {
+		v.State = reviewPending
+		return true
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	todo2, err := s.createTodo(ctx, "Deleted agy side task", "Verify explicit deletion handover", agyDel, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.superviseTodo(ctx, todo2.ID, agyDel, []string{"Verified"}, 30, "plan"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate hub restart or missing runtimepkg where Claude assistant sessions are listed,
+	// while zero agy assistant sessions are reported.
+	f.setSessions("server",
+		proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle},
+	)
+	if got := s.sideConversationStatus(ctx, s.settings(ctx), agySide); got != "" {
+		t.Fatalf("sideConversationStatus(%q) while agy runtime unlisted = %q, want empty", agySide, got)
+	}
+	if s.conversationAway(ctx, s.settings(ctx), agySide) {
+		t.Fatalf("conversationAway(%q) while agy runtime unlisted = true, want false", agySide)
+	}
+	// Even past sideReviewAfter, an unlisted agy runtime must not trigger gone or away handover.
+	s.superviseWatch(ctx, time.Now().Add(time.Hour))
+	if got := todoNow(s, todo1.ID).Supervision.Supervisor; got != agySide {
+		t.Fatalf("todo1 supervisor moved to %q while agy runtime was unlisted, want %q", got, agySide)
+	}
+
+	// Once agy reconnects, agySide still owns todo1 and can review it.
+	f.setSessions("server",
+		proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle},
+		proto.Session{
+			SessionID:    agySide,
+			MachineID:    "server",
+			Agent:        "agy",
+			Assistant:    true,
+			Status:       proto.StatusIdle,
+			SourceKind:   proto.SourceRuntime,
+			Capabilities: &proto.SessionCapabilities{SupervisionPolicy: true},
+		},
+	)
+	if !s.canReviewLedger(ctx, agySide, todoNow(s, todo1.ID), todoNow(s, todo1.ID).Supervision) {
+		t.Fatal("agySide lost review permission after agy runtime reconnected")
+	}
+
+	// When the agy runtime IS listing other agy assistant sessions and agySide is absent, it hands over as gone.
+	f.setSessions("server",
+		proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle},
+		proto.Session{
+			SessionID:    agyOther,
+			MachineID:    "server",
+			Agent:        "agy",
+			Assistant:    true,
+			Status:       proto.StatusIdle,
+			SourceKind:   proto.SourceRuntime,
+			Capabilities: &proto.SessionCapabilities{SupervisionPolicy: true},
+		},
+	)
+	s.superviseWatch(ctx, time.Now())
+	if got := todoNow(s, todo1.ID).Supervision.Supervisor; got != "conv1" {
+		t.Fatalf("todo1 supervisor = %q after agy runtime listed other sessions without agySide, want conv1", got)
+	}
+
+	// Explicit durable deletion hands over even when zero agy assistant sessions remain listed.
+	f.setSessions("server",
+		proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle},
+	)
+	s.refreshDurableConversationDeletion(ctx, "server", agyDel, deletedConversation{At: time.Now().UTC()})
+	s.superviseWatch(ctx, time.Now())
+	if got := todoNow(s, todo2.ID).Supervision.Supervisor; got != "conv1" {
+		t.Fatalf("todo2 supervisor = %q after explicit durable deletion, want conv1", got)
+	}
+}

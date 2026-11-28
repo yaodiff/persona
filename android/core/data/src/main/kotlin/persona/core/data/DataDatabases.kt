@@ -41,6 +41,8 @@ data class OutboxRow(
     @ColumnInfo(defaultValue = "0") val apply_switch: Boolean = false,
     /** External provenance; null for typed messages and rows restored from version 6. */
     val via: String? = null,
+    /** The hub's own sentence for the refusal in `error` (#16531); null otherwise and for rows restored from version 7. */
+    val reason: String? = null,
 )
 
 @Entity(tableName = "drafts", primaryKeys = ["scope", "machine", "session"])
@@ -68,11 +70,15 @@ interface PersistentDao {
     @Insert(onConflict = OnConflictStrategy.ABORT)
     suspend fun insertMessage(row: OutboxRow)
 
-    @Query("UPDATE outbox SET state = :state, error = :error WHERE scope = :scope AND client_msg_id = :id AND state IN (:from)")
+    @Query("UPDATE outbox SET state = :state, error = :error, reason = NULL WHERE scope = :scope AND client_msg_id = :id AND state IN (:from)")
     suspend fun transition(scope: String, id: String, from: List<String>, state: String, error: String?): Int
 
-    @Query("UPDATE outbox SET state = :state, error = :error, op_id = :opId WHERE scope = :scope AND client_msg_id = :id AND state IN (:from)")
+    @Query("UPDATE outbox SET state = :state, error = :error, op_id = :opId, reason = NULL WHERE scope = :scope AND client_msg_id = :id AND state IN (:from)")
     suspend fun transition(scope: String, id: String, from: List<String>, state: String, error: String?, opId: String): Int
+
+    /** A null [opId] keeps the next attempt's operation id. */
+    @Query("UPDATE outbox SET state = :state, error = :error, op_id = COALESCE(:opId, op_id), reason = :reason WHERE scope = :scope AND client_msg_id = :id AND state IN (:from)")
+    suspend fun transition(scope: String, id: String, from: List<String>, state: String, error: String?, opId: String?, reason: String?): Int
 
     @Query("UPDATE outbox SET state = 'unknown' WHERE scope = :scope AND state = 'sending'")
     suspend fun recoverInterrupted(scope: String)
@@ -116,9 +122,10 @@ interface PersistentDao {
     suspend fun adoptMessage(row: OutboxRow): Long
 }
 
-@Database(entities = [OutboxRow::class, DraftRow::class, MainConversationRow::class], version = 7,
+@Database(entities = [OutboxRow::class, DraftRow::class, MainConversationRow::class], version = 8,
     autoMigrations = [AutoMigration(from = 1, to = 2), AutoMigration(from = 2, to = 3), AutoMigration(from = 3, to = 4),
-        AutoMigration(from = 4, to = 5), AutoMigration(from = 5, to = 6), AutoMigration(from = 6, to = 7)],
+        AutoMigration(from = 4, to = 5), AutoMigration(from = 5, to = 6), AutoMigration(from = 6, to = 7),
+        AutoMigration(from = 7, to = 8)],
     exportSchema = true)
 abstract class PersistentDatabase : RoomDatabase() {
     abstract fun records(): PersistentDao
@@ -135,7 +142,7 @@ class RoomOutboxStore(
         rows.map { row ->
             OutboxEntry(row.client_msg_id, SessionKey(row.machine, row.session), row.text, row.clear_draft,
                 OutboxState.entries.single { it.wire == row.state }, row.error, row.created_at, row.main_target, row.op_id,
-                row.launcher, row.model, applySwitch = row.apply_switch, via = row.via)
+                row.launcher, row.model, applySwitch = row.apply_switch, via = row.via, reason = row.reason)
                 .withAgentHandOff(handOffs[row.client_msg_id])
         }
     }
@@ -223,6 +230,10 @@ class RoomOutboxStore(
 
     override suspend fun transition(id: String, from: Set<OutboxState>, to: OutboxState, error: String?, opId: String): Boolean =
         dao.transition(scope.path, id, from.map { it.wire }, to.wire, error, opId) != 0
+
+    override suspend fun transition(
+        id: String, from: Set<OutboxState>, to: OutboxState, error: String?, opId: String?, reason: String?,
+    ): Boolean = dao.transition(scope.path, id, from.map { it.wire }, to.wire, error, opId, reason) != 0
 
     override suspend fun recoverInterrupted() = dao.recoverInterrupted(scope.path)
 }

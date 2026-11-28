@@ -1,18 +1,18 @@
 {
-  "resend_confirm": "不确定第一条消息是否已经送达。你已经查看会话，确认没有收到，要重新发送吗？",
-  "restart_confirm": "电脑上可能已经创建了 Agent。你已经查看列表，确认没有重复，要重新启动吗？",
+  "resend_confirm": "尚不确定第一条消息是否已送达。如果你已检查会话并确认未收到，要重新发送吗？",
+  "restart_confirm": "电脑上可能已创建该 Agent。如果你已检查列表并确认没有重复项，要重新启动吗？",
   "creating": "正在启动 Agent",
   "uploading": "正在准备附件",
   "sending": "正在发送第一条消息",
   "sidebar": "侧边栏",
-  "title": "新 Agent",
-  "uncertain": "结果尚不确定，先查看会话或列表，避免重复启动或发送。",
-  "kept": "消息和附件已保留，可以重试。",
-  "launcher_label": "启动器（留空跟随模型配置）",
+  "title": "新建 Agent",
+  "uncertain": "当前结果尚不确定，请先查看会话或列表，避免重复启动或发送。",
+  "kept": "你的消息和附件已保留，可以重试。",
+  "launcher_label": "启动器（留空则跟随模型配置）",
   "first_message": "第一条消息",
   "clear_and_send": "清空并发送",
   "retry": "重试",
   "view_session": "查看会话",
   "view_list": "查看列表",
-  "background": "已在本地打开，会在后台完成。你可以先看其他会话。"
+  "background": "已在此打开，后续步骤将在后台完成。等待期间你可以先查看其他会话。"
 }

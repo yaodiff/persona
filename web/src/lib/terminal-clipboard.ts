@@ -4,14 +4,12 @@
 // to say after a copy and what a program's OSC 52 write may put on the clipboard. The browser's side (the upload
 // request, reading and writing the clipboard) is in views/session/terminal/clipboard.ts.
 import { t } from "../i18n";
+import { escapePastePath } from "./paste-path";
+
+export { dragHasFiles, escapePastePath } from "./paste-path";
 
 /** The hub's limit for a terminal upload (`proto.MaxTerminalUploadBytes`). */
 export const MAX_TERMINAL_UPLOAD = 50 * 1024 * 1024;
-
-/** A path as a shell word: everything but letters, digits and `@%+=:,./-` (and non-ASCII) gets a backslash. */
-export function escapePastePath(path: string): string {
-  return path.replace(/[^\w@%+=:,./\-\u{80}-\u{10FFFF}]/gu, (m) => "\\" + m);
-}
 
 /** What goes into the terminal for uploaded files: escaped paths, space-separated, and a space after the last. */
 export function pastedPaths(paths: string[]): string {
@@ -30,11 +28,6 @@ export function transferFiles(data: Pick<DataTransfer, "files" | "items"> | null
     if (f) out.push(f);
   }
   return out;
-}
-
-/** Whether a drag has files in it (decided while dragging, when the files themselves are not readable yet). */
-export function dragHasFiles(data: Pick<DataTransfer, "types"> | null | undefined): boolean {
-  return Boolean(data && Array.from(data.types ?? []).includes("Files"));
 }
 
 const MIME_EXT: Record<string, string> = {

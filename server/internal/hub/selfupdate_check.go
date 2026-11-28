@@ -101,10 +101,16 @@ func (u *updater) noteHeld(ctx context.Context) {
 
 // check reads the release now (a Docker hub: its image's tags).
 func (u *updater) check(ctx context.Context) (*update.Published, error) {
+	return u.checkMode(ctx, false)
+}
+
+func (u *updater) checkMode(ctx context.Context, preview bool) (*update.Published, error) {
 	if err := u.load(ctx); err != nil {
 		return nil, err
 	}
-	u.recordRolledBack(ctx)
+	if !preview {
+		u.recordRolledBack(ctx)
+	}
 	u.mu.Lock()
 	if u.checking || (u.developmentLocked() && u.updateActiveLocked()) {
 		r := u.release
@@ -117,7 +123,9 @@ func (u *updater) check(ctx context.Context) (*update.Published, error) {
 	u.mu.Unlock()
 	defer func() { u.mu.Lock(); u.checking = false; u.mu.Unlock() }()
 	if dev {
-		u.setCheckState("checking", "")
+		if !preview {
+			u.setCheckState("checking", "")
+		}
 		r, err := u.checkDevelopment(ctx)
 		if err != nil {
 			u.setCheckState("failed", i18n.Localize(err, u.h.userLang()))
@@ -145,7 +153,7 @@ func (u *updater) check(ctx context.Context) (*update.Published, error) {
 	u.setCheckState("checking", "")
 	cctx, cancel := context.WithTimeout(ctx, updateRequestLimit)
 	defer cancel()
-	r, err := update.CheckChannel(cctx, u.client, source, u.selectedChannel())
+	r, err := update.CheckChannel(cctx, u.client, source, u.selectedChannel(), u.h.build.Edition)
 	if err == nil && u.selectedBeta() {
 		// A pointer only names the newest prerelease; download its immutable
 		// tag, never the pointer's own placeholder binaries.
@@ -257,7 +265,7 @@ func (u *updater) setCheckState(state, errText string) {
 		u.setLocked(state, "", errText)
 	}
 	u.mu.Unlock()
-	u.h.broadcast(map[string]any{"type": "hub_update", "update": u.view()})
+	u.broadcastStatus()
 }
 
 // freshRelease reads latest.json again for an install script when the release the hub has is older than
@@ -299,7 +307,7 @@ func (u *updater) freshRelease(ctx context.Context) {
 	}
 	cctx, cancel := context.WithTimeout(ctx, releaseRefreshLimit)
 	defer cancel()
-	r, err := update.CheckChannel(cctx, u.client, source, u.selectedChannel())
+	r, err := update.CheckChannel(cctx, u.client, source, u.selectedChannel(), u.h.build.Edition)
 	if err == nil && u.selectedBeta() {
 		r.Source = update.BetaReleaseBase(source, r.Manifest)
 		if r.Source == "" {
@@ -327,7 +335,7 @@ func (u *updater) freshRelease(ctx context.Context) {
 	u.mu.Unlock()
 	u.noteBehind(src, r.Manifest)
 	if available {
-		u.h.broadcast(map[string]any{"type": "hub_update", "update": u.view()})
+		u.broadcastStatus()
 	}
 }
 

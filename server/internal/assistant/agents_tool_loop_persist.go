@@ -7,6 +7,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -156,7 +157,7 @@ func (s *Service) finishExpiredToolLoop(ctx context.Context, k [2]string) {
 	id := state.expiredID
 	s.work.mu.Unlock()
 	if st := s.fleetStore(); st != nil {
-		writeCtx, cancel := context.WithTimeout(ctx, historyTimeout)
+		writeCtx, cancel := context.WithTimeout(db.WithEndedBy(ctx, db.EndedByExpired), historyTimeout)
 		err := st.FinishInteraction(writeCtx, id, "expired", nil)
 		cancel()
 		if err != nil {

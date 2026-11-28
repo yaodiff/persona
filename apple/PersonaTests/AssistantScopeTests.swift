@@ -171,6 +171,28 @@ struct AssistantScopeTests {
         #expect(model.badges == TabBadges(assistant: 1, agents: 3), "one assistant: all of them, as before")
     }
 
+    @Test func anApprovalDisplayCopyCountsAndAnnouncesOnlyOnce() throws {
+        let model = try model()
+        let sessions = [try session("side", on: "server", manager: "assistant", assistant: true),
+                        try session("main", on: "server", manager: "assistant", assistant: true)]
+        model.applySessions(Dictionary(grouping: sessions, by: \.machineRef))
+        let original = try card("original", on: "server", session: "side", manager: "assistant")
+        let mirror = try JSON.decoder.decode(Interaction.self, from: Data(
+            #"{"id":"display","machine_id":"server","session_id":"main","kind":"permission","manager":"assistant","mirror_of":"original"}"#.utf8))
+        model.replaceInteractions("", [original, mirror])
+
+        #expect(mirror.isDisplayMirror && !original.isDisplayMirror)
+        #expect(Set(model.pendingInteractions.map(\.id)) == ["original", "display"], "the raw cards remain available to conversations")
+        #expect(model.aggregatePendingInteractions.map(\.id) == ["original"])
+        #expect(model.directoryVisibleInteractions.map(\.id) == ["original"])
+        #expect(model.interactions(for: original.sessionKey).map(\.id) == ["original"])
+        #expect(model.interactions(for: mirror.sessionKey).map(\.id) == ["display"])
+        #expect(model.watchSummary().interactions.map(\.id) == ["original"])
+        #expect(model.badges.assistant == 1)
+        #expect(AppModel.announcesInteraction(original, replacing: nil))
+        #expect(!AppModel.announcesInteraction(mirror, replacing: nil))
+    }
+
     /// The main conversation's dock shows the current assistant's agents going on.
     @Test func theDockShowsTheCurrentAssistantsAgents() throws {
         let model = try model()

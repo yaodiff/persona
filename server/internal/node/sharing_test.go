@@ -2,10 +2,33 @@ package node
 
 import (
 	"errors"
+	"log"
+	"strings"
 	"testing"
 
 	"github.com/nwverse/persona/server/internal/proto"
 )
+
+func TestShareCreationResultDistinguishesAbsentAndPartialReceiptRequests(t *testing.T) {
+	for _, tc := range []struct{ creation, incarnation, result string }{
+		{"", "", "receipt_not_requested"},
+		{"creation", "", "identity_missing"},
+		{"", "incarnation", "identity_missing"},
+	} {
+		t.Run(tc.result+tc.creation, func(t *testing.T) {
+			var line strings.Builder
+			n := &Node{state: newState(), logger: log.New(&line, "", 0)}
+			const id = "synthetic-start"
+			out, err := n.creationResult(&proto.Session{SessionID: id}, nil, "", tc.creation, tc.incarnation)
+			if err != nil || len(out.(map[string]any)) != 1 {
+				t.Fatalf("unexpected reply: %+v %v", out, err)
+			}
+			if _, ok := n.state.get(id); ok || !strings.Contains(line.String(), `"result":"`+tc.result+`"`) {
+				t.Fatalf("unexpected receipt state or log: %v %s", ok, line.String())
+			}
+		})
+	}
+}
 
 func TestShareCreationResultPreservesReceiptAcrossStateUpdates(t *testing.T) {
 	n := &Node{state: newState()}

@@ -1,4 +1,11 @@
 {
+  "close_active_refused": "Task {id} cannot be closed. The user has an unfinished request in Agent “{agent}” ({activity}).",
+  "latest_owner_message": "Latest owner message to this Agent: “{message}”",
+  "close_active_choices": "Use task_scope to add the requirement to the completion criteria, ask the Agent to finish or stop the follow-up, or use needs_user to ask the owner.",
+  "close_active_confirm": "The Agent “{agent}” is still monitoring or has work scheduled. Mark “{title}” complete anyway?",
+  "accept_active_confirm": "The Agent “{agent}” is still monitoring or has work scheduled. Pass the review and close “{title}” anyway?",
+  "latest_agent_message": "Your latest message to this Agent was “{message}”.",
+  "close_not_confirmed": "The task stays open until you confirm. Its Agent is still monitoring or has work scheduled.",
   "remind_subtitle": "To-do reminder",
   "remind_body": "Time to do this",
   "remind_due": "Due {when}",
@@ -13,5 +20,11 @@
   "not_found": "This to-do no longer exists",
   "round_not_found": "That part of the to-do's conversation is no longer there",
   "agent_not_listed": "This Agent isn't listed on its computer yet. Try again in a moment.",
-  "images_forbidden": "This device can’t read to-do images"
+  "not_told_yet": "This to-do can't be checked right now. Try again in a moment.",
+  "machine_not_found": "This computer isn't one of the hub's computers.",
+  "machine_offline": "This computer is off right now. Try again once it's back.",
+  "images_forbidden": "This device can’t read to-do images",
+  "reorganize_requires_v2": "Turn on New To-dos & Tasks in Labs to reorganize to-dos.",
+  "topology_changed": "The to-do changed. Refresh your to-dos and try again.",
+  "split_children_changed": "Some to-dos from this split were moved or removed. Refresh your to-dos before splitting again."
 }

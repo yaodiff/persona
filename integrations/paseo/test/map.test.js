@@ -515,6 +515,19 @@ test("what another agent hands this one is a message from another session, a sub
   assert.ok(items.every((i) => !i.wake && !i.queued), 'the timeline does not say whether one started a run')
 })
 
+test('botmux sentinel entries preserve the timeline preview and original items', () => {
+  const marker = 'BOTMUX_NOTHING_TO_SEND'
+  const mixed = 'Notes\n' + marker + '\nready'
+  const entries = [entry(1, { type: 'assistant_message', text: mixed })]
+  const row = (timeline) => agentRow(agentSnapshot({ provider: 'grok' }), { roots: providerRoots(CONFIG), lastText: timeline.lastText })
+  assert.equal(row(timelineItems(entries)).last_text, 'Notes ready')
+  entries.push(entry(2, { type: 'assistant_message', text: marker }))
+  const timeline = timelineItems(entries)
+  assert.equal(row(timeline).last_text, 'Notes ready')
+  assert.deepEqual(timeline.items.map(i => i.text), [mixed, marker])
+  assert.equal(row(timelineItems(entries.slice(1))).last_text, undefined)
+})
+
 test('a timeline as items: results where they finished, the text being written held back, echoes tagged', () => {
   const entries = [
     entry(1, { type: 'user_message', text: '看看测试', messageId: 'm1' }),

@@ -183,3 +183,69 @@ func TestAssistantStartCutOffStaysUnknown(t *testing.T) {
 		t.Fatalf("started %d times", n)
 	}
 }
+
+// #13360: the manager there but the assistant's computer not (its node restarting): the manager answers that the node
+// got nothing (503 node_unreachable, delivered "none", retryable), so nothing started and no receipt is kept. The same
+// op id reaches the manager again once the computer is back and gets the new answer, which is kept from then on. A
+// refusal that is not retryable keeps its receipt: asked again, the stored answer comes back without the manager.
+func TestAssistantStartNodeUnreachableKeepsNoReceipt(t *testing.T) {
+	h := newTestHub(t)
+	store := &receiptStore{memStore: newMemStore(), ops: &clientOpsStore{ops: map[string]db.ClientOp{}}}
+	h.store = store
+	manager, _ := connectInboxManager(t, h)
+	var starts atomic.Int32
+	var answer atomic.Value
+	answer.Store(assistantwire.HTTPResponse{Status: http.StatusServiceUnavailable, Header: map[string][]string{"Content-Type": {"application/json"}},
+		Body: []byte(`{"code":"node_unreachable","delivered":"none","retryable":true,"error":"machine is offline"}`)})
+	manager.mu.Lock()
+	manager.http = func(_ context.Context, r assistantwire.HTTPRequest) (any, error) {
+		if r.Path != "/api/v1/assistant/conversations" {
+			return assistantwire.HTTPResponse{Status: 404, Body: []byte(`{}`)}, nil
+		}
+		starts.Add(1)
+		return answer.Load(), nil
+	}
+	manager.mu.Unlock()
+	mux := h.routes()
+	const op = "00000000-0000-4000-8000-000000013360"
+	for i := range 2 { // the node away: each try reaches the manager
+		code, out := startRequest(t, context.Background(), mux, h.cfg.Token, op)
+		if code != http.StatusServiceUnavailable || out["code"] != "node_unreachable" || out["delivered"] != "none" {
+			t.Fatalf("node away, try %d: %d %v", i+1, code, out)
+		}
+		if got := receiptStates(store); len(got) != 0 {
+			t.Fatalf("node away, try %d kept a receipt: %v", i+1, got)
+		}
+		if n := starts.Load(); n != int32(i+1) {
+			t.Fatalf("node away, try %d: the manager was asked %d times", i+1, n)
+		}
+	}
+	answer.Store(startedSession("s1")) // the node back
+	for range 2 {
+		code, out := startRequest(t, context.Background(), mux, h.cfg.Token, op)
+		if session, _ := out["session"].(map[string]any); code != http.StatusOK || session["session_id"] != "s1" {
+			t.Fatalf("node back: %d %v", code, out)
+		}
+	}
+	if n := starts.Load(); n != 3 {
+		t.Fatalf("the manager was asked %d times, want 3 (two refused, one started)", n)
+	}
+	if got := receiptStates(store); got[op] != "done" {
+		t.Fatalf("receipt after the start = %v", got)
+	}
+
+	const busyOp = "00000000-0000-4000-8000-000000013361"
+	answer.Store(assistantwire.HTTPResponse{Status: http.StatusConflict, Header: map[string][]string{"Content-Type": {"application/json"}},
+		Body: []byte(`{"code":"conversation_busy","delivered":"none","retryable":false,"error":"busy"}`)})
+	for range 2 {
+		if code, out := startRequest(t, context.Background(), mux, h.cfg.Token, busyOp); code != http.StatusConflict || out["code"] != "conversation_busy" {
+			t.Fatalf("busy: %d %v", code, out)
+		}
+	}
+	if n := starts.Load(); n != 4 {
+		t.Fatalf("a refusal that is not retryable reached the manager %d times in all, want 4", n)
+	}
+	if got := receiptStates(store); got[busyOp] != "failed" {
+		t.Fatalf("receipt of the busy refusal = %v", got)
+	}
+}

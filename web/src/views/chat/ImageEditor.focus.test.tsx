@@ -110,6 +110,57 @@ describe("the markup editor", () => {
     expect(document.querySelector('[role="dialog"]')).toBeNull();
     expect(document.activeElement).toBe(opener);
   });
+
+  it("supports shared Crop rotate / undo / redo and returns updated edit state on Done", async () => {
+    vi.spyOn(HTMLImageElement.prototype, "decode").mockImplementation(function (this: HTMLImageElement) {
+      Object.defineProperty(this, "naturalWidth", { configurable: true, value: 200 });
+      Object.defineProperty(this, "naturalHeight", { configurable: true, value: 150 });
+      return Promise.resolve();
+    });
+    const ctxStub = {
+      setTransform: vi.fn(),
+      clearRect: vi.fn(),
+      save: vi.fn(),
+      restore: vi.fn(),
+      beginPath: vi.fn(),
+      rect: vi.fn(),
+      clip: vi.fn(),
+      translate: vi.fn(),
+      scale: vi.fn(),
+      transform: vi.fn(),
+      drawImage: vi.fn(),
+      moveTo: vi.fn(),
+      lineTo: vi.fn(),
+      stroke: vi.fn(),
+      fill: vi.fn(),
+      strokeRect: vi.fn(),
+      fillRect: vi.fn(),
+    } as unknown as CanvasRenderingContext2D;
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(ctxStub);
+    vi.spyOn(HTMLCanvasElement.prototype, "toBlob").mockImplementation((cb, type) => {
+      cb(new Blob([new Uint8Array([1, 2, 3])], { type: type || "image/png" }));
+    });
+
+    const onDone = vi.fn();
+    act(() => root.render(<ImageEditor src={SRC} onDone={onDone} onCancel={() => {}} />));
+    await flush();
+    act(() => button(t("chat-imageeditor.crop"))!.click());
+    await flush();
+    act(() => button(t("chat-imageeditor.rotate"))!.click());
+    await flush();
+    expect(button(t("chat-imageeditor.undo"))!.disabled).toBe(false);
+    act(() => button(t("chat-imageeditor.undo"))!.click());
+    await flush();
+    expect(button(t("chat-imageeditor.redo"))!.disabled).toBe(false);
+    act(() => button(t("chat-imageeditor.redo"))!.click());
+    await flush();
+    await act(async () => {
+      button(t("chat-imageeditor.done"))!.click();
+    });
+    await until(() => expect(onDone).toHaveBeenCalledTimes(1));
+    expect(onDone.mock.calls[0][1].edits.turns).toBe(3);
+    expect(onDone.mock.calls[0][0].mime).toBe("image/png");
+  });
 });
 
 describe("the markup editor's names", () => {

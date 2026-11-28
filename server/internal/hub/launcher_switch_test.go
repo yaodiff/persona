@@ -108,6 +108,8 @@ func TestSendMessagePassesApplySwitch(t *testing.T) {
 	}{
 		{map[string]any{"text": "hi"}, proto.Session{Status: proto.StatusIdle}, 90 * time.Second},
 		{map[string]any{"text": "hi"}, proto.Session{Status: proto.StatusOffline}, 5 * time.Minute},
+		{map[string]any{"text": "continue"}, proto.Session{Agent: "claude", Status: proto.StatusIdle, PaneID: "p1"}, proto.LauncherRefreshSendWait},
+		{map[string]any{"text": "continue"}, proto.Session{Agent: "codex", Status: proto.StatusIdle, PaneID: "p1"}, 90 * time.Second},
 		// a switch picked a moment ago, not on the cached row yet: the request says so
 		{map[string]any{"text": "hi", "apply_switch": true}, proto.Session{Status: proto.StatusIdle}, switchSendWait},
 	} {

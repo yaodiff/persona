@@ -12,6 +12,7 @@ import { loadTodoProjects, useTodoProjects } from "../lib/todo-projects";
 import type { Todo } from "../lib/todos";
 import type { Session } from "../lib/types";
 import { Sidebar } from "./Sidebar";
+import { installedMailbox, preloadMailbox } from "../test/installed-mailbox";
 import { MailBody } from "./inbox/InboxBodies";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -260,6 +261,8 @@ describe("Sidebar lazy loading, section concurrency cap, and route-switch safety
   });
 
   it("avoids duplicate concurrent /todos and /assistant across cold start and / -> /overview -> /inbox -> /todos route switches and aborts route-scoped reads on unmount", async () => {
+    await preloadMailbox("Body");
+    const mailRead = installedMailbox ? "/api/v1/mail/messages/acc/42" : "/api/v1/inbox/m1";
     vi.useFakeTimers();
     const inFlightByPath = new Map<string, number>();
     const peakByPath = new Map<string, number>();
@@ -274,7 +277,7 @@ describe("Sidebar lazy loading, section concurrency cap, and route-switch safety
       peakByPath.set(path, Math.max(peakByPath.get(path) ?? 0, cur));
       const releaseCount = () => inFlightByPath.set(path, Math.max(0, (inFlightByPath.get(path) ?? 1) - 1));
 
-      if (path === "/api/v1/todos" || path === "/api/v1/assistant" || path === "/api/v1/kb/projects" || path.startsWith("/api/v1/mail/messages/")) {
+      if (path === "/api/v1/todos" || path === "/api/v1/assistant" || path === "/api/v1/kb/projects" || path === mailRead) {
         return new Promise<Response>((resolve, reject) => {
           init?.signal?.addEventListener("abort", () => {
             abortedPaths.push(path);
@@ -356,7 +359,7 @@ describe("Sidebar lazy loading, section concurrency cap, and route-switch safety
       await vi.advanceTimersByTimeAsync(0);
     });
     // Navigating away from /inbox aborted the pending MailBody fetch immediately.
-    expect(abortedPaths).toContain("/api/v1/mail/messages/acc/42");
+    expect(abortedPaths).toContain(mailRead);
 
     // Switching away from /todos aborts its pending /kb/projects fetch.
     await act(async () => {

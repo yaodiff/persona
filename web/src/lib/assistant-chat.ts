@@ -130,24 +130,24 @@ export function usePickedEffort(key: string): string | undefined {
   return useSyncExternalStore(subscribe, () => efforts.get(key));
 }
 
-/** Fast picked for the one new-conversation draft; false: Codex's own default. Independent of effort. */
-let startFast = false;
+/** Native tier picked for the new-conversation draft; absent means the runtime's default. */
+let startTier: string | undefined;
 
-export function pickedFast(): boolean {
-  return startFast;
+export function pickedServiceTier(): string | undefined {
+  return startTier;
 }
 
-export function pickFast(on: boolean) {
-  startFast = on;
+export function pickServiceTier(tier: string | undefined) {
+  startTier = tier;
   listeners.forEach((l) => l());
 }
 
-export function usePickedFast(): boolean {
-  return useSyncExternalStore(subscribe, () => startFast);
+export function usePickedServiceTier(): string | undefined {
+  return useSyncExternalStore(subscribe, pickedServiceTier);
 }
 
 // A speed was validated against one manager's catalog and start capability; never carry it to another, even with no pill mounted.
-onManagerChoice(() => pickFast(false));
+onManagerChoice(() => pickServiceTier(undefined));
 
 /** Drop key's whole pick, launcher, model, effort and speed together: none of it outlives the others (the
  *  new-conversation page's would go with the start, and a hub that keeps picks would keep what nobody chose). */
@@ -155,7 +155,7 @@ export function dropPick(key: string) {
   picks.delete(key);
   models.delete(key);
   efforts.delete(key);
-  if (key === NEW_CONVERSATION) startFast = false;
+  if (key === NEW_CONVERSATION) startTier = undefined;
   listeners.forEach((l) => l());
 }
 

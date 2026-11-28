@@ -98,6 +98,21 @@ struct HubSignOutTests {
         #expect(calls(revoked) == ["GET /api/v1/auth/tokens"])
     }
 
+    @Test func aTraded401KeepsUnconfirmedWatchWhileClearingConfirmedDevice() async {
+        let fake = FakeHub()
+        fake.on("GET", "/api/v1/auth/tokens") { _ in throw APIError(status: 401, message: "invalid token") }
+
+        let withWatch = await AppModel.signOutStatus(at: fake.client, watch: "dev_watch", traded: true, timeout: 10)
+        #expect(!withWatch.missed)
+        #expect(withWatch.deviceConfirmed)
+        #expect(!withWatch.watchConfirmed)
+
+        let noWatch = await AppModel.signOutStatus(at: fake.client, watch: nil, traded: true, timeout: 10)
+        #expect(!noWatch.missed)
+        #expect(noWatch.deviceConfirmed)
+        #expect(noWatch.watchConfirmed)
+    }
+
     @Test func anExpiredPairingTokenIsNamed() async {
         // Never traded for the device's own: the pairing token expired, and the pushes registered with it stay.
         let fake = FakeHub()

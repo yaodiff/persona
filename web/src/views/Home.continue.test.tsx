@@ -97,7 +97,7 @@ describe("Continue on a finished agent's row", () => {
     await submit();
     expect(fake.queue).toHaveBeenCalledWith("mac", "s1", { text: "also add a test" });
     expect(input()).toBeNull();
-    expect(status()).toContain("已发出");
+    expect(status()).toContain("已发送");
     expect(document.activeElement).toBe(button("继续"));
   });
 
@@ -130,7 +130,7 @@ describe("Continue on a finished agent's row", () => {
     await submit();
     expect(fake.discard).toHaveBeenCalledWith("mac", "s1", first);
     expect(fake.queue).toHaveBeenLastCalledWith("mac", "s1", { text: "go on, carefully" });
-    expect(status()).toContain("已发出");
+    expect(status()).toContain("已发送");
   });
 
   it("keeps to the agent named when it opened, in a tab of several", async () => {
@@ -183,7 +183,7 @@ describe("Continue on a finished agent's row", () => {
     const reopenedText = input()?.value;
     await submit();
     expect(fake.queue).toHaveBeenCalledTimes(1);
-    expect(closedStatus).toContain("已发出");
+    expect(closedStatus).toContain("已发送");
     expect(reopenedText).toBe("");
     expect(fake.retry).not.toHaveBeenCalled();
     expect(fake.discard).not.toHaveBeenCalled();
@@ -217,7 +217,7 @@ describe("Continue on a finished agent's row", () => {
     expect(fake.discard).not.toHaveBeenCalled();
     expect(fake.entries.get("slow")?.state).toBe("sent");
     expect(input()).toBeNull();
-    expect(status()).toContain("已发出");
+    expect(status()).toContain("已发送");
   });
 
   it("keeps a reopened replacement draft when the earlier send succeeds late", async () => {
@@ -275,7 +275,7 @@ describe("Continue on a finished agent's row", () => {
     expect(fake.discard).not.toHaveBeenCalled();
     expect(fake.entries.get("slow")?.state).toBe("failed");
     expect(input()).toBeNull();
-    expect(status()).toContain("已发出");
+    expect(status()).toContain("已发送");
   });
 
   it("keeps the second pending send untouched when the first send completes late", async () => {
@@ -320,7 +320,7 @@ describe("Continue on a finished agent's row", () => {
       await secondSent;
     });
     expect(input()).toBeNull();
-    expect(status()).toContain("已发出");
+    expect(status()).toContain("已发送");
     expect(fake.entries.get("first")?.state).toBe("sent");
     expect(fake.entries.get("second")?.state).toBe("sent");
   });

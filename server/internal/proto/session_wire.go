@@ -21,7 +21,10 @@ import (
 // fields differ from them (a field added, renamed, retyped or retagged by a change that did not update this file),
 // appendSession leaves every session to the reflect encoder: the session is sent whole, only slower, until its line
 // here and this hash are brought up to date. TestSessionWireMatchesReflect fails meanwhile and prints the new hash.
-const sessionWireLayout = 0x3a4a9b026ed8443a
+// Derive the merged layout only after proving that it is the union of both incoming
+// schemas. Removing either new field must reproduce the layout from the branch that
+// did not add it. Any subsequent Session change still fails the layout comparison.
+var sessionWireLayout = uint64(0x7e980d2bc6488d38)
 
 var sessionWireCurrent = sessionLayout() == sessionWireLayout && hierarchyLayout() == hierarchyWireLayout
 
@@ -34,14 +37,14 @@ func sessionLayout() uint64 {
 // too, each type under its own layout hash: while one's fields differ from the ones written here, its values are left to
 // the reflect encoder (value), the rest of the session still written here.
 const (
-	backgroundWireLayout   = 0x2c6a40db481222e7
+	backgroundWireLayout   = 0x69fdd6d60e3fb445
 	subagentWireLayout     = 0xbf84f2ee699de074
 	workflowToolWireLayout = 0x56c71f2c71223998
 )
 
 // hierarchyWireLayout is the layout hash of SessionHierarchy and SessionChildren, whose members appendSession writes
 // on the row: while either differs, appendSession leaves every session to the reflect encoder, as for sessionWireLayout.
-const hierarchyWireLayout = 0x53676730036e062b
+const hierarchyWireLayout = 0x3903526277357cf7
 
 // hierarchyLayout hashes SessionHierarchy's fields, then SessionChildren's.
 func hierarchyLayout() uint64 {
@@ -138,6 +141,7 @@ func appendSession(b []byte, s *Session) ([]byte, bool) {
 	w.boolean(`"effort_change_failed":`, s.EffortChangeFailed, true)
 	w.boolean(`"context_restart_recommended":`, s.ContextRestartRecommended, true)
 	w.boolean(`"off_launcher":`, s.OffLauncher, true)
+	w.boolean(`"native_turn_verified":`, s.NativeTurnVerified, true)
 	if s.BackgroundStalledSince != 0 {
 		w.time(`"background_stalled_since":`, s.BackgroundStalledSince.Time())
 	}
@@ -153,7 +157,6 @@ func appendSession(b []byte, s *Session) ([]byte, bool) {
 	}
 	w.integer(`"context_tokens":`, int64(s.ContextTokens), true)
 	w.integer(`"context_window":`, int64(s.ContextWindow), true)
-	w.integer(`"output_tokens":`, int64(s.OutputTokens), true)
 	w.strs(`"efforts":`, s.Efforts)
 	w.str(`"service_tier":`, s.ServiceTier, true)
 	if len(s.ServiceTiers) > 0 {
@@ -331,9 +334,12 @@ func appendSession(b []byte, s *Session) ([]byte, bool) {
 			w.value(`"context_breakdown":`, h.ContextBreakdown)
 		}
 		w.boolean(`"deleted":`, h.Deleted, true)
+		w.integer(`"output_tokens":`, int64(h.OutputTokens), true)
 		if h.View != nil {
 			w.value(`"view":`, h.View)
 		}
+		w.boolean(`"botmux_external_trigger":`, h.BotmuxExternalTrigger, true)
+		w.str(`"botmux_external_trigger_reason":`, string(h.BotmuxExternalTriggerReason), true)
 	}
 	w.boolean(legacyStartedMember, s.StartedByPersona, false) // sessionWire's legacy key (compatibility.go)
 	return append(w.b, '}'), w.ok
@@ -446,6 +452,7 @@ func (w *wireWriter) backgroundTasks(list []BackgroundTask) {
 		if t.ExitCode != nil {
 			w.integer(`"exit_code":`, int64(*t.ExitCode), false)
 		}
+		w.boolean(`"moved_from_foreground":`, t.MovedFromForeground, true)
 		w.close()
 	}
 	w.b = append(w.b, ']')

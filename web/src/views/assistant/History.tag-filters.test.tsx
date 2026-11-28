@@ -111,7 +111,7 @@ describe("History custom tag filters (#12018)", () => {
     act(() => setInput(input, "offline"));
     act(() => input.closest("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
     await flush();
-    expect(toast).toHaveBeenLastCalledWith(expect.stringContaining("没能保存标签过滤"), "error");
+    expect(toast).toHaveBeenLastCalledWith(expect.stringContaining("无法保存标签过滤设置"), "error");
     expect(chips()).toEqual(["planning", "trip"]);
   });
 });

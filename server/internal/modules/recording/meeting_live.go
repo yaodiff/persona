@@ -137,6 +137,7 @@ func (s *Recordings) meetingRoutes() {
 	s.askRoute()
 	s.meetingConversationRoutes()
 	s.meetingPhotoRoutes()
+	s.meetingSpeakerRoutes()
 }
 
 // meetingCaller: the request carries full credentials; anything else has been answered 403 forbidden.
@@ -415,6 +416,8 @@ func (v meetingLiveView) only(parts []string) map[string]any {
 			if v.Interim != nil {
 				out[p] = v.Interim
 			}
+		case recordingwire.PartSpeakers:
+			// Only its revision: speakers are read from GET /api/v1/kb/recordings/{id}.
 		default:
 			continue
 		}
@@ -443,7 +446,7 @@ func (s *Recordings) liveView(ctx context.Context, l recordingwire.Live, rec rec
 		recordingwire.PartHighlights: l.HighlightsRev}
 	if m := rec.Conv; m != nil {
 		out.Private, out.Room, out.Followup, out.Transcription = m.Private, m.RoomView(), m.FollowupView(), m.TranscriptionView(nil)
-		for _, p := range []string{recordingwire.PartRoom, recordingwire.PartPrivate, recordingwire.PartFollowup, recordingwire.PartTranscription} {
+		for _, p := range []string{recordingwire.PartRoom, recordingwire.PartPrivate, recordingwire.PartFollowup, recordingwire.PartTranscription, recordingwire.PartSpeakers} {
 			if rev, ok := m.Revs[p]; ok {
 				out.Revs[p] = rev
 			}

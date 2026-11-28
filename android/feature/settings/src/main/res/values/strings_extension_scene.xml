@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="settings_ext_scene">3D scene</string>
+    <string name="settings_ext_scene_turn_left">Turn the scene left</string>
+    <string name="settings_ext_scene_turn_right">Turn the scene right</string>
+    <string name="settings_ext_scene_tilt_up">Raise the viewpoint</string>
+    <string name="settings_ext_scene_tilt_down">Lower the viewpoint</string>
+    <string name="settings_ext_scene_reset">Reset view</string>
+</resources>

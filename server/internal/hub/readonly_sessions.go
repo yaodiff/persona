@@ -617,6 +617,8 @@ var readOnlyAllowedSocketEvents = map[string]bool{
 	"agents":               true,
 	"agents.prefs":         true,
 	"agents.triage":        true,
+	"mutes":                true,
+	"pins":                 true,
 	"interaction_resolved": true,
 }
 

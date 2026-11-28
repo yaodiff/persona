@@ -153,14 +153,14 @@ TAGS="$(cat build-tags.txt)"
 # Every platform a machine can run, the same four the release and the Docker image build (docs/operations/release.md): each
 # machine gets the one it runs (machine_platform), and the hub keeps all four for "Redeploy" (#3103).
 PLATFORMS=(linux-amd64 linux-arm64 darwin-amd64 darwin-arm64)
-# persona-node is the device's own program (cmd/persona-node): the hub keeps it beside personad, and "Redeploy" gives it
-# to a machine whose node runs it (devices/deploy.go nodeBinary). The connector (cmd/persona-link) goes there too: a
-# switch of an ssh computer to Persona Link sends it (devices/connector_package.go). Machines this script installs get
-# personad.
+PACKAGES=()
+# Each platform gets the programs its nodes and managers can run. The connector
+# package is available for a switch from SSH to Persona Link.
 for plat in "${PLATFORMS[@]}"; do
-  GOOS=${plat%-*} GOARCH=${plat#*-} CGO_ENABLED=0 go build -tags "$TAGS" -trimpath -ldflags "$LDFLAGS" -o "bin/personad-$plat" ./cmd/personad
-  GOOS=${plat%-*} GOARCH=${plat#*-} CGO_ENABLED=0 go build -tags "$TAGS" -trimpath -ldflags "$LDFLAGS" -o "bin/persona-node-$plat" ./cmd/persona-node
-  GOOS=${plat%-*} GOARCH=${plat#*-} CGO_ENABLED=0 go build -tags "$TAGS" -trimpath -ldflags "$LDFLAGS" -o "bin/persona-link-$plat" ./cmd/persona-link
+  for p in personad persona-node persona-manager persona-link; do
+    GOOS=${plat%-*} GOARCH=${plat#*-} CGO_ENABLED=0 go build -tags "$TAGS" -trimpath -ldflags "$LDFLAGS" -o "bin/$p-$plat" "./cmd/$p"
+    PACKAGES+=("$p-$plat")
+  done
 done
 # The Windows node programs, named with .exe as the release names them (publish.sh): no machine this script installs
 # runs Windows, but the hub keeps them for Redeploy. Without them the hub's version has no Windows build of its own,
@@ -169,6 +169,7 @@ WINDOWS_PLATFORMS=(windows-amd64 windows-arm64)
 for plat in "${WINDOWS_PLATFORMS[@]}"; do
   for p in personad persona-node; do
     GOOS=${plat%-*} GOARCH=${plat#*-} CGO_ENABLED=0 go build -tags "$TAGS" -trimpath -ldflags "$LDFLAGS" -o "bin/$p-$plat.exe" "./cmd/$p"
+    PACKAGES+=("$p-$plat.exe")
   done
 done
 # adhoc_identifiers <dir>: the darwin builds in dir, signed ad hoc again under their program's identifier
@@ -286,7 +287,7 @@ install_bin() {
     fi
     mv "$root/bin/personad.new" "$root/bin/personad" || return 1
     python3 ../scripts/persona_identity.py --alias-binaries "$root/bin" || return 1
-    PERSONA_HOME="$root" restart_resident
+    if [ "$role" != hub ]; then PERSONA_HOME="$root" restart_resident; fi
   else
     keep=
     [ "$role" = hub ] && keep='{ [ ! -f "$_PERSONA_HUB_BIN" ] || cp -p "$_PERSONA_HUB_BIN" "$PERSONA_HOME/bin/personad.prev"; } && '
@@ -305,7 +306,9 @@ $command")
         echo "$id: the $plat build is not installed or does not run there: $out" >&2
         return 1
       fi
-      python3 ../scripts/persona_identity.py --service node --prefix ../scripts/deploy/node-launchd.sh | ssh "$host" 'bash -s restart-idle' 2>/dev/null || true
+      if [ "$role" != hub ]; then
+        python3 ../scripts/persona_identity.py --service node --prefix ../scripts/deploy/node-launchd.sh | ssh "$host" 'bash -s restart-idle' 2>/dev/null || true
+      fi
     fi
   fi
 }
@@ -315,7 +318,9 @@ $command")
 install_program() {
   local id=$1 plat=$2 name=$3 bin keep=
   bin="bin/$name-$plat"
-  GOOS=${plat%-*} GOARCH=${plat#*-} CGO_ENABLED=0 go build -tags "$TAGS" -trimpath -ldflags "$LDFLAGS" -o "$bin" "./cmd/$name" || return 1
+  if [ "$name" != persona-manager ]; then
+    GOOS=${plat%-*} GOARCH=${plat#*-} CGO_ENABLED=0 go build -tags "$TAGS" -trimpath -ldflags "$LDFLAGS" -o "$bin" "./cmd/$name" || return 1
+  fi
   case $name in persona-hub | persona-manager)
     keep="{ if [ -f \"\$PERSONA_HOME/bin/$name\" ]; then cp -p \"\$PERSONA_HOME/bin/$name\" \"\$PERSONA_HOME/bin/$name.prev\"; else rm -f \"\$PERSONA_HOME/bin/$name.prev\"; fi; } && " ;;
   esac
@@ -396,30 +401,17 @@ for t in "${TARGETS[@]}"; do
   case "$t" in
     "$HUB")
       python3 ../scripts/persona_identity.py --service hub --prepare --prefix ../scripts/deploy/db.sh | ssh "$PERSONA_HUB_SSH" 'bash -s'
-      for plat in "${PLATFORMS[@]}"; do
-        remote_state "$PERSONA_HUB_SSH" 'mkdir -p "$PERSONA_HOME/bin/nodes"; n="$PERSONA_HOME/bin/nodes/'"personad-$plat"'"; rm -f "$n.version"; cat > "$n.new" && mv "$n.new" "$n"' < "bin/personad-$plat"
-        # This deploy's personad is the hub's version: a version file beside it (a release's build put there by hand,
-        # docs/operations/docker.md "Node builds") would say it is another, so it went above.
-        # persona-node says which build it is in a file beside it, and Redeploy sends it only while that is the hub's
-        # version (the hub's own updates replace personad-* alone; devices/packages.go). So the old version file
-        # goes first, the binary lands whole (a temporary file renamed), and the new version file comes last: a deploy
-        # that stops half way leaves persona-node unused, never a new or torn binary under the old version.
-        remote_state "$PERSONA_HUB_SSH" 'n="$PERSONA_HOME/bin/nodes/'"persona-node-$plat"'"; rm -f "$n.version"; cat > "$n.new" && mv "$n.new" "$n"' < "bin/persona-node-$plat"
-        printf '%s\n' "$VERSION" | remote_state "$PERSONA_HUB_SSH" 'cat > "$PERSONA_HOME/bin/nodes/'"persona-node-$plat.version"'"'
-        # The connector the same way: a switch to Persona Link sends it only while its version file says the hub's.
-        remote_state "$PERSONA_HUB_SSH" 'n="$PERSONA_HOME/bin/nodes/'"persona-link-$plat"'"; rm -f "$n.version"; cat > "$n.new" && mv "$n.new" "$n"' < "bin/persona-link-$plat"
-        printf '%s\n' "$VERSION" | remote_state "$PERSONA_HUB_SSH" 'cat > "$PERSONA_HOME/bin/nodes/'"persona-link-$plat.version"'"'
-      done
-      # The Windows node programs the same way, under the names the hub looks them up by (devices/packages.go).
-      for plat in "${WINDOWS_PLATFORMS[@]}"; do
-        remote_state "$PERSONA_HUB_SSH" 'mkdir -p "$PERSONA_HOME/bin/nodes"; n="$PERSONA_HOME/bin/nodes/'"personad-$plat.exe"'"; rm -f "$n.version"; cat > "$n.new" && mv "$n.new" "$n"' < "bin/personad-$plat.exe"
-        remote_state "$PERSONA_HUB_SSH" 'n="$PERSONA_HOME/bin/nodes/'"persona-node-$plat.exe"'"; rm -f "$n.version"; cat > "$n.new" && mv "$n.new" "$n"' < "bin/persona-node-$plat.exe"
-        printf '%s\n' "$VERSION" | remote_state "$PERSONA_HUB_SSH" 'cat > "$PERSONA_HOME/bin/nodes/'"persona-node-$plat.exe.version"'"'
-      done
-      remote_state "$PERSONA_HUB_SSH" 'persona_alias_binaries "$PERSONA_HOME/bin/nodes"'
       hub_plat=$(machine_platform "$t") || exit 2
       install_bin "$t" "bin/personad-$hub_plat"
       for p in persona-hub persona-manager; do install_program "$t" "$hub_plat" "$p"; done
+      # Use the same publisher as Hub self-update. The private staging directory
+      # keeps a partial upload out of package lookup and away from release pointers.
+      COPYFILE_DISABLE=1 tar -C bin -cf - "${PACKAGES[@]}" |
+        remote_state "$PERSONA_HUB_SSH" 'set -e
+          staging=$(mktemp -d "$PERSONA_HOME/.node-packages.XXXXXXXX")
+          trap '\''rm -rf "$staging"'\'' EXIT
+          tar -xf - -C "$staging"
+          "$PERSONA_HOME/bin/personad" hub publish-packages "$staging"'
       # What this build contains, beside its binary: the hub's deploy checks read it before asking GitHub, and it names
       # the open PRs the build runs (docs/assistant/todo-status-sop.md "Without GitHub"). Never fails the deploy.
       if python3 ../scripts/deploy/deployed_commits.py ${COMMIT:+--commit "${COMMIT%-dirty}"} --out bin/deployed-commits.txt; then
@@ -432,6 +424,8 @@ for t in "${TARGETS[@]}"; do
       ensure_bwrap "$t"
       hub_admin_access
       python3 ../scripts/persona_identity.py --service hub --prepare --prefix ../scripts/deploy/hub-systemd.sh | ssh "$PERSONA_HUB_SSH" 'bash -s'
+      remote_state "$PERSONA_HUB_SSH" '"$PERSONA_HOME/bin/personad" hub sync-local-node' ||
+        echo "hub: could not request an idle restart of its resident node" >&2
       echo "$t: hub on the new binary"
       upload_web ;;
     *)

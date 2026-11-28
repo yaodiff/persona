@@ -55,16 +55,16 @@ const provider = (p: ReturnType<typeof panel>, id: string) => p.providers.find((
 describe("the panel's providers", () => {
   it("says which Persona providers pi can use too (#8194)", () => {
     const p = panel({ launchers: [...launchers.slice(0, 4), { name: "p-relay", display_name: "Team relay", source: "persona", pi: true }] });
-    expect(provider(p, "p-relay").alsoNote).toBe("pi 也能用");
+    expect(provider(p, "p-relay").alsoNote).toBe("pi 也可使用");
     expect(provider(p, "claude").alsoNote).toBeUndefined();
   });
   it("one per launcher in the hub's order, named by display name, each led by its Default row", () => {
     const p = panel();
     expect(p.providers.map((x) => [x.id, x.name, x.engine])).toEqual([
-      ["claude", "claude", "claude"],
+      ["claude", "Claude Code", "claude"],
       ["work_gw", "work_gw", "claude"],
       ["sonnetcc", "sonnetcc", "claude"],
-      ["codex", "codex", "codex"],
+      ["codex", "Codex", "codex"],
       ["p-relay", "Team relay", "claude"],
     ]);
     // a display name keeps its startup ID as secondary text (#5029); an rc alias has none
@@ -144,13 +144,13 @@ describe("the panel's providers", () => {
 
   it("a real model its list marks default (Codex's) keeps a row of its own; the Default row names it", () => {
     const codex = provider(panel({ configured: null }), "codex");
-    expect(codex.models?.map((m) => [m.id, m.name])).toEqual([["default", "默认：5.5"], ["gpt-5.5", "5.5"], ["gateway/glm-5.3", "glm-5.3"]]);
+    expect(codex.models?.map((m) => [m.id, m.name])).toEqual([["default", "默认：GPT-5.5"], ["gpt-5.5", "GPT-5.5"], ["gateway/glm-5.3", "glm-5.3"]]);
   });
 
   it("an ID typed for this start is not one the hub remembers: no Typed before, nothing to forget", () => {
     const row = provider(panel({ choice: { launcher: "claude", model: "vendor/new", effort: "" }, configured: null }), "claude").models?.at(-1);
     expect(row?.custom).toBeUndefined();
-    expect(row?.description).toBe("这次手输的模型 ID");
+    expect(row?.description).toBe("本次手动输入的模型 ID");
   });
 
   it("Codex offers only each model's reported efforts and keeps unset effort at Codex's default; a list still read is a spinner", () => {
@@ -287,7 +287,7 @@ describe("presets", () => {
     const p = panel();
     expect(p.presets).toEqual([
       { key: "quick", name: "quick", description: "Small, quick fixes", setup: { provider: "sonnetcc", model: "default" } },
-      { key: "review", name: "review", description: "claude · Opus 5.5 · High", setup: { provider: "claude", model: "opus", effort: "high" } },
+      { key: "review", name: "review", description: "Claude Code · Opus 5.5 · High", setup: { provider: "claude", model: "opus", effort: "high" } },
     ]);
     const sections = panelSections({ providers: p.providers, state: p.state, view: { kind: "all" }, query: "", favorites: [{ uid: "f", provider: "claude", model: "sonnet" }], recent: [], overrides: {}, presets: p.presets });
     expect(sections.slice(0, 2).map((s) => s.kind)).toEqual(["favorites", "presets"]);
@@ -369,16 +369,16 @@ describe("engines", () => {
 
 describe("the pill", () => {
   it("names what runs: the model settings' model with their effort, the engine and the launcher's title", () => {
-    expect(newAgentPill({ launchers, runs: "claude", list: lists.claude, choice: none, configured, fallback: "Default model" })).toEqual({ engine: "claude", provider: "claude", model: "Sonnet 5.5", effort: "high", loading: false, failed: false });
+    expect(newAgentPill({ launchers, runs: "claude", list: lists.claude, choice: none, configured, fallback: "Default model" })).toEqual({ engine: "claude", provider: "Claude Code", model: "Sonnet 5.5", effort: "high", loading: false, failed: false });
   });
 
   it("a model picked, a launcher's own default, a fixed model, a Codex launcher (reported effort only)", () => {
     expect(newAgentPill({ launchers, runs: "claude", list: lists.claude, choice: { launcher: "claude", model: "opus", effort: "max" }, configured: null, fallback: "" })).toMatchObject({ model: "Opus 5.5", effort: "max" });
     expect(newAgentPill({ launchers, runs: "claude", list: lists.claude, choice: { launcher: "claude", model: "", effort: "" }, configured: null, fallback: "" }).model).toBe("Opus 5.5");
     expect(newAgentPill({ launchers, runs: "sonnetcc", list: lists.sonnetcc, choice: { launcher: "sonnetcc", model: "", effort: "" }, configured: null, fallback: "" }).model).toBe("sonnet");
-    expect(newAgentPill({ launchers, runs: "codex", list: lists.codex, choice: { launcher: "codex", model: "gpt-5.5", effort: "" }, configured: null, fallback: "" })).toMatchObject({ engine: "codex", model: "5.5" });
+    expect(newAgentPill({ launchers, runs: "codex", list: lists.codex, choice: { launcher: "codex", model: "gpt-5.5", effort: "" }, configured: null, fallback: "" })).toMatchObject({ engine: "codex", model: "GPT-5.5" });
     expect(newAgentPill({ launchers, runs: "codex", list: lists.codex, choice: { launcher: "codex", model: "gpt-5.5", effort: "" }, configured: null, fallback: "" }).effort).toBeUndefined();
-    expect(newAgentPill({ launchers, runs: "codex", list: lists.codex, choice: { launcher: "codex", model: "gpt-5.5", effort: "high" }, configured: null, fallback: "" })).toMatchObject({ engine: "codex", model: "5.5", effort: "high" });
+    expect(newAgentPill({ launchers, runs: "codex", list: lists.codex, choice: { launcher: "codex", model: "gpt-5.5", effort: "high" }, configured: null, fallback: "" })).toMatchObject({ engine: "codex", model: "GPT-5.5", effort: "high" });
     expect(newAgentPill({ launchers, runs: "codex", list: lists.codex, choice: { launcher: "codex", model: "", effort: "high" }, configured: null, fallback: "" }).effort).toBe("high");
     expect(newAgentPill({ launchers, runs: "codex", list: lists.codex, choice: { launcher: "codex", model: "gpt-5.5", effort: "max" }, configured: null, fallback: "" }).effort).toBeUndefined();
     expect(newAgentPill({ launchers, runs: "codex", list: lists.codex, choice: { launcher: "codex", model: "unlisted", effort: "high" }, configured: null, fallback: "" }).effort).toBeUndefined();
@@ -390,7 +390,7 @@ describe("the pill", () => {
     const model = source === "codex_app" ? "gpt-5.5" : "sonnet";
     const pill = newAgentPill({ launchers: [desktop], runs: desktop.name, list: { list },
       choice: { launcher: desktop.name, model, effort: "high" }, configured: null, fallback: "" });
-    expect(pill.model).toBe(source === "codex_app" ? "5.5" : "Sonnet 5.5");
+    expect(pill.model).toBe(source === "codex_app" ? "GPT-5.5" : "Sonnet 5.5");
     expect(pill.effort).toBe("high");
   });
 

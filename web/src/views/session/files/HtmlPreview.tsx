@@ -12,6 +12,8 @@ export function HtmlPreview({ html, title, mid, path }: { html: string; title: s
   const [network, setNetwork] = useState(false);
   const [reloads, setReloads] = useState(0);
   const policy = { scripts, network };
+  // Changing the sandbox policy requires a new browsing context before any scripts can run.
+  const frameKey = `${reloads}:${scripts}:${network}`;
   const local = useMemo(() => relativeRefs(html), [html]);
   // files beside the page, read from the machine and put into it: the frame has no address to load them from
   const [inlined, setInlined] = useState<{ html: string; loaded: number; missing: number } | null>(null);
@@ -71,14 +73,13 @@ export function HtmlPreview({ html, title, mid, path }: { html: string; title: s
           <Loading label={t("session-files-htmlpreview.loading_local", { count: local })} />
         </div>
       ) : (
-      <iframe
-        key={`${reloads}:${scripts}:${network}`}
-        title={title}
-        // never allow-same-origin: the page cannot reach this one, its storage or its token
-        sandbox={sandboxFor(policy)}
-        srcDoc={srcDoc}
-        className="min-h-0 w-full flex-1 border-0 bg-white"
-      />
+        <iframe
+          key={frameKey}
+          title={title}
+          sandbox={sandboxFor(policy)}
+          srcDoc={srcDoc}
+          className="min-h-0 w-full flex-1 border-0 bg-white"
+        />
       )}
     </>
   );

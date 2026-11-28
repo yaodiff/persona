@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 // The AI twin's draft cut at four lines opens the rest in place (#4742), so the owner reads it before "Send".
+import { registerTestMailbox } from "../../test/mailbox-fixture";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -29,6 +30,8 @@ afterEach(() => {
 
 const item = (draft: string): InboxItem =>
   ({ id: "mail:1", source: "mail", kind: "mail", account: "a", account_name: "Mail", title: "周会", preview: "来吗", count: 1, agent: { state: "drafted", draft } }) as InboxItem;
+
+registerTestMailbox();
 
 describe("DraftCard expand (#4742)", () => {
   it("offers 展开全文 when four lines cut the draft, and opens it in place", () => {

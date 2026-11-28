@@ -83,7 +83,12 @@ final class TasksStore {
         detailTask = nil
         detailAgent = nil
         fullAgent = nil
+        openAfterBoard = nil
+        openAgentAfterBoard = nil
         showBoard = false
+        undone = []
+        error = nil
+        todayAsked = [:]
         busyPlans = []
         busyMessages = []
         laterMessages = []
@@ -118,6 +123,23 @@ final class TasksStore {
             detailTask = id
             detailTaskAgent = agent
         }
+    }
+
+    /// The detail asked for (`detailTask` with its dispatch's Agent, or `detailAgent`) as a value for a stack's path, the
+    /// request taken (#13156): the Sidebar layout's page pushes it on its path, so it stays with the root it was opened
+    /// on (`SidebarPageRoots`) instead of being pushed by view over whatever the sidebar picks next. Nil when none is asked.
+    func takeDetail() -> TaskDetailRoute? {
+        let route: TaskDetailRoute
+        if let id = detailTask {
+            route = TaskDetailRoute(todo: id, taskAgent: detailTaskAgent)
+        } else if let key = detailAgent {
+            route = TaskDetailRoute(agent: key)
+        } else {
+            return nil
+        }
+        detailTask = nil
+        detailAgent = nil
+        return route
     }
 
     // MARK: Loading
@@ -206,7 +228,8 @@ final class TasksStore {
         if item.kind == .message { messageWrites[item.id, default: 0] &+= 1 }
         viewStore.receive(item, group: group)
         merge([item], into: item.conversation)
-        if item.kind == .task || item.kind == .receipt || item.kind == .review || item.kind == .report { reloadTodos() }
+        // As a `todos` push: spaced, and only when the hub's revision moved (`TodoStore.pushed`).
+        if item.kind == .task || item.kind == .receipt || item.kind == .review || item.kind == .report { todoStore.pushed() }
     }
 
     func received(_ plan: TaskPlan) {
@@ -353,16 +376,21 @@ final class TasksStore {
     /// What the task's agents are asking the user, oldest first.
     func interactions(_ todo: TodoItem) -> [Interaction] {
         let keys = Set(sessions(todo).map(\.key))
-        return AppModel.shared.pendingInteractions.filter { keys.contains($0.sessionKey) }
+        return AppModel.shared.aggregatePendingInteractions.filter { keys.contains($0.sessionKey) }
     }
 
     /// The main conversation's Today card, once a day: the hub makes it on the first ask and answers it after that.
-    func loadToday(_ conversation: String) {
+    @discardableResult
+    func loadToday(_ conversation: String, api injected: APIClient? = nil) -> Task<Void, Never>? {
         let day = Date.now.formatted(.iso8601.year().month().day())
-        guard todayAsked[conversation] != day, let api = AppModel.shared.api else { return }
+        guard todayAsked[conversation] != day, let api = injected ?? AppModel.shared.api else { return nil }
         todayAsked[conversation] = day
-        Task {
-            if let item = try? await api.today(conversation: conversation) { received(item) } else { todayAsked[conversation] = nil }
+        let ticket = generation
+        return Task {
+            guard generation == ticket else { return }
+            let item = try? await api.today(conversation: conversation)
+            guard generation == ticket else { return }
+            if let item { received(item, group: api.group) } else { todayAsked[conversation] = nil }
         }
     }
 
@@ -504,8 +532,8 @@ final class TasksStore {
         guard let round = todo.decisionReview?.reviewAt, let key = Self.decisionKey(todo), !busyDecisions.contains(todo.id),
               let api = (injected ?? AppModel.shared.api)?.manager(todoStore.named(todo.id)) else { return false }
         busyDecisions.insert(todo.id)
-        defer { busyDecisions.remove(todo.id) }
         let ticket = generation
+        defer { if generation == ticket { busyDecisions.remove(todo.id) } }
         do {
             let result = try await api.dismissDecision(todo.id, reviewAt: round)
             guard generation == ticket else { return false }
@@ -532,8 +560,8 @@ final class TasksStore {
         guard let round = todo.decisionReview?.reviewAt, let key = Self.decisionKey(todo), !receipt.isEmpty, !busyDecisions.contains(todo.id),
               expectedGeneration == nil || generation == expectedGeneration else { return false }
         busyDecisions.insert(todo.id)
-        defer { busyDecisions.remove(todo.id) }
         let ticket = generation
+        defer { if generation == ticket { busyDecisions.remove(todo.id) } }
         do {
             try await api.undoDecisionDismissal(todo.id, reviewAt: round, receipt: receipt)
             guard generation == ticket else { return false }
@@ -561,12 +589,13 @@ final class TasksStore {
             return false
         }
         busyRetries.insert(todo.id)
-        defer { busyRetries.remove(todo.id) }
         let ticket = generation
+        defer { if generation == ticket { busyRetries.remove(todo.id) } }
         do {
             let result = try await api.retryTodo(todo.id, launcher: launcher)
             guard generation == ticket else { return false }
             try await todoStore.applyConfirmed(result, api: api)
+            guard generation == ticket else { return false }
             Haptics.success()
             return true
         } catch {
@@ -586,9 +615,17 @@ final class TasksStore {
         guard let api = (injected ?? AppModel.shared.api)?.manager(todoStore.named(todo.id)) else {
             throw APIError(status: 0, message: String(localized: "Not connected to a hub [Todo Store 04f822]"))
         }
-        let result = try await api.answerTaskStart(todo.id, choice: choice)
-        if let result { try await todoStore.applyConfirmed(result, api: api) } else { reloadTodos(api: injected) }
-        Haptics.success()
+        let ticket = generation
+        do {
+            let result = try await api.answerTaskStart(todo.id, choice: choice)
+            guard generation == ticket else { return }
+            if let result { try await todoStore.applyConfirmed(result, api: api) } else { reloadTodos(api: injected) }
+            guard generation == ticket else { return }
+            Haptics.success()
+        } catch {
+            guard generation == ticket else { return }
+            throw error
+        }
     }
 
     enum MessageState { case open, sent, filed, dismissed }
@@ -613,7 +650,7 @@ final class TasksStore {
     nonisolated static func messageState(_ card: FeedItem, inbox item: InboxItem?, sentHere: Bool, refused: Bool) -> MessageState {
         if sentHere || card.sentAt != nil { return .sent }
         if card.dismissedAt != nil { return .dismissed }
-        if let item { return item.isDone ? (item.doneBy == "replied" ? .sent : .filed) : .open }
+        if let item { return item.isDone ? .filed : .open }
         return card.filedAt != nil || refused ? .filed : .open
     }
 
@@ -640,13 +677,17 @@ final class TasksStore {
 
     func start(_ plan: TaskPlan, edits: [PlanTask]? = nil, remember: Bool = false, scheduleGrant: Bool = false) async {
         guard let api = client(for: plan), !busyPlans.contains(plan.id) else { return }
+        let ticket = generation
         busyPlans.insert(plan.id)
-        defer { busyPlans.remove(plan.id) }
+        defer { if generation == ticket { busyPlans.remove(plan.id) } }
         do {
-            received(try await api.startPlan(plan.id, edits: edits, remember: remember, scheduleGrant: scheduleGrant))
+            let started = try await api.startPlan(plan.id, edits: edits, remember: remember, scheduleGrant: scheduleGrant)
+            guard generation == ticket else { return }
+            received(started)
             reloadTodos()
             Haptics.success()
         } catch {
+            guard generation == ticket else { return }
             self.error = error.localizedDescription
             AppModel.shared.toast = Toast(String(localized: "Didn't start: \(error.localizedDescription) [Tasks Store 38bbb7]"), style: .error)
         }
@@ -656,24 +697,31 @@ final class TasksStore {
     /// it the task's card, pill and line.
     func remove(_ todo: TodoItem) async {
         guard let api = AppModel.shared.api else { return }
+        let ticket = generation
         do {
             try await todoStore.delete(id: todo.id, api: api)
+            guard generation == ticket else { return }
             for (conversation, id) in routes where id == todo.id { routes[conversation] = nil }
             if detailTask == todo.id { detailTask = nil }
             Haptics.success()
         } catch {
-            AppModel.shared.toast = Toast(String(localized: "Couldn't remove: \(error.localizedDescription) [Tasks Store ab04c7]"), style: .error)
+            guard generation == ticket else { return }
+            showToast(Toast(String(localized: "Couldn't remove: \(error.localizedDescription) [Tasks Store ab04c7]"), style: .error))
         }
     }
 
     func dismiss(_ plan: TaskPlan) async {
         guard let api = client(for: plan), !busyPlans.contains(plan.id) else { return }
+        let ticket = generation
         busyPlans.insert(plan.id)
-        defer { busyPlans.remove(plan.id) }
+        defer { if generation == ticket { busyPlans.remove(plan.id) } }
         do {
-            received(try await api.dismissPlan(plan.id))
+            let dismissed = try await api.dismissPlan(plan.id)
+            guard generation == ticket else { return }
+            received(dismissed)
         } catch {
-            AppModel.shared.toast = Toast(error.localizedDescription, style: .error)
+            guard generation == ticket else { return }
+            showToast(Toast(error.localizedDescription, style: .error))
         }
     }
 
@@ -681,10 +729,15 @@ final class TasksStore {
     func sendRouted(_ conversation: String, text: String) -> Bool {
         guard let todoID = routes[conversation], let api = AppModel.shared.api else { return false }
         routes[conversation] = nil
+        let ticket = generation
         Task {
+            guard generation == ticket else { return }
             do {
-                received(try await api.route(conversation: conversation, todoID: todoID, text: text))
+                let item = try await api.route(conversation: conversation, todoID: todoID, text: text)
+                guard generation == ticket else { return }
+                received(item, group: api.group)
             } catch {
+                guard generation == ticket else { return }
                 AppModel.shared.toast = Toast(String(localized: "Couldn't deliver: \(error.localizedDescription)"), style: .error)
             }
         }
@@ -708,4 +761,12 @@ nonisolated enum FeedPaging {
         if let since, newest <= since { return nil }
         return newest
     }
+}
+
+/// A task's detail page (or an Agent's no task stands for) pushed by value (`TasksStore.takeDetail`, #13156).
+nonisolated struct TaskDetailRoute: Hashable, Sendable {
+    var todo: String?
+    var agent: SessionKey?
+    /// A dispatch's resolved Agent, shown first on the task's page.
+    var taskAgent: SessionKey?
 }

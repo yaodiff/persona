@@ -1,12 +1,12 @@
 # Persona naming cutover
 
-代码与界面使用 **Persona**；2026-11-07 的新约定取代 #277 的一次性硬切换方案，原生端保留旧数据读取、显式保存双写和稳定系统身份，支持回装旧版。网络与服务端兼容由关联任务接入，不能从原生端验收推导为全链路已完成。**合并代码不授权部署或发布**；历史[切换操作](persona-cutover.md)也不能因此直接执行。
+代码与界面使用 **Persona**。2026-11-07 的兼容约定取代了 #277 的一次性硬切换方案。现有安装按[原位升级指引](upgrade.md#in-place-upgrade-for-existing-installs)保留实际服务和状态目录，并按[滚动升级兼容清单](../protocol/rolling-upgrade-compatibility.md)核对各端版本。该兼容清单和升级指引不单独授权生产操作；生产授权边界仍由 [#1102](https://github.com/nwverse/persona/issues/1102) 决定，历史[切换操作](persona-cutover.md)的禁令则继续有效。
 
 ## Registered application identities remain unchanged
 
 Keep the actual values in private configuration for `app.bundle_id`, `app.app_group`, `android.application_id`, iCloud containers, keychain access groups, and App Store / Google registration. Only the variables that carry them change. Examples in the repository are placeholders, not registration values. Do not register a new app, regenerate keys, or discard pairing credentials.
 
-Provisioning profile display names and service labels are operational configuration, not registered app IDs. Make sure the configured signing profiles exist before archiving on a Mac. The old app's pending notifications, queued workers, saved Shortcuts and caches are not guaranteed to survive renamed class/type/storage identities; test and migrate them explicitly during the maintenance window.
+Provisioning profile display names and service labels are operational configuration. Make sure the configured signing profiles exist before archiving on a Mac. Check pending notifications, queued workers and saved Shortcuts against the native upgrade and downgrade evidence below before deploying a new client build.
 
 ### 可逆的原生端兼容（#6152）
 
@@ -39,38 +39,30 @@ Control Center 的旧 kind 继续注册，共用同一绘制和操作配方。Li
 | Header / runtime subprotocol | `X-Persona-*`, `persona-runtime.v1` |
 | Default database / container names for new installs | `persona`, `persona_test`, `persona-postgres` |
 
-The `/` front door still opens the main conversation. Previous short assistant URLs are not aliases; previously sent links stop working. The existing avatar data model and `personas/` directory remain. Mochi's built-in ID is `persona` and the bundled frog pack is `nwverse`. The one-time naming cutover preserves old appearance IDs as data, but the five retired bundled choices now display Mochi through the look API's effective-ID fallback; they are not runtime brand aliases. See [Avatars](../apple/persona.md).
+The `/` front door opens the main conversation. Previously sent assistant links are covered by the route aliases in the [compatibility matrix](../protocol/rolling-upgrade-compatibility.md). Mochi's built-in ID is `persona` and the bundled frog pack is `nwverse`. The five retired bundled choices now display Mochi through the look API's effective-ID fallback, and their old IDs remain reserved. See [Avatars](../apple/persona.md).
 
 ## Runtime root: one directory, no automatic migration
 
-The runtime reads only `PERSONA_HOME`, lexically resolves an absolute path, `~/…`, or a path relative to HOME, and otherwise uses `~/.persona`. A query does not create files. Initialization creates that one directory and never creates a compatibility symlink or merges another store. An existing valid custom symlink may be used; a dangling or cyclic link is refused rather than repaired into an empty store. A custom root does not create default-directory aliases.
+The runtime uses the explicit `PERSONA_HOME` or its supported former-name equivalent first. It resolves an absolute path, `~/…`, or a path relative to HOME. With no override it reuses an existing default root under the former name and uses `~/.persona` for a fresh install. Initialization can add `~/.persona` as an alias for the former default root. A custom root may use an existing valid symlink. A dangling or cyclic symlink requires restoring its target before initialization.
 
 **Two independent stores** (#744). A machine that has not been through the cutover can still have its older default directory (`~/.<previous-name>`) next to `~/.persona` as a store of its own, not an alias. In that case:
 
-- With `PERSONA_HOME` naming one of them, as a node's or Persona Link's service definition does, initialization uses that one. It never aliases the other over it or merges the two.
-- Without `PERSONA_HOME`, initialization (hub, node, Persona Link) refuses: "independent state directories exist". It changes neither directory.
-- A client run without that variable (`personad mcp`, `hook`, `launch`, `notify`) resolves the older directory and dials a socket no node listens on.
+- Set `PERSONA_HOME` or its supported former-name equivalent to the intended store. Initialization then uses only that store.
+- Without an effective runtime-root override, initialization stops with the error "independent state directories exist" before writing to either store.
+- Set the same root for clients such as `personad mcp`, `hook`, `launch` and `notify` so they reach the socket opened by the running service.
 
 Agents never run with the node's environment, so the node writes its root into everything it hands them: `PERSONA_HOME` in the `env` of `mcp.json`'s server, in front of the hook command, and in front of the commands it types into a pane (`docs/integrations/engines.md`, "What a start types").
 
-`PERSONA_CONFIG` selects the build/deploy config; otherwise only `~/.config/persona/config.json` is read. The config script emits only `PERSONA_*` build variables and uses the existing configured registration values unchanged. It does not export tokens or bridge environment names.
+`PERSONA_CONFIG` selects the build/deploy config. The build tools use the current default config path when it exists and fall back to the former default path. They also accept the former environment override as described in the [compatibility matrix](../protocol/rolling-upgrade-compatibility.md).
 
 <a id="部署脚本按服务恢复运行目录"></a>
 
 ## Recover the runtime directory per service
 
-`scripts/persona_identity.py --service hub|node|link` reads only the matching canonical service definition. It never borrows a colocated service's root when the selected role has a unit of its own. A `PERSONA_HOME` already present in the environment, including an empty value, takes precedence.
+`scripts/persona_identity.py --service hub|node|link` looks for installed systemd units under the current and former names. For node and Link it also looks for installed LaunchAgents. Use the macOS hub's actual LaunchAgent to identify its root. The selected role's unit takes precedence when present. An explicit runtime-root override already in the environment, including an empty value, takes precedence over the service definition.
 
-The resolver supports systemd unit resets, sorted drop-ins, `XDG_CONFIG_HOME`, `%h` / `%%`, external `EnvironmentFile` overrides and `UnsetEnvironment`. It extracts only `PERSONA_HOME`, never executes shell text and never returns other credentials. Missing required environment files fail closed. Auto mode rejects different independent roots; explicit role selection avoids ambiguity. `--prepare` creates only the selected directory. `--prefix` resolves the remote root remotely and exports only `PERSONA_HOME`, not the caller's local root.
+The resolver supports systemd unit resets, sorted drop-ins, `XDG_CONFIG_HOME`, `%h` / `%%`, external `EnvironmentFile` overrides and `UnsetEnvironment`. It parses root overrides as data. Missing required environment files fail closed. Auto mode rejects independent roots, so select the service role explicitly. `--prepare` initializes the selected root as described above. `--prefix` resolves the root on the remote machine and exports it for the remote service under both supported names.
 
 ## Verification boundaries
 
-- Scan tracked file contents and names, including generated schema bundles.
-- Run Go build and the full suite against a dedicated real Postgres test database using `PERSONA_TEST_DATABASE_URL`.
-- Run the web typecheck, unit tests, production build and available source checks; explicitly report if no lint command is configured.
-- Compile and unit-test Android with the available Linux SDK; keep the Health Connect `ViewPermissionUsageActivity` alias, which is a platform permission entry rather than a previous-brand alias.
-- On this Linux lane, Apple changes are text-only. Validate plist/YAML/symbol references statically, then build the project, all apps/extensions, tests, AppIntents and signing artifacts on a Mac. Screenshots and real-device upgrade behavior are separate acceptance checks.
-- Generate extension wire code centrally with `python3 scripts/gen/extension_schema.py`; `--check` must show no drift. Do not hand-edit generated Swift/Kotlin/Go/TypeScript.
-- Rebase onto the latest `origin/main` before the single PR is pushed, rename any newly merged previous-brand additions, rerun affected verification, and scan the merged `origin/main` again.
-
-Historical [acceptance](rename.md) and [audit](rename.md) records describe earlier stages, not authorization to run this incompatible cutover. Previous compatibility guarantees no longer apply to this version. Do not deploy, publish, restart live services, move live data or change live MCP configuration until the user approves the operational plan.
+Use the [compatibility matrix and verification record](../protocol/rolling-upgrade-compatibility.md) for the isolated protocol and deployment checks. The native-client checks above cover preferences, Keychain, Shortcuts and Live Activities. Rehearse the actual version combination before the approved production update.

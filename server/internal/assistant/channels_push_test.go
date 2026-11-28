@@ -156,26 +156,36 @@ func TestFailedExtensionPushKeepsItsMirrorAfterOtherChannelsSucceed(t *testing.T
 
 func TestExtensionPushDoesNotSuppressFeishuMirrorOrRetry(t *testing.T) {
 	needsLarkLayer(t) // the chat is the lark module's
-	s, f := channelPushService(t, true)
-	enableChannelPushFeishu(f)
-	s.channelPush("server", "s1", "Status", "The notification")
-	ctx := context.Background()
-	m := &mirrorSend{target: botTarget{MachineID: "server", SessionID: "s1"}, main: true, answer: "The full answer", turn: "a1"}
-	if due, err := s.mirrorStillDue(ctx, m); !due || err != nil {
-		t.Fatal("a successful extension push suppressed a Lark mirror retry")
-	}
-	s.feishuMirror(ctx, "server", "s1")
-	if got := f.appParams(AppFeishu, FeishuPost); len(got) != 1 {
-		t.Fatalf("a successful extension push suppressed the Lark mirror: %v", got)
-	}
-	s.feishuPush("server", "s1", "Status", "The notification")
-	if due, err := s.mirrorStillDue(ctx, m); due || err != nil {
-		t.Fatal("a delivered Lark push must suppress its own mirror retry")
-	}
-	s.feishuMirror(ctx, "server", "s1")
-	if got := f.appParams(AppFeishu, FeishuPost); len(got) != 2 {
-		t.Fatalf("Lark mirrored a turn after its own successful notification: %v", got)
-	}
+	synctest.Test(t, func(t *testing.T) {
+		s, f := channelPushService(t, true)
+		enableChannelPushFeishu(f)
+		mirrors := 0
+		f.answerApp(AppFeishu, FeishuPost, func(raw json.RawMessage) (any, error) {
+			var p struct{ UUID string }
+			_ = json.Unmarshal(raw, &p)
+			if strings.HasPrefix(p.UUID, "m") {
+				mirrors++
+				if mirrors != 2 {
+					return nil, errLost
+				}
+			}
+			return map[string]any{"message_id": "om_push"}, nil
+		})
+		ctx := context.Background()
+		s.channelPush("server", "s1", "Status", "The notification")
+		s.feishuMirror(ctx, "server", "s1")
+		time.Sleep(2 * feishuMirrorRetry) // sleep-ok: advance only the synctest mirror's retry timer
+		if got := f.appParams(AppFeishu, FeishuPost); len(got) != 2 || got[0]["uuid"] == "" || got[0]["uuid"] != got[1]["uuid"] {
+			t.Fatalf("an extension push should leave the Lark mirror and its keyed retry due: %v", got)
+		}
+		s.feishuMirror(ctx, "server", "s1") // the first attempt fails again
+		s.feishuPush("server", "s1", "Status", "The notification")
+		s.feishuMirror(ctx, "server", "s1")
+		time.Sleep(2 * feishuMirrorRetry) // sleep-ok: advance only the synctest mirror's retry timer
+		if got := f.appParams(AppFeishu, FeishuPost); len(got) != 4 {
+			t.Fatalf("a delivered Lark push should suppress its own mirror and retry: %v", got)
+		}
+	})
 }
 
 func TestExtensionSyncStillRunsWithPushesDisabled(t *testing.T) {

@@ -8,8 +8,9 @@ import (
 	"github.com/nwverse/persona/server/internal/i18n"
 )
 
-// marketAdd registers a market after reading its index once (a market that cannot be read is not added).
-func (h *Manager) marketAdd(ctx context.Context, specText, token string) (MarketView, error) {
+// marketAdd registers a market after reading its index once (a market that cannot be read is not added). keys are a
+// private market's trusted public keys: given any, its index must verify with one of them or it is not added.
+func (h *Manager) marketAdd(ctx context.Context, specText, token string, keys ...string) (MarketView, error) {
 	if err := h.marketsLoad(ctx); err != nil {
 		return MarketView{}, err
 	}
@@ -19,6 +20,12 @@ func (h *Manager) marketAdd(ctx context.Context, specText, token string) (Market
 	}
 	if len(token) > extension.MarketTokenMost {
 		return MarketView{}, i18n.Err("hub-extension_market.token_too_long")
+	}
+	if keys, err = extension.NormalizeMarketKeys(keys); err != nil {
+		return MarketView{}, err
+	}
+	if len(keys) > 0 && extension.IsOfficialMarket(spec.String()) {
+		return MarketView{}, i18n.Err("extension-market_security.official_key")
 	}
 	id := extension.MarketID(spec)
 	ms := h.marketsState()
@@ -35,7 +42,7 @@ func (h *Manager) marketAdd(ctx context.Context, specText, token string) (Market
 	if err != nil {
 		return MarketView{}, err
 	}
-	mk := &extension.Market{Spec: spec, Token: token, Client: client, GitHubAPI: ms.githubAPI, Dir: h.marketsDir(), Cache: h.packageCache()}
+	mk := &extension.Market{Spec: spec, HubBuild: h.build.Number, Token: token, TrustedKeys: keys, Client: client, GitHubAPI: ms.githubAPI, Dir: h.marketsDir(), Cache: h.packageCache()}
 	if err := h.configureMarket(mk); err != nil {
 		return MarketView{}, err
 	}
@@ -45,7 +52,7 @@ func (h *Manager) marketAdd(ctx context.Context, specText, token string) (Market
 	}
 	now := time.Now()
 	// Official identity determines verification; unofficial markets acquire no persistent pin.
-	rec, ix, err := signedIndex(extension.MarketRecord{ID: id, Spec: spec.String(), AddedAt: now}, f, now)
+	rec, ix, err := signedIndex(extension.MarketRecord{ID: id, Spec: spec.String(), AddedAt: now, TrustedKeys: keys}, f, now, h.build.Number)
 	if err != nil {
 		mk.RemoveCheckout()
 		return MarketView{}, err
@@ -139,7 +146,7 @@ func (h *Manager) marketSetSpec(ctx context.Context, id, specText string) (Marke
 	if err != nil {
 		return MarketView{}, err
 	}
-	mk := &extension.Market{Spec: spec, Token: old.Token, Client: client, GitHubAPI: ms.githubAPI, Dir: h.marketsDir(), Cache: h.packageCache()}
+	mk := &extension.Market{Spec: spec, HubBuild: h.build.Number, Token: old.Token, TrustedKeys: old.TrustedKeys, Client: client, GitHubAPI: ms.githubAPI, Dir: h.marketsDir(), Cache: h.packageCache()}
 	if err := h.configureMarket(mk); err != nil {
 		return MarketView{}, err
 	}
@@ -153,7 +160,7 @@ func (h *Manager) marketSetSpec(ctx context.Context, id, specText string) (Marke
 	if s = ms.byID[id]; s == nil {
 		return MarketView{}, errNoMarket
 	}
-	if s.rec.Spec != snapshot.Spec || s.rec.SigningKey != snapshot.SigningKey || s.rec.TokenSealed != snapshot.TokenSealed {
+	if !sameMarketTrust(s.rec, snapshot) {
 		return MarketView{}, i18n.Err("extension-market_security.changed")
 	}
 	// Another add or move may have claimed the target during the network read.
@@ -167,7 +174,7 @@ func (h *Manager) marketSetSpec(ctx context.Context, id, specText string) (Marke
 	if extension.IsOfficialMarket(s.rec.Spec) && !extension.IsOfficialMarket(candidate.Spec) {
 		return MarketView{}, i18n.Err("extension-market_security.catalog")
 	}
-	rec, ix, err := signedIndex(candidate, f, now)
+	rec, ix, err := signedIndex(candidate, f, now, h.build.Number)
 	if err != nil {
 		if old.Spec.String() != spec.String() {
 			mk.RemoveCheckout()

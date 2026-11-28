@@ -88,15 +88,26 @@ class HubPairingClient private constructor(
         }
     }
 
-    suspend fun pair(token: String, deviceName: String, deviceId: String? = null, progress: (PairingProgress) -> Unit): PairedHub {
+    suspend fun pair(
+        token: String,
+        deviceName: String,
+        deviceId: String? = null,
+        replaces: suspend (String) -> String? = { null },
+        progress: (PairingProgress) -> Unit,
+    ): PairedHub {
         check(connection == null) { "Pairing requires a new client" }
         val route = probe(progress)
         progress(PairingProgress(PairingStage.VerifyIdentity, candidates = candidates))
         val hubId = route.health.hubId ?: expectedHubId ?: legacyHubId(address)
         require(hubId.matches(Regex("[A-Za-z0-9_-]{1,128}")))
         progress(PairingProgress(PairingStage.ExchangeCredentials))
+        val previous = if (deviceId == null) replaces(hubId)?.takeIf { it.isNotBlank() } else null
         val exchanged = if (deviceId != null) buildJsonObject { put("token", token); put("id", deviceId) } else try {
-            json("/api/v1/auth/tokens", token, buildJsonObject { put("name", deviceName); put("kind", "phone") })
+            json("/api/v1/auth/tokens", token, buildJsonObject {
+                put("name", deviceName)
+                put("kind", "phone")
+                previous?.let { put("replaces", it) }
+            })
         } catch (error: HubFailure) {
             if (error.status == 404) null else throw error
         }

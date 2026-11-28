@@ -116,11 +116,11 @@ func TestWatchFixturePushesSequences(t *testing.T) {
 		})
 	}
 
-	// Verify card ledger recorded every page_alert push under category 1 (cardCatDirection).
+	// Verify card ledger recorded every page_alert push under category 7 (cardCatSubscribed).
 	ledger := cardsToday(t, s)
 	c, ok := ledger[cardPageAlert]
-	if !ok || c.Category != cardCatDirection || c.N-beforeLedger != 6 {
-		t.Fatalf("card ledger for page_alert = %+v (before %d), want category %d delta 6", c, beforeLedger, cardCatDirection)
+	if !ok || c.Category != cardCatSubscribed || c.N-beforeLedger != 6 {
+		t.Fatalf("card ledger for page_alert = %+v (before %d), want category %d delta 6", c, beforeLedger, cardCatSubscribed)
 	}
 }
 

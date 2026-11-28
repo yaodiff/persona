@@ -215,7 +215,6 @@ internal/tmux
 internal/toolcli
 internal/toolschema
 internal/transcribejob
-internal/transcribelive
 internal/transcript
 internal/tunnel
 internal/tzguard
@@ -231,6 +230,7 @@ internal/workspacenaming
 plugins
 scripts/fleetsoak
 scripts/pushrec
+scripts/transcribelive
 
 # Pending: the names the PRs open when this freeze landed were adding, each with its PRs
 # (python3 scripts/test/name_freezes.py pending --write, 2026-11-25; drafts idle more than 14 days left out).

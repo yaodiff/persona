@@ -162,15 +162,21 @@ type trSession struct {
 	expires time.Time // when the service ends it (session.started's expires_at; zero: not said)
 	feed    int64
 
-	pos     atomic.Int64 // the recording sample after the last one sent
-	stop    atomic.Int64 // replay: no audio past this (-1 none); the writer then adds the tail and is done
-	limit   atomic.Int64 // replay: no audio past this for now, while stop is not known (-1 none)
-	clock   atomic.Int64 // session samples sent, audio and silence
-	written atomic.Bool  // replay: everything is sent, the tail too
-	closing atomic.Bool
-	gone    chan struct{} // closed once the writer and the socket are done with
-	once    sync.Once
-	poke    chan struct{}
+	pos           atomic.Int64 // the recording sample after the last one sent
+	stop          atomic.Int64 // replay: no audio past this (-1 none); the writer then adds the tail and is done
+	limit         atomic.Int64 // replay: no audio past this for now, while stop is not known (-1 none)
+	clock         atomic.Int64 // session samples sent, audio and silence
+	written       atomic.Bool  // replay: everything is sent, the tail too
+	closing       atomic.Bool
+	forced        atomic.Bool
+	stopWrite     chan struct{} // closed once writing must stop (polite or forced close)
+	stopWriteOnce sync.Once
+	writerDone    chan struct{} // closed when write() exits (non-nil once run() started)
+	gone          chan struct{} // closed once the writer and the socket are done with
+	once          sync.Once
+	politeOnce    sync.Once
+	nowOnce       sync.Once
+	poke          chan struct{}
 
 	mu    sync.Mutex
 	marks []trMark
@@ -229,7 +235,7 @@ type trPart struct{ window, from int }
 func newTrSession(j *trJob, kind string, slot *trSlot, window int, why string) *trSession {
 	j.opened++
 	s := &trSession{j: j, no: j.opened, kind: kind, slot: slot, window: window, why: why, last: -1,
-		gone: make(chan struct{}), poke: make(chan struct{}, 1), passed: map[int]time.Time{}}
+		stopWrite: make(chan struct{}), gone: make(chan struct{}), poke: make(chan struct{}, 1), passed: map[int]time.Time{}}
 	s.stop.Store(-1)
 	s.limit.Store(-1)
 	return s
@@ -377,15 +383,22 @@ type trRead struct {
 
 // run starts s's reader and writer once it started on up.
 func (s *trSession) run(up upLink, feed int64) {
+	if s.closing.Load() {
+		s.end()
+		_ = up.CloseNow()
+		return
+	}
 	s.up, s.feed = up, feed
 	s.pos.Store(feed)
 	s.claimed, s.lastAt = feed, feed
 	s.rctx, s.stopR = context.WithCancel(context.Background())
+	s.writerDone = make(chan struct{})
 	go s.read()
 	go s.write()
 }
 
 func (s *trSession) read() {
+	defer s.end()
 	j := s.j
 	for {
 		typ, b, err := s.up.Read(s.rctx)
@@ -394,6 +407,7 @@ func (s *trSession) read() {
 			select {
 			case j.reads <- trRead{s: s, err: err}:
 			case <-j.ctx.Done():
+				s.close(true)
 			}
 			return
 		}
@@ -404,6 +418,7 @@ func (s *trSession) read() {
 			select {
 			case j.reads <- trRead{s: s, events: evs, pos: s.pos.Load(), clock: s.clock.Load()}:
 			case <-j.ctx.Done():
+				s.close(true)
 				return
 			}
 		}
@@ -412,6 +427,12 @@ func (s *trSession) read() {
 
 // end lets the writer go.
 func (s *trSession) end() { s.once.Do(func() { close(s.gone) }) }
+
+// stopWriting tells write() to exit immediately without waiting for s.gone.
+func (s *trSession) stopWriting() {
+	s.closing.Store(true)
+	s.stopWriteOnce.Do(func() { close(s.stopWrite) })
+}
 
 // addSilence has the writer send n samples of silence once the session's audio reached recording position at: a
 // turn's end for the service, which needs audio to hear a silence.
@@ -434,6 +455,7 @@ func (s *trSession) wake() {
 // behind) or at the job's speed (replay), and the silence asked for; in replay, once its audio reached its stop, the
 // tail of silence that ends the last turn, and then nothing.
 func (s *trSession) write() {
+	defer close(s.writerDone)
 	j := s.j
 	var paceFrom time.Time
 	var paced int64
@@ -444,6 +466,8 @@ func (s *trSession) write() {
 			return
 		}
 		select {
+		case <-s.stopWrite:
+			return
 		case <-s.gone:
 			return
 		default:
@@ -474,6 +498,8 @@ func (s *trSession) write() {
 			s.written.Store(true)
 			select {
 			case <-s.poke:
+			case <-s.stopWrite:
+				return
 			case <-s.gone:
 				return
 			}
@@ -491,6 +517,8 @@ func (s *trSession) write() {
 			select {
 			case <-wait:
 			case <-s.poke:
+			case <-s.stopWrite:
+				return
 			case <-s.gone:
 				return
 			}
@@ -517,6 +545,9 @@ func (s *trSession) write() {
 				t := time.NewTimer(d)
 				select {
 				case <-t.C:
+				case <-s.stopWrite:
+					t.Stop()
+					return
 				case <-s.gone:
 					t.Stop()
 					return
@@ -525,6 +556,9 @@ func (s *trSession) write() {
 			paced += int64(len(pcm) / 2)
 		} else {
 			paceFrom = time.Time{}
+		}
+		if s.closing.Load() {
+			return
 		}
 		if !s.send(pcm, at) {
 			return
@@ -612,34 +646,61 @@ func (s *trSession) pruneMarks(at int64) {
 	s.skips = slices.DeleteFunc(s.skips, func(k [2]int64) bool { return k[1] <= at })
 }
 
-// close ends s: politely (session.close, and the service's session.closed with its usage, which the reader passes
-// on) unless now, then the socket.
-func (s *trSession) close(now bool) {
-	if !s.closing.CompareAndSwap(false, true) {
-		return
-	}
-	if s.up == nil {
-		return
-	}
-	if now {
+// forceClose tears down s's reader, writer, and underlying socket immediately without
+// blocking on a WebSocket close handshake.
+func (s *trSession) forceClose() {
+	s.forced.Store(true)
+	s.nowOnce.Do(func() {
 		s.end()
 		s.stopR()
 		_ = s.up.CloseNow()
+	})
+}
+
+// close ends s: politely (session.close, and the service's session.closed with its usage, which the reader passes
+// on) unless now, then the socket. A forced close (now) always overrides an in-flight polite close.
+func (s *trSession) close(now bool) {
+	s.stopWriting()
+	if s.up == nil {
+		s.end()
 		return
 	}
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-		if writeJSON(ctx, s.up, liveWire{}.close()) == nil {
+	if now {
+		s.forceClose()
+		return
+	}
+	if s.forced.Load() {
+		return
+	}
+	s.politeOnce.Do(func() {
+		go func() {
+			ctx, cancel := context.WithTimeout(s.rctx, 2*time.Second)
+			defer cancel()
+			// Wait for write() to finish any in-flight append before sending session.close,
+			// so audio frames cannot interleave with or follow session.close.
 			select {
-			case <-s.gone: // the service closed it after session.closed
+			case <-s.writerDone:
+			case <-s.gone:
 			case <-ctx.Done():
 			}
-		}
-		s.end()
-		_ = s.up.Close(websocket.StatusNormalClosure, "bye")
-		s.stopR()
-	}()
+			if !s.forced.Load() && ctx.Err() == nil {
+				select {
+				case <-s.gone:
+				default:
+					if writeJSON(ctx, s.up, liveWire{}.close()) == nil {
+						select {
+						case <-s.gone: // the service closed it after session.closed
+						case <-ctx.Done():
+						}
+					}
+				}
+			}
+			// Always finish through forceClose (end -> stopR -> CloseNow) rather than
+			// up.Close so a wedged writer or peer cannot stall teardown or block a
+			// concurrent close(true) on coder/websocket's closing handshake lock.
+			s.forceClose()
+		}()
+	})
 }
 
 // edgeNow is the end of the newest audio.

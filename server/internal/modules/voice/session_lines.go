@@ -156,6 +156,7 @@ func (c *conversation) userTextWithID(upstreamID, text string, replace, final bo
 		return time.Time{}
 	}
 	c.remember("user", c.user.text, c.user.at)
+	c.keep("user", c.user.text, c.user.at)
 	at := c.user.at
 	c.user = nil
 	return at
@@ -216,6 +217,7 @@ func (c *conversation) asstText(text string, replace, final bool, source string)
 	c.show(c.asst, "assistant", final)
 	if final {
 		c.remember("assistant", c.asst.text, c.asst.at)
+		c.keep("assistant", c.asst.text, c.asst.at)
 		c.asst = nil
 	}
 }
@@ -223,6 +225,9 @@ func (c *conversation) asstText(text string, replace, final bool, source string)
 func (c *conversation) closeAsst() {
 	if c.asst != nil {
 		c.asstText("", false, true, c.asst.source)
+	}
+	if c.tts != nil && !c.turnsEnd && c.ttsCurGen != 0 {
+		c.endTTSTextLocked()
 	}
 }
 

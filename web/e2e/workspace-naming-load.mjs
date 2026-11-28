@@ -56,23 +56,21 @@ try {
     const preference = page.getByLabel("When dispatching tasks, prefer", { exact: true });
     const notes = page.getByRole("textbox", { name: "About me", exact: true });
     await notes.waitFor();
-    assert.equal(imports, 0, "prefer-existing does not import naming");
+    await chunkRequested;
     const draft = `Instructions kept through a failed import (${scheme}, ${width})`;
     await notes.fill(draft);
-    await preference.selectOption("prefer-new");
-    await chunkRequested;
     assert.equal(await notes.inputValue(), draft, "pending import leaves other settings mounted");
     assert(await preference.isEnabled(), "settings remain usable while Suspense waits");
     release();
     await page.getByRole("alert").filter({ hasText: "This page didn't load" }).waitFor();
-    const dispatch = page.locator('[data-settings-group="dispatch-tasks"]');
-    assert.equal(await dispatch.getByRole("alert").count(), 1, "the import failure is confined to Dispatch tasks");
+    const naming = page.locator('[data-settings-group="workspace-naming"]');
+    assert.equal(await naming.getByRole("alert").count(), 1, "the import failure is confined to Workspace naming");
     assert.equal(await notes.inputValue(), draft, "the local failure preserves the other editor's draft");
-    await dispatch.screenshot({ path: join(shots, `chunk-failed-${scheme}-${width}.png`) });
+    await naming.screenshot({ path: join(shots, `chunk-failed-${scheme}-${width}.png`) });
     if (width === 390) {
       await page.evaluate(() => document.documentElement.style.setProperty("--text-scale", "2"));
-      assert(await dispatch.evaluate((el) => el.scrollWidth <= el.clientWidth), "the error and recovery action fit at 200% text");
-      await dispatch.screenshot({ path: join(shots, `chunk-failed-${scheme}-${width}-large.png`) });
+      assert(await naming.evaluate((el) => el.scrollWidth <= el.clientWidth), "the error and recovery action fit at 200% text");
+      await naming.screenshot({ path: join(shots, `chunk-failed-${scheme}-${width}-large.png`) });
     }
     const notesGroup = notes.locator('xpath=ancestor::*[@data-settings-group][1]');
     const saved = page.waitForResponse((response) => response.url().endsWith("/api/v1/assistant") && response.request().method() === "PUT" && response.request().postDataJSON().notes === draft);
@@ -80,24 +78,23 @@ try {
     assert((await saved).ok(), "other settings can still save while the chunk is unavailable");
     assert.equal((await (await context.request.get(origin + "/api/v1/assistant", { headers })).json()).notes, draft);
     blocking = false;
-    await Promise.all([page.waitForEvent("load"), dispatch.getByRole("button", { name: "Reload", exact: true }).click()]);
-    const naming = page.locator('[data-settings-group="workspace-naming"]');
+    await Promise.all([page.waitForEvent("load"), naming.getByRole("button", { name: "Reload", exact: true }).click()]);
     await naming.getByRole("button", { name: "Workspace naming", exact: true }).click();
     const task = naming.getByLabel("Task folder template", { exact: true });
     assert.equal(await task.inputValue(), savedTemplate, "reload recovers the actual module and saved naming rules");
     assert.equal(await notes.inputValue(), draft, "the other setting persisted");
-    assert.equal(await dispatch.getByRole("alert").count(), 0);
+    assert.equal(await naming.getByRole("alert").count(), 0);
     await task.fill("draft/{task-id}");
     await notes.fill("Another instructions draft");
     assert.equal(await task.inputValue(), "draft/{task-id}", "ordinary parent updates preserve the naming draft");
-    await dispatch.screenshot({ path: join(shots, `chunk-recovered-${scheme}-${width}.png`) });
+    await naming.screenshot({ path: join(shots, `chunk-recovered-${scheme}-${width}.png`) });
     if (width === 390) {
       await page.evaluate(() => document.documentElement.style.setProperty("--text-scale", "2"));
       // The settings scroller uses content visibility. Give the full crop a
       // viewport so offscreen form rows are painted in the evidence image.
       await page.setViewportSize({ width, height: 6000 });
-      assert(await dispatch.evaluate((el) => el.scrollWidth <= el.clientWidth), "recovered settings fit at 200% text");
-      await dispatch.screenshot({ path: join(shots, `chunk-recovered-${scheme}-${width}-large.png`) });
+      assert(await naming.evaluate((el) => el.scrollWidth <= el.clientWidth), "recovered settings fit at 200% text");
+      await naming.screenshot({ path: join(shots, `chunk-recovered-${scheme}-${width}-large.png`) });
     }
     assert.equal(pageErrors.length, 0, "the expected import error is caught by the local boundary");
     assert(imports >= 2 && failedURLs.length > 0, "a real module request failed and was fetched again on reload");

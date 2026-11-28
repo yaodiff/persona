@@ -134,6 +134,11 @@ func (h *Manager) TranscriptionInstall(ref string) string {
 // rename, whose old id resolves to it) and when it was installed, to the microsecond the database keeps
 // (extensionIdentityTimestamp): the install's clock has nanoseconds, so a reload would otherwise move it.
 func transcriptionInstallOf(r extension.Record) string {
+	// The owner explicitly moved this speech provider into the same storage and
+	// permission slot. A fresh package with its public ID still gets a new pin.
+	if r.VerifiedBuiltinPredecessor() {
+		return extension.SourceBuiltin + ":" + r.ID
+	}
 	switch r.Source {
 	case extension.SourceBuiltin, extension.SourceHubJSON:
 		return r.Source + ":" + r.ID

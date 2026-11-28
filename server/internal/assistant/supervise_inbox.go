@@ -157,7 +157,7 @@ func (s *Service) inboxToAgent(ctx context.Context, g superviseSignal) {
 		e := taskInboxEvent{ID: namedClientID("task inbox\n" + t.ID + "\n" + g.Key), Key: g.Key, Todo: t.ID, Inbox: in}
 		e.Prompt = prompts.RenderInboxToAgent(prompts.InboxToAgent{Sender: in.Sender,
 			Preview: in.Preview, URL: in.URL, Count: in.Count, Event: e.ID})
-		_, err = s.sendTaskInput(ctx, t, e.Prompt, true, &e, false)
+		_, err = s.sendTaskInput(ctx, t, e.Prompt, true, &e, false, nil)
 		if err != nil {
 			_ = s.updateTaskInboxEvents(ctx, func(events map[string]taskInboxEvent) bool {
 				if cur, ok := events[e.ID]; ok && !cur.Retried {

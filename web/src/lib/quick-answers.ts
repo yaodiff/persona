@@ -2,17 +2,20 @@
 // permission's "Deny" / "Allow" (not one that has fields to fill in), one single-choice question's options (four at most),
 // a terminal dialog's plain options (one to four, read by the hub too). Every other card opens its chat. The bodies
 // are the chat card's (views/chat/Interactions.tsx sends them through the same resolve).
+import { approvalImpact, declinesCommand } from "./approval-impact";
+import { confirmationEnabled } from "./approval-confirmation";
 import { t } from "../i18n";
 import type { Resolution } from "./answered";
-import { isSecretHandoff, isSecretRun } from "./tool-detail";
+import { isCommandInput, isSecretHandoff, isSecretRun } from "./tool-detail";
 import { supervisorHeld } from "./supervisor-held";
 import type { Interaction } from "./types";
 
 /** A permission card only its own form can allow: it has fields to fill in (#4987), it is a password card (#1137),
- *  answered only with the password typed on it, or a hand-off card (#3962), approved only on the card. Its quick paths
- *  (a row's answers, a notification's buttons) open the chat instead. */
+ *  answered only with the password typed on it, a hand-off card (#3962), approved only on the card, or a command waiting
+ *  for a line (#14527), answered only with the line typed on it. Its quick paths (a row's answers, a notification's
+ *  buttons) open the chat instead. */
 export function needsFieldValues(ix: Interaction): boolean {
-  return ix.kind === "permission" && (!!ix.fields?.length || isSecretRun(ix) || isSecretHandoff(ix));
+  return ix.kind === "permission" && (!!ix.fields?.length || isSecretRun(ix) || isSecretHandoff(ix) || isCommandInput(ix));
 }
 
 /** What a permission card's "Allow" sends. */
@@ -36,9 +39,11 @@ export function quickAnswers(ix: Interaction): QuickChoice[] | null {
   switch (ix.kind) {
     case "permission": {
       if (needsFieldValues(ix)) return null;
+      const deny = { key: "deny", label: t("chat-interactions.deny"), body: denyBody() };
+      if (confirmationEnabled() && approvalImpact(ix)) return [deny];
       return [
         { key: "allow", label: t("chat-interactions.allow"), body: allowBody(), primary: true },
-        { key: "deny", label: t("chat-interactions.deny"), body: denyBody() },
+        deny,
       ];
     }
     case "question": {
@@ -53,7 +58,8 @@ export function quickAnswers(ix: Interaction): QuickChoice[] | null {
       const plain = (d?.options ?? []).filter((o) => !o.kind);
       // a question read off the terminal with several steps (its tab bar) or its review tab goes to the chat
       if (!d || d.multi || d.steps?.length || d.review || plain.length < 1 || plain.length > 4) return null;
-      return plain.map((o) => ({ key: o.key, label: o.label, body: { option: o.key }, hint: o.detail }));
+      const choices = confirmationEnabled() && approvalImpact(ix) ? plain.filter(o => declinesCommand(ix, o.key)) : plain;
+      return choices.map((o) => ({ key: o.key, label: o.label, body: { option: o.key }, hint: o.detail }));
     }
     default:
       return null;

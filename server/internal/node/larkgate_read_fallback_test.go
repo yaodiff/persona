@@ -56,6 +56,7 @@ func TestLarkReadFallbackBypass(t *testing.T) {
 // Outside bypassPermissions the gate lets the reads run (or leaves a loop to the conversation's own permission mode)
 // without a Lark card, and still asks about every write.
 func TestLarkReadFallbackDefaultMode(t *testing.T) {
+	needsLarkGate(t)
 	check := func(t *testing.T, command string, wantCard bool) {
 		t.Helper()
 		n := codexTestNode(t)

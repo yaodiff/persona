@@ -65,6 +65,7 @@ func (n *Node) gitWrite(ctx context.Context, method string, params json.RawMessa
 		Method      string   `json:"method"`
 		Auto        bool     `json:"auto"`
 		AutoOff     bool     `json:"auto_off"`
+		Ownership   bool     `json:"ownership"`
 	}
 	if err := json.Unmarshal(params, &p); err != nil {
 		return nil, err
@@ -87,6 +88,9 @@ func (n *Node) gitWrite(ctx context.Context, method string, params json.RawMessa
 		}
 		return n.gitStash(ctx, p.Cwd, p.Op, index, p.Message, p.Untracked, p.OID)
 	case methodGitPR:
+		if p.Ownership {
+			return n.gitPROwnership(ctx, p.Cwd)
+		}
 		return n.gitPR(ctx, p.Cwd)
 	case methodGitPRCreate:
 		return n.gitPRCreate(ctx, p.Cwd, p.Title, p.Body, p.Base, p.Draft)

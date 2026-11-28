@@ -5,14 +5,20 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Catalog, Market } from "../../lib/extension-market";
+import type { Catalog, CatalogItem, Market, MarketPreview } from "../../lib/extension-market";
 
-const catalog = vi.hoisted(() => ({ value: null as unknown, impl: null as null | ((q: string, market: string) => Promise<unknown>) }));
+const catalog = vi.hoisted(() => ({
+  value: null as unknown,
+  impl: null as null | ((q: string, market: string, refresh?: boolean, manager?: string) => Promise<unknown>),
+  preview: vi.fn<(market: string, extension: string, manager?: string) => Promise<MarketPreview>>(),
+}));
 vi.mock("../../lib/extension-market", async (original) => ({
   ...(await original<typeof import("../../lib/extension-market")>()),
-  getCatalog: (q: string, m: string) => (catalog.impl ? catalog.impl(q, m) : Promise.resolve(catalog.value)),
+  getCatalog: (q: string, m: string, refresh?: boolean, manager?: string) =>
+    (catalog.impl ? catalog.impl(q, m, refresh, manager) : Promise.resolve(catalog.value)),
+  previewFromMarket: (market: string, extension: string, manager?: string) => catalog.preview(market, extension, manager),
 }));
-import { MarketCatalog } from "./ExtensionMarket";
+import { MarketCatalog, MarketItem } from "./ExtensionMarket";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -42,16 +48,16 @@ describe("MarketCatalog empty line", () => {
     catalog.value = { markets: [market("official", { error: "timeout" }), market("team")], extensions: [] } satisfies Catalog;
     act(() => root.render(<MarketCatalog onBack={() => {}} onOpen={() => {}} onMarkets={() => {}} />));
     await flush();
-    expect(host.textContent).toContain("读不到「official」");
-    expect(host.textContent).toContain("读到的市场里还没有扩展");
-    expect(host.textContent).not.toContain("这个市场还没有扩展");
+    expect(host.textContent).toContain("无法读取市场「official」");
+    expect(host.textContent).toContain("已读取的市场中暂无扩展");
+    expect(host.textContent).not.toContain("此市场暂无扩展");
   });
 
-  it("keeps 这个市场还没有扩展 for a single readable market", async () => {
+  it("keeps 此市场暂无扩展 for a single readable market", async () => {
     catalog.value = { markets: [market("official")], extensions: [] } satisfies Catalog;
     act(() => root.render(<MarketCatalog onBack={() => {}} onOpen={() => {}} onMarkets={() => {}} />));
     await flush();
-    expect(host.textContent).toContain("这个市场还没有扩展");
+    expect(host.textContent).toContain("此市场暂无扩展");
   });
 });
 
@@ -60,8 +66,8 @@ describe("MarketCatalog rate-limited GitHub market", () => {
     catalog.value = { markets: [market("team", { spec: "github:example/extensions", error: "HTTP 403" })], extensions: [] } satisfies Catalog;
     act(() => root.render(<MarketCatalog onBack={() => {}} onOpen={() => {}} onMarkets={() => {}} />));
     await flush();
-    expect(host.textContent).toContain("GitHub 不带 token 时每小时只能读 60 次");
-    expect(button("填 token")).toBeTruthy();
+    expect(host.textContent).toContain("未配置 token 时，GitHub 每小时仅允许读取 60 次");
+    expect(button("添加 token")).toBeTruthy();
   });
 
   it("does not offer a token when the market has one or is not GitHub", async () => {
@@ -71,8 +77,8 @@ describe("MarketCatalog rate-limited GitHub market", () => {
     } satisfies Catalog;
     act(() => root.render(<MarketCatalog onBack={() => {}} onOpen={() => {}} onMarkets={() => {}} />));
     await flush();
-    expect(host.textContent).not.toContain("GitHub 不带 token 时每小时只能读 60 次");
-    expect(button("填 token")).toBeUndefined();
+    expect(host.textContent).not.toContain("未配置 token 时，GitHub 每小时仅允许读取 60 次");
+    expect(button("添加 token")).toBeUndefined();
   });
 
   it("asks no token of a newcomer for the official market: grey, and a quiet way to the markets page", async () => {
@@ -83,10 +89,10 @@ describe("MarketCatalog rate-limited GitHub market", () => {
     const onMarkets = vi.fn();
     act(() => root.render(<MarketCatalog onBack={() => {}} onOpen={() => {}} onMarkets={onMarkets} />));
     await flush();
-    expect(host.textContent).toContain("暂时读不到官方扩展");
-    expect(host.textContent).not.toContain("GitHub 不带 token 时每小时只能读 60 次");
-    expect(button("填 token")).toBeUndefined();
-    const link = button("去「管理市场」填一个 GitHub token");
+    expect(host.textContent).toContain("暂时无法访问官方扩展");
+    expect(host.textContent).not.toContain("未配置 token 时，GitHub 每小时仅允许读取 60 次");
+    expect(button("添加 token")).toBeUndefined();
+    const link = button("前往「管理市场」添加 GitHub token");
     expect(link).toBeTruthy();
     act(() => link!.click());
     expect(onMarkets).toHaveBeenCalledOnce();
@@ -96,13 +102,13 @@ describe("MarketCatalog rate-limited GitHub market", () => {
     catalog.value = { markets: [market("team", { spec: "github:example/extensions", error: "HTTP 403" })], extensions: [] } satisfies Catalog;
     act(() => root.render(<MarketCatalog onBack={() => {}} onOpen={() => {}} onMarkets={() => {}} />));
     await flush();
-    const fix = button("填 token");
+    const fix = button("添加 token");
     expect(fix).toBeTruthy();
     act(() => fix!.click());
     await flush();
     expect(document.querySelector('[role="dialog"]')?.textContent).toContain("「team」的 token");
     // and how to get one: GitHub's token page, filled in
-    const create = [...document.querySelectorAll('[role="dialog"] a')].find((a) => a.textContent?.includes("去 GitHub 生成")) as HTMLAnchorElement | undefined;
+    const create = [...document.querySelectorAll('[role="dialog"] a')].find((a) => a.textContent?.includes("前往 GitHub 创建")) as HTMLAnchorElement | undefined;
     expect(create?.href).toContain("https://github.com/settings/personal-access-tokens/new?");
     expect(create?.target).toBe("_blank");
   });
@@ -152,7 +158,7 @@ describe("MarketCatalog updating state (#6468)", () => {
     type("zzz"); // the typing pause for the second query is still running
     await act(async () => first.resolve(reply([])));
     expect(host.querySelector("[role=status]")).not.toBeNull(); // the answer is for "zz", not "zzz"
-    expect(host.textContent).not.toContain("没有找到");
+    expect(host.textContent).not.toContain("未找到");
     await wait(300);
     const second = asks.at(-1)!;
     expect(second.q).toBe("zzz");
@@ -164,6 +170,18 @@ describe("MarketCatalog updating state (#6468)", () => {
 });
 
 describe("MarketCatalog header Manage markets entry (#14958)", () => {
+  it("requests installed status for the assistant selected for marketplace installs", async () => {
+    const request = vi.fn(async () => ({ markets: [market("official")], extensions: [] }));
+    catalog.impl = request;
+    try {
+      await act(async () => root.render(<MarketCatalog manager="work" onOpen={() => {}} />));
+      await flush();
+      expect(request).toHaveBeenCalledWith("", "", false, "work");
+    } finally {
+      catalog.impl = null;
+    }
+  });
+
   it("supports onManageMarkets and custom backLabel for Integrations while keeping legacy onMarkets compatible", async () => {
     catalog.value = { markets: [market("official")], extensions: [] } satisfies Catalog;
     const onManageMarkets = vi.fn();
@@ -202,5 +220,135 @@ describe("MarketCatalog header Manage markets entry (#14958)", () => {
     expect(legacyManageBtn).not.toBeNull();
     act(() => legacyManageBtn!.click());
     expect(onMarkets).toHaveBeenCalledOnce();
+  });
+});
+
+describe("ExtensionMarket latest_incompatible_version hints (#17698)", () => {
+  const reason = "这个扩展需要更新版本的 hub，请先更新 hub（需要 >=300，现在是 100）";
+  const entry = (extra: Partial<CatalogItem> = {}): CatalogItem => ({
+    market: "official",
+    market_name: "官方扩展",
+    id: "example-cal",
+    name: "Example 日历",
+    version: "1.5.0",
+    description: "同步日程与提醒",
+    ...extra,
+  });
+
+  beforeEach(() => {
+    catalog.preview.mockReset();
+    catalog.preview.mockResolvedValue({
+      preview_id: "pv-150",
+      manifest: { id: "example-cal", name: "Example 日历", version: "1.5.0" },
+      permissions: [],
+      permissions_digest: "digest-150",
+      expires_at: new Date(Date.now() + 60_000).toISOString(),
+    });
+  });
+
+  it("shows a quiet hint for an installed compatible release while keeping compatible upgrades unblocked", async () => {
+    const installedLatest = entry({
+      installed: "1.5.0",
+      installed_source: "installed",
+      from_this_market: true,
+      latest_incompatible_version: "3.0.0",
+      latest_incompatible_reason: reason,
+    });
+    const upgradableOlder = entry({
+      id: "example-notes",
+      name: "Example 笔记",
+      installed: "1.0.0",
+      installed_source: "installed",
+      from_this_market: true,
+      upgradable: true,
+      latest_incompatible_version: "3.0.0",
+      latest_incompatible_reason: reason,
+    });
+    catalog.value = { markets: [market("official")], extensions: [installedLatest, upgradableOlder] } satisfies Catalog;
+
+    act(() => root.render(<MarketCatalog onBack={() => {}} onOpen={() => {}} onMarkets={() => {}} />));
+    await flush();
+
+    const hints = [...host.querySelectorAll("[data-incompatible-hint]")];
+    expect(hints).toHaveLength(2);
+    expect(hints[0].textContent).toContain("3.0.0");
+    expect(hints[0].textContent).toContain(reason);
+    expect(host.textContent).toContain("已安装 1.5.0");
+    expect(host.textContent).toContain("可升级到 1.5.0");
+
+    // Detail view for already-installed compatible version shows the full notice.
+    act(() => root.render(<MarketItem market="official" id="example-cal" onBack={() => {}} onInstalled={() => {}} />));
+    await flush();
+    const notice = host.querySelector("[data-incompatible-notice]");
+    expect(notice).not.toBeNull();
+    expect(notice!.textContent).toContain("有更新版本 3.0.0，当前 Persona 暂不兼容");
+    expect(notice!.textContent).toContain(reason);
+
+    // Detail view for upgradable older version shows the notice AND allows upgrading to the compatible release.
+    act(() => root.render(<MarketItem market="official" id="example-notes" onBack={() => {}} onInstalled={() => {}} />));
+    await flush();
+    expect(host.querySelector("[data-incompatible-notice]")?.textContent).toContain("3.0.0");
+    const upgradeBtn = button("升级到 1.5.0");
+    expect(upgradeBtn).toBeTruthy();
+    expect(upgradeBtn!.disabled).toBe(false);
+    act(() => upgradeBtn!.click());
+    await flush();
+    expect(catalog.preview).toHaveBeenCalledWith("official", "example-notes", undefined);
+  });
+
+  it("shows the hint for an uninstalled compatible release without blocking installation", async () => {
+    const installable = entry({
+      latest_incompatible_version: "3.0.0",
+      latest_incompatible_reason: reason,
+    });
+    catalog.value = { markets: [market("official")], extensions: [installable] } satisfies Catalog;
+
+    act(() => root.render(<MarketCatalog onBack={() => {}} onOpen={() => {}} onMarkets={() => {}} />));
+    await flush();
+
+    expect(host.textContent).toContain("未安装");
+    const hint = host.querySelector("[data-incompatible-hint]");
+    expect(hint).not.toBeNull();
+    expect(hint!.textContent).toContain("3.0.0");
+    expect(hint!.textContent).toContain(reason);
+
+    act(() => root.render(<MarketItem market="official" id="example-cal" onBack={() => {}} onInstalled={() => {}} />));
+    await flush();
+
+    const notice = host.querySelector("[data-incompatible-notice]");
+    expect(notice).not.toBeNull();
+    expect(notice!.textContent).toContain("3.0.0");
+    expect(notice!.textContent).toContain(reason);
+
+    const installBtn = button("安装");
+    expect(installBtn).toBeTruthy();
+    expect(installBtn!.disabled).toBe(false);
+    act(() => installBtn!.click());
+    await flush();
+    expect(catalog.preview).toHaveBeenCalledWith("official", "example-cal", undefined);
+  });
+
+  it("omits the incompatible-version notice when item.problem already blocks the extension", async () => {
+    const blocked = entry({
+      version: "3.0.0",
+      problem: reason,
+      latest_incompatible_version: "3.0.0",
+      latest_incompatible_reason: reason,
+    });
+    catalog.value = { markets: [market("official")], extensions: [blocked] } satisfies Catalog;
+
+    act(() => root.render(<MarketCatalog onBack={() => {}} onOpen={() => {}} onMarkets={() => {}} />));
+    await flush();
+
+    expect(host.textContent).toContain("无法安装");
+    expect(host.textContent).toContain(reason);
+    expect(host.querySelector("[data-incompatible-hint]")).toBeNull();
+
+    act(() => root.render(<MarketItem market="official" id="example-cal" onBack={() => {}} onInstalled={() => {}} />));
+    await flush();
+
+    expect(host.querySelector("[data-incompatible-notice]")).toBeNull();
+    expect(host.textContent?.split(reason).length).toBe(2); // shown exactly once via item.problem
+    expect(button("安装")).toBeUndefined();
   });
 });

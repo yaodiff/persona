@@ -117,12 +117,8 @@ describe("NetworkPanel", () => {
     await flush();
     expect(calls).toEqual(["/api/v1/machines/m1/network", "/api/v1/machines/m1/network"]);
 
-    // Switching to an offline machine shows the offline message without fetching.
-    const offlineTab = [...host.querySelectorAll('[role="radio"]')].find((b) => b.textContent?.includes("Offline Box"));
-    expect(offlineTab).toBeDefined();
-    await act(async () => {
-      (offlineTab as HTMLButtonElement).click();
-    });
+    // Once all computers are offline, the tool shows its offline state without fetching.
+    act(() => root.render(<NetworkPanel machines={machines.map((m) => ({ ...m, online: false }))} />));
     await flush();
     expect(calls).toHaveLength(2);
     expect(host.textContent).toMatch(/离线|offline/i);
@@ -139,10 +135,10 @@ describe("NetworkPanel", () => {
     expect(host.textContent).toMatch(/更新.*节点|Update this computer's node/);
   });
 
-  it("wires NetworkPanel lazily from Machines.tsx via lazyPage", async () => {
+  it("wires NetworkPanel lazily from MachineViews.tsx via lazyPage", async () => {
     const fs = await import("node:fs");
     const path = await import("node:path");
-    const source = fs.readFileSync(path.join(__dirname, "../Machines.tsx"), "utf8");
-    expect(source).toMatch(/const NetworkPanel = lazyPage\(\(\) => import\("\.\/machines\/NetworkPanel"\)\.then\(\(m\) => m\.NetworkPanel\)\)/);
+    const source = fs.readFileSync(path.join(__dirname, "MachineViews.tsx"), "utf8");
+    expect(source).toMatch(/const NetworkPanel = lazyPage\(\(\) => import\("\.\/NetworkPanel"\)\.then\(\(m\) => m\.NetworkPanel\)\)/);
   });
 });

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -86,15 +87,39 @@ func (n *Node) traexOwners() map[int]string {
 	return out
 }
 
-// Fresh starts need positive writer evidence, including when old IDs were archived,
+// Fresh starts need positive evidence from the writer or foreground client, including when old IDs were archived,
 // outside the rollout scan window, or absent from a cached metadata list.
 func (n *Node) traexLiveThread(pane, preferred string) string {
+	// Revalidate the winner of the combined host inventory, including when
+	// a generic multi-thread writer was demoted during discovery.
+	n.mu.Lock()
+	var fresh string
+	for id, a := range n.agents {
+		if a.PaneID == pane && a.Agent == traexAgent && a.AgentSession != nil && a.AgentSession.Source == traexForegroundSource {
+			fresh = id
+			break
+		}
+	}
+	n.mu.Unlock()
+	if fresh != "" {
+		if preferred != "" {
+			return ""
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		if p := n.traexCurrentPane(ctx, pane); p != nil {
+			if n.traexFreshThreads(ctx, []host.Agent{*p}, nil, &traexHostEvidence{})[pane] == fresh {
+				return fresh
+			}
+		}
+		return ""
+	}
 	threads := n.traexThreads()
 	ownerSet := n.traexReadOwners(threads)
 	if preferred != "" || len(ownerSet.shared) > 0 {
 		paneAgent := n.layoutPane(pane)
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		fgID := n.traexPaneForegroundResumed(ctx, pane, paneAgent, true, true)
+		fgID := n.traexPaneForegroundResumed(ctx, pane, paneAgent, true, true, nil)
 		cancel()
 		if fgID != "" {
 			if t, known := threads[fgID]; !known || traexConversation(t) {
@@ -488,7 +513,7 @@ func traexResumeFlag(args []string, i *int, inResume bool) (string, bool) {
 	return "", false
 }
 
-func (n *Node) traexPaneForegroundResumed(ctx context.Context, pane string, p *host.Agent, allowAnyProgram, allowHostQuery bool) string {
+func (n *Node) traexPaneForegroundResumed(ctx context.Context, pane string, p *host.Agent, allowAnyProgram, allowHostQuery bool, observed map[string][]int) string {
 	parse := func(argv []string, permissive bool) string {
 		return traexResumedIDFromArgs(argv, permissive, n.isTraexLauncher)
 	}
@@ -518,6 +543,9 @@ func (n *Node) traexPaneForegroundResumed(ctx context.Context, pane string, p *h
 	pctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	pids, err := n.paneProcesses(pctx, pane)
 	cancel()
+	if observed != nil {
+		observed[pane] = pids
+	}
 	if err != nil || len(pids) == 0 {
 		return ""
 	}
@@ -560,6 +588,15 @@ func traexNativeStatus(a host.Agent) string {
 	default:
 		return ""
 	}
+}
+
+// Classic Herdr can report synthetic Idle before Persona's second RPC
+// supplies a session. Only a distinct native reporter positively identifies it.
+func traexAppliedStatus(a host.Agent, source string) string {
+	if source == traexForegroundSource && a.AgentStatus == proto.StatusIdle && a.AgentSession != nil && a.AgentSession.Source != "" && a.AgentSession.Source != resumeSource {
+		return proto.StatusIdle
+	}
+	return traexNativeStatus(a)
 }
 
 // alive says whether the process behind a pid file this user's claude or a compatible CLI wrote still runs. A pid now held by
@@ -618,10 +655,10 @@ func (n *Node) paneOfPID(pid int) string {
 	return p
 }
 
-// traexAgents turns the panes running a compatible CLI into agents, preserving native host lifecycle state,
+// traexSnapshotAgents turns the panes running a compatible CLI into agents, preserving native host lifecycle state,
 // preferring an explicitly resumed foreground conversation ID over shared app-server writer metadata, and never
 // assigning an unrelated shared-server conversation to a terminal.
-func (n *Node) traexAgents(ctx context.Context, panes []host.Agent, agents []host.Agent) []host.Agent {
+func (n *Node) traexSnapshotAgents(ctx context.Context, panes []host.Agent, agents []host.Agent, proof *traexHostEvidence) []host.Agent {
 	threads := n.traexThreads()
 	ownerSet := n.traexReadOwners(threads)
 	isAgent := map[string]bool{}
@@ -659,6 +696,8 @@ func (n *Node) traexAgents(ctx context.Context, panes []host.Agent, agents []hos
 	// with zero extra RPCs; classic herdr queries pane.process_info only when shared/multi-thread writers exist or a
 	// host-detected traex pane lacks a direct writer lock.
 	fgResumed := map[string]string{}
+	observed := map[string][]int{}
+	var freshPanes []host.Agent
 	paneByID := make(map[string]host.Agent, len(panes))
 	for i := range panes {
 		p := panes[i]
@@ -669,11 +708,14 @@ func (n *Node) traexAgents(ctx context.Context, panes []host.Agent, agents []hos
 		}
 		_, isCompat := compatible[pane]
 		allowHostQuery := hasSharedOrMulti || (isCompat && len(directByPane[pane]) == 0)
-		id := n.traexPaneForegroundResumed(ctx, pane, &p, isCompat || p.Agent == traexAgent, allowHostQuery)
+		id := n.traexPaneForegroundResumed(ctx, pane, &p, isCompat || p.Agent == traexAgent, allowHostQuery, observed)
 		if id != "" {
 			if t, known := threads[id]; !known || traexConversation(t) {
 				fgResumed[pane] = id
 			}
+		} else if kind := host.ParsePane(pane).Kind; (kind == host.Herdr || kind == host.HerdrCore) &&
+			(!isCompat || agents[compatible[pane]].SessionID() == "") && (len(p.ForegroundArgv) == 0 || n.traexPlainClient(p.ForegroundArgv)) {
+			freshPanes = append(freshPanes, p)
 		}
 	}
 
@@ -689,6 +731,9 @@ func (n *Node) traexAgents(ctx context.Context, panes []host.Agent, agents []hos
 		}
 		paneClaims[id][pane] = true
 	}
+	fresh := n.traexFreshThreads(ctx, freshPanes, observed, proof)
+	proof.fresh = fresh
+	proof.writers = directByPane
 	for pane, id := range fgResumed {
 		addClaim(id, pane)
 	}
@@ -699,7 +744,9 @@ func (n *Node) traexAgents(ctx context.Context, panes []host.Agent, agents []hos
 	}
 	for ownerPane, byPID := range directByPane {
 		for pid, ids := range byPID {
-			crossPane := false
+			// A multi-thread writer that cannot account for its own terminal's
+			// proven foreground thread is also shared.
+			crossPane := traexWriterContested(ownerPane, ids, fresh)
 			for _, id := range ids {
 				for claimPane := range paneClaims[id] {
 					if claimPane != ownerPane {
@@ -727,7 +774,7 @@ func (n *Node) traexAgents(ctx context.Context, panes []host.Agent, agents []hos
 	var out []host.Agent
 	claimedByPane := map[string]string{}
 	resolved := map[string]bool{}
-	apply := func(pane string, p host.Agent, hasPane bool, thread string) {
+	apply := func(pane string, p host.Agent, hasPane bool, thread, source string) {
 		applyCwd := func(a *host.Agent) {
 			// A host workspace is a terminal container, which may be unrelated to where
 			// Run started this CLI. Keep its placement, but report the conversation's cwd.
@@ -767,13 +814,12 @@ func (n *Node) traexAgents(ctx context.Context, panes []host.Agent, agents []hos
 				}
 			}
 			dst.Agent = traexAgent
-			source := ""
 			if orig.AgentSession != nil && orig.SessionID() == thread {
 				source = orig.AgentSession.Source
 			}
 			dst.AgentSession = &host.AgentSession{Source: source, Agent: traexAgent, Kind: "id", Value: thread}
 			applyCwd(&dst)
-			if status := traexNativeStatus(orig); status != "" {
+			if status := traexAppliedStatus(orig, source); status != "" {
 				dst.AgentStatus = status
 			} else {
 				dst.AgentStatus = n.traexStatus(ctx, dst)
@@ -781,10 +827,15 @@ func (n *Node) traexAgents(ctx context.Context, panes []host.Agent, agents []hos
 			agents[i] = dst
 			return
 		}
+		original := p
 		p.Agent = traexAgent
-		p.AgentSession = &host.AgentSession{Agent: traexAgent, Kind: "id", Value: thread}
+		p.AgentSession = &host.AgentSession{Source: source, Agent: traexAgent, Kind: "id", Value: thread}
 		applyCwd(&p)
-		if status := traexNativeStatus(p); status != "" {
+		status := traexNativeStatus(p)
+		if source == traexForegroundSource {
+			status = traexAppliedStatus(original, source)
+		}
+		if status != "" {
 			p.AgentStatus = status
 		} else {
 			p.AgentStatus = n.traexStatus(ctx, p)
@@ -811,7 +862,7 @@ func (n *Node) traexAgents(ctx context.Context, panes []host.Agent, agents []hos
 		}
 		claimedByPane[thread] = pane
 		resolved[pane] = true
-		apply(pane, p, true, thread)
+		apply(pane, p, true, thread, "")
 	}
 
 	// Pass 2: Dedicated (non-shared) per-pane writer locks resolve panes without an explicit foreground resume.
@@ -839,13 +890,29 @@ func (n *Node) traexAgents(ctx context.Context, panes []host.Agent, agents []hos
 		if i, ok := compatible[pane]; ok {
 			preferred = agents[i].SessionID()
 		}
+		hostID := preferred
+		if preferred == "" {
+			preferred = fresh[pane]
+		}
 		thread := traexPaneThread(filtered, preferred, parentPID)
 		if thread == "" {
 			continue
 		}
+		source := ""
+		for pid, ids := range filtered {
+			if len(directByPane[pane][pid]) > 1 && slices.Contains(ids, thread) && thread != hostID {
+				// A different host may know this writer is shared. Keep the
+				// distinction until both Herdr inventories have been merged.
+				source = traexMultiWriterSource
+				if fresh[pane] == thread {
+					source = traexForegroundSource
+				}
+				break
+			}
+		}
 		claimedByPane[thread] = pane
 		resolved[pane] = true
-		apply(pane, p, true, thread)
+		apply(pane, p, true, thread, source)
 	}
 
 	// Pass 3: Retain valid host-reported sessions on compatible panes not resolved above, clearing any session
@@ -866,7 +933,15 @@ func (n *Node) traexAgents(ctx context.Context, panes []host.Agent, agents []hos
 		claimedByPane[hostID] = a.PaneID
 		resolved[a.PaneID] = true
 		p, hasPane := paneByID[a.PaneID]
-		apply(a.PaneID, p, hasPane, hostID)
+		apply(a.PaneID, p, hasPane, hostID, "")
+	}
+
+	// Other hosts' claims are reconciled when the snapshot inventories merge.
+	for _, p := range freshPanes {
+		id := fresh[p.PaneID]
+		if id != "" && !resolved[p.PaneID] && claimedByPane[id] == "" {
+			apply(p.PaneID, p, true, id, traexForegroundSource)
+		}
 	}
 
 	return out

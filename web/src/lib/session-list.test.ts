@@ -1607,3 +1607,90 @@ describe("SectionList: a section that holds all its rows passes over hints about
     expect(calls()).toBe(before + 1);
   });
 });
+
+describe("SessionList revision deduplication and hidden-tab throttling", () => {
+  const setVisibility = (state: "visible" | "hidden") => {
+    const target = globalThis as { document?: EventTarget & { visibilityState?: string } };
+    if (!target.document) {
+      target.document = Object.assign(new EventTarget(), { visibilityState: state });
+    } else {
+      Object.defineProperty(target.document, "visibilityState", { configurable: true, get: () => state });
+    }
+    target.document.dispatchEvent(new Event("visibilitychange"));
+  };
+
+  afterEach(() => {
+    setVisibility("visible");
+  });
+
+  it("skips redundant fetches when a sessions_list hint repeats the already-loaded revision", async () => {
+    vi.useFakeTimers();
+    try {
+      const list = make();
+      pages.mockResolvedValueOnce(page([row("1")], { revision: "rev-1" }));
+      await list.load();
+      expect(pages).toHaveBeenCalledTimes(1);
+
+      list.invalidate({ revision: "rev-1" });
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(pages).toHaveBeenCalledTimes(1);
+
+      pages.mockResolvedValueOnce(page([], { revision: "rev-2" }));
+      list.invalidate({ revision: "rev-2" });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(pages).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("backs off rapid invalidations while hidden and catches up immediately when visible again", async () => {
+    vi.useFakeTimers();
+    try {
+      const list = make();
+      pages.mockResolvedValue(page([row("1")], { revision: "rev-1" }));
+      await list.load();
+      list.invalidate({ revision: "rev-2" });
+      await vi.advanceTimersByTimeAsync(0);
+      const beforeHidden = pages.mock.calls.length;
+
+      setVisibility("hidden");
+      for (let i = 0; i < 10; i++) {
+        list.invalidate({ revision: `rev-h-${i}` });
+        await vi.advanceTimersByTimeAsync(1_000);
+      }
+      // 10 s elapsed while hidden: still inside the 15 s hidden coalescing window, so no extra reads fired.
+      expect(pages.mock.calls.length).toBe(beforeHidden);
+
+      // Returning to visible cancels the remaining hidden timer and catches up right away.
+      setVisibility("visible");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(pages.mock.calls.length).toBe(beforeHidden + 1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("pauses invalidations completely while hidden when pauseWhenHidden is enabled, then flushes once on visible", async () => {
+    vi.useFakeTimers();
+    try {
+      const list = make(undefined, { pauseWhenHidden: true });
+      pages.mockResolvedValue(page([row("1")], { revision: "rev-1" }));
+      await list.load();
+      expect(pages).toHaveBeenCalledTimes(1);
+
+      setVisibility("hidden");
+      for (let i = 0; i < 20; i++) {
+        list.invalidate({ revision: `rev-p-${i}` });
+        await vi.advanceTimersByTimeAsync(3_000);
+      }
+      expect(pages).toHaveBeenCalledTimes(1);
+
+      setVisibility("visible");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(pages).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

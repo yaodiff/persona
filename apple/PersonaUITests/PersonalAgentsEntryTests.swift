@@ -1,7 +1,7 @@
 import XCTest
 
-/// The shell's way to the personal agents page on a phone (#140): the Personal Agents pill beside the grouping, under
-/// the quick filters. Against scripts/mock/mock_hub.py with MOCK_PERSONAL_AGENTS=1 (TEST_RUNNER_PERSONA_PERSONAL_HUB);
+/// The shell's way to the personal agents page on a phone (#140): the Personal Agents group heading above the
+/// computers (#16769). Against scripts/mock/mock_hub.py with MOCK_PERSONAL_AGENTS=1 (TEST_RUNNER_PERSONA_PERSONAL_HUB);
 /// screenshots in PERSONA_SHOTS, with PERSONA_SHOTS_SUFFIX appended to each name.
 final class PersonalAgentsEntryTests: XCTestCase {
     private var app: XCUIApplication!
@@ -43,7 +43,7 @@ final class PersonalAgentsEntryTests: XCTestCase {
         _ = try open("configured")
         let pill = app.buttons["agents.personal"]
         XCTAssertTrue(pill.waitForExistence(timeout: 30), app.debugDescription)
-        XCTAssertTrue(app.buttons["agents.grouping"].exists, "beside the grouping")
+        XCTAssertTrue(app.buttons["agents.grouping"].exists, "the grouping stays in the filter bar")
         shot("entry")
         pill.tap()
         let title = app.navigationBars.staticTexts.matching(NSPredicate(format: "label == 'Personal Agents' OR label == '个人 Agent'")).firstMatch

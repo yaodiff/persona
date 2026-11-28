@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -52,6 +53,14 @@ const (
 	MethodRename = "devices.rename"
 )
 
+var (
+	RequestMethod         = buswire.Method[NodeCall, json.RawMessage]{Name: MethodRequest}
+	ConnectedMethod       = buswire.Method[Connected, ConnectedReply]{Name: MethodConnected}
+	ConnectorCredMethod   = buswire.Method[ConnectorCredRequest, ConnectorCred]{Name: MethodConnectorCred}
+	ConnectorPairedMethod = buswire.Method[ConnectorCred, buswire.None]{Name: MethodConnectorPaired}
+	RenameMethod          = buswire.Method[Rename, RenameReply]{Name: MethodRename}
+)
+
 // Rename is devices.rename's params: Name "" is the computer's id again.
 type Rename struct {
 	MachineID string `json:"machine_id"`
@@ -77,6 +86,9 @@ const (
 	// MethodFileCall has NodeCall's params too, but only for a long file.copy / file.zip whose caller may cancel it.
 	// Keeping it separate leaves ordinary devices.call completion semantics unchanged when an HTTP client disconnects.
 	MethodFileCall = "devices.file_call"
+	// MethodRetireCall forwards only session.stop_if_idle and propagates cancellation.
+	// An old manager refuses it; unlike a file call, it has no unconditional fallback.
+	MethodRetireCall = "devices.retire_call"
 	// EventNotify {machine_id, event, params}: a one-way event to a node (terminal input, a port's bytes).
 	EventNotify = "devices.notify"
 	// EventConfig Config: what the hub hands the manager changed (an entry added on the admin page, the mesh, the
@@ -114,6 +126,22 @@ const (
 	MethodEnginePut = "devices.engine.put"
 )
 
+var (
+	CallMethod                 = buswire.Method[NodeCall, json.RawMessage]{Name: MethodCall}
+	FileCallMethod             = buswire.Method[NodeCall, json.RawMessage]{Name: MethodFileCall}
+	RetireCallMethod           = buswire.Method[NodeCall, json.RawMessage]{Name: MethodRetireCall}
+	AcceptMethod               = buswire.Method[Accept, buswire.None]{Name: MethodAccept}
+	UpdateNodesMethod          = buswire.Method[buswire.None, buswire.None]{Name: MethodUpdateNodes}
+	PairConnectorMethod        = buswire.Method[PairConnector, PairConnectorReply]{Name: MethodPairConnector}
+	ReconnectMethod            = buswire.Method[ReconnectRequest, buswire.None]{Name: MethodReconnect}
+	UsageGatewayAccountsMethod = buswire.Method[buswire.None, proto.GatewayAccounts]{Name: MethodUsageGatewayAccounts}
+	MachinesPutMethod          = buswire.Method[MachinePut, buswire.None]{Name: MethodMachinesPut}
+	MachinesRemoveMethod       = buswire.Method[MachineRef, MachineRemoved]{Name: MethodMachinesRemove}
+	MachinesGetMethod          = buswire.Method[MachineRef, MachineEntry]{Name: MethodMachinesGet}
+	EngineGetMethod            = buswire.Method[MachineRef, MachineEngine]{Name: MethodEngineGet}
+	EnginePutMethod            = buswire.Method[MachineEngine, buswire.None]{Name: MethodEnginePut}
+)
+
 // MachineEngine is one machine's engine choice (devices.engine.get's answer, devices.engine.put's params).
 type MachineEngine struct {
 	MachineID string              `json:"machine_id"`
@@ -132,6 +160,17 @@ type MachinePut struct {
 // MachineRef names one machine.
 type MachineRef struct {
 	MachineID string `json:"machine_id"`
+}
+
+// ReconnectRequest names the machine whose node should reconnect.
+type ReconnectRequest MachineRef
+
+// UnmarshalJSON uses the manager's original anonymous struct to preserve invalid-parameter errors.
+func (r *ReconnectRequest) UnmarshalJSON(data []byte) error {
+	legacy := (*struct {
+		MachineID string `json:"machine_id"`
+	})(r)
+	return json.Unmarshal(data, legacy)
 }
 
 // MachineRemoved is devices.machines.remove's answer: whether the list had it.
@@ -208,6 +247,7 @@ type Config struct {
 	NodePackagesURL   string             `json:"node_packages_url,omitempty"`
 	NodePackagesProxy string             `json:"node_packages_proxy,omitempty"`
 	DevelopmentTarget *DevelopmentTarget `json:"development_target,omitempty"`
+	PublishedTarget   *DevelopmentTarget `json:"published_target,omitempty"`
 	DevelopmentHold   bool               `json:"development_hold,omitempty"`
 	// LinkPingMS / LinkPingTimeoutMS: the heartbeats of the links and streams, hub.json's link section (0: the
 	// protocol's, link.PingEvery / PingTimeout; tests shorten them). The manager tells Persona Link them too.
@@ -384,6 +424,8 @@ const (
 	PortStreamHalfCloseV1 = 1
 )
 
+var PortDialMethod = buswire.Method[PortDial, PortDialReply]{Name: MethodPortDial}
+
 // PortDial opens a stream to a port on the node. The hub offers StreamVersion only for an endpoint with CloseWrite.
 type PortDial struct {
 	ID            string `json:"id"`
@@ -437,6 +479,20 @@ type ConnectedReply struct {
 	Calls []NodeCall `json:"calls,omitempty"`
 }
 
+// ConnectorCredRequest asks for the credential of one machine.
+type ConnectorCredRequest MachineRef
+
+// UnmarshalJSON keeps the hub's legacy decode through ConnectorCred. Only the
+// machine ID is used, but malformed fields must still produce the same error.
+func (r *ConnectorCredRequest) UnmarshalJSON(data []byte) error {
+	legacy := ConnectorCred{MachineID: r.MachineID}
+	if err := json.Unmarshal(data, &legacy); err != nil {
+		return err
+	}
+	r.MachineID = legacy.MachineID
+	return nil
+}
+
 // ConnectorCred is a computer of kind service's pin and credential (the token in the clear: the bus is the manager's).
 type ConnectorCred struct {
 	MachineID string `json:"machine_id"`
@@ -451,6 +507,12 @@ type PairConnector struct {
 	MachineID string `json:"machine_id"`
 	Address   string `json:"address,omitempty"`
 	Proxy     string `json:"proxy,omitempty"`
+}
+
+// PairConnectorReply is the paired connector's address and version.
+type PairConnectorReply struct {
+	Address string `json:"address"`
+	Version string `json:"version"`
 }
 
 // Routes are the apps' routes on machines the manager answers itself (the hub relays them as http.request, as the
@@ -477,6 +539,9 @@ var Routes = []string{
 	"PUT /api/v1/machines/{mid}/herdr/sessions/blocked",
 	"GET /api/v1/machines/{mid}/botmux",
 	"PUT /api/v1/machines/{mid}/botmux",
+	// "Start new Agents as Orca chats" (#17650, internal/devices orca_chat_starts.go).
+	"GET /api/v1/machines/{mid}/orca-chat-starts",
+	"PUT /api/v1/machines/{mid}/orca-chat-starts",
 	"GET /api/v1/machines/{mid}/health/reports",
 	"DELETE /api/v1/machines/{mid}/health/reports/{name}",
 	"POST /api/v1/machines/{mid}/deploy",
@@ -522,8 +587,8 @@ var TransferRoutes = []string{
 }
 
 // MetricsRoutes are the machines' monitoring's routes (internal/devices metrics.go), relayed the same way: every
-// machine's latest sample and its last hour, one machine's history, the token usage (all, one machine's range, and
-// the history: the days, the last days by the hour).
+// machine's latest sample and its last hour, one machine's history, the token usage (all, one machine's range, the
+// history: the days, the last days by the hour, and by project: usage_projects.go).
 var MetricsRoutes = []string{
 	"GET /api/v1/metrics",
 	"GET /api/v1/machines/{id}/metrics",
@@ -531,6 +596,8 @@ var MetricsRoutes = []string{
 	"GET /api/v1/usage",
 	"GET /api/v1/usage/days",
 	"GET /api/v1/usage/hours",
+	"GET /api/v1/usage/projects",
+	"GET /api/v1/usage/projects/detail",
 }
 
 // UsageRoutes are the subscription usage windows' routes (internal/devices usagewindows.go, docs/server/usage-windows.md),

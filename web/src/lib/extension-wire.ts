@@ -304,6 +304,11 @@ export interface Permissions {
    */
   agent_runtimes?: boolean;
   /**
+   * The routine sends its local date and language to this extension and may include its facts and report sections in
+   * the briefing.
+   */
+  routine_facts?: boolean;
+  /**
    * It receives the error and crash reports of the hub and the user's devices, scrubbed (no message text, tokens,
    * user names, machine names or IP addresses). Needed by contributes.error_reports.
    */
@@ -359,10 +364,12 @@ export interface Contributes {
   triage_templates?: TriageTemplateItem[];
   agent_filters?: AgentFilterItem[];
   tunnels?: TunnelItem[];
+  routine_facts?: RoutineFactsItem[];
   error_reports?: ErrorReportsItem[];
   auth_relay?: AuthRelayItem[];
   secret_providers?: SecretProviderItem[];
   repository_providers?: RepositoryProviderItem[];
+  text_lookup?: TextLookupItem[];
   memory_sources?: MemorySourceItem[];
   disk_offload?: DiskOffloadItem[];
   messaging?: MessagingItem[];
@@ -378,6 +385,8 @@ export interface Contributes {
  */
 export interface SkillItem {
   id: string;
+  /** What the extension's contributions list calls it; the id when absent. */
+  title?: string;
   /** The directory, relative to the package (or to the data directory with source data). */
   dir: string;
   source?: ContentSource;
@@ -606,6 +615,28 @@ export interface RepositoryProviderItem {
 }
 
 /**
+ * Identifies one text_lookup dictionary within its extension.
+ */
+export type TextLookupContributionID = string & { readonly __brand: "TextLookupContributionID" };
+/** A TextLookupContributionID from its raw string. */
+export function textLookupContributionID(raw: string): TextLookupContributionID {
+  return raw as TextLookupContributionID;
+}
+
+/**
+ * A dictionary the apps ask for the meaning of a word the user taps (text_lookup.state, text_lookup.lookup,
+ * text_lookup.save, text_lookup.remove). Needs the program to speak the protocol. Only English (languages ["en"]) for
+ * now.
+ */
+export interface TextLookupItem {
+  id: TextLookupContributionID;
+  /** What the dictionary is called, in a few words. */
+  name?: string;
+  /** The languages it looks up. Only "en" is accepted for now; omitted means ["en"]. */
+  languages?: string[];
+}
+
+/**
  * A provider that moves items from a computer to storage elsewhere, lists what it already holds and brings items back
  * (docs/server/machine-usage-map.md "Extension point disk_offload"): the disk usage map draws its inventory beside
  * the computer's disk and offers Offload; the manager asks the program (offload.inventory, offload.run, offload.job,
@@ -662,6 +693,24 @@ export interface RepositoryLinkLabel {
  */
 export type RepositoryLinkKind = "issue" | "pull_request" | (string & {});
 export const REPOSITORY_LINK_KINDS = ["issue", "pull_request"] as const;
+
+/**
+ * Identifies one routine facts source within its extension.
+ */
+export type RoutineContributionID = string & { readonly __brand: "RoutineContributionID" };
+/** A RoutineContributionID from its raw string. */
+export function routineContributionID(raw: string): RoutineContributionID {
+  return raw as RoutineContributionID;
+}
+
+/**
+ * A source of facts and report sections for a scheduled briefing. Requires an RPC runtime and
+ * permissions.routine_facts.
+ */
+export interface RoutineFactsItem {
+  id: RoutineContributionID;
+  title: string;
+}
 
 /**
  * It is given the error and crash reports of the hub and the user's devices (error_reports.deliver): needs the
@@ -790,6 +839,9 @@ export interface UsageItem {
   id: string;
   name: string;
   hosts?: string[];
+  direct?: boolean;
+  remote_address?: string;
+  remote_key?: string;
 }
 
 export interface ProviderItem {
@@ -827,6 +879,8 @@ export interface APIReceipt {
 
 export interface AssistantItem {
   id: string;
+  /** What the extension's contributions list calls it; the id when absent. */
+  title?: string;
   skills?: string[];
   instructions?: string;
   gate?: string;
@@ -840,6 +894,8 @@ export interface AssistantItem {
 export interface MCPServerItem {
   /** The server's name for the assistant; not persona or persona. */
   id: string;
+  /** What the extension's contributions list calls it; the id when absent. */
+  title?: string;
   /** Looked up on PATH, then in ~/bin. */
   command: string;
   /**
@@ -1538,6 +1594,80 @@ export interface AuthRelayResult {
 }
 
 /**
+ * text_lookup.state's parameters: which contribution to ask for the words the user saved and whether saved words are
+ * underlined.
+ */
+export interface TextLookupStateParams {
+  contribution: string;
+}
+
+/**
+ * What text_lookup.state answers. words is capped by the manager at 5000.
+ */
+export interface TextLookupStateResult {
+  underline_saved: boolean;
+  words?: string[];
+}
+
+/**
+ * text_lookup.lookup's parameters: the word the user tapped, an optional sentence around it, the word's language and
+ * the language of the app.
+ */
+export interface TextLookupLookupParams {
+  contribution: string;
+  word: string;
+  context?: string;
+  lang: string;
+  ui_lang: string;
+}
+
+/**
+ * One meaning of a looked-up word.
+ */
+export interface TextLookupSense {
+  pos?: string;
+  text: string;
+}
+
+/**
+ * What text_lookup.lookup answers: found is false when the dictionary has no entry.
+ */
+export interface TextLookupLookupResult {
+  found: boolean;
+  word: string;
+  lemma?: string;
+  phonetic?: string;
+  senses?: TextLookupSense[];
+  saved: boolean;
+}
+
+/**
+ * text_lookup.save's parameters: the word to remember, an optional sentence around it and where the user saved it
+ * from.
+ */
+export interface TextLookupSaveParams {
+  contribution: string;
+  word: string;
+  context?: string;
+  source?: string;
+}
+
+/**
+ * text_lookup.remove's parameters: the saved word to forget.
+ */
+export interface TextLookupRemoveParams {
+  contribution: string;
+  word: string;
+}
+
+/**
+ * What text_lookup.save and text_lookup.remove answer: whether the word is saved afterwards.
+ */
+export interface TextLookupSavedResult {
+  saved: boolean;
+}
+
+/**
  * What a secret value is resolved for: kind extension (an extension's secret, id its id), launcher (a launcher's or
  * model provider's key, id its name, machine the computer it goes to) or agent_run (handed to one Agent run after the
  * user approved it on the phone, id the variable's name, machine and session the Agent's).
@@ -1572,6 +1702,11 @@ export interface SecretsResolveParams {
   contribution: string;
   reference: string;
   purpose: SecretPurpose;
+  /**
+   * The manager still holds an earlier value of the reference and uses it if this fails: the provider must not ask
+   * the user (no authorization prompt), and answers not_signed_in at once when it cannot answer without them.
+   */
+  quiet?: boolean;
 }
 
 /**
@@ -1583,11 +1718,13 @@ export interface SecretsResolveResult {
 }
 
 /**
- * A public field name/type; never a value or source path.
+ * A public field name/type or edit action (delete, keep_value); never a value or source path.
  */
 export interface SecretStoreField {
   name: string;
-  type: string;
+  type?: string;
+  delete?: boolean;
+  keep_value?: boolean;
 }
 
 /**
@@ -2084,6 +2221,13 @@ export interface CodeComponent {
    * (…/blob/<sha>/a.go#L{start}-L{end}).
    */
   line_url?: string;
+  /**
+   * Go to definition (UI version 13): a name in the code chosen to follow it (⌘/Ctrl-click or ⌘/Ctrl+B on it; Alt+F7
+   * for its usages) calls ui.action with action and values {path, line, column (1-based, in characters), word,
+   * intent: definition or references}; ⌘[ (Ctrl+Alt+← elsewhere) calls it with {path, intent: back}. An older app
+   * leaves it out.
+   */
+  navigate?: Action;
 }
 
 /**
@@ -2926,8 +3070,8 @@ export interface Action {
    */
   reply?: string;
   /**
-   * Assistant only: an https URL or a validated persona/persona session, task, kb or file target, opened inside the
-   * app.
+   * Assistant only, except that a full extension page may open persona://session/<machine>/<session> or
+   * persona://task/<id>: an https URL or a validated persona session, task, kb or file target, opened inside the app.
    */
   open?: string;
   /** Assistant only: return one page within the card. */

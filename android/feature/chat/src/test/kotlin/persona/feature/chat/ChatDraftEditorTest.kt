@@ -82,6 +82,23 @@ class ChatDraftEditorTest {
         assertEquals(listOf(""), sent.saves)
     }
 
+    @Test fun anExtensionComposeHandoffIsSavedThroughTheMountedComposer() = runTest {
+        val drafts = Drafts("earlier words").also { it.gate.complete(Unit) }
+        val editor = ChatDraftEditor(drafts, backgroundScope, key)
+        runCurrent()
+        val composer = editor.composer.value!!
+        val bus = AssistDraftQueue(clock = { 1_000L })
+        bus.publish(id = "compose", text = "What happened?", textMode = AssistDraftTextMode.Replace)
+        val handoff = bus.claim(AssistDraftTarget.Session(SessionKey("machine", "session")))!!
+
+        assertTrue(prefillAssistDraft(composer, handoff).textAdded)
+        editor.changed(composer.draft)
+        runCurrent()
+
+        assertEquals("What happened?", composer.value.text)
+        assertEquals(listOf("What happened?"), drafts.saves)
+    }
+
     @Test fun reopeningDispatchesSavedPromptBodiesAsMessagesAndRetypedBodiesAsCommands() = runTest {
         for (word in listOf("/clear", "/permissions")) {
             val drafts = Drafts(word, structured = true)

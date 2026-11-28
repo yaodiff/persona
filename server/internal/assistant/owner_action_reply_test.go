@@ -42,12 +42,12 @@ func keepOwnerReplyCard(s *Service, ix proto.Interaction, messageID string) {
 
 func ownerReplyBatchIX(batch ownerActionBatch) proto.Interaction {
 	return proto.Interaction{ID: ownerActionInteractionID(batch.ID, ""), MachineID: batch.MachineID, SessionID: batch.SessionID,
-		Kind: proto.IxPermission, ToolName: ownerActionBatchTool, ApprovalBatchID: batch.ID, OwnerProposal: true, Resumable: true, NoExpiry: true}
+		Kind: proto.IxPermission, ToolName: ownerActionBatchTool, ApprovalBatchID: batch.ID, OwnerProposal: true, Resumable: true, NoExpiry: true, CreatedAt: batch.CreatedAt}
 }
 
 func ownerReplyItemIX(batch ownerActionBatch, item ownerActionItem) proto.Interaction {
 	return proto.Interaction{ID: ownerActionInteractionID(batch.ID, item.ID), MachineID: batch.MachineID, SessionID: batch.SessionID,
-		Kind: proto.IxPermission, ToolName: item.Tool, ApprovalBatchID: batch.ID, ApprovalItemID: item.ID, OwnerProposal: true, Resumable: true, NoExpiry: true}
+		Kind: proto.IxPermission, ToolName: item.Tool, ApprovalBatchID: batch.ID, ApprovalItemID: item.ID, OwnerProposal: true, Resumable: true, NoExpiry: true, CreatedAt: batch.CreatedAt}
 }
 
 func ownerReplyEvent(parent string) botcard.MessageEvent {
@@ -323,5 +323,42 @@ func TestOwnerActionFeishuReplyFailuresGrantNothing(t *testing.T) {
 				t.Fatalf("failed approval changed item state to %s", current.Items[0].State)
 			}
 		})
+	}
+}
+
+func TestOwnerActionAmbiguousFeishuMappingIsConsumedWithoutForwarding(t *testing.T) {
+	needsLarkLayer(t)
+	s, f, _, book := ownerReplyTestService(t)
+	first := ownerReplyBatchIX(createOwnerTestBatch(t, book, `{"body":"first"}`))
+	second := ownerReplyBatchIX(createOwnerTestBatch(t, book, `{"body":"second"}`))
+	keepOwnerReplyCard(s, first, "om_shared")
+	keepOwnerReplyCard(s, second, "om_shared")
+	f.answerApp(AppFeishu, FeishuText, func(json.RawMessage) (any, error) { return map[string]any{}, nil })
+
+	ev := ownerReplyEvent("om_shared")
+	ev.Message.MessageType = "text"
+	ev.Message.Content = `{"text":"发"}`
+	feishuSay(t, s, f, nil, ev, "oa_reply")
+
+	if sent := handoffs(f); len(sent) != 0 {
+		t.Fatalf("ambiguous exact approval fell through to ordinary conversation input: %+v", sent)
+	}
+	if calls := f.appParams(AppInteractions, InteractionsResolve); len(calls) != 0 {
+		t.Fatalf("ambiguous exact approval resolved a question instead: %+v", calls)
+	}
+	if calls := f.appParams(AppInteractions, assistantwire.InteractionsOwnerAction); len(calls) != 0 {
+		t.Fatalf("ambiguous exact approval guessed an owner proof target: %+v", calls)
+	}
+	if notes := topicNotes(f); len(notes) != 1 {
+		t.Fatalf("failure notes = %+v, want one consumed-error reply", notes)
+	}
+	for _, batchID := range []string{first.ApprovalBatchID, second.ApprovalBatchID} {
+		current, found, err := book.batch(context.Background(), batchID)
+		if err != nil || !found {
+			t.Fatalf("read batch %s: found=%v err=%v", batchID, found, err)
+		}
+		if current.Items[0].State != ownerActionPending {
+			t.Fatalf("ambiguous reply changed %s to %s", batchID, current.Items[0].State)
+		}
 	}
 }

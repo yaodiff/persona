@@ -2,12 +2,12 @@
   "title": "履歴",
   "search": "タイトルと会話を検索",
   "computer": "コンピュータ",
-  "agent": "Agent",
+  "agent": "エージェントの種類",
   "all_computers": "すべてのコンピュータ",
-  "all_agents": "すべての Agent",
+  "all_agents": "すべてのエージェントの種類",
   "earlier": "以前",
-  "empty": "実行されていないセッションはまだありません。",
+  "empty": "終了したセッションはまだありません。",
   "older_search": "このハブはタイトルとプレビューのみ検索します。会話の検索には更新が必要です。",
-  "open_terminals": "ターミナルを開く",
+  "open_terminals": "タブ一覧を開く",
   "resume_named": "{title} を再開"
 }

@@ -26,11 +26,12 @@ export class HubRepository {
     if (local) this.mutations = MutationStore.shared(local, JSON.stringify([config.hubId, config.managerId]));
   }
   async call(path: string, method: string = 'GET', body: Record<string, Object> = {}, op: string = '', admit?: () => boolean, completedAsAck: boolean = false,
-    acknowledged?: (result: Record<string, Object>) => boolean, emptyRequest: boolean = false): Promise<Record<string, Object>> {
+    acknowledged?: (result: Record<string, Object>) => boolean, emptyRequest: boolean = false,
+    messageRequestBytes?: number): Promise<Record<string, Object>> {
     const payload=method==='GET' || emptyRequest && !Object.keys(body).length ? '' : JSON.stringify(body);
     if (method === 'GET' || !this.mutations) {
       if (admit && !admit()) throw new HttpFailure(0, 'request_updated', false);
-      const result = Wire.parse(await this.transport.request(path, method, payload, op));
+      const result = Wire.parse(await this.transport.request(path, method, payload, op, messageRequestBytes));
       if (acknowledged && !acknowledged(result)) throw new HttpFailure(0, 'result_unknown', true);
       return result;
     }
@@ -38,7 +39,7 @@ export class HubRepository {
     let pendingReceipt = false;
     try {
       if (admit && !admit()) { await this.mutations.finish(record, 'failed'); throw new HttpFailure(0, 'request_updated', false); }
-      const result = Wire.parse(await this.transport.request(path, method, payload, record.id));
+      const result = Wire.parse(await this.transport.request(path, method, payload, record.id, messageRequestBytes));
       const state = Wire.text(result, 'state');
       if (state === 'pending' || state === 'unknown' || Wire.text(result, 'delivered') === 'unknown') {
         pendingReceipt = state === 'pending'; await this.mutations.finish(record, pendingReceipt ? 'pending' : 'unknown'); throw new HttpFailure(202, 'result_unknown', true, pendingReceipt);
@@ -53,12 +54,12 @@ export class HubRepository {
       throw new HttpFailure(0, 'result_unknown', true);
     } finally { this.changed(); }
   }
-  async upload(path: string, bytes: ArrayBuffer, admit?: () => boolean): Promise<Record<string, Object>> {
+  async upload(path: string, bytes: ArrayBuffer, admit?: () => boolean, requestLimit?: number): Promise<Record<string, Object>> {
     if (!this.mutations) throw new Error('storage_unavailable');
     const record = await this.mutations.begin(path, 'POST', ''); this.changed();
     try {
       if (admit && !admit()) { await this.mutations.finish(record, 'failed'); throw new HttpFailure(0, 'request_updated', false); }
-      const result = await this.transport.requestBytes(path, 'POST', bytes, 'application/octet-stream', record.id);
+      const result = await this.transport.requestBytes(path, 'POST', bytes, 'application/octet-stream', record.id, requestLimit);
       const receipt = Wire.parse(util.TextDecoder.create('utf-8', { fatal: true }).decodeToString(new Uint8Array(result.data)));
       if (!Wire.text(receipt, 'path') && !Wire.text(receipt, 'name')) throw new HttpFailure(0, 'result_unknown', true);
       await this.mutations.finish(record, 'done'); return receipt;
@@ -123,9 +124,9 @@ export class HubRepository {
     return this.call('/api/v1/sessions/' + segment(row.machine) + '/' + segment(row.session || row.id) + '/items?lines=80&fold_work=1&lazy_images=1');
   }
   async cards(row: ResourceRow): Promise<Record<string, Object>> { return this.call('/api/v1/assistant/conversations/' + segment(row.id) + '/feed'); }
-  async send(row: ResourceRow, text: string, op: string, context: string, images: Object[] = [], admit?: () => boolean): Promise<Record<string, Object>> {
+  async send(row: ResourceRow, text: string, op: string, context: string, images: Object[] = [], admit?: () => boolean, messageRequestBytes?: number): Promise<Record<string, Object>> {
     const body = Wire.payload(['text', 'client_msg_id'], [text, op]); if (images.length) body['images'] = images;
-    return this.call('/api/v1/sessions/' + segment(row.machine) + '/' + segment(row.session || row.id) + '/messages', 'POST', body, op, admit, true);
+    return this.call('/api/v1/sessions/' + segment(row.machine) + '/' + segment(row.session || row.id) + '/messages', 'POST', body, op, admit, true, undefined, false, messageRequestBytes);
   }
   async stop(row: ResourceRow, admit?: () => boolean): Promise<void> { await this.call('/api/v1/sessions/' + segment(row.machine) + '/' + segment(row.session || row.id) + '/interrupt', 'POST', {}, '', admit); }
   async decisions(): Promise<Record<string, Object>[]> {

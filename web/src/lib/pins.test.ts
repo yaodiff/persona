@@ -57,7 +57,7 @@ describe("按空间分组（buildSpaces）", () => {
 describe("交给 Persona（iOS AgentHandoff）", () => {
   it("Agent 的位置和最后说的作为上下文卡片，再加上要求", () => {
     const t = agentHandoffText(session("abc", { title: "", last_text: "做完了", state: "unread" }), "我的电脑");
-    expect(t.startsWith('<persona-context kind="context" title="Agent · app" url="">\n机器：我的电脑（m）\n会话：abc\n目录：/home/me/code/app\n状态：unread\n最后说的：做完了\n</persona-context>\n\n')).toBe(true);
+    expect(t.startsWith('<persona-context kind="context" title="Agent · app" url="">\n机器：我的电脑（m）\n会话：abc\n目录：/home/me/code/app\n状态：unread\n最后一条消息：做完了\n</persona-context>\n\n')).toBe(true);
     expect(t).toContain("agent_read");
     expect(agentHandoffText(session("x", { last_text: "字".repeat(900) })).match(/字/g)).toHaveLength(800);
   });

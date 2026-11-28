@@ -216,3 +216,55 @@ it("restores forever when the hub refuses a finite draft", async () => {
   expect(minutes()).toBeNull();
   expect(toast).toHaveBeenCalledWith(expect.stringContaining("Synthetic refusal"), "error");
 });
+
+// A hub with separate audio and text retentions (#16412): two rows, each forever or a number of days past the old
+// 365 cap; the text is kept forever by default and minutes stay forever while it is.
+it("shows audio and text retentions separately on a hub that says both", async () => {
+  type Split = { recording_audio_days: number; recording_text_days: number; minutes_days: number };
+  let split: Split = { recording_audio_days: 14, recording_text_days: 0, minutes_days: 0 };
+  const splitWrites: Record<string, unknown>[] = [];
+  const effectiveSplit = () => ({ ...split, recording_days: split.recording_audio_days,
+    minutes_days: split.minutes_days === 0 || split.recording_text_days === 0 ? 0 : Math.max(split.minutes_days, split.recording_text_days) });
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input).split("?")[0];
+    if (path.endsWith("/assistant")) {
+      if (init?.method === "PUT") {
+        const body = JSON.parse(String(init.body)); splitWrites.push(body);
+        split = { ...split, ...body };
+      }
+      return json({ manager: "assistant", notes: "", ...effectiveSplit() });
+    }
+    if (path.endsWith("/tasks")) return json({ tasks: [] });
+    if (path.endsWith("/memory")) return json({ files: [] });
+    throw new Error(`Unexpected path: ${path}`);
+  }));
+  await render();
+  const audioLabel = t("settings-assistantsettings.recording_audio_days");
+  const textLabel = t("settings-assistantsettings.recording_text_days");
+  const select = (label: string) => host.querySelector<HTMLSelectElement>(`select[aria-label="${label}"]`)!;
+  const pick = async (label: string, value: string) => {
+    await act(async () => { select(label).value = value; select(label).dispatchEvent(new Event("change", { bubbles: true })); });
+    await flush();
+  };
+  expect(host.textContent).toContain(t("settings-assistantsettings.recordings_footer_split"));
+  expect(recordings()).toBeNull(); // no old single row
+  expect(input(audioLabel)!.value).toBe("14");
+  expect(select(textLabel).value).toBe("forever");
+  expect(input(textLabel)).toBeNull();
+  // The text kept for a number of days past the old cap.
+  await pick(textLabel, "days");
+  await enter(input(textLabel)!, "1000");
+  expect(splitWrites).toEqual([{ recording_text_days: 1000 }]);
+  expect(input(textLabel)!.value).toBe("1000");
+  // The audio kept forever, the text unchanged.
+  await pick(audioLabel, "forever");
+  expect(splitWrites.at(-1)).toEqual({ recording_audio_days: 0 });
+  expect(select(audioLabel).value).toBe("forever");
+  expect(input(textLabel)!.value).toBe("1000");
+  // Minutes below the text's days show the text's in effect.
+  await choose("days");
+  await enter(minutes()!, "30");
+  expect(splitWrites.at(-1)).toEqual({ minutes_days: 30 });
+  expect(minutes()!.value).toBe("1000");
+  expect(toast).not.toHaveBeenCalled();
+});

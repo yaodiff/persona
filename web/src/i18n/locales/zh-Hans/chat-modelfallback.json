@@ -1,9 +1,9 @@
 {
-  "cause_safeguards_refusal": "模型拒绝了这次请求",
-  "cause_quota_exhausted": "额度用尽",
-  "cause_rate_limited": "被限流",
-  "cause_server_error": "服务出错",
+  "cause_safeguards_refusal": "模型拒绝了此请求",
+  "cause_quota_exhausted": "额度已用尽",
+  "cause_rate_limited": "触发限流",
+  "cause_server_error": "服务异常",
   "cause_model_unavailable": "模型不可用",
   "exhausted_resets": "{time} 恢复可用",
-  "exhausted_tried": "试过的模型：{models}"
+  "exhausted_tried": "已尝试的模型：{models}"
 }

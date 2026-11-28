@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { initI18n, t } from "../i18n";
 import { countsLabel } from "../lib/direction-names";
 import type { DirectionTree } from "../lib/direction-tree";
-import type { Todo } from "../lib/todos";
+import type { Todo, TodoBoardProjection } from "../lib/todos";
 
 vi.hoisted(() => {
   window.matchMedia = ((media: string) => ({
@@ -24,12 +24,13 @@ vi.mock("../lib/direction-tree", async (orig) => ({
   ...(await orig<typeof import("../lib/direction-tree")>()),
   useDirectionTree: () => tree.current,
 }));
+const apiMock = vi.hoisted(() => vi.fn(async (_path: string, _init?: unknown): Promise<unknown> => ({})));
 vi.mock("../lib/api", async (orig) => ({
   ...(await orig<typeof import("../lib/api")>()),
-  api: async () => ({}),
+  api: (path: string, init?: unknown) => apiMock(path, init),
 }));
 
-const { getState } = await import("../lib/store");
+const { getState, refreshTodos, reset } = await import("../lib/store");
 const { TodosView } = await import("./Todos");
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -58,8 +59,10 @@ const sections = () => [...host.querySelectorAll<HTMLElement>('[data-testid="tod
 beforeEach(async () => {
   await initI18n("zh-Hans");
   localStorage.clear();
+  apiMock.mockReset();
+  apiMock.mockResolvedValue({});
   tree.current = TREE;
-  seed({ todos: TODOS, todosLoaded: true, todosError: null, todosSupported: true, machines: [], sessions: {} });
+  seed({ todos: TODOS, todoBoard: null, closedCursors: {}, closedLoading: false, closedError: null, todosLoaded: true, todosError: null, todosSupported: true, machines: [], sessions: {} });
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
@@ -145,7 +148,7 @@ describe("To-dos grouped by 常驻", () => {
   it("opens a row's menu on a right click, as the other groupings do", async () => {
     localStorage.setItem("persona.todos.grouping", "direction");
     await render();
-    const row = [...sections()[1].querySelectorAll<HTMLElement>("[role=button]")].find((r) => r.textContent?.includes("Card"));
+    const row = [...sections()[1].querySelectorAll<HTMLElement>("[data-todo]")].find((r) => r.textContent?.includes("Card"));
     expect(row).toBeTruthy();
     const ev = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 40, clientY: 120 });
     await act(async () => void row!.dispatchEvent(ev));
@@ -344,5 +347,320 @@ describe("To-dos grouped by 常驻", () => {
     expect(sections()[1].textContent).toContain("Infra");
     expect(sections()[2].querySelector("button")?.textContent).toContain("Custom Stream");
     expect(sections()[2].textContent).toContain("Own");
+  });
+
+  it("keeps legacy 书记官 label and flat Completed fold when todos_v2 is false, and renames to 未分类 with effective_direction_id fallback when todos_v2 is true (#17181)", async () => {
+    localStorage.setItem("persona.todos.grouping", "direction");
+    const fallbackTree: DirectionTree = {
+      directions: [
+        { id: "lead-b", name: "Infrastructure", counts: counts(1, 0), running: true, tasks: [{ id: "t-infra", title: "Infra", state: "working" }] },
+        { id: "lead-a", name: "Product", counts: counts(1, 0), running: false, tasks: [{ id: "t-prod", title: "Prod", state: "working" }] },
+        {
+          id: "main",
+          name: "",
+          secretary: true,
+          counts: counts(2, 0),
+          running: false,
+          tasks: [
+            { id: "t-umbrella", title: "Umbrella Goal", state: "working" },
+            { id: "t-own", title: "Loose Note", state: "working" },
+          ],
+        },
+      ],
+    };
+    const items = [
+      todo("t-infra", "Infra"),
+      todo("t-prod", "Prod"),
+      todo("t-umbrella", "Umbrella Goal", { effective_direction_id: "lead-a", effective_direction_name: "Product" }),
+      todo("t-own", "Loose Note"),
+      todo("t-done-prod", "Shipped Prod", { done_at: at, effective_direction_id: "lead-a", effective_direction_name: "Product" }),
+      todo("t-done-loose", "Shipped Loose", { done_at: at }),
+    ];
+    tree.current = fallbackTree;
+
+    // 1. Legacy todos_v2=false: keeps 书记官, flat Completed fold, zero direction chips or header review buttons.
+    seed({
+      todos: items,
+      todoBoard: null,
+      assistant: { machine_id: "m1", main: "main", conversations: [], todos_v2: false },
+    });
+    await render();
+    expect(sections().map((s) => s.dataset.group)).toEqual(["direction:lead-b", "direction:lead-a", "direction:secretary"]);
+    expect(sections()[2].querySelector("button")?.textContent).toContain(t("lib-todo-tree.secretary"));
+    expect(sections()[2].textContent).toContain("Umbrella Goal");
+    expect(host.querySelector("[data-testid=todo-direction-review-done]")).toBeNull();
+    const legacyDoneBtn = host.querySelector<HTMLButtonElement>("[data-testid=todos-done-fold]")!;
+    await act(async () => legacyDoneBtn.click());
+    expect(host.querySelector("[data-testid=todos-done-direction-filters]")).toBeNull();
+    expect(host.querySelector("[data-testid=todos-done-direction-group]")).toBeNull();
+
+    // 2. todos_v2=true with serverBoard=null (fallback path): uncategorized is 未分类, umbrella moves to Product.
+    await act(async () => root.unmount());
+    root = createRoot(host);
+    seed({
+      todos: items,
+      todoBoard: null,
+      assistant: { machine_id: "m1", main: "main", conversations: [], todos_v2: true },
+    });
+    await render();
+    expect(sections().map((s) => s.dataset.group)).toEqual(["direction:lead-b", "direction:lead-a", "direction:secretary"]);
+    expect(sections()[1].textContent).toContain("Umbrella Goal");
+    expect(sections()[2].querySelector("button")?.textContent).toContain(t("todos.direction_uncategorized"));
+    expect(sections()[2].querySelector("button")?.textContent).not.toContain(t("lib-todo-tree.secretary"));
+    expect(sections()[2].textContent).not.toContain("Umbrella Goal");
+    expect(sections()[2].textContent).toContain("Loose Note");
+
+    // 3. todos_v2=true with serverBoard: board ungrouped bucket also uses 未分类.
+    await act(async () => root.unmount());
+    root = createRoot(host);
+    const board: TodoBoardProjection = {
+      status_groups: [
+        { key: "in_progress", total_count: 3, visible_count: 3, entries: [{ todo_id: "t-infra" }, { todo_id: "t-umbrella" }, { todo_id: "t-own" }] },
+        { key: "done", total_count: 2, visible_count: 2, entries: [{ todo_id: "t-done-prod" }, { todo_id: "t-done-loose" }] },
+      ],
+      direction_groups: [
+        { direction_id: "lead-a", label: "Product", counts: { needs_you: 0, in_progress: 1, pending_review: 0, waiting: 0, done: 1, total: 2 }, todo_ids: ["t-umbrella", "t-done-prod"] },
+        { direction_id: "", counts: { needs_you: 0, in_progress: 1, pending_review: 0, waiting: 0, done: 1, total: 2 }, todo_ids: ["t-own", "t-done-loose"] },
+      ],
+      sidebar_tree: [],
+      counts: { needs_you: 0, in_progress: 3, pending_review: 0, waiting: 0, someday: 0, done: 2, open_total: 3 },
+    };
+    seed({
+      todos: items,
+      todoBoard: board,
+      assistant: { machine_id: "m1", main: "main", conversations: [], todos_v2: true },
+    });
+    await render();
+    expect(sections().map((s) => s.dataset.group)).toEqual(["direction:lead-a", "direction:secretary"]);
+    expect(sections()[1].querySelector("button")?.textContent).toContain(t("todos.direction_uncategorized"));
+    expect(sections()[1].querySelector("button")?.textContent).not.toContain(t("lib-todo-tree.secretary"));
+  });
+
+  it("groups Completed fold by effective direction with filter chips, header jump without folding, and merges paginated closed history under todos_v2=true (#17181)", async () => {
+    localStorage.setItem("persona.todos.grouping", "direction");
+    const scrollIntoView = vi.fn();
+    HTMLElement.prototype.scrollIntoView = scrollIntoView;
+    const flush = async () => {
+      await act(async () => { await vi.dynamicImportSettled(); });
+      for (let i = 0; i < 6; i++) await act(async () => { await Promise.resolve(); });
+    };
+
+    const items = [
+      todo("t-infra-open", "Infra Open", { direction_id: "lead-b" }),
+      todo("t-prod-open", "Prod Open", { direction_id: "lead-a" }),
+      todo("t-loose-open", "Loose Open"),
+      todo("t-prod-done-1", "Prod Done 1", { done_at: "2026-11-12T00:00:00Z", effective_direction_id: "lead-a", effective_direction_name: "Product" }),
+      todo("t-prod-done-2", "Prod Done 2", { done_at: "2026-11-11T00:00:00Z", direction_id: "lead-a" }),
+      todo("t-loose-done", "Loose Done", { done_at: "2026-11-10T00:00:00Z" }),
+    ];
+    const olderDone = todo("t-infra-done-old", "Infra Done Older", {
+      done_at: "2026-10-01T00:00:00Z",
+      effective_direction_id: "lead-b",
+      effective_direction_name: "Infrastructure",
+    });
+
+    tree.current = null;
+
+    const board: TodoBoardProjection = {
+      status_groups: [
+        { key: "in_progress", total_count: 3, visible_count: 3, entries: [{ todo_id: "t-infra-open" }, { todo_id: "t-prod-open" }, { todo_id: "t-loose-open" }] },
+        { key: "done", total_count: 4, visible_count: 4, entries: [{ todo_id: "t-prod-done-1" }, { todo_id: "t-prod-done-2" }, { todo_id: "t-loose-done" }, { todo_id: olderDone.id }] },
+      ],
+      direction_groups: [
+        { direction_id: "lead-b", label: "Infrastructure", counts: { needs_you: 0, in_progress: 1, pending_review: 0, waiting: 0, done: 1, total: 2 }, todo_ids: ["t-infra-open", olderDone.id] },
+        { direction_id: "lead-a", label: "Product", counts: { needs_you: 0, in_progress: 1, pending_review: 0, waiting: 0, done: 2, total: 3 }, todo_ids: ["t-prod-open", "t-prod-done-1", "t-prod-done-2"] },
+        { direction_id: "", counts: { needs_you: 0, in_progress: 1, pending_review: 0, waiting: 0, done: 1, total: 2 }, todo_ids: ["t-loose-open", "t-loose-done"] },
+      ],
+      sidebar_tree: [],
+      counts: { needs_you: 0, in_progress: 3, pending_review: 0, waiting: 0, someday: 0, done: 4, open_total: 3 },
+    };
+
+    apiMock.mockImplementation(async (path: string) => {
+      if (path === "/todos") {
+        return {
+          todos: items,
+          board,
+          closed_cursors: { assistant: { next_cursor: "closed-1", has_more: true } },
+        };
+      }
+      if (path === "/todos?limit=50&cursor=closed-1") {
+        return { todos: [olderDone], has_more: false };
+      }
+      return {};
+    });
+
+    reset();
+    await refreshTodos();
+    seed({
+      assistant: {
+        machine_id: "m1",
+        main: "main",
+        leaders: ["lead-b", "lead-a"],
+        conversations: [
+          { machine_id: "m1", session_id: "lead-b", title: "Infrastructure", cwd: "", status: "idle", updated_at: at },
+          { machine_id: "m1", session_id: "lead-a", title: "Product", cwd: "", status: "idle", updated_at: at },
+        ],
+        todos_v2: true,
+      },
+    });
+    await render();
+    await flush();
+
+    // Active direction sections stay focused on open work only.
+    expect(sections().some((s) => s.textContent?.includes("Prod Done 1"))).toBe(false);
+    expect(sections().some((s) => s.textContent?.includes("Loose Done"))).toBe(false);
+
+    // The hub count makes a direction reviewable before its first completed row has been loaded.
+    const [infraSec, prodSec, uncatSec] = sections();
+    const infraJump = infraSec.querySelector<HTMLButtonElement>("[data-testid=todo-direction-review-done]")!;
+    expect(infraJump.textContent).toContain(t("todos.direction_done_count", { count: 1 }));
+    const prodJump = prodSec.querySelector<HTMLButtonElement>("[data-testid=todo-direction-review-done]")!;
+    const uncatJump = uncatSec.querySelector<HTMLButtonElement>("[data-testid=todo-direction-review-done]")!;
+    expect(prodJump).toBeTruthy();
+    expect(prodJump.textContent).toContain(t("todos.direction_done_count", { count: 2 }));
+    expect(uncatJump).toBeTruthy();
+    expect(uncatJump.textContent).toContain(t("todos.direction_done_count", { count: 1 }));
+
+    // The review stays selected after the cursor page even without a legacy direction tree.
+    const prodFoldToggle = prodSec.querySelector<HTMLButtonElement>("button[aria-expanded]")!;
+    expect(prodFoldToggle.getAttribute("aria-expanded")).toBe("true");
+    await act(async () => infraJump.click());
+    await flush();
+
+    expect(prodFoldToggle.getAttribute("aria-expanded")).toBe("true");
+    expect(scrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "nearest" });
+    expect(apiMock).toHaveBeenCalledWith("/todos?limit=50&cursor=closed-1", expect.anything());
+
+    // Filter chips include All + Infrastructure (merged from paginated older closed history!) + Product + trailing Uncategorized.
+    const chips = () => [...host.querySelectorAll<HTMLButtonElement>("[data-testid=todos-done-direction-chip]")];
+    expect(chips().map((c) => c.dataset.directionId)).toEqual(["all", "lead-b", "lead-a", "__uncategorized__"]);
+    expect(chips().find((c) => c.dataset.directionId === "lead-b")?.getAttribute("aria-pressed")).toBe("true");
+    expect(host.querySelector('[data-testid="todos-done-direction-group"][data-direction-id="lead-b"]')?.textContent).toContain("Infra Done Older");
+    expect(getState().todoBoard).toEqual(board);
+    expect(sections().map((s) => s.dataset.group)).toEqual(["direction:lead-b", "direction:lead-a", "direction:secretary"]);
+
+    await act(async () => prodJump.click());
+
+    // Only Product completed items are visible while filtered to Product.
+    const filteredGroups = [...host.querySelectorAll<HTMLElement>("[data-testid=todos-done-direction-group]")];
+    expect(filteredGroups).toHaveLength(1);
+    expect(filteredGroups[0].dataset.directionId).toBe("lead-a");
+    expect(filteredGroups[0].textContent).toContain("Prod Done 1");
+    expect(filteredGroups[0].textContent).toContain("Prod Done 2");
+    expect(filteredGroups[0].textContent).not.toContain("Loose Done");
+    expect(filteredGroups[0].textContent).not.toContain("Infra Done Older");
+
+    // Clicking the active chip toggles back to All and renders direction sub-groups with Uncategorized last.
+    await act(async () => chips().find((c) => c.dataset.directionId === "lead-a")!.click());
+    await flush();
+    expect(chips().find((c) => c.dataset.directionId === "all")?.getAttribute("aria-pressed")).toBe("true");
+    const allGroups = [...host.querySelectorAll<HTMLElement>("[data-testid=todos-done-direction-group]")];
+    expect(allGroups.map((g) => g.dataset.directionId)).toEqual(["lead-b", "lead-a", "__uncategorized__"]);
+    expect(allGroups[0].textContent).toContain("Infra Done Older");
+    expect(allGroups[1].textContent).toContain("Prod Done 1");
+    expect(allGroups[2].textContent).toContain(t("todos.direction_uncategorized"));
+    expect(allGroups[2].textContent).toContain("Loose Done");
+
+    // Clicking Uncategorized header jump filters cleanly to "__uncategorized__".
+    const uncatJumpAfter = sections().find((s) => s.dataset.group === "direction:secretary")!.querySelector<HTMLButtonElement>("[data-testid=todo-direction-review-done]")!;
+    await act(async () => uncatJumpAfter.click());
+    await flush();
+    expect(chips().find((c) => c.dataset.directionId === "__uncategorized__")?.getAttribute("aria-pressed")).toBe("true");
+    const uncatGroups = [...host.querySelectorAll<HTMLElement>("[data-testid=todos-done-direction-group]")];
+    expect(uncatGroups).toHaveLength(1);
+    expect(uncatGroups[0].dataset.directionId).toBe("__uncategorized__");
+    expect(uncatGroups[0].textContent).toContain("Loose Done");
+    expect(uncatGroups[0].textContent).not.toContain("Prod Done 1");
+    reset();
+  });
+
+  it("orders open subtasks first and collapses completed subtasks cleanly in TodoDetail under todos_v2=true (#17181)", async () => {
+    const flush = async () => {
+      await act(async () => { await vi.dynamicImportSettled(); });
+      for (let i = 0; i < 6; i++) await act(async () => { await Promise.resolve(); });
+    };
+
+    const items = [
+      // Goal A: 1 open + 2 done -> completed collapsed by default
+      todo("goal-mixed", "Mixed Goal"),
+      todo("mixed-done-1", "Mixed Done 1", { part_of: "goal-mixed", done_at: at }),
+      todo("mixed-open-1", "Mixed Open 1", { part_of: "goal-mixed" }),
+      todo("mixed-done-2", "Mixed Done 2", { part_of: "goal-mixed", done_at: at }),
+      // Goal B: 0 open + 2 done (<= 3) -> completed expanded by default
+      todo("goal-small-done", "Small All-Done Goal"),
+      todo("small-done-1", "Small Done 1", { part_of: "goal-small-done", done_at: at }),
+      todo("small-done-2", "Small Done 2", { part_of: "goal-small-done", done_at: at }),
+      // Goal C: 0 open + 4 done (> 3) -> completed collapsed by default
+      todo("goal-large-done", "Large All-Done Goal"),
+      todo("large-done-1", "Large Done 1", { part_of: "goal-large-done", done_at: at }),
+      todo("large-done-2", "Large Done 2", { part_of: "goal-large-done", done_at: at }),
+      todo("large-done-3", "Large Done 3", { part_of: "goal-large-done", done_at: at }),
+      todo("large-done-4", "Large Done 4", { part_of: "goal-large-done", done_at: at }),
+    ];
+
+    seed({
+      todos: items,
+      todoBoard: null,
+      assistant: { machine_id: "m1", main: "main", conversations: [], todos_v2: true },
+    });
+
+    // 1. Mixed goal: open subtask shown at top; 2 done subtasks collapsed behind toggle.
+    await act(async () => root.render(<TodosView selectedId="goal-mixed" />));
+    await flush();
+    const visibleIds = () =>
+      [...host.querySelectorAll<HTMLElement>("[data-testid=todo-detail-subtask-item]")].map((el) => el.dataset.subtaskId);
+    const doneToggle = () => host.querySelector<HTMLButtonElement>("[data-testid=todo-detail-subtasks-done-toggle]");
+
+    expect(visibleIds()).toEqual(["mixed-open-1"]);
+    expect(doneToggle()?.getAttribute("aria-expanded")).toBe("false");
+    expect(doneToggle()?.textContent).toContain(t("todos.detail_subtasks_done_toggle", { count: 2 }));
+
+    // Expanding shows completed subtasks after open subtasks.
+    await act(async () => doneToggle()!.click());
+    await flush();
+    expect(doneToggle()?.getAttribute("aria-expanded")).toBe("true");
+    expect(visibleIds()).toEqual(["mixed-open-1", "mixed-done-1", "mixed-done-2"]);
+
+    // 2. Switching to large all-done goal (>3 done) resets disclosure state to collapsed.
+    await act(async () => root.render(<TodosView selectedId="goal-large-done" />));
+    await flush();
+    expect(doneToggle()?.getAttribute("aria-expanded")).toBe("false");
+    expect(visibleIds()).toEqual([]);
+    await act(async () => doneToggle()!.click());
+    await flush();
+    expect(doneToggle()?.getAttribute("aria-expanded")).toBe("true");
+    expect(visibleIds()).toEqual(["large-done-1", "large-done-2", "large-done-3", "large-done-4"]);
+
+    // 3. Small all-done goal (<= 3 done, 0 open) starts expanded by default.
+    await act(async () => root.render(<TodosView selectedId="goal-small-done" />));
+    await flush();
+    expect(doneToggle()?.getAttribute("aria-expanded")).toBe("true");
+    expect(visibleIds()).toEqual(["small-done-1", "small-done-2"]);
+  });
+
+  it("renders a labeled Directions trigger in the top header under todos_v2=true and keeps legacy icon button when off (#17938)", async () => {
+    seed({
+      todos: TODOS,
+      todoBoard: null,
+      assistant: { machine_id: "m1", main: "main", conversations: [], todos_v2: false },
+    });
+    await render();
+    expect(host.querySelector("[data-testid=todos-direction-details-trigger]")).toBeNull();
+    expect(host.querySelector(`button[aria-label="${t("external-sources.direction_details")}"]`)).toBeTruthy();
+
+    seed({
+      todos: TODOS,
+      todoBoard: null,
+      assistant: { machine_id: "m1", main: "main", conversations: [], todos_v2: true },
+    });
+    await render();
+    const trigger = host.querySelector<HTMLButtonElement>("[data-testid=todos-direction-details-trigger]")!;
+    expect(trigger).toBeTruthy();
+    expect(trigger.textContent).toContain(t("todos.header_directions"));
+    expect(trigger.getAttribute("aria-label")).toBe(t("external-sources.direction_details"));
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    await act(async () => trigger.click());
+    expect(trigger.getAttribute("aria-expanded")).toBe("true");
+    expect(menuItems().map((el) => el.textContent?.trim())).toContain("Infrastructure");
   });
 });

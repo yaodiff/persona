@@ -3,6 +3,7 @@ mail_search
 mail_read
 mail_save_attachment
 mail_send
+mail_move
 resource_status
 resource_acquire
 resource_get

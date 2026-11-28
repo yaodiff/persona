@@ -4,7 +4,7 @@
   "source_identity_conflict": "ID の競合",
   "source_claude_background": "Claude バックグラウンド",
   "source_claude_desktop": "Claude デスクトップアプリ",
-  "source_claude_terminal": "ターミナルの Claude",
+  "source_claude_terminal": "タブで実行したClaude",
   "read_only": "{source} · 閲覧のみ：{reason}",
   "read_only_default_reason": "このソースからはまだ送信できません",
   "untitled_session": "無題のセッション",

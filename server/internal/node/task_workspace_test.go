@@ -62,6 +62,76 @@ func workspaceCall(t *testing.T, n *Node, method string, req taskworkspace.Reque
 	}
 	return out.(taskworkspace.Record)
 }
+
+func TestBackendWorkspaceWithoutRepositories(t *testing.T) {
+	home := workspaceTemp(t)
+	n := &Node{home: home, dir: filepath.Join(home, ".persona")}
+	req := taskworkspace.Request{WorkspaceID: "ws_empty", OperationID: "op_empty", UseID: "launch_example", Plan: workspacePlan(t, home, repository.LayoutContainer)}
+	// Preparing, inspecting, and cleaning an empty workspace do not require Git.
+	t.Setenv("PATH", workspaceTemp(t))
+	root := filepath.Join(home, "workspace", "task-todo_example")
+	ready := workspaceCall(t, n, "prepare", req)
+	if ready.State != "ready" || ready.Error != nil || len(ready.Repositories) != 0 || ready.Plan.RootPath != root {
+		t.Fatal(ready)
+	}
+	if entries, err := os.ReadDir(root); err != nil || len(entries) != 0 {
+		t.Fatalf("workspace contents = %v, %v", entries, err)
+	}
+	// A replacement node reads the same ownership receipt and respects its use claims.
+	n = &Node{home: home, dir: n.dir}
+	if got := workspaceCall(t, n, "acquire", req); got.Error != nil || len(got.Uses) != 1 {
+		t.Fatal(got)
+	}
+	if got := workspaceCall(t, n, "cleanup", req); got.Error == nil || got.Error.Code != "worktree_in_use" {
+		t.Fatal(got)
+	}
+	workspaceCall(t, n, "release", req)
+	userFile := filepath.Join(root, "notes.txt")
+	if err := os.WriteFile(userFile, []byte("Keep my notes."), 0600); err != nil {
+		t.Fatal(err)
+	}
+	req.Force, req.DeleteBranch = true, true
+	if got := workspaceCall(t, n, "cleanup", req); got.Error == nil || got.Error.Code != "cleanup_retained" {
+		t.Fatal(got)
+	}
+	if err := n.guardBackendDeletion(root); err == nil {
+		t.Fatal("generic deletion bypassed the ownership receipt")
+	}
+	if err := os.Remove(userFile); err != nil {
+		t.Fatal(err)
+	}
+	if got := workspaceCall(t, n, "cleanup", req); got.State != "removed" || got.Error != nil || got.Cleanup == nil || !got.Cleanup.Removed || len(got.Cleanup.RetainedPaths) != 0 {
+		t.Fatal(got)
+	}
+	if _, err := os.Stat(root); !os.IsNotExist(err) {
+		t.Fatalf("removed root: %v", err)
+	}
+	if got := workspaceCall(t, n, "prepare", req); got.State != "removed" {
+		t.Fatal("late prepare recreated the directory", got)
+	}
+}
+
+func TestBackendEmptyWorkspaceChecksRootBeforeUse(t *testing.T) {
+	home := workspaceTemp(t)
+	n := &Node{home: home, dir: filepath.Join(home, ".persona")}
+	req := taskworkspace.Request{WorkspaceID: "ws_empty", OperationID: "op_empty", UseID: "launch_example", Plan: workspacePlan(t, home, repository.LayoutContainer)}
+	if got := workspaceCall(t, n, "prepare", req); got.State != "ready" {
+		t.Fatal(got)
+	}
+	// Keep the old directory present so that the replacement cannot reuse its file ID.
+	if err := os.Rename(req.Plan.RootPath, req.Plan.RootPath+"-moved"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(req.Plan.RootPath, 0700); err != nil {
+		t.Fatal(err)
+	}
+	for _, method := range []string{"inspect", "acquire", "cleanup"} {
+		if got := workspaceCall(t, n, method, req); got.Error == nil || got.Error.Code != "identity_mismatch" {
+			t.Fatalf("%s accepted a replacement directory: %+v", method, got)
+		}
+	}
+}
+
 func TestBackendWorkspaceRealLayoutsAndRecovery(t *testing.T) {
 	for _, layout := range []repository.Layout{repository.LayoutRoot, repository.LayoutContainer} {
 		t.Run(string(layout), func(t *testing.T) {
@@ -203,7 +273,7 @@ func TestBackendWorkspacePathOwnershipAndCleanupSemantics(t *testing.T) {
 			t.Skip(err)
 		}
 		r := workspaceCall(t, n, "prepare", req)
-		if r.Error == nil || r.Error.Code != "invalid_path" {
+		if r.Error == nil || r.Error.Code != "path_symlink" {
 			t.Fatal(r)
 		}
 		entries, err := os.ReadDir(external)

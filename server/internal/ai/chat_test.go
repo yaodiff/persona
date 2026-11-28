@@ -136,6 +136,150 @@ func TestRedirectUserAgent(t *testing.T) {
 	}
 }
 
+func TestRedirectStripsCredentials(t *testing.T) {
+	const apiKey = "sk-secret-redirect-test"
+	for _, tc := range []struct {
+		name     string
+		api      string
+		bearer   bool
+		wantKey  string
+		wantAuth string
+	}{
+		{name: "messages/x-api-key", api: "messages", wantKey: apiKey},
+		{name: "messages/bearer", api: "messages", bearer: true, wantAuth: "Bearer " + apiKey},
+		{name: "responses", api: "responses", wantAuth: "Bearer " + apiKey},
+		{name: "chat", api: "chat", wantAuth: "Bearer " + apiKey},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			type hop struct {
+				host string
+				path string
+				key  string
+				auth string
+			}
+			var first, second *httptest.Server
+			var hops []hop
+			first = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				hops = append(hops, hop{
+					host: "first",
+					path: r.URL.Path,
+					key:  r.Header.Get("X-Api-Key"),
+					auth: r.Header.Get("Authorization"),
+				})
+				switch r.URL.Path {
+				case "/v1/messages", "/v1/responses", "/v1/chat/completions":
+					http.Redirect(w, r, "/same", http.StatusTemporaryRedirect)
+				case "/same":
+					http.Redirect(w, r, second.URL+"/hop1", http.StatusTemporaryRedirect)
+				case "/final":
+					switch tc.api {
+					case "messages":
+						fmt.Fprint(w, `{"content":[{"type":"text","text":"ok"}]}`)
+					case "responses":
+						fmt.Fprint(w, "data: {\"type\":\"response.output_text.delta\",\"delta\":\"ok\"}\n\ndata: {\"type\":\"response.completed\"}\n\n")
+					case "chat":
+						fmt.Fprint(w, "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
+					}
+				default:
+					t.Errorf("unexpected path on first: %s", r.URL.Path)
+				}
+			}))
+			defer first.Close()
+			second = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				hops = append(hops, hop{
+					host: "second",
+					path: r.URL.Path,
+					key:  r.Header.Get("X-Api-Key"),
+					auth: r.Header.Get("Authorization"),
+				})
+				if r.URL.Path == "/hop1" {
+					http.Redirect(w, r, "/hop2", http.StatusTemporaryRedirect)
+				} else {
+					http.Redirect(w, r, first.URL+"/final", http.StatusTemporaryRedirect)
+				}
+			}))
+			defer second.Close()
+
+			c := New(Config{API: tc.api, BaseURL: first.URL, APIKey: apiKey, Bearer: tc.bearer, Model: "m"})
+			reply, err := c.Complete(context.Background(), "system", "hello", 8)
+			if err != nil || reply != "ok" {
+				t.Fatalf("reply = %q, error = %v", reply, err)
+			}
+			want := []hop{
+				{host: "first", path: apiPathForTest(tc.api), key: tc.wantKey, auth: tc.wantAuth},
+				{host: "first", path: "/same", key: tc.wantKey, auth: tc.wantAuth},
+				{host: "second", path: "/hop1", key: "", auth: ""},
+				{host: "second", path: "/hop2", key: "", auth: ""},
+				{host: "first", path: "/final", key: "", auth: ""},
+			}
+			if !reflect.DeepEqual(hops, want) {
+				t.Errorf("hops = %+v\nwant = %+v", hops, want)
+			}
+		})
+	}
+
+	t.Run("checkRedirectHeaders", func(t *testing.T) {
+		for _, tc := range []struct {
+			name      string
+			originURL string
+			nextURL   string
+			keepAuth  bool
+		}{
+			{name: "same-origin-default-port", originURL: "https://api.example.com/v1/messages", nextURL: "https://api.example.com:443/v1/other", keepAuth: true},
+			{name: "same-origin-ipv6-default-port", originURL: "https://[::1]:443/v1/messages", nextURL: "https://[::1]/v1/other", keepAuth: true},
+			{name: "cross-domain", originURL: "https://api.example.com/v1/messages", nextURL: "https://evil.example.net/steal", keepAuth: false},
+			{name: "subdomain", originURL: "https://api.example.com/v1/messages", nextURL: "https://sub.api.example.com/v1/messages", keepAuth: false},
+			{name: "scheme-downgrade", originURL: "https://api.example.com/v1/messages", nextURL: "http://api.example.com/v1/messages", keepAuth: false},
+			{name: "scheme-upgrade", originURL: "http://api.example.com/v1/messages", nextURL: "https://api.example.com/v1/messages", keepAuth: false},
+			{name: "different-port", originURL: "https://api.example.com/v1/messages", nextURL: "https://api.example.com:8443/v1/messages", keepAuth: false},
+			{name: "ipv6-different-port", originURL: "https://[::1]:443/v1/messages", nextURL: "https://[::1]:8443/v1/messages", keepAuth: false},
+			{name: "userinfo-spoof", originURL: "https://api.example.com/v1/messages", nextURL: "https://api.example.com@evil.example.net/v1/messages", keepAuth: false},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				originReq := httptest.NewRequest(http.MethodPost, tc.originURL, nil)
+				next := httptest.NewRequest(http.MethodPost, tc.nextURL, nil)
+				next.Header.Set("X-Api-Key", apiKey)
+				next.Header.Set("Authorization", "Bearer "+apiKey)
+				next.Header.Set("Proxy-Authorization", "Basic secret")
+				next.Header.Set("Cookie", "sid=secret")
+				next.Header.Set("Cookie2", "$Version=1")
+				if err := checkRedirectHeaders(next, []*http.Request{originReq}, nil); err != nil {
+					t.Fatalf("checkRedirectHeaders error = %v", err)
+				}
+				for _, h := range []string{"X-Api-Key", "Authorization", "Proxy-Authorization", "Cookie", "Cookie2"} {
+					got := next.Header.Get(h)
+					if tc.keepAuth && got == "" {
+						t.Errorf("header %s was cleared on same-origin redirect", h)
+					}
+					if !tc.keepAuth && got != "" {
+						t.Errorf("header %s leaked across origin: %q", h, got)
+					}
+				}
+			})
+		}
+
+		// Empty via slice and nil URLs must not panic.
+		next := httptest.NewRequest(http.MethodPost, "https://api.example.com/v1/messages", nil)
+		if err := checkRedirectHeaders(next, nil, nil); err != nil {
+			t.Fatalf("empty via error = %v", err)
+		}
+		if sameOrigin(nil, next.URL) || sameOrigin(next.URL, nil) || sameOrigin(nil, nil) {
+			t.Fatal("sameOrigin with nil URL returned true")
+		}
+	})
+}
+
+func apiPathForTest(api string) string {
+	switch api {
+	case "responses":
+		return "/v1/responses"
+	case "chat":
+		return "/v1/chat/completions"
+	default:
+		return "/v1/messages"
+	}
+}
+
 func strPtr(s string) *string { return &s }
 
 func TestRedirectLimit(t *testing.T) {

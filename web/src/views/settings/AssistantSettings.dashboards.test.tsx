@@ -108,7 +108,7 @@ it("is not on another manager's settings: only the default manager has dashboard
 
 it("has its words in every language", async () => {
   for (const [lang, label, footer] of [
-    ["zh-Hans", "让 Persona 做仪表盘", "开启后，助手可以起草你会常回来看的页面，你在聊天里点「保留」后它出现在侧边栏。"],
+    ["zh-Hans", "允许 Persona 创建仪表盘", "开启后，助手可以为你起草需要经常查看的页面；在对话中点击「保留」后，页面就会显示在侧边栏中。"],
     ["ja", "Persona にダッシュボードを作らせる", "オンにすると、アシスタントが何度も見返すページを下書きします。チャットで「保存」をタップするとサイドバーに表示されます。"],
   ] as const) {
     await initI18n(lang);

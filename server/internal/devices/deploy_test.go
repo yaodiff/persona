@@ -9,14 +9,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"runtime/pprof"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -63,28 +61,8 @@ func testDeployScript(t *testing.T, shell, bin string) {
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("%v: %s", err, out)
 	}
-	got, _ := os.ReadFile(pkilled)
-	pattern, ok := strings.CutPrefix(strings.TrimSuffix(string(got), "\n"), "-f ")
-	if !ok {
-		t.Fatalf("the resident node is not restarted: pkill got %q", got)
-	}
-	// The pattern finds the resident node persona-link's service runs (cmd/persona-link nodesvc.go: personad, or
-	// persona-node on a device), and the one of a computer not cut over to the Persona names yet; it leaves the other
-	// Persona processes and the remote command that carries it alone.
-	re := regexp.MustCompile(pattern)
-	personad := filepath.Join(home, ".persona", "bin", "personad")
-	for _, node := range []string{personad + " node --attach", filepath.Join(home, ".persona", "bin", "persona-node") + " node --attach",
-		filepath.Join(home, compat.StateDir, "bin", compat.DaemonBinary) + " node --attach"} {
-		if !re.MatchString(node) {
-			t.Errorf("pkill -f %q does not find the resident node %q", pattern, node)
-		}
-	}
-	for _, other := range []string{personad + " node --stdio", personad + " hub run", personad + " hook", personad + "-wechat run",
-		personad + " manager run --dir /x", filepath.Join(home, ".persona", "bin", "persona-node") + " node --stdio",
-		filepath.Join(home, ".persona", "bin", "persona-link") + " run", deployScript(bin, false), deployScript(bin, true)} {
-		if re.MatchString(other) {
-			t.Errorf("pkill -f %q matches %q", pattern, other)
-		}
+	if got, _ := os.ReadFile(pkilled); len(got) != 0 {
+		t.Fatalf("legacy deploy used a broad process match: %q", got)
 	}
 	path := filepath.Join(home, strings.TrimPrefix(bin, "~/"))
 	data, err := os.ReadFile(path)
@@ -381,10 +359,8 @@ func shellEnv(home, stubs string) []string {
 		"PATH="+stubs+string(os.PathListSeparator)+"/usr/bin:/bin")
 }
 
-// fakePkill puts a pkill first on PATH that only records its arguments (the returned file) and kills nothing. The
-// deploy script ends with `pkill -f '[p]ersonad node --attach'`; run for real on a developer's machine it stops the
-// resident node serving that machine (it did, every time the hub tests ran on a Mac with one: the machine went offline
-// for a minute and a half).
+// fakePkill records a broad process match without touching any process on
+// the test host. A deploy must never use one to reload a resident.
 func fakePkill(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()

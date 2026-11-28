@@ -2,6 +2,7 @@ package node
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +11,81 @@ import (
 
 	"github.com/nwverse/persona/server/internal/proto"
 )
+
+func TestCodexRemoteSharedNotifications(t *testing.T) {
+	n := remoteTestNode(t)
+	c := &codexRemote{n: n, ready: true, threads: map[string]remoteThread{
+		remoteRaw: {publicID: remoteRaw, turn: "t1", partial: "streaming", buffer: &strings.Builder{}},
+	}}
+	c.message(codexMessage{Method: "item/started", Params: json.RawMessage(`{"threadId":"` + remoteRaw + `","item":{"type":"plan"}}`)})
+	for _, tc := range []struct {
+		method, fields string
+		check          func(remoteThread) bool
+	}{
+		{"thread/status/changed", `,"status":{"type":"active","activeFlags":[]}`, func(th remoteThread) bool { return th.status == proto.StatusWorking }},
+		{"thread/status/changed", `,"status":{"type":"active","activeFlags":["waitingOnApproval"]}`, func(th remoteThread) bool { return th.status == proto.StatusBlocked }},
+		{"thread/status/changed", `,"status":{"type":"idle"}`, func(th remoteThread) bool { return th.status == proto.StatusDone }},
+		{"thread/status/changed", `,"status":{"type":"active","activeFlags":["waitingOnUserInput"]}`, func(th remoteThread) bool { return th.status == proto.StatusBlocked }},
+		{"thread/name/updated", `,"threadName":"New title"`, func(th remoteThread) bool { return th.title == "New title" }},
+		{"thread/name/updated", `,"threadName":null`, func(th remoteThread) bool { return th.title == "New title" }},
+		{"thread/queue/changed", "", nil},
+		{"item/plan/delta", `,"itemId":"plan1","delta":"Plan"`, func(th remoteThread) bool { return th.partial == "Plan" }},
+		{"item/plan/delta", `,"itemId":"plan1","delta":" text"`, func(th remoteThread) bool { return th.partial == "Plan text" }},
+		{"turn/plan/updated", `,"plan":[{"step":"Verify","status":"inProgress"}]`, nil},
+		{"thread/closed", "", func(th remoteThread) bool {
+			return th.status == proto.StatusDone && th.turn == "" && th.partial == "" && th.buffer == nil
+		}},
+	} {
+		c.message(codexMessage{Method: tc.method, Params: json.RawMessage(`{"threadId":"` + remoteRaw + `"` + tc.fields + `}`)})
+		if got := threadOf(c, remoteRaw); tc.check != nil && !tc.check(got) {
+			t.Fatalf("%s%s did not update and notify: %+v", tc.method, tc.fields, got)
+		}
+		select {
+		case <-n.codices.kick:
+		default:
+			t.Fatalf("%s did not notify", tc.method)
+		}
+	}
+}
+
+func TestCodexRemoteRefreshPreservesBlocked(t *testing.T) {
+	n := remoteTestNode(t)
+	f, c := connectRemoteFixture(t, n, t.TempDir(), "shared", remoteRaw, remoteOther)
+	f.mu.Lock()
+	f.active = true // Both thread/read snapshots now report Working.
+	f.mu.Unlock()
+	c.mu.Lock()
+	th := c.threads[remoteRaw]
+	th.status, th.turn = proto.StatusBlocked, "t1"
+	c.threads[remoteRaw] = th
+	c.asks["request"] = &remoteAsk{thread: remoteOther, cancel: func() {}}
+	c.mu.Unlock()
+	if err := c.refresh(); err != nil {
+		t.Fatal(err)
+	}
+	for _, raw := range []string{remoteRaw, remoteOther} {
+		if got := threadOf(c, raw).status; got != proto.StatusBlocked {
+			t.Errorf("%s: got %s, want Blocked", raw, got)
+		}
+	}
+}
+
+func TestCodexRemoteInterruptWaitsForLiveTurn(t *testing.T) {
+	n, f, c, _ := daemonPane(t)
+	c.message(codexMessage{Method: "turn/started", Params: json.RawMessage(`{"threadId":"` + remoteRaw + `","turn":{"id":"t1"}}`)})
+	f.mu.Lock()
+	f.response = func(method string, _ map[string]any) (any, bool) {
+		if method == "turn/interrupt" {
+			c.message(codexMessage{Method: "turn/completed", Params: json.RawMessage(`{"threadId":"` + remoteRaw + `","turn":{"id":"t1","status":"interrupted"}}`)})
+		}
+		return nil, false
+	}
+	f.mu.Unlock()
+	start := time.Now()
+	if !n.interruptCodexActiveTurn(context.Background(), remoteRaw) || time.Since(start) >= 350*time.Millisecond {
+		t.Fatalf("interrupt should return as soon as the completed turn is observed, took %v", time.Since(start))
+	}
+}
 
 func TestCodexRemotePendingReplayWhileJoining(t *testing.T) {
 	n := remoteTestNode(t)

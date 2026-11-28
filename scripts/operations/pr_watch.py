@@ -82,10 +82,15 @@ def load_config(path):
             raise WatchError("close_stale must be a boolean")
         if item.get("respect_human_reviews", False) is not True and item.get("respect_human_reviews", False) is not False:
             raise WatchError("respect_human_reviews must be a boolean")
+        # Every repository here states its own contribution rules. One that has no issue-link workflow opts this gate
+        # out instead of the watcher failing every PR it can never merge.
+        if item.get("require_issue_link", True) is not True and item.get("require_issue_link", True) is not False:
+            raise WatchError("require_issue_link must be a boolean")
         repos.append({"name": repo, "checkout": str(Path(root).expanduser()), "base": base,
                       "verify": item["verify"], "merge": item.get("merge", False),
                       "close_stale": item.get("close_stale", False),
                       "respect_human_reviews": item.get("respect_human_reviews", False),
+                      "require_issue_link": item.get("require_issue_link", True),
                       "privacy": item.get("privacy"), "notify_command": item.get("notify_command")})
     reviewer = raw.get("reviewer", {})
     if not isinstance(reviewer, dict):
@@ -100,8 +105,10 @@ def load_config(path):
     # The human-review opt-in only adds an alternative semantic-evidence source
     # behind an off-by-default switch; it never weakens a verification or merge
     # gate, so toggling it must not invalidate existing exact-head evidence.
+    # require_issue_link likewise decides a merge-time gate only: the review and
+    # verification evidence of an unchanged head stays valid when it is set.
     repository_policy = [{key: value for key, value in item.items()
-                          if key not in ("reviewer", "respect_human_reviews")}
+                          if key not in ("reviewer", "respect_human_reviews", "require_issue_link")}
                          for item in raw["repositories"]]
     return {"repositories": repos, "reviewer": reviewer, "reviewer_concurrency": concurrency, "webhook": webhook,
             "repository_policy": repository_policy,
@@ -454,12 +461,18 @@ class Watcher:
                 if identity.strip() != repo:
                     raise WatchError("checkout does not belong to " + repo)
                 base = pr["baseRefOid"]
-                checked(["git", "fetch", "-q", "origin", "refs/heads/" + pr["baseRefName"]], cwd=root, timeout=180)
-                fetched_base = checked(["git", "rev-parse", "FETCH_HEAD"], cwd=root).strip()
+                # FETCH_HEAD belongs to the checkout, not to this process: merge-pr.sh and
+                # every other fetch in the same clone overwrite it between these two lines.
+                # Each fetch lands in its own per-PR ref and the check reads that ref (#16759).
+                base_ref = "refs/pr-watch/prepare/%s/base" % number
+                head_ref = "refs/pr-watch/prepare/%s/head" % number
+                checked(["git", "fetch", "-q", "origin", "+refs/heads/" + pr["baseRefName"] + ":" + base_ref],
+                        cwd=root, timeout=180)
+                fetched_base = checked(["git", "rev-parse", base_ref], cwd=root).strip()
                 if fetched_base != base:
                     raise WatchError("base moved while preparing the PR")
-                checked(["git", "fetch", "-q", "origin", "pull/%s/head" % number], cwd=root, timeout=180)
-                if checked(["git", "rev-parse", "FETCH_HEAD"], cwd=root).strip() != pr["headRefOid"]:
+                checked(["git", "fetch", "-q", "origin", "+pull/%s/head:%s" % (number, head_ref)], cwd=root, timeout=180)
+                if checked(["git", "rev-parse", head_ref], cwd=root).strip() != pr["headRefOid"]:
                     raise WatchError("head moved while preparing the PR")
                 # The temporary directory exists only as an mkdtemp reservation.
                 worktree.rmdir()
@@ -674,7 +687,8 @@ class Watcher:
         else:
             privacy = config.get("privacy")
             generic_merge(repo, number, root, privacy=privacy, timeout=600,
-                          expected_head=pr["headRefOid"], expected_base=pr["baseRefOid"])
+                          expected_head=pr["headRefOid"], expected_base=pr["baseRefOid"],
+                          require_issue_link=config.get("require_issue_link", True))
         if pr_snapshot(repo, number)["state"] != "MERGED":
             raise WatchError("merge returned without a merged PR")
         self.log("%s#%s merged at %s" % (repo, number, pr["headRefOid"][:9]))
@@ -744,7 +758,8 @@ class Watcher:
         new_number, checks = (None, [])
         try:
             new_number, checks = pr_watch_repair.commit_and_push_repair(
-                repo, pr, str(worktree), pr["baseRefOid"], reason, config["verify"])
+                repo, pr, str(worktree), pr["baseRefOid"], reason, config["verify"],
+                require_issue_link=config.get("require_issue_link", True))
         except pr_watch_common.RepairAttemptError:
             self.state.put(repo, number, pr["headRefOid"], evidence_key=evidence_key,
                            repair_rounds=rounds + 1, outcome="repairing", failure=reason)
@@ -833,7 +848,8 @@ class Watcher:
             checked(["python3", "-I", str(scanner), "--range", base + ".." + updated_head],
                     cwd=worktree, timeout=180, environ=dict(os.environ, PERSONA_PRIVACY_ROOT=str(worktree)))
             if pr.get("isCrossRepository"):
-                new_number, repair_checks = pr_watch_repair.commit_and_push_repair(repo, merged_pr, str(worktree), base, str(error), config["verify"], allow_merge_only=True, original_pr=pr)
+                new_number, repair_checks = pr_watch_repair.commit_and_push_repair(repo, merged_pr, str(worktree), base, str(error), config["verify"], allow_merge_only=True, original_pr=pr,
+                                                                                  require_issue_link=config.get("require_issue_link", True))
                 self.record_continuation(repo, pr, old.get("evidence_key"), new_number, repair_checks,
                                          repair_rounds=rounds + 1)
             else:
@@ -869,7 +885,8 @@ class Watcher:
             raise
         self.state.put(repo, number, pr["headRefOid"], evidence_key=old.get("evidence_key"),
                        repair_rounds=rounds + 1, outcome="repairing", failure=str(error))
-        new_number, repair_checks = pr_watch_repair.commit_and_push_repair(repo, pr, str(worktree), pr["baseRefOid"], str(error), config["verify"])
+        new_number, repair_checks = pr_watch_repair.commit_and_push_repair(repo, pr, str(worktree), pr["baseRefOid"], str(error), config["verify"],
+                                                                          require_issue_link=config.get("require_issue_link", True))
         if new_number == number:
             published = pr_snapshot(repo, number)
             published_head = published["headRefOid"]
@@ -935,7 +952,12 @@ query($owner: String!, $name: String!, $number: Int!, $pageSize: Int!,
         seen = set()
         for _ in range(1000):
             variables = {"owner": owner, "name": name, "number": number, "pageSize": 100}
-            variables.update({field + "Cursor": value for field, value in cursors.items()})
+            # `False` marks a finished collection here, but the cursor variable is declared String: sending
+            # `false` is rejected ("Could not coerce value false to String") on every second page, which used
+            # to block every PR with more than one page of activity (#16737). The @include directive already
+            # drops a finished collection, so its cursor only has to be a legal value.
+            variables.update({field + "Cursor": None if value is False else value
+                              for field, value in cursors.items()})
             variables.update({"needComments": cursors["comments"] is not False,
                               "needReviews": cursors["reviews"] is not False,
                               "needThreads": cursors["threads"] is not False})
@@ -1082,14 +1104,14 @@ query($owner: String!, $name: String!, $number: Int!, $pageSize: Int!,
         self.notify(config, number, pr["headRefOid"], "stale_closed")
         return True
 
-    def human_review_decision(self, repo, number, head):
+    def human_review_decision(self, repo, number, head, pr_author=None):
         """Fetch and classify real-user reviews bound to this exact head."""
         if self.gh_login is None:
             with self.gh_login_lock:
                 if self.gh_login is None:
                     self.gh_login = pr_watch_human.authenticated_login()
         reviews = pr_watch_human.fetch_reviews(repo, number)
-        return pr_watch_human.classify_human_reviews(reviews, head, self.gh_login)
+        return pr_watch_human.classify_human_reviews(reviews, head, self.gh_login, pr_author=pr_author)
 
     def apply_human_review_policy(self, repo, number, pr, evidence_key):
         """Apply the opt-in human-review policy before any reviewer call.
@@ -1109,7 +1131,10 @@ query($owner: String!, $name: String!, $number: Int!, $pageSize: Int!,
             # Valid exact-head watcher evidence already exists; never override it.
             # Human evidence instead tracks later reviews on the same head.
             return False
-        decision = self.human_review_decision(repo, number, head)
+        author = pr.get("author")
+        pr_author = author.get("login") if isinstance(author, dict) and isinstance(author.get("login"), str) else None
+        decision = (self.human_review_decision(repo, number, head, pr_author=pr_author)
+                    if pr_author else self.human_review_decision(repo, number, head))
         kind = decision["decision"]
         if kind == pr_watch_human.DECISION_NONE:
             if (current.get("head") == head and current.get("evidence_key") == evidence_key
@@ -1404,7 +1429,7 @@ query($owner: String!, $name: String!, $number: Int!, $pageSize: Int!,
                     if current_pr["headRefOid"] != head or current_pr["baseRefOid"] != pr["baseRefOid"] \
                             or not self.mergeable(current_pr):
                         return
-                    if not linked_issue(current_pr["body"], repo):
+                    if config.get("require_issue_link", True) and not linked_issue(current_pr["body"], repo):
                         raise WatchError("PR has no linked issue; not merged")
                     self.finish_merge(config, current_pr, old)
                 return
@@ -1424,7 +1449,7 @@ query($owner: String!, $name: String!, $number: Int!, $pageSize: Int!,
                     if current_pr["headRefOid"] != head or current_pr["baseRefOid"] != pr["baseRefOid"] \
                             or not self.mergeable(current_pr):
                         return
-                    if not linked_issue(current_pr["body"], repo):
+                    if config.get("require_issue_link", True) and not linked_issue(current_pr["body"], repo):
                         raise WatchError("PR has no linked issue; not merged")
                     try:
                         self.success_review(repo, number, current_pr, old.get("checks", []), old.get("base_failures"))
@@ -1497,7 +1522,8 @@ query($owner: String!, $name: String!, $number: Int!, $pageSize: Int!,
                         checked(["python3", "-I", str(scanner), "--range", base + ".." + updated_head],
                                 cwd=worktree, timeout=180, environ=dict(os.environ, PERSONA_PRIVACY_ROOT=str(worktree)))
                         if pr.get("isCrossRepository"):
-                            new_number, repair_checks = pr_watch_repair.commit_and_push_repair(repo, merged_pr, str(worktree), base, "conflicting base", config["verify"], allow_merge_only=True, original_pr=pr)
+                            new_number, repair_checks = pr_watch_repair.commit_and_push_repair(repo, merged_pr, str(worktree), base, "conflicting base", config["verify"], allow_merge_only=True, original_pr=pr,
+                                                                                              require_issue_link=config.get("require_issue_link", True))
                             self.record_continuation(repo, pr, evidence_key, new_number, repair_checks,
                                                      repair_rounds=rounds + 1)
                         else:
@@ -1669,7 +1695,7 @@ query($owner: String!, $name: String!, $number: Int!, $pageSize: Int!,
                         or not self.mergeable(current_pr)):
                     self.log("%s#%s moved during review; old result discarded" % (repo, number))
                     return
-                if not linked_issue(current_pr["body"], repo):
+                if config.get("require_issue_link", True) and not linked_issue(current_pr["body"], repo):
                     raise WatchError("PR has no linked issue; not merged")
                 if not current.get("success_posted"):
                     self.phase(key, "posting successful review")

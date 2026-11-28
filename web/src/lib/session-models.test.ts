@@ -6,7 +6,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { t } from "../i18n";
 import type { LauncherModels } from "./launcher-models";
-import { currentModelRow, forgetModel, modelLabel, modelList, pillView, readModels, type ModelList } from "./session-models";
+import { currentModelRow, forgetModel, modelLabel, modelList, pillView, readModels, sessionModelHost, sessionSwitches, type ModelList } from "./session-models";
 import { pickPlan, sessionPanel, speedStep } from "./session-panel";
 import type { Launcher, Session } from "./types";
 
@@ -97,9 +97,9 @@ describe("the providers of an Agent's chat", () => {
     expect(own.typable).toBeUndefined();
     expect(state.recommended).toEqual([]);
     expect(state.busy).toBeUndefined();
-    expect(state.current).toEqual({ provider: "cx", model: "gpt-5.5", effort: "high", fast: true });
-    expect(own.models![0]).toMatchObject({ id: "gpt-5.5", efforts: ["low", "medium", "high"], fast: true });
-    expect(own.models![1].fast).toBeUndefined();
+    expect(state.current).toEqual({ provider: "cx", model: "gpt-5.5", effort: "high", speed: "fast" });
+    expect(own.models![0]).toMatchObject({ id: "gpt-5.5", efforts: ["low", "medium", "high"], speeds: [{ id: "standard" }, { id: "fast" }] });
+    expect(own.models![1].speeds).toBeUndefined();
     expect(providers.find((p) => p.id === "gateway")!.unavailable).toBe(t("chat-modelpanel.other_engine", { from: "Codex", to: "Claude Code" }));
   });
 
@@ -151,10 +151,10 @@ describe("what a pick sends", () => {
   });
 
   it("a Codex thread: its effort and its speed, Standard back from Fast", () => {
-    expect(pickPlan(codex(), { provider: "cx", model: "gpt-5.5", effort: "low", fast: true }, () => codexList)).toEqual([{ effort: "low" }, { service_tier: "priority" }]);
-    expect(pickPlan(codex({ service_tier: "priority" }), { provider: "cx", model: "gpt-5.5", fast: false }, () => codexList)).toEqual([{ service_tier: "default" }]);
-    // a saved Standard setup has no `fast` (cleanSetup drops false): picking it turns Fast off
-    expect(pickPlan(codex({ service_tier: "priority" }), { provider: "cx", model: "gpt-5.5" }, () => codexList)).toEqual([{ service_tier: "default" }]);
+    expect(pickPlan(codex(), { provider: "cx", model: "gpt-5.5", effort: "low", speed: "fast" }, () => codexList)).toEqual([{ effort: "low" }, { service_tier: "priority" }]);
+    expect(pickPlan(codex({ service_tier: "priority" }), { provider: "cx", model: "gpt-5.5", speed: "standard" }, () => codexList)).toEqual([{ service_tier: "default" }]);
+    // An ordinary model pick leaves the current speed alone.
+    expect(pickPlan(codex({ service_tier: "priority" }), { provider: "cx", model: "gpt-5.5" }, () => codexList)).toEqual([]);
   });
 
   it("an Antigravity variant brings its own thinking level", () => {
@@ -169,6 +169,21 @@ describe("what a pick sends", () => {
     // its rows have no slider: the variants are the levels
     expect(sessionPanel(agy, [], lists({ agy: { list } })).providers[0].models!.every((m) => m.efforts.length === 0)).toBe(true);
     expect(sessionPanel({ ...agy, effort: undefined }, [], lists({ agy: { list } })).providers[0].models?.[0].defaultEffort).toBe("medium");
+
+    // Live terminal agy session (no source_kind) also switches model and effort without the companion host.
+    const agyTerm = session({
+      agent: "agy",
+      launcher: undefined,
+      pane_id: "herdr:w1:p1",
+      capabilities: { read: true, send: true, modes: false, model: true },
+      model: "future-medium",
+      effort: "medium",
+      efforts: ["low", "medium", "high"],
+    });
+    expect(sessionModelHost(agyTerm)).toBeUndefined();
+    expect(sessionSwitches(agyTerm)).toEqual({ model: true, effort: true });
+    expect(pickPlan(agyTerm, { provider: "agy", model: "future-high" }, () => list)).toEqual([{ model: "future-high" }]);
+    expect(pickPlan(agyTerm, { provider: "agy", model: "future-high", effort: "low" }, () => list)).toEqual([{ model: "future-high" }, { effort: "low" }]);
   });
 });
 
@@ -176,7 +191,7 @@ describe("what the pill says", () => {
   it("the list's name for the model once read, a short id before; the launcher, engine, effort and speed", () => {
     expect(pillView(session(), { list: claudeList })).toEqual({ engine: "claude", provider: "gateway", model: "Opus 5.5", effort: "high", loading: false, failed: false });
     expect(pillView(session(), {}).model).toBe("opus 5.5");
-    expect(pillView(codex({ service_tier: "priority" }), {})).toMatchObject({ engine: "codex", provider: "cx", model: "5.5", fast: true });
+    expect(pillView(codex({ service_tier: "priority" }), {})).toMatchObject({ engine: "codex", provider: "cx", model: "GPT-5.5", speed: "fast" });
     expect(pillView(session({ launcher: undefined, agent: undefined }), {})).toMatchObject({ engine: "claude", provider: "claude" });
   });
 
@@ -211,7 +226,7 @@ describe("what the pill says", () => {
     expect(modelLabel("claude-sonnet-5-5[1m]")).toBe("sonnet 5.5 1M");
     expect(modelLabel("claude-opus-5-5-20260101")).toBe("opus 5.5");
     expect(modelLabel("claude-haiku-5-5")).toBe("haiku 5.5");
-    expect(modelLabel("gpt-5.5-codex")).toBe("5.5 Codex");
+    expect(modelLabel("gpt-5.5-codex")).toBe("GPT-5.5 Codex");
     expect(modelLabel("vendor/model-x")).toBe("vendor/model-x");
     expect(modelLabel("route-a/gemini-4-carbon")).toBe("route-a/gemini-4-carbon");
     expect(modelLabel("acme/gpt-5-pro")).toBe("acme/gpt-5-pro");
@@ -289,6 +304,17 @@ describe("reading the lists", () => {
     await answer("/machines/m-fail/launchers/gateway/models", json({ error: "claude 没有登录" }, 502));
     expect(modelList("m-fail", "gateway").error).toContain("claude 没有登录");
     expect(modelList("m-fail", "gateway").list).toBeUndefined();
+  });
+
+  it("keeps the previous list and reports a failed manual refresh", async () => {
+    void readModels("m-refresh", "gateway");
+    await flush();
+    await answer("/machines/m-refresh/launchers/gateway/models", json(claudeList));
+
+    void readModels("m-refresh", "gateway", { refresh: true });
+    await flush();
+    await answer("/machines/m-refresh/launchers/gateway/models?refresh=1", json({ error: "offline" }, 502));
+    expect(modelList("m-refresh", "gateway")).toEqual({ list: claudeList, error: expect.stringContaining("offline") });
   });
 
   it("keeps an assistant's shell models separate from the same named Agent provider", async () => {
@@ -380,13 +406,17 @@ describe("reading the lists", () => {
   });
 
   it("reads at most three lists at a time, the session's own ahead of the queue", async () => {
-    for (const name of ["a", "b", "c", "d"]) void readModels("m-queue", name);
-    void readModels("m-queue", "own", { first: true });
+    const [a, b, c, d] = ["a", "b", "c", "d"].map((name) => readModels("m-queue", name));
+    const own = readModels("m-queue", "own", { first: true });
     await flush();
     expect(waiting.map((w) => w.url.split("/launchers/")[1])).toEqual(["a/models", "b/models", "c/models"]);
     await answer("/launchers/a/", json(claudeList));
+    await a;
     expect(waiting.map((w) => w.url.split("/launchers/")[1])).toEqual(["b/models", "c/models", "own/models"]);
-    for (const name of ["b", "c", "own", "d"]) await answer(`/launchers/${name}/`, json(claudeList));
+    for (const [name, read] of [["b", b], ["c", c], ["own", own], ["d", d]] as const) {
+      await answer(`/launchers/${name}/`, json(claudeList));
+      await read;
+    }
     expect(waiting).toEqual([]);
   });
 
@@ -399,7 +429,7 @@ describe("reading the lists", () => {
     expect(modelList("m-forget", "gateway").list!.models.some((m) => m.id === "vendor/model-x")).toBe(false);
     expect(calls.at(-1)).toEqual({ method: "DELETE", url: expect.stringContaining("/machines/m-forget/launchers/gateway/models/custom?model=vendor%2Fmodel-x") });
     await answer("/models/custom", json({ error: "只读设备不能改" }, 403));
-    expect(await done).toMatch(/没能忘记「vendor\/model-x」：.*只读设备不能改/);
+    expect(await done).toMatch(/无法移除「vendor\/model-x」：.*只读设备不能改/);
     expect(modelList("m-forget", "gateway").list!.models.map((m) => m.id)).toEqual(["default", "opus", "haiku", "vendor/model-x"]);
   });
 });
@@ -407,15 +437,15 @@ describe("reading the lists", () => {
 describe("a speed change", () => {
   const tiers = [{ id: "default", name: "Standard" }, { id: "priority", name: "Fast" }];
   it("is sent only where the thread has Fast and only when it changes", () => {
-    expect(speedStep(session({ service_tiers: tiers }), true)).toEqual({ service_tier: "priority" });
-    expect(speedStep(session({ service_tiers: tiers }), false)).toBeUndefined();
-    expect(speedStep(session({ service_tiers: tiers, service_tier: "priority" }), false)).toEqual({ service_tier: "default" });
-    expect(speedStep(session({ service_tiers: tiers, service_tier: "priority" }), true)).toBeUndefined();
-    expect(speedStep(session(), true)).toBeUndefined();
+    expect(speedStep(session({ service_tiers: tiers }), "fast")).toEqual({ service_tier: "priority" });
+    expect(speedStep(session({ service_tiers: tiers, service_tier: "default" }), "standard")).toBeUndefined();
+    expect(speedStep(session({ service_tiers: tiers, service_tier: "priority" }), "standard")).toEqual({ service_tier: "default" });
+    expect(speedStep(session({ service_tiers: tiers, service_tier: "priority" }), "fast")).toBeUndefined();
+    expect(speedStep(session(), "fast")).toBeUndefined();
     expect(speedStep(session({ service_tiers: tiers }), undefined)).toBeUndefined();
     // the flyout's switch goes whatever the session says (its speed arrives only with the push)
-    expect(speedStep(session({ service_tiers: tiers }), false, true)).toEqual({ service_tier: "default" });
-    expect(speedStep(session(), false, true)).toBeUndefined();
+    expect(speedStep(session({ service_tiers: tiers }), "standard", true)).toEqual({ service_tier: "default" });
+    expect(speedStep(session(), "standard", true)).toBeUndefined();
   });
 });
 
@@ -433,4 +463,3 @@ describe("the running model while its list is not in", () => {
     expect(sessionPanel(session(), launchers, lists({})).providers.find((p) => p.id === "claude")!.models).toBeNull();
   });
 });
-

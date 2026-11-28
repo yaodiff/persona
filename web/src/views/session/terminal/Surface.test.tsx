@@ -48,9 +48,9 @@ describe("the switch in the panel's header", () => {
     const h = html(<ModeToggle mode="full" onChange={() => {}} />);
     expect(h).toContain('role="radiogroup"');
     expect(h).toContain('aria-label="终端界面"');
-    expect(h).toMatch(/aria-checked="false"[^>]*aria-label="单窗格"/);
+    expect(h).toMatch(/aria-checked="false"[^>]*aria-label="单个终端"/);
     expect(h).toMatch(/aria-checked="true"[^>]*aria-label="完整界面"/);
-    expect(h).toContain(">单窗格</span>");
+    expect(h).toContain(">单个终端</span>");
     expect(h).toContain(">完整界面</span>");
     expect(h).toContain("@md:hidden"); // the icon, where the words do not fit
     expect(h).toContain("whitespace-nowrap"); // a button's label is one line

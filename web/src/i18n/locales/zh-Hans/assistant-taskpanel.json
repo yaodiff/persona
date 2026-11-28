@@ -1,13 +1,16 @@
 {
   "title": "任务",
-  "gone": "没有这个任务了。",
+  "gone": "此任务已不存在。",
   "more": "更多",
   "remove_ellipsis": "移除任务…",
-  "start_failed": "Agent 没开起来",
+  "start_failed": "Agent 启动失败",
   "retry": "重试",
   "remove": "移除任务",
-  "starting": "正在开 Agent，开好以后这里就是它的对话。",
-  "no_agent": "当前没有 Agent 在执行这项任务。",
+  "starting": "正在启动 Agent，启动完成后将在此显示对话内容。",
+  "no_agent": "当前没有 Agent 正在执行此任务。",
   "open_in_new_window": "在新窗口打开",
-  "switch_agent": "切换 Agent"
+  "switch_agent": "切换 Agent",
+  "report": "任务汇报",
+  "raw_session": "查看原始 Agent 会话",
+  "follow_up": "在对话中回复"
 }

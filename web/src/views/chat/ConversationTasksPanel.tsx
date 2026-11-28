@@ -6,7 +6,7 @@ import { openAgent, openTask } from "../../lib/handoff";
 import { defaultManager } from "../../lib/manager-choice";
 import { refreshTodos, useStore } from "../../lib/store";
 import { reviewState, reportText } from "../../lib/supervision";
-import { mostUrgentAgent, type SessionLookup, type Todo } from "../../lib/todos";
+import { mostUrgentAgent, todoSupervisorLabel, type SessionLookup, type Todo } from "../../lib/todos";
 import { todoLook, waitOf } from "../../lib/todo-wait-reason";
 import { Button, Loading } from "../../ui/atoms";
 import { PanelHeader } from "../../ui/PanelHeader";
@@ -45,14 +45,15 @@ export function ConversationTasksPanel({ sid, manager, onClose }: { sid: string;
         }>{error}</Empty> : rows.length === 0 && needsYou.length === 0 ? <p className="text-sm text-ink-3">{t("sidepanel.conversation_tasks_empty")}</p> :
         <ul className="flex flex-col gap-2">
           {needsYou.map((item) => <li key={item.key}>
-            <NeedsYouBody item={item} />
+            <NeedsYouBody item={item} onOpenChat={onClose} />
             {item.kind === "task" && <TaskAgentLink todo={item.todo} lookup={lookup} />}
           </li>)}
           {rows.map((todo) => {
             const status = statusOf(todo, lookup, plans);
             const session = mostUrgentAgent(todo, lookup)?.session;
-            const summary = reportText(todo.supervision) || progressOf(session)?.text || todo.start_error;
-            const label = reviewState(todo) === "parked" ? t("assistant-tasks.review_parked") : todoLook(todo, status, waitOf(todo, status, lookup)).label;
+            const summary = todo.wait != null ? todo.wait.reason : reportText(todo.supervision) || progressOf(session)?.text || todo.start_error;
+            const label = todoSupervisorLabel(todo, status, lookup) ??
+              (todo.wait == null && reviewState(todo) === "parked" ? t("assistant-tasks.review_parked") : todoLook(todo, status, waitOf(todo, status, lookup)).label);
             return <li key={todo.id} className="rounded-control bg-field p-3">
               <div className="flex items-baseline justify-between gap-2">
                 <button type="button" className="touch-hit min-w-0 truncate text-left text-sm font-semibold hover:underline" title={todo.title} onClick={() => openTask(todo.id)}>{todo.title}</button>

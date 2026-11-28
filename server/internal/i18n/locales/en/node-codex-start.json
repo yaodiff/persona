@@ -3,6 +3,7 @@
   "command_line_too_long": "The Codex message and launcher arguments need {units} UTF-16 units; Windows allows {limit}. Nothing was sent. Shorten the first message.",
   "no_box": "Codex opened in a new tab on the computer, but its input box didn’t appear within {seconds} seconds.",
   "no_box_here": "Codex started in the pane you picked, but its input box didn’t appear within {seconds} seconds. The pane is left as it is.",
+  "not_logged_in": "Codex isn’t signed in on the computer: it opened on its sign-in screen, so the agent didn’t start. Run codex login in a terminal there, then start the agent again.",
   "paste_unconfirmed": "The first message was not confirmed in Codex’s input box ({view}); Enter was not pressed.",
   "session_cleanup_failed": "The failed launch pane was closed, but its session could not be archived: {reason}"
 }

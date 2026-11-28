@@ -25,6 +25,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/bus"
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/extwire"
 	"github.com/nwverse/persona/server/internal/kb"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -91,25 +92,42 @@ func (s *Service) transcriptionRequest(ctx context.Context, method string, param
 	if method != assistantwire.MethodTranscriptionExtension {
 		return nil, false, nil
 	}
-	var call assistantwire.ExtensionTranscription
-	if err := json.Unmarshal(params, &call); err != nil || call.Extension == "" {
-		return nil, true, invalidTranscription(call.Method, "no extension")
+	decode := func(out any) error {
+		// The envelope accepts extra fields. Each transcription method decodes its own params strictly.
+		call := out.(*assistantwire.ExtensionTranscription)
+		if err := json.Unmarshal(params, call); err != nil || call.Extension == "" {
+			return invalidTranscription(call.Method, "no extension")
+		}
+		return nil
 	}
+	return handleAssistantRequest(ctx, assistantwire.TranscriptionExtensionMethod, decode, s.extensionTranscription)
+}
+
+func (s *Service) extensionTranscription(ctx context.Context, call assistantwire.ExtensionTranscription) (json.RawMessage, error) {
 	switch call.Method {
-	case assistantwire.MethodTranscriptionStart:
-		out, err := s.extTranscribeStart(ctx, call)
-		return out, true, err
-	case assistantwire.MethodTranscriptionAudio:
-		out, err := s.extTranscribeAudio(ctx, call)
-		return out, true, err
-	case assistantwire.MethodTranscriptionFinish:
-		out, err := s.extTranscribeFinish(ctx, call)
-		return out, true, err
-	case assistantwire.MethodTranscriptionCancel:
-		out, err := s.extTranscribeCancel(call)
-		return out, true, err
+	case assistantwire.TranscriptionStartMethod.Name:
+		return handleTranscriptionMethod(ctx, assistantwire.TranscriptionStartMethod, call, s.extTranscribeStart)
+	case assistantwire.TranscriptionAudioMethod.Name:
+		return handleTranscriptionMethod(ctx, assistantwire.TranscriptionAudioMethod, call, s.extTranscribeAudio)
+	case assistantwire.TranscriptionFinishMethod.Name:
+		return handleTranscriptionMethod(ctx, assistantwire.TranscriptionFinishMethod, call, s.extTranscribeFinish)
+	case assistantwire.TranscriptionCancelMethod.Name:
+		return handleTranscriptionMethod(ctx, assistantwire.TranscriptionCancelMethod, call, s.extTranscribeCancel)
 	}
-	return nil, true, invalidTranscription(call.Method, "no such method")
+	return nil, invalidTranscription(call.Method, "no such method")
+}
+
+func handleTranscriptionMethod[P, R any](ctx context.Context, method buswire.Method[P, R], call assistantwire.ExtensionTranscription,
+	run func(context.Context, string, P) (R, error)) (json.RawMessage, error) {
+	var params P
+	if err := strictParams(method.Name, call.Params, &params); err != nil {
+		return nil, err
+	}
+	out, err := run(ctx, call.Extension, params)
+	if err != nil {
+		return nil, err
+	}
+	return rpc.Marshal(out)
 }
 
 func invalidTranscription(method, format string, args ...any) error {
@@ -120,31 +138,27 @@ func transcriptionError(code, format string, args ...any) error {
 	return &rpc.Error{Code: code, Message: fmt.Sprintf(format, args...)}
 }
 
-func (s *Service) extTranscribeStart(ctx context.Context, call assistantwire.ExtensionTranscription) (any, error) {
-	var p assistantwire.TranscriptionStartParams
-	if err := strictParams(call.Method, call.Params, &p); err != nil {
-		return nil, err
-	}
+func (s *Service) extTranscribeStart(ctx context.Context, extension string, p assistantwire.TranscriptionStartParams) (assistantwire.TranscriptionStartResult, error) {
 	var b [16]byte
 	_, _ = rand.Read(b[:])
 	jctx, stop := context.WithCancel(context.WithoutCancel(ctx))
-	job := &extJob{id: hex.EncodeToString(b[:]), ext: call.Extension, label: transcriptionLabel(p.Label), ctx: jctx, stop: stop,
+	job := &extJob{id: hex.EncodeToString(b[:]), ext: extension, label: transcriptionLabel(p.Label), ctx: jctx, stop: stop,
 		heard: time.Now(), done: make(chan struct{}), wake: make(chan struct{}, 1)}
 	t := &s.extTr
 	t.mu.Lock()
 	running := 0
 	for _, j := range t.jobs {
-		if j.ext == call.Extension {
+		if j.ext == extension {
 			t.mu.Unlock()
 			stop()
-			return nil, transcriptionError(assistantwire.CodeTranscriptionBusy, "transcription.start: this extension has a job running; finish or cancel it first")
+			return assistantwire.TranscriptionStartResult{}, transcriptionError(assistantwire.CodeTranscriptionBusy, "transcription.start: this extension has a job running; finish or cancel it first")
 		}
 		running++
 	}
 	if running >= extTranscribeMost {
 		t.mu.Unlock()
 		stop()
-		return nil, transcriptionError(assistantwire.CodeTranscriptionBusy, "transcription.start: %d extensions' jobs are running; try again later", running)
+		return assistantwire.TranscriptionStartResult{}, transcriptionError(assistantwire.CodeTranscriptionBusy, "transcription.start: %d extensions' jobs are running; try again later", running)
 	}
 	if t.jobs == nil {
 		t.jobs = map[string]*extJob{}
@@ -155,7 +169,7 @@ func (s *Service) extTranscribeStart(ctx context.Context, call assistantwire.Ext
 	jc, err := s.extTranscribeDial(ctx, p.Language)
 	if err != nil {
 		s.endExtJob(job, "unavailable")
-		return nil, err
+		return assistantwire.TranscriptionStartResult{}, err
 	}
 	job.mu.Lock()
 	job.jc = jc
@@ -325,27 +339,23 @@ func (s *Service) extTranscribeCallDone(job *extJob) {
 	job.calls.Unlock()
 }
 
-func (s *Service) extTranscribeAudio(ctx context.Context, call assistantwire.ExtensionTranscription) (any, error) {
+func (s *Service) extTranscribeAudio(ctx context.Context, extension string, p assistantwire.TranscriptionAudioParams) (buswire.None, error) {
 	const method = assistantwire.MethodTranscriptionAudio
-	var p assistantwire.TranscriptionAudioParams
-	if err := strictParams(call.Method, call.Params, &p); err != nil {
-		return nil, err
-	}
 	if base64.StdEncoding.DecodedLen(len(p.Data)) > extTranscribeChunkMost+3 {
-		return nil, invalidTranscription(method, "at most %d bytes of PCM a call", extTranscribeChunkMost)
+		return buswire.None{}, invalidTranscription(method, "at most %d bytes of PCM a call", extTranscribeChunkMost)
 	}
 	pcm, err := base64.StdEncoding.DecodeString(p.Data)
 	switch {
 	case err != nil:
-		return nil, invalidTranscription(method, "data is not base64")
+		return buswire.None{}, invalidTranscription(method, "data is not base64")
 	case len(pcm) > extTranscribeChunkMost:
-		return nil, invalidTranscription(method, "at most %d bytes of PCM a call", extTranscribeChunkMost)
+		return buswire.None{}, invalidTranscription(method, "at most %d bytes of PCM a call", extTranscribeChunkMost)
 	case len(pcm)%2 != 0:
-		return nil, invalidTranscription(method, "PCM16: an even number of bytes")
+		return buswire.None{}, invalidTranscription(method, "PCM16: an even number of bytes")
 	}
-	job, err := s.extTranscribeJob(method, call.Extension, p.Job)
+	job, err := s.extTranscribeJob(method, extension, p.Job)
 	if err != nil {
-		return nil, err
+		return buswire.None{}, err
 	}
 	defer s.extTranscribeCallDone(job)
 	job.mu.Lock()
@@ -353,27 +363,27 @@ func (s *Service) extTranscribeAudio(ctx context.Context, call assistantwire.Ext
 	job.mu.Unlock()
 	if sent+int64(len(pcm)/2) > extTranscribeSamplesMost {
 		s.endExtJob(job, "too long")
-		return nil, transcriptionError(assistantwire.CodeTranscriptionTooLong, "%s: more than %d minutes of audio: the job is ended", method,
+		return buswire.None{}, transcriptionError(assistantwire.CodeTranscriptionTooLong, "%s: more than %d minutes of audio: the job is ended", method,
 			extTranscribeSamplesMost/kb.AudioRate/60)
 	}
 	ahead := int64(replayAhead.Seconds() * kb.AudioRate)
 	for len(pcm) > 0 {
 		n := min(len(pcm), replayFrame)
 		if err := job.waitRoom(ctx, ahead); err != nil {
-			return nil, s.extTranscribeFailed(job, method, err)
+			return buswire.None{}, s.extTranscribeFailed(job, method, err)
 		}
 		job.mu.Lock()
 		jc := job.jc
 		job.mu.Unlock()
 		if err := jc.SendAudio(job.ctx, pcm[:n]); err != nil {
-			return nil, s.extTranscribeFailed(job, method, err)
+			return buswire.None{}, s.extTranscribeFailed(job, method, err)
 		}
 		job.mu.Lock()
 		job.sent += int64(n / 2)
 		job.mu.Unlock()
 		pcm = pcm[n:]
 	}
-	return struct{}{}, nil
+	return buswire.None{}, nil
 }
 
 // errStalled: the contribution answered nothing for jobDoneWait.
@@ -442,15 +452,11 @@ func (s *Service) extTranscribeFailed(job *extJob, method string, err error) err
 	return job.failed(method, err)
 }
 
-func (s *Service) extTranscribeFinish(ctx context.Context, call assistantwire.ExtensionTranscription) (any, error) {
+func (s *Service) extTranscribeFinish(ctx context.Context, extension string, p assistantwire.TranscriptionJobParams) (assistantwire.TranscriptionFinishResult, error) {
 	const method = assistantwire.MethodTranscriptionFinish
-	var p assistantwire.TranscriptionJobParams
-	if err := strictParams(call.Method, call.Params, &p); err != nil {
-		return nil, err
-	}
-	job, err := s.extTranscribeJob(method, call.Extension, p.Job)
+	job, err := s.extTranscribeJob(method, extension, p.Job)
 	if err != nil {
-		return nil, err
+		return assistantwire.TranscriptionFinishResult{}, err
 	}
 	defer s.extTranscribeCallDone(job)
 	job.mu.Lock()
@@ -460,7 +466,7 @@ func (s *Service) extTranscribeFinish(ctx context.Context, call assistantwire.Ex
 	jc := job.jc
 	job.mu.Unlock()
 	if err := jc.Send(job.ctx, extwire.TranscriptionFrame{Type: extwire.TFEnd}); err != nil {
-		return nil, s.extTranscribeFailed(job, method, err)
+		return assistantwire.TranscriptionFinishResult{}, s.extTranscribeFailed(job, method, err)
 	}
 	for {
 		job.mu.Lock()
@@ -468,7 +474,7 @@ func (s *Service) extTranscribeFinish(ctx context.Context, call assistantwire.Ex
 		job.mu.Unlock()
 		left := jobDoneWait - time.Since(heard)
 		if left <= 0 {
-			return nil, s.extTranscribeFailed(job, method, errStalled)
+			return assistantwire.TranscriptionFinishResult{}, s.extTranscribeFailed(job, method, errStalled)
 		}
 		t := time.NewTimer(left)
 		select {
@@ -480,7 +486,7 @@ func (s *Service) extTranscribeFinish(ctx context.Context, call assistantwire.Ex
 				Seconds: float64(job.sent) / kb.AudioRate}
 			job.mu.Unlock()
 			if err != nil {
-				return nil, s.extTranscribeFailed(job, method, err)
+				return assistantwire.TranscriptionFinishResult{}, s.extTranscribeFailed(job, method, err)
 			}
 			if out.Segments == nil {
 				out.Segments = []assistantwire.TranscriptionSegment{}
@@ -491,26 +497,22 @@ func (s *Service) extTranscribeFinish(ctx context.Context, call assistantwire.Ex
 		case <-t.C:
 		case <-ctx.Done():
 			t.Stop()
-			return nil, s.extTranscribeFailed(job, method, ctx.Err())
+			return assistantwire.TranscriptionFinishResult{}, s.extTranscribeFailed(job, method, ctx.Err())
 		}
 		t.Stop()
 	}
 }
 
-func (s *Service) extTranscribeCancel(call assistantwire.ExtensionTranscription) (any, error) {
+func (s *Service) extTranscribeCancel(_ context.Context, extension string, p assistantwire.TranscriptionJobParams) (buswire.None, error) {
 	const method = assistantwire.MethodTranscriptionCancel
-	var p assistantwire.TranscriptionJobParams
-	if err := strictParams(call.Method, call.Params, &p); err != nil {
-		return nil, err
-	}
 	s.extTr.mu.Lock()
 	job := s.extTr.jobs[p.Job]
 	s.extTr.mu.Unlock()
-	if job == nil || job.ext != call.Extension {
-		return nil, invalidTranscription(method, "no such job (finished, cancelled, or not this extension's)")
+	if job == nil || job.ext != extension {
+		return buswire.None{}, invalidTranscription(method, "no such job (finished, cancelled, or not this extension's)")
 	}
 	s.endExtJob(job, "cancelled")
-	return struct{}{}, nil
+	return buswire.None{}, nil
 }
 
 // endExtJob ends job (its socket closed, its place given back) and logs it once: how it ended, never what was said.

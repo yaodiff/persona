@@ -68,6 +68,14 @@ describe("readable hub errors", () => {
     expect(new Headers(fetch.mock.calls[1][1].headers).get("X-Persona-Features")).toBe("agent_message_hold");
   });
 
+  it("adds an explicit query without changing the route used for routing and reports", async () => {
+    const fetch = vi.fn().mockImplementation(() => Promise.resolve(new Response("{}", { status: 200 })));
+    vi.stubGlobal("fetch", fetch);
+    await api("/todos", { token: "test-token", query: { closed_limit: "50" } });
+    expect(fetch.mock.calls[0][0]).toBe("/api/v1/todos?closed_limit=50");
+    expect(fetch.mock.calls[0][1].query).toBeUndefined();
+  });
+
   it.each([500, 501, 505, 599])("explains HTTP %s without discarding the server's reason", (status) => {
     expect(errorText(new ApiError(status, "storage failed", {}))).toBe(t("lib-api.server_error", { detail: `HTTP ${status}: storage failed` }));
   });
@@ -78,13 +86,23 @@ describe("readable hub errors", () => {
     expect(isOfflineError(text)).toBe(false);
   });
 
-  it("shows a decision accept failure's reason without exposing its diagnostic detail", async () => {
+  // The hub's own sentence, not "the service couldn't complete this request (HTTP 502)" (#17431): that line is for what
+  // stands in front of the hub.
+  it.each([502, 503])("shows the hub's own reason for a coded HTTP %s, without its diagnostic detail", async (status) => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
-      code: "accept_not_taken", error: "every agent on this task has stopped", detail: "private diagnostic",
-    }), { status: 502 })));
+      code: "accept_not_taken", error: "The answer did not go: the computer is offline", detail: "private diagnostic", delivered: "none",
+    }), { status })));
     const error = await api("/todos/todo_v1/accept", { method: "POST", token: "test-token" }).catch((e: unknown) => e);
-    expect(errorText(error)).toBe(t("lib-api.hub_unavailable", { detail: "HTTP 502: every agent on this task has stopped" }));
+    expect(errorText(error)).toBe("The answer did not go: the computer is offline");
     expect(errorText(error)).not.toContain("private diagnostic");
+    expect(isTransient(error)).toBe(false);
+  });
+
+  it.each([["", "HTTP 502"], ["Bad Gateway", "HTTP 502: Bad Gateway"]])("keeps the generic line for an empty or non-JSON gateway answer: %j", async (body, detail) => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(body, { status: 502 })));
+    const error = await api("/todos/todo_v1/accept", { method: "POST", token: "test-token" }).catch((e: unknown) => e);
+    expect(errorText(error)).toBe(t("lib-api.hub_unavailable", { detail }));
+    expect(isTransient(error)).toBe(true);
   });
 
   it.each(["", "HTTP 500"])("keeps a bare status only once: %s", (message) => {
@@ -107,7 +125,7 @@ describe("readable hub errors", () => {
   it("leaves the original error available to callers and session-specific explanations", () => {
     const message = "transcript for session deadbeef not found";
     const error = new ApiError(404, message, { code: "not_found" }, true, "request-1");
-    expect(sessionLoadError(errorText(error))).toBe("找不到这个会话：可能已经删除，或链接里的 id 不完整");
+    expect(sessionLoadError(errorText(error))).toBe("找不到该会话，可能已被删除或链接中的 ID 不完整。");
     expect(error.message).toBe(message);
     expect(error.code).toBe("not_found");
     expect(error.requestId).toBe("request-1");
@@ -221,7 +239,7 @@ describe("a dialog open in the terminal", () => {
     const refused = new ApiError(409, "终端正在等待选择，请先到终端处理。", { code: "dialog_open", delivered: "none", retryable: false }); // i18n-ignore
     const text = errorText(refused);
     expect(text).toBe(t("lib-api.dialog_open"));
-    expect(text).toContain("先关掉终端里的对话框"); // i18n-ignore
+    expect(text).toContain("请先在终端中关闭该对话框"); // i18n-ignore
     expect(text).not.toContain("HTTP");
     expect(isTransient(refused)).toBe(false);
   });
@@ -231,7 +249,7 @@ describe("error language", { timeout: 30_000 }, () => {
   afterEach(() => initI18n("zh-Hans"), 30_000);
 
   it.each([
-    ["zh-Hans", "找不到", "服务暂时出错", "服务未能完成此次请求"],
+    ["zh-Hans", "未找到相关内容", "服务出现异常", "服务未能完成此次请求"],
     ["en", "Content not found", "The service ran into a problem", "The service couldn't complete this request"],
     ["ja", "内容が見つからない", "サービスで問題が発生しました", "サービスがこの要求を完了できませんでした"],
   ] as const)("uses the current %s catalog and retains diagnostics", async (lang, missing, server, gateway) => {
@@ -244,7 +262,7 @@ describe("error language", { timeout: 30_000 }, () => {
   });
 
   it.each([
-    ["zh-Hans", "不在线", "连接断了", "请求超时"],
+    ["zh-Hans", "当前离线", "连接已断开", "请求超时"],
     ["en", "is offline", "connection to this computer dropped", "timed out"],
     ["ja", "オフライン", "接続が切れました", "タイムアウト"],
   ] as const)("says what became of the computer in %s", async (lang, offline, dropped, timedOut) => {

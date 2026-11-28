@@ -1,6 +1,7 @@
 package extmgr
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -19,6 +20,7 @@ import (
 	"github.com/nwverse/persona/sdk/go/wire"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/bus"
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/extension"
 	"github.com/nwverse/persona/server/internal/extension/uistream"
@@ -52,6 +54,7 @@ func (h *Manager) Run(ctx context.Context) error {
 	h.migrateWeChatState(ctx) // into the channels' state before the assistant and the WeChat program read it
 	h.startBots(ctx)
 	go h.agentsLoop(ctx)
+	go h.orcaBotsLoop(ctx) // the computers' Orca bots as Agents → Bots sources (orcabots.go)
 	go h.inboxLoop(ctx)
 	go h.noLockLoop(ctx)
 	go h.extensionLeaseLoop(ctx)
@@ -66,7 +69,7 @@ func (h *Manager) Run(ctx context.Context) error {
 	go h.extensionMetricsLoop(ctx)
 	go h.pageLoop(ctx)
 	go h.sentLedgerLoop(ctx)
-	go h.larkSyncLoop(ctx) // the Lark user sync's daily runs (larksync_run.go)
+	go h.larkSyncLoop(ctx) // the Lark user sync's daily runs (larksync_host.go)
 	h.apiMux = http.NewServeMux()
 	h.registerRoutes(h.apiMux)
 	close(h.started)
@@ -126,6 +129,7 @@ func (h *Manager) registerRoutes(api *http.ServeMux) {
 	h.agentRoutes(api)
 	h.connectorRoutes(api)
 	h.extensionRoutes(api)
+	h.textLookupRoutes(api)
 	h.messagingRoutes(api)
 	h.adminExtensionRoutes(api) // with the old /api/v1/admin/plugins paths
 	h.subscriptionRoutes(api)
@@ -250,7 +254,7 @@ func (h *Manager) relayServer() *http.Server {
 	return &http.Server{Handler: h, ReadHeaderTimeout: 30 * time.Second, IdleTimeout: relayIdleTimeout}
 }
 
-// Accept is extwire.MethodAccept: the hub holds a request for the manager; it dials the relay with the id and serves
+// Accept serves extwire.AcceptMethod: the hub holds a request for the manager; it dials the relay with the id and serves
 // the request (and any after it on the same connection) there.
 func (h *Manager) Accept(ctx context.Context, id string) error {
 	if h.opts.DialRelay == nil {
@@ -347,7 +351,7 @@ func (h *Manager) Hello(res json.RawMessage) {
 	h.hello.Store(&hl)
 	h.isMemberNow.Store(hl.Assistant.Standby)
 	if was != hl.Assistant.Standby && h.extensions != nil {
-		go h.extensions.roleChanged(context.Background()) // a member's center runs what runs once (mesh_group.go)
+		go h.extensions.roleChanged(h.extensions.runtimeContext(nil)) // a member's center runs what runs once (mesh_group.go)
 		go func() {
 			h.restartBot() // the center's Feishu bot answers for the group
 			h.sendReport()
@@ -373,68 +377,107 @@ func (h *Manager) BusUp() {
 }
 
 // Request takes the hub's extensions.* calls (handled false: not one).
+// The central dispatch guard reads the string constants. Each case binds the
+// descriptor built from that constant to its typed handler.
 func (h *Manager) Request(ctx context.Context, method string, params json.RawMessage) (any, bool, error) {
 	switch method {
 	case extwire.MethodUIStream:
-		var call extwire.UIStreamCall
-		if len(params) > 128<<10 || json.Unmarshal(params, &call) != nil {
+		if len(params) > 128<<10 {
 			return nil, true, pageError("invalid")
 		}
-		if !h.ready(ctx) {
-			return nil, true, errAssistantOffline
-		}
-		frame, err := h.uiStream(ctx, call)
-		if err != nil {
-			requestID := ""
-			if env, decodeErr := uistream.DecodeClientEnvelope(call.Envelope); decodeErr == nil && env.Request != nil {
-				requestID = env.Request.RequestID
-			}
-			frame = streamFrame("error", requestID, &wire.UIStreamFailure{Code: pageFailureCode(err), Message: i18n.Localize(err, i18n.Resolve(call.Who.Lang))})
-		}
-		var envelope struct {
-			Kind string `json:"kind"`
-		}
-		_ = json.Unmarshal(frame, &envelope)
-		// Snapshots are enqueued by the manager while it still owns publication order.
-		if envelope.Kind != "snapshot" {
-			h.pageEmit(call.Who, frame)
-		}
-		return map[string]any{}, true, nil
+		return handleExtensionRequest(extwire.UIStreamMethod, params, pageError("invalid"), func(call extwire.UIStreamCall) (buswire.None, error) {
+			return h.requestUIStream(ctx, call)
+		})
 	case extwire.MethodAccept:
-		var a struct {
-			ID string `json:"id"`
-		}
-		if err := json.Unmarshal(params, &a); err != nil || a.ID == "" {
-			return nil, true, &rpc.Error{Code: bus.CodeInvalidParams, Message: "extensions.accept needs an id"}
-		}
-		return map[string]any{}, true, h.Accept(ctx, a.ID)
+		invalid := invalidExtensionParams(method + " needs an id")
+		return handleExtensionRequest(extwire.AcceptMethod, params, invalid, func(a extwire.Accept) (buswire.None, error) {
+			if a.ID == "" {
+				return buswire.None{}, invalid
+			}
+			return buswire.None{}, h.Accept(ctx, string(a.ID))
+		})
 	case extwire.MethodAuthorize:
-		var a extwire.Authorize
-		if err := json.Unmarshal(params, &a); err != nil {
-			return nil, true, &rpc.Error{Code: bus.CodeInvalidParams, Message: err.Error()}
-		}
-		if !h.ready(ctx) {
-			return nil, true, errAssistantOffline
-		}
-		return h.authorize(a), true, nil
+		return handleExtensionRequest(extwire.AuthorizeMethod, params, nil, func(a extwire.Authorize) (extwire.Authorized, error) {
+			if !h.ready(ctx) {
+				return extwire.Authorized{}, errAssistantOffline
+			}
+			return h.authorize(a), nil
+		})
 	case extwire.MethodHubCall:
-		var c extwire.HubCall
-		if err := json.Unmarshal(params, &c); err != nil {
-			return nil, true, &rpc.Error{Code: bus.CodeInvalidParams, Message: err.Error()}
-		}
-		if !h.ready(ctx) {
-			return nil, true, errAssistantOffline
-		}
-		out, err := h.hubCall(ctx, c.Method, c.Params)
-		return out, true, err
-	case extwire.MethodSourceExport, extwire.MethodSourceImport, extwire.MethodSourceRelease:
-		if !h.ready(ctx) {
-			return nil, true, errAssistantOffline
-		}
-		out, err := h.sourceCall(method, params)
-		return out, true, err
+		return handleExtensionRequest(extwire.HubCallMethod, params, nil, func(c extwire.HubCall) (extwire.HubCallResult, error) {
+			return h.requestHubCall(ctx, c)
+		})
+	case extwire.MethodSourceExport:
+		return handleSourceRequest(ctx, h, extwire.SourceExportMethod, params, invalidSourceRef(method), h.exportSource)
+	case extwire.MethodSourceImport:
+		// The decoder's error can quote the bundle.
+		invalid := invalidExtensionParams(method + " needs a source bundle")
+		return handleSourceRequest(ctx, h, extwire.SourceImportMethod, params, invalid, h.importSource)
+	case extwire.MethodSourceRelease:
+		return handleSourceRequest(ctx, h, extwire.SourceReleaseMethod, params, invalidSourceRef(method), h.releaseSource)
 	}
 	return nil, false, nil
+}
+
+// handleExtensionRequest checks the handler's types against its descriptor and
+// decodes its params once. Unknown fields remain valid during rolling upgrades.
+func handleExtensionRequest[P, R any](_ buswire.Method[P, R], params json.RawMessage, invalid error, run func(P) (R, error)) (any, bool, error) {
+	var p P
+	if err := json.Unmarshal(params, &p); err != nil {
+		if invalid == nil {
+			invalid = invalidExtensionParams(err.Error())
+		}
+		return nil, true, invalid
+	}
+	out, err := run(p)
+	if err != nil {
+		return nil, true, err
+	}
+	return out, true, nil
+}
+
+func invalidExtensionParams(message string) error {
+	return &rpc.Error{Code: bus.CodeInvalidParams, Message: message}
+}
+
+func (h *Manager) requestUIStream(ctx context.Context, call extwire.UIStreamCall) (buswire.None, error) {
+	if !h.ready(ctx) {
+		return buswire.None{}, errAssistantOffline
+	}
+	frame, err := h.uiStream(ctx, call)
+	if err != nil {
+		requestID := ""
+		if env, decodeErr := uistream.DecodeClientEnvelope(call.Envelope); decodeErr == nil && env.Request != nil {
+			requestID = env.Request.RequestID
+		}
+		frame = streamFrame("error", requestID, &wire.UIStreamFailure{Code: pageFailureCode(err), Message: i18n.Localize(err, i18n.Resolve(call.Who.Lang))})
+	}
+	var envelope struct {
+		Kind string `json:"kind"`
+	}
+	_ = json.Unmarshal(frame, &envelope)
+	// Snapshots are enqueued by the manager while it still owns publication order.
+	if envelope.Kind != "snapshot" {
+		h.pageEmit(call.Who, frame)
+	}
+	return buswire.None{}, nil
+}
+
+func (h *Manager) requestHubCall(ctx context.Context, c extwire.HubCall) (extwire.HubCallResult, error) {
+	if !h.ready(ctx) {
+		return nil, errAssistantOffline
+	}
+	out, err := h.hubCall(ctx, c.Method, c.Params)
+	if err != nil {
+		return nil, err
+	}
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false) // Match the RPC peer's encoding of the nested reply.
+	if err := enc.Encode(out); err != nil {
+		return nil, err
+	}
+	return bytes.TrimSuffix(buf.Bytes(), []byte("\n")), nil
 }
 
 // Event takes the hub's extensions.* events (handled false: not one).
@@ -652,6 +695,7 @@ func (h *Manager) report() extwire.Report {
 			}
 		}
 		slices.Sort(r.PushGradingExtensions)
+		r.Modules = h.reportModules() // the modules approved installed extensions supply (module_providers.go)
 	}
 	for _, m := range h.machinesNow() {
 		var x extwire.MachineExtras
@@ -723,6 +767,7 @@ func (h *Manager) AgentTools(ctx context.Context, assistant bool) (agents, assis
 		assistantOnly = append(assistantOnly, h.browserTools()...)
 		assistantOnly = append(assistantOnly, h.iphoneTools()...)
 		assistantOnly = append(assistantOnly, h.subscriptionTools()...)
+		assistantOnly = append(assistantOnly, h.orcaBotTools()...)
 		if hp, _ := h.larkImageSource(); hp != nil && connector.StatusOf(ctx, h.connectors.Get(connector.Lark)).State == connector.StateOK {
 			assistantOnly = append(assistantOnly, mcpTool(larkImageTool))
 		}
@@ -749,17 +794,22 @@ func (h *Manager) CallTool(ctx context.Context, machine, session, name string, a
 	case assistant && h.memoryWithheld(name): // memory_sources.go
 		return memoryWithheldResult(name), true
 	case h.connectors.Offers(name) && (assistant || h.connectors.ForAgents(name)):
+		if !assistant {
+			ctx = connector.WithoutOwnerCaller(ctx)
+		}
 		return h.callConnector(ctx, asker{machine, session}, name, args), true
 	case assistant && name == larkImageTool:
 		return h.callLarkImage(ctx, args), true
 	case assistant && isComputerTool(name):
 		return h.callComputerTool(ctx, session, name, args), true
 	case assistant && isBrowserTool(name):
-		return h.callBrowserTool(ctx, session, name, args), true
+		return h.callBrowserTool(ctx, machine, session, name, args), true
 	case assistant && isIPhoneTool(name):
 		return h.callIPhoneTool(ctx, session, name, args), true
 	case assistant && isSubscriptionTool(name):
 		return h.callSubscriptionTool(ctx, asker{machine, session}, name, args), true
+	case assistant && isOrcaBotTool(name):
+		return h.callOrcaBotTool(ctx, name, args), true
 	}
 	return proto.ToolResult{}, false
 }
@@ -803,6 +853,8 @@ func (h *Manager) ToolAccess(name string) (known, readOnly bool) {
 	case isSubscriptionTool(name):
 		return true, name == "subscription_list" || name == "subscription_get" ||
 			name == "subscription_sources" || name == "subscription_dry_run"
+	case isOrcaBotTool(name):
+		return true, name != orcaBotSendTool
 	}
 	return false, false
 }

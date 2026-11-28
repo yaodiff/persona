@@ -18,21 +18,21 @@ describe("normalizeHubURL", () => {
     expect(normalizeHubURL("hub.example.com:8443")).toEqual({ url: "https://hub.example.com:8443" });
   });
   it("says what is wrong with anything that is not just an address", () => {
-    expect(normalizeHubURL("  ")).toEqual({ error: "填 hub 的地址" });
-    expect(normalizeHubURL("ftp://hub.example.com")).toEqual({ error: "只能是 http:// 或 https:// 的地址" });
-    expect(normalizeHubURL("https://me:pw@hub.example.com")).toEqual({ error: "地址里不要带用户名和密码" });
-    const noPath = "只填 hub 的地址（可以带反向代理的子路径），不要带 ? 或 # 之后的部分";
+    expect(normalizeHubURL("  ")).toEqual({ error: "请输入 hub 地址" });
+    expect(normalizeHubURL("ftp://hub.example.com")).toEqual({ error: "地址必须以 http:// 或 https:// 开头" });
+    expect(normalizeHubURL("https://me:pw@hub.example.com")).toEqual({ error: "地址中不能包含用户名和密码" });
+    const noPath = "请仅填写 hub 地址（支持反向代理子路径），不要包含 ? 或 # 及其后的内容";
     expect(normalizeHubURL("https://hub.example.com/settings")).toEqual({ error: noPath });
     expect(normalizeHubURL("https://hub.example.com/persona/s/laptop/abc")).toEqual({ error: noPath });
     expect(normalizeHubURL("https://hub.example.com/?token=x")).toEqual({ error: noPath });
     expect(normalizeHubURL("https://hub.example.com/#token=x")).toEqual({ error: noPath });
     expect(normalizeHubURL("https://hub.example.com/a%20b")).toEqual({ error: noPath });
-    expect(normalizeHubURL("https://")).toEqual({ error: "不是一个地址" });
+    expect(normalizeHubURL("https://")).toEqual({ error: "请输入有效的地址" });
   });
   // audit item 67: Chrome's URL parser keeps a host with spaces, escaped ("not%20a%20url"), where Node and jsdom refuse it
   it("refuses text that is not a host, even where the browser's URL parser lets it through", () => {
-    expect(normalizeHubURL("not a url")).toEqual({ error: "不是一个地址" });
-    expect(normalizeHubURL("https://hub .example.com")).toEqual({ error: "不是一个地址" });
+    expect(normalizeHubURL("not a url")).toEqual({ error: "请输入有效的地址" });
+    expect(normalizeHubURL("https://hub .example.com")).toEqual({ error: "请输入有效的地址" });
     class ChromeURL extends URL {
       constructor(input: string | URL, base?: string | URL) {
         const s = String(input);
@@ -46,8 +46,8 @@ describe("normalizeHubURL", () => {
     }
     vi.stubGlobal("URL", ChromeURL);
     try {
-      expect(normalizeHubURL("not%20a%20url")).toEqual({ error: "不是一个地址" });
-      expect(normalizeHubURL("https://not%20a%20url")).toEqual({ error: "不是一个地址" });
+      expect(normalizeHubURL("not%20a%20url")).toEqual({ error: "请输入有效的地址" });
+      expect(normalizeHubURL("https://not%20a%20url")).toEqual({ error: "请输入有效的地址" });
       // still taken: names with "_", a trailing dot, another script's name as URL spells it
       expect(normalizeHubURL("my_hub.example.com")).toEqual({ url: "https://my_hub.example.com" });
       expect(normalizeHubURL("hub.example.com.")).toEqual({ url: "https://hub.example.com." });
@@ -156,8 +156,8 @@ describe("the stored list", () => {
   });
   it("adds, renames and removes; refuses duplicates and bad addresses", () => {
     expect(addHub("b.example.com", "工作")).toEqual({ list: [{ url: "https://b.example.com", label: "工作", added: NOW }] });
-    expect(addHub("https://b.example.com:443/")).toEqual({ error: "这台 hub 已经在列表里" });
-    expect(addHub("https://b.example.com/settings")).toEqual({ error: "只填 hub 的地址（可以带反向代理的子路径），不要带 ? 或 # 之后的部分" });
+    expect(addHub("https://b.example.com:443/")).toEqual({ error: "该 hub 已在列表中" });
+    expect(addHub("https://b.example.com/settings")).toEqual({ error: "请仅填写 hub 地址（支持反向代理子路径），不要包含 ? 或 # 及其后的内容" });
     // the same origin under a reverse proxy's sub-path is another hub
     expect(addHub("https://b.example.com/x")).toEqual({ list: [{ url: "https://b.example.com", label: "工作", added: NOW }, { url: "https://b.example.com/x", added: NOW }] });
     removeHub("https://b.example.com/x");
@@ -173,7 +173,7 @@ describe("the stored list", () => {
   });
   it("stops adding at MAX_HUBS", () => {
     for (let i = 0; i < MAX_HUBS; i++) expect("list" in addHub(`https://h${i}.example.com`)).toBe(true);
-    expect(addHub("https://one-more.example.com")).toEqual({ error: `最多记 ${MAX_HUBS} 台 hub` });
+    expect(addHub("https://one-more.example.com")).toEqual({ error: `最多可保存 ${MAX_HUBS} 台 hub` });
   });
   it("merges a handed-over list into what it has", () => {
     rememberHub("https://b.example.com", "B");

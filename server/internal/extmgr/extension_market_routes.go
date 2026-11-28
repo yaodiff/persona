@@ -84,6 +84,7 @@ func (h *Manager) marketRoutesAt(api *http.ServeMux, base string, allow func(w h
 		}
 		writeErrCode(w, http.StatusBadRequest, code, err)
 	}
+	h.marketKeyRoutes(api, base, gate, fail)
 	api.HandleFunc("GET "+base+"/markets", gate(func(w http.ResponseWriter, r *http.Request) {
 		h.awaitFirstReads(r.Context())
 		writeJSON(w, map[string]any{"markets": marketsOut(r, h.marketViews())})
@@ -95,6 +96,8 @@ func (h *Manager) marketRoutesAt(api *http.ServeMux, base string, allow func(w h
 			// TokenFrom: use the token of this registered market (one account's token reading several private
 			// repositories), never seen by the caller.
 			TokenFrom string `json:"token_from,omitempty"`
+			// Keys: the private market's trusted public keys ("ed25519:<base64>"); its catalog must verify with one.
+			Keys []string `json:"keys,omitempty"`
 		}
 		if !readExtensionJSON(w, r, &in) {
 			return
@@ -116,7 +119,7 @@ func (h *Manager) marketRoutesAt(api *http.ServeMux, base string, allow func(w h
 			}
 			in.Token = tok
 		}
-		v, err := h.marketAdd(r.Context(), in.Spec, in.Token)
+		v, err := h.marketAdd(r.Context(), in.Spec, in.Token, in.Keys...)
 		if err != nil {
 			fail(w, err, "market_failed")
 			return
@@ -250,6 +253,10 @@ func (h *Manager) marketRoutesAt(api *http.ServeMux, base string, allow func(w h
 			fail(w, err, "not_in_market")
 			return
 		}
+		if err := e.EngineProblem(h.build.Number); err != nil {
+			fail(w, err, "cant_run_here")
+			return
+		}
 		if err := h.cantRunHere(e.Parsed); err != nil { // before downloading it (#5639)
 			fail(w, err, "cant_run_here")
 			return
@@ -261,7 +268,13 @@ func (h *Manager) marketRoutesAt(api *http.ServeMux, base string, allow func(w h
 		}
 		upgrade := ""
 		if cur := h.extensions.reg.Get(in.Extension); cur != nil && cur.Record.Source == extension.SourceInstalled {
+			if cur.Record.BuiltinPredecessor && (!cur.Record.VerifiedBuiltinPredecessor() || !h.builtinMarketUpgrade(rec, e)) {
+				fail(w, i18n.Err("extension-identity.invalid"), "identity_conflict")
+				return
+			}
 			upgrade = cur.Record.ID
+		} else if h.extensions.reg.CanHandoffBuiltin(e.Parsed.ID) && h.builtinMarketUpgrade(rec, e) {
+			upgrade = e.Parsed.ID
 		} else if e.Replaces != "" {
 			if old := h.extensions.reg.GetExact(e.Replaces); old != nil {
 				if old.Record.Source != extension.SourceInstalled || old.Record.Origin != "market:"+rec.ID+"/"+e.Replaces || h.extensions.reg.Get(e.Parsed.ID) != nil {

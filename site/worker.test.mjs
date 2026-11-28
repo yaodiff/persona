@@ -195,6 +195,7 @@ test("the other files under /dl/ stay the site's static files", async () => {
 test("/dl/<version>/ comes from the kept release, never a slot", async () => {
   const DL = bucket({
     "release/v1-202611060000/personad-linux-amd64.gz": "kept bytes", "release/v1-202611060000/manifest.json": '{"version":"v1"}',
+    "release/v1-202611060000/core-manifest.json": '{"version":"v1","edition":"core"}',
     "a/personad-linux-amd64.gz": "slot bytes",
   });
   const env = { ASSETS: dlAssets("a"), DL };
@@ -212,6 +213,9 @@ test("/dl/<version>/ comes from the kept release, never a slot", async () => {
   assert.equal(r.status, 404);
   r = await worker.fetch(new Request("https://site.example/dl/v2/manifest.json"), env);
   assert.equal(r.status, 404);
+  // The core edition's manifest of a kept release (docs/operations/core-install.md) is served the same way.
+  r = await worker.fetch(new Request("https://site.example/dl/v1-202611060000/core-manifest.json"), env);
+  assert.equal(await r.text(), '{"version":"v1","edition":"core"}');
   r = await worker.fetch(new Request("https://site.example/dl/v1-202611060000/manifest.json", { method: "POST", body: "x" }), env);
   assert.equal(r.status, 405);
 });
@@ -444,6 +448,10 @@ test("Accept-Language prefers supported ranges and uses English for other positi
     ["en;q=0x1,zh;q=0.7", false],
     ["en;q=0.1234,zh;q=0.5", false],
     ["en;q=0.8;q=0.9,zh;q=0.7", false],
+    ["en;q=,zh;q=0.7", false],
+    ["en;q,zh;q=0.7", false],
+    ["en;q=0 .8,zh;q=0.7", false],
+    ["en;q=;q=0.8,zh;q=0.7", false],
     ["fr-FR,*;q=0.8", true],
     ["en;q=1.5,zh;q=0.5", false],
     ["en;q=bogus,zh;q=0.5", false],

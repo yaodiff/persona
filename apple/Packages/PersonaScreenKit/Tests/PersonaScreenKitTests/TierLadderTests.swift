@@ -1,4 +1,4 @@
-import PersonaScreenKit
+@testable import PersonaScreenKit
 import XCTest
 
 /// The quality tiers' ladder (#6396): sizes and frame rates per bias, bands from pixels × fps, caps and merging.
@@ -77,5 +77,33 @@ final class TierLadderTests: XCTestCase {
         XCTAssertEqual(retina[1].pixelsPerPoint, 1.5, accuracy: 1e-9)
         let desktop = TierLadder.make(points: (1512, 982), pixels: (3024, 1964), maxSize: 0, bias: .auto, capKbps: 12_000, maxFps: 60)
         XCTAssertEqual(desktop[0].pixelsPerPoint, 2, accuracy: 1e-9, "no cap: the step")
+    }
+
+    func testHugeDimensionsDoNotOverflowOrTrap() {
+        // Exact IEEE 754 Double(Int.max) boundary and non-finite clamping.
+        XCTAssertEqual(TierLadder.clampedInt(Double(Int.max)), Int.max)
+        XCTAssertEqual(TierLadder.clampedInt(Double(Int.max).nextDown), Int(Double(Int.max).nextDown))
+        XCTAssertEqual(TierLadder.clampedInt(.infinity), Int.max)
+        XCTAssertEqual(TierLadder.clampedInt(-.infinity), 0)
+        XCTAssertEqual(TierLadder.clampedInt(.nan), 0)
+
+        let hugeTier = TierLadder.Tier(scale: 2, fps: 60, width: Int.max, height: Int.max, minKbps: 200, maxKbps: 200)
+        XCTAssertEqual(hugeTier.pixelRate, Int.max)
+        let negativeTier = TierLadder.Tier(scale: 1, fps: -1, width: Int.min, height: 1, minKbps: 200, maxKbps: 200)
+        XCTAssertEqual(negativeTier.pixelRate, 0)
+
+        let maxTiers = TierLadder.make(points: (Int.max, Int.max), pixels: (Int.max, Int.max), maxSize: 0, bias: .auto,
+                                       capKbps: 12_000, maxFps: 60)
+        XCTAssertFalse(maxTiers.isEmpty)
+        XCTAssertEqual(maxTiers.last?.minKbps, CapturePlan.minKbps)
+        XCTAssertEqual(maxTiers.last?.maxKbps, 12_000)
+
+        let billionTiers = TierLadder.make(points: (1_000_000_000, 1_000_000_000), pixels: (2_000_000_000, 2_000_000_000),
+                                           maxSize: 0, bias: .auto, capKbps: 50_000, maxFps: 60)
+        XCTAssertFalse(billionTiers.isEmpty)
+        for tier in billionTiers {
+            XCTAssertLessThanOrEqual(tier.minKbps, tier.maxKbps)
+            XCTAssertGreaterThan(tier.pixelRate, 0)
+        }
     }
 }

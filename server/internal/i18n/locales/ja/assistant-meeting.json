@@ -47,5 +47,10 @@
   "bad_audio": "音声が正しくありません。有効な開始時刻を指定し、16 kHzのモノラルPCM16音声を送信してください。",
   "bad_transcription_mode": "meeting_transcription_defaultはdeviceまたはhubにしてください。",
   "bad_glossary": "meeting_glossaryは文字列のリストにしてください。最大200語、各語は40文字以内です。",
-  "bad_transcription_extension": "インストール済みの文字起こし拡張をextension-id/contribution-idで指定してください。空欄にすると内蔵サービスを使います。"
+  "bad_transcription_extension": "インストール済みの文字起こし拡張をextension-id/contribution-idで指定してください。空欄にすると内蔵サービスを使います。",
+  "speakers_stale": "話者一覧が更新されました。再読み込みしてからもう一度お試しください。",
+  "speakers_cleared": "この会議の話者情報は削除済みです。",
+  "bad_speakers": "話者リクエストが正しくありません。",
+  "speaker_run_reused": "この話者タイムラインの run id は別のタイムラインですでに使われています。",
+  "too_many_speaker_turns": "1 回のインポートは最大 {max} 件の話者区間までです。"
 }

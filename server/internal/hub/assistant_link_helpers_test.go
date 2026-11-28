@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/db"
 )
 
 // assistantLink as an assistant.Hub for the tests that run the assistant in-process (assistant_link_test.go,
@@ -45,4 +46,8 @@ func (l assistantLink) Broadcast(_ context.Context, b assistantwire.Broadcast) {
 // Snapshot keeps what the assistant reported for the hub's own features.
 func (l assistantLink) Snapshot(ctx context.Context, s assistantwire.Snapshot) (assistantwire.SnapshotResult, error) {
 	return l.snapshotFrom(ctx, assistantwire.AssistantID, s)
+}
+
+func (l assistantLink) snapshotFrom(_ context.Context, id string, s assistantwire.Snapshot) (assistantwire.SnapshotResult, error) {
+	return l.keepSnapshot(&busConn{ident: db.BusIdentity{ID: id}}, s)
 }

@@ -60,4 +60,3 @@ export async function handToPersona(s: Session, machineName?: string) {
     toast(t("lib-agent-actions.send_failed", { error: errorText(e) }), "error");
   }
 }
-

@@ -69,6 +69,15 @@ struct WatchMutedTests {
         #expect(WatchInteractions.newOnes(in: shown, alreadyShown: shown).isEmpty)
     }
 
+    @Test func aDisplayCopyDoesNotAddASecondWatchRowOrBuzz() {
+        let original = card("ix1", session: "s1", at: 0)
+        var copy = card("mirror", session: "main", at: 1)
+        copy.mirrorOf = original.id
+        let shown = WatchInteractions.leavingMuted([original, copy])
+        #expect(shown.map(\.id) == ["ix1"])
+        #expect(WatchInteractions.newOnes(in: shown, alreadyShown: []).map(\.id) == ["ix1"])
+    }
+
     @Test func interactionMutedDecodesFromTheHubAndDefaultsToFalse() throws {
         let oldHub = try JSON.decoder.decode(Interaction.self, from: Data(
             #"{"id":"x","machine_id":"m","session_id":"s","kind":"question"}"#.utf8))

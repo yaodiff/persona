@@ -1,6 +1,7 @@
 // One knowledge entry (/kb/<kind>/<id>): its tile, name, badges, one line and tags, "Ask Persona"; then the places a
-// search found, the Agents on a project, the timeline, a project's lessons from finished tasks, the profile, Moments, related entries by kind, code directories,
-// a chat's last 7 days and the folder (docs/apple/ios.md "Information architecture", knowledge base). "Tag" in the header.
+// search found, the Agents on a project, a chat's Inbox items ("In Inbox", #15356), the timeline, a project's lessons from finished tasks, the profile, Moments,
+// related entries by kind, code directories, a chat's last 7 days (a row an Inbox item holds opens it) and the folder (docs/apple/ios.md "Information
+// architecture", knowledge base). "Tag" in the header.
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { api, ApiError, credentialOwner, enc, errorText, getToken, isAbort, subscribeCredentialOwner } from "../../lib/api";
 import { MANAGER_HEADER, shownManager, useChosenManager, useKnownDefault } from "../../lib/manager-choice";
@@ -23,8 +24,10 @@ import {
   factsOf,
   formatAt,
   hitView,
+  inboxOfRows,
   isKind,
   kindTitle,
+  messageRowKey,
   parseMessageLine,
   parseRecent,
   profile,
@@ -56,6 +59,7 @@ import { DayDialog, MessageView, MomentDialog, TagEditor } from "./KBDialogs";
 import { ErrorBox } from "./KBList";
 import { Empty } from "../session/files/parts";
 import { Badges, Card, importedMeetingOf, importedNotesLabel, KBIcon, Marked, MoreRow, onPlainClick, SectionTitle, Tile, TonePill } from "./KBParts";
+import { ChatInbox, InboxMessageLink } from "./KBInbox";
 import { t } from "../../i18n";
 
 /** Timeline lines shown before "Show all". */
@@ -65,14 +69,19 @@ const LINKS_SHOWN = 4;
 /** Search matches shown before "Show all". */
 const MATCHES_SHOWN = 5;
 
+/** The side beside the list with no entry open: an empty bar of the list's height (#16462), so the line under the list's
+ *  bar runs across the page as on Inbox and To-dos, and what to do here under it. Only shown beside the list. */
 export function EmptyDetail() {
   return (
-    <div className="flex flex-1 flex-col items-center justify-center px-8 pb-[8vh] text-center" style={{ animation: `fade-in 300ms ease-out both` }}>
-      <span className="mb-3 flex size-11 items-center justify-center rounded-[12px] bg-field text-ink-3">
-        <Icon name="book" size={20} />
-      </span>
-      <p className="text-[14px] font-medium text-ink">{t("knowledge-kbdetail.empty_title")}</p>
-      <p className="mt-1 max-w-[320px] text-[12.5px] leading-relaxed text-ink-3">{t("knowledge-kbdetail.empty_body")}</p>
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div data-testid="kb-empty-detail-bar" aria-hidden className="h-14 shrink-0 border-b border-line" />
+      <div className="flex flex-1 flex-col items-center justify-center px-8 pb-[8vh] text-center" style={{ animation: `fade-in 300ms ease-out both` }}>
+        <span className="mb-3 flex size-11 items-center justify-center rounded-[12px] bg-field text-ink-3">
+          <Icon name="book" size={20} />
+        </span>
+        <p className="text-[14px] font-medium text-ink">{t("knowledge-kbdetail.empty_title")}</p>
+        <p className="mt-1 max-w-[320px] text-[12.5px] leading-relaxed text-ink-3">{t("knowledge-kbdetail.empty_body")}</p>
+      </div>
     </div>
   );
 }
@@ -194,6 +203,9 @@ function OwnedEntryDetail({ kind, id, query, reloadKey, onToggleSidebar, onBack,
   const log = timeline(d?.log);
   const dirs = dirsOf(d?.meta);
   const recent = d?.kind === "chats" ? parseRecent(d.recent) : [];
+  // a chat's Inbox items (#15356), and the rows of its recent messages each holds
+  const inbox = d?.kind === "chats" ? resp?.inbox ?? [] : [];
+  const rowItems = inboxOfRows(inbox);
   const into = typeof d?.meta?.merged_into === "string" ? d.meta.merged_into : "";
   const moments = d?.moments ?? [];
 
@@ -332,6 +344,8 @@ function OwnedEntryDetail({ kind, id, query, reloadKey, onToggleSidebar, onBack,
                 )}
 
                 {resp?.agents && resp.agents.length > 0 && <Agents agents={resp.agents} />}
+
+                {inbox.length > 0 && <ChatInbox items={inbox} manager={manager} />}
 
                 {log.length > 0 && (
                   <section>
@@ -480,9 +494,16 @@ function OwnedEntryDetail({ kind, id, query, reloadKey, onToggleSidebar, onBack,
                                   </div>
                                 )}
                                 <div className="flex flex-col gap-2">
-                                  {g.messages.map((m, j) => (
-                                    <MessageView key={j} m={m} />
-                                  ))}
+                                  {g.messages.map((m, j) => {
+                                    const item = rowItems.get(messageRowKey(g.day, m));
+                                    return item ? (
+                                      <InboxMessageLink key={j} item={item} manager={manager}>
+                                        <MessageView m={m} />
+                                      </InboxMessageLink>
+                                    ) : (
+                                      <MessageView key={j} m={m} />
+                                    );
+                                  })}
                                 </div>
                               </div>
                             ))}

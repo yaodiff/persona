@@ -74,17 +74,34 @@ func (s *Service) pendingNeedsUserSummary(t Todo) (question, recommend string) {
 
 // emitNeedsUserExternalInfo emits an idempotent, non-destructive wake to task t's supervisor when external
 // information arrives while t is in reviewNeedsUser. It never mutates the task's supervision state or ask card.
-func (s *Service) emitNeedsUserExternalInfo(ctx context.Context, t Todo, source, summary, signalKey string) bool {
+func (s *Service) emitNeedsUserExternalInfo(ctx context.Context, t Todo, source, summary, signalKey string, panes ...unlinkedPane) bool {
 	if !needsUserWakeEligible(t) {
 		return false
 	}
-	source = clip(oneLine(strings.TrimSpace(source)), 160)
-	summary = clip(oneLine(strings.TrimSpace(summary)), 500)
-	signalKey = strings.TrimSpace(signalKey)
-	if summary == "" || signalKey == "" {
+	g := superviseSignal{
+		Key:            strings.TrimSpace(signalKey),
+		Unlinked:       panes,
+		ExternalSource: clip(oneLine(strings.TrimSpace(source)), 160),
+		Detail:         clip(oneLine(strings.TrimSpace(summary)), 500),
+	}
+	return s.enqueueNeedsUserExternalInfo(ctx, t, g, s.needsUserRoundKey(t))
+}
+
+func (s *Service) maybeWakeNeedsUserForPRFeedback(ctx context.Context, t Todo, ev prRoutedEvent, round string) bool {
+	return s.enqueueNeedsUserExternalInfo(ctx, t, superviseSignal{
+		Key:            ev.supervisorKey(),
+		PRURL:          ev.PRURL,
+		PREventID:      ev.EventID,
+		Report:         ev.Kind,
+		ExternalSource: ev.EventURL,
+		Detail:         prEventNotice + "\nEvent: " + ev.Kind + "\n" + ev.feedbackContent(),
+	}, round)
+}
+
+func (s *Service) enqueueNeedsUserExternalInfo(ctx context.Context, t Todo, g superviseSignal, round string) bool {
+	if g.Detail == "" || g.Key == "" {
 		return false
 	}
-	to := ""
 	if s.agentSupervised(t) {
 		// A coding task leader works without permission prompts and does not hold the owner's needs_user card;
 		// route external info to the supervising conversation above it.
@@ -92,18 +109,11 @@ func (s *Service) emitNeedsUserExternalInfo(ctx context.Context, t Todo, source,
 		if up == "" {
 			return false
 		}
-		to = up
+		g.To = up
 	}
-	key := signalKey + "@round:" + s.needsUserRoundKey(t)
-	s.signal(superviseSignal{
-		Todo:           t.ID,
-		Kind:           sigNeedsUserExternalInfo,
-		Key:            key,
-		ExternalSource: source,
-		Detail:         summary,
-		To:             to,
-	})
-	return true
+	g.Todo, g.Kind = t.ID, sigNeedsUserExternalInfo
+	g.Key += "@round:" + round
+	return s.signalReplacing(nil, g)
 }
 
 // needsUserExternalInfoStillHolds revalidates a queued external-info wake right before delivery: the task must still
@@ -112,7 +122,16 @@ func (s *Service) needsUserExternalInfoStillHolds(t Todo, g superviseSignal) boo
 	if !needsUserWakeEligible(t) {
 		return false
 	}
-	return strings.HasSuffix(g.Key, "@round:"+s.needsUserRoundKey(t))
+	round := "@round:" + s.needsUserRoundKey(t)
+	if g.PREventID == "" {
+		return strings.HasSuffix(g.Key, round)
+	}
+	p := s.prFeedbackBinding(t, g.PRURL)
+	if p == nil {
+		return false
+	}
+	ev := prRoutedEvent{PRURL: p.URL, HeadSHA: p.HeadOID, Kind: g.Report, EventID: g.PREventID}
+	return g.Key == ev.supervisorKey()+round
 }
 
 // needsUserExternalInfoEntry builds the localized prompt payload for a needs_user_external_info supervision entry.
@@ -250,4 +269,33 @@ func formatInboxExternalInfo(in prompts.SuperviseInbox) (source, summary string)
 		summary = cmp.Or(in.Title, in.Item)
 	}
 	return source, summary
+}
+
+// needsUserAgentTurn wakes t's supervisor when one of t's agents ended a turn while t still waits on an open owner
+// decision (#14899): the agent may have gone on (the supervisor sent it more, or it went on by itself) and found what
+// answers or replaces the question. The turn that raised the decision is no news, nor is one its review came after.
+// Nothing is changed on the task or its card; the supervisor decides as for any external information (#13112).
+func (s *Service) needsUserAgentTurn(ctx context.Context, t Todo, c taskDoneCheck, err error) {
+	e, ok := s.turnOf(ctx, t.ID)
+	if !ok || e.Session == "" || e.At.IsZero() {
+		return
+	}
+	if r := triageLatestReview(t.Supervision); r != nil && r.Verdict == reviewNeedsUser && !e.At.After(r.At) {
+		return
+	}
+	summary := c.Reason
+	if err != nil && summary == "" {
+		summary = fmt.Sprintf("agent %s/%s ended a turn; it could not be judged: %s", e.Machine, short(e.Session), clip(err.Error(), 120))
+	}
+	if summary == "" {
+		summary = fmt.Sprintf("agent %s/%s ended a turn (%s)", e.Machine, short(e.Session), cmp.Or(c.Verdict, "unjudged"))
+	}
+	source := fmt.Sprintf("agent turn %s/%s", e.Machine, short(e.Session))
+	key := fmt.Sprintf("agent_turn:%s/%s@%s", e.Machine, e.Session, e.At.UTC().Truncate(time.Microsecond).Format(time.RFC3339Nano))
+	if len(c.unlinked) > 0 {
+		source = "agent turn"
+	}
+	if s.emitNeedsUserExternalInfo(ctx, t, source, summary, key, c.unlinked...) {
+		s.logf("task %s: agent turn while the owner decides: supervisor told", t.ID)
+	}
 }

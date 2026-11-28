@@ -67,7 +67,7 @@ function FoldedTally() {
 
 describe("the sidebar's To-dos badge (#11085)", () => {
   it.each([
-    { lang: "zh-Hans", page: "待办", said: "需要你处理的待办 1 个" },
+    { lang: "zh-Hans", page: "待办", said: "有 1 个待办需要你处理" },
     { lang: "en", page: "To-dos", said: "1 to-do needs you" },
     { lang: "ja", page: "ToDo", said: "あなたの対応が必要なToDo 1件" },
   ] as const)("counts only the to-do that needs the owner and says what it counts in $lang", async ({ lang, page, said }) => {

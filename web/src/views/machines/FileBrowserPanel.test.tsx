@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { t } from "../../i18n";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -775,6 +776,20 @@ describe("FileBrowserPanel", () => {
     });
     expect(FakeXHR.last?.url).toContain("overwrite=1");
     expect(FakeXHR.last?.url).toContain("confirm_sensitive=1");
+  });
+
+  it("keeps a refused workspace directory as the retry target without showing an empty folder", async () => {
+    const get = vi.fn(async (input: RequestInfo | URL) => String(input).includes("/files/list")
+      ? json({ code: "forbidden", error: "Access denied" }, 403)
+      : json({ roots: [] }));
+    vi.stubGlobal("fetch", get);
+    await act(async () => root.render(<FileBrowserPanel machine={{ id: "b", name: "Computer B", online: true }} path="/projects/quiet" routed />));
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain("Access denied");
+    expect(host.querySelector('[data-files-panel]')).toBeNull();
+    expect(host.textContent).not.toContain(t("machines-files.empty_dir"));
+    const refresh = host.querySelector<HTMLButtonElement>(`button[aria-label="${t("machines-files.refresh")}"]`)!;
+    await act(async () => refresh.click());
+    expect(get.mock.calls.filter(([url]) => String(url).endsWith("/machines/b/files/list?path=%2Fprojects%2Fquiet"))).toHaveLength(2);
   });
 
   it("shows offline notice without issuing file requests when selected machine is offline", async () => {

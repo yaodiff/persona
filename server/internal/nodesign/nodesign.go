@@ -109,6 +109,11 @@ const (
 	verifyTimeout = 20 * time.Second
 )
 
+// SignLimit is the most one Sign or AdHoc waits on codesign: the signing and the check of its result, each bounded
+// above (and each process gets a second more to exit). An update's commit counts it once per signed copy
+// (nodeupdate.CommitWait).
+const SignLimit = signTimeout + verifyTimeout
+
 // New is the signer c sets up for program, nil when it sets up none or this is not a Mac.
 func New(c Config, program string) *Signer {
 	if c.Identity == "" || runtime.GOOS != "darwin" {

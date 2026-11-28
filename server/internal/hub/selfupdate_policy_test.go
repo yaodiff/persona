@@ -140,6 +140,23 @@ func TestHubOnlySlotKeepsRemoteAgentsIndependent(t *testing.T) {
 	}
 }
 
+func TestUpdateBusyIgnoresDisplayMirrorCards(t *testing.T) {
+	p := newPublisher(t, "v2-202611021700", 202611021700)
+	h, m, _, _ := updatingHub(t, p, "release")
+	h.slot = &hubedge.Slot{}
+	setSessions(m,
+		proto.Session{SessionID: "main", Title: "Main", Assistant: true, Status: proto.StatusIdle, State: proto.StateNeedsYou, PendingInteractions: 1},
+		proto.Session{SessionID: "side", Title: "Remote task", Status: proto.StatusIdle, State: proto.StateNeedsYou, PendingInteractions: 1, Host: proto.EngineHerdr},
+	)
+	unwaited := proto.Interaction{ID: "ix_main_later", MachineID: "box", SessionID: "main", Kind: proto.IxQuestion,
+		ToolName: "ask_user", Resumable: true, CreatedAt: time.Now(), ExpiresAt: time.Now().Add(2 * time.Hour)}
+	origin, mirror := mirrorPairForTest("ix_remote_permission")
+	h.takeFleetInteractions([]proto.Interaction{unwaited, origin, mirror})
+	if busy := h.updateBusy(); len(busy) != 0 {
+		t.Fatalf("a display copy alone made Main block a hub-only update: %+v", busy)
+	}
+}
+
 // A conversation waiting only on the assistant's ask_user cards asked without waiting does not hold the update: no turn
 // waits on them and they outlive a restart (#7392). A waiting question's card, another card next to it, a card the
 // hub was not shown, or a running turn still do.
@@ -173,5 +190,28 @@ func TestUpdateDoesNotWaitForQuestionsAskedWithoutWaiting(t *testing.T) {
 		if busy := h.updateBusy(); (len(busy) == 1) != c.busy || len(busy) > 1 {
 			t.Errorf("%s: busy %+v, want busy %v", c.name, busy, c.busy)
 		}
+	}
+}
+
+// Orca's terminals belong to the Orca app, not to the node, so on a remote node that is not resident an Orca session
+// does not hold a Hub-only switch, as herdr's does not (#17049); a fleet update and a local node still wait for it.
+func TestHubOnlySlotKeepsRemoteOrcaAgentsIndependent(t *testing.T) {
+	p := newPublisher(t, "v2-202611021700", 202611021700)
+	h, m, _, _ := updatingHub(t, p, "release")
+	h.slot = &hubedge.Slot{}
+	working := proto.Session{SessionID: "orca-task", Status: proto.StatusWorking, Host: proto.EngineOrca}
+	waiting := proto.Session{SessionID: "orca-question", Status: proto.StatusBlocked, State: proto.StateNeedsYou, Host: proto.EngineOrca}
+	setSessions(m, working, waiting)
+	if busy := h.updateBusy(); len(busy) != 0 {
+		t.Fatalf("remote Orca sessions held a Hub-only switch: %+v", busy)
+	}
+	h.cfg.AutoUpdateNodes = true
+	if len(h.updateBusy()) != 2 {
+		t.Fatal("fleet update did not wait for Orca's agents")
+	}
+	h.cfg.AutoUpdateNodes = false
+	m.cfg.Kind = "local"
+	if len(h.updateBusy()) != 2 {
+		t.Fatal("local Orca agents were not protected")
 	}
 }

@@ -9,7 +9,7 @@ import { MoveToManager } from "../ManagerParts";
 import { hostedManagersForMachine, offlineManagerOf, useRoster } from "../../lib/managers";
 import { useEffect, useMemo, useRef, useState, type ComponentProps } from "react";
 import { api, ApiError, enc, errorText, isAbort } from "../../lib/api";
-import { ago } from "../../lib/format";
+import { ago, byAttention, stateOf } from "../../lib/format";
 import { openUsageMap } from "../../lib/usage-map-link";
 import { agentName, isTraeCli } from "../../lib/agent-kind";
 import {
@@ -37,15 +37,17 @@ import {
   type Level,
   type MetricRange,
 } from "../../lib/machine-detail";
-import { loadDefinition, perCoreLabel } from "../../lib/machine-alerts";
+import { alertLabel, machineAlerts, loadDefinition, perCoreLabel } from "../../lib/machine-alerts";
 import { hubLabel, routeText } from "../../lib/mesh";
 import { machineDeployment } from "../../lib/machine-deploy";
 import { classifyConnection } from "../../lib/node-health";
 import { SCREEN_PAGE, screenPath, showsScreen } from "../../lib/computer";
 import { standaloneOn, useModuleStates } from "../../core/module-host";
 import { osFamily } from "../../lib/machine-capabilities";
-import { openPanel } from "../../lib/panel";
-import { href, onLinkClick } from "../../lib/router";
+import { MachineToolView, MachineViewLinks } from "./MachineViews";
+import type { MachineSubview } from "../../lib/machine-route";
+import { useScrollMemory } from "../../lib/scroll-memory";
+import { href, navigate, onLinkClick, routeAt, useRoute, type Route } from "../../lib/router";
 import { getState, refresh, useStore } from "../../lib/store";
 import { useFullAgentSessions } from "../../lib/sessions";
 import type { Launcher, MachineLinkSwitch } from "../../lib/types";
@@ -61,9 +63,13 @@ import { BrowserSection } from "./BrowserSection";
 import { ComputerSection } from "./ComputerSection";
 import { IPhoneSection } from "./IPhoneSection";
 import { EngineSection } from "./EngineSection";
-import { openEngineSection } from "./engine-anchor";
+import { openNewAgent } from "../../lib/new-agent";
+import { openMachineTerminal } from "../../lib/machine-terminal";
+import { sessionWorkspace } from "../../lib/agent-repos";
+import { useWorkspaceCatalog, type HostWorkspace } from "../../lib/workspace-catalog";
+import { boardAgentPreset } from "../../lib/workspace-agent-preset";
 import { BotmuxSwitch } from "./BotmuxSwitch";
-import { currentEngine, currentHosts, engineName, hostsName, supportsHostSets } from "../../lib/engines";
+import { ENGINE_HOSTS } from "../../lib/engines";
 import { NodeHealth } from "./NodeHealth";
 import { UsageSection } from "./UsageSection";
 import { MachineExtensionSections } from "../extensions/ExtensionSlots";
@@ -125,25 +131,26 @@ function RenameMachine({ m, onDone }: { m: DetailMachine; onDone: () => void }) 
 
 type MachineLauncher = Pick<Launcher, "name" | "display_name" | "model" | "agent" | "agent_type">;
 
-function initialRange(): MetricRange {
-  const r = new URLSearchParams(location.search).get("range");
-  return RANGE_KEYS.includes(r as MetricRange) ? (r as MetricRange) : "1h";
-}
-
-export function MachineDetail({ mid, onToggleSidebar }: { mid: string; onToggleSidebar: () => void }) {
+export function MachineDetail({ mid, subview = "work", mode, onToggleSidebar }: {
+  mid: string; subview?: MachineSubview; mode?: "reclaim"; onToggleSidebar: () => void;
+}) {
+  const address = useRoute();
+  const requested = address.name === "machine" ? address.range as MetricRange : undefined;
+  const range = requested && RANGE_KEYS.includes(requested) ? requested : "1h";
+  const work = subview === "work";
+  const management = subview === "management" || subview === "config";
   const machines = useStore((s) => s.machines) as DetailMachine[];
   const loaded = useStore((s) => s.loaded);
   useModuleStates(); // "View screen" follows the screen page's module
   // Its agents, read as the Agents list reads them: a hub that pages that list pushes no sessions, so the store has none
   // of this computer's. A child session folds into its parent (#5120): never an agent of the computer of its own.
-  const full = useFullAgentSessions();
+  const full = useFullAgentSessions(work);
   const sessions = useMemo(() => full.sessions.filter((s) => s.machine_id === mid), [full.sessions, mid]);
   const m = machines.find((x) => x.id === mid);
   const online = m?.online ?? false;
   const deployment = m ? machineDeployment(m) : null;
   const expectedDisconnect = deployment?.expectedDisconnect ?? false;
 
-  const [range, setRangeState] = useState<MetricRange>(initialRange);
   const [data, setData] = useState<{ metrics: DetailMetrics; range: MetricRange; at: number } | null>(null);
   const [failure, setFailure] = useState("");
   const [launchers, setLaunchers] = useState<MachineLauncher[] | null>(null);
@@ -153,13 +160,14 @@ export function MachineDetail({ mid, onToggleSidebar }: { mid: string; onToggleS
   useEffect(() => () => void (alive.current = false), []);
 
   const setRange = (r: MetricRange) => {
-    setRangeState(r);
-    history.replaceState(history.state, "", r === "1h" ? location.pathname : `${location.pathname}?range=${r}`);
+    navigate({ name: "machine", mid, subview: "monitoring", range: r === "1h" ? undefined : r }, true);
   };
 
   // Metrics: now, then every 10 s (the hour) or every minute, and again when the page comes back into view; nothing
   // while the tab is hidden.
+  const readMetrics = !!m && (work || subview === "monitoring");
   useEffect(() => {
+    if (!readMetrics) return;
     let dead = false;
     let ctrl: AbortController | null = null;
     const load = async () => {
@@ -186,11 +194,11 @@ export function MachineDetail({ mid, onToggleSidebar }: { mid: string; onToggleS
       clearInterval(timer);
       document.removeEventListener("visibilitychange", vis);
     };
-  }, [mid, range]);
+  }, [mid, range, readMetrics]);
 
   // Launchers: an offline computer has none to list; again once it comes online.
   useEffect(() => {
-    if (!online) {
+    if (!online || !management) {
       setLaunchers(null);
       return;
     }
@@ -201,7 +209,7 @@ export function MachineDetail({ mid, onToggleSidebar }: { mid: string; onToggleS
     return () => {
       dead = true;
     };
-  }, [mid, online]);
+  }, [mid, online, management]);
 
   // Asks the hub to reconnect, then watches the machine list (up to 15 s) for it to come online.
   const reconnect = async () => {
@@ -236,7 +244,20 @@ export function MachineDetail({ mid, onToggleSidebar }: { mid: string; onToggleS
   const selfHub = useStore((s) => s.mesh.find((x) => x.self)?.hub_id);
   const ownHub = !m?.hub_id || !selfHub || m.hub_id === selfHub; // one of this hub's own computers
   const connFailure = m && !expectedDisconnect && !goneWith ? classifyConnection(m) : null;
-  const groups = useMemo(() => (online ? agentsBySpace(sessions) : []), [online, sessions]);
+  const panesOn = useStore(s => s.features.includes("terminal_panes"));
+  const catalog = useWorkspaceCatalog(Boolean(work && m && ownHub));
+  const inventory = useMemo(() => ownHub ? catalog.workspaces.filter(w => w.machine_id === mid && w.source !== "session-directory") : [], [catalog.workspaces, mid, ownHub]);
+  const groups = useMemo(() => {
+    if (!online) return [];
+    const groups = agentsBySpace(sessions, s => sessionWorkspace(s, inventory, catalog.manager));
+    for (const g of groups) g.sessions.sort(byAttention);
+    return groups.sort((a, b) => Number(b.counts.needs > 0) - Number(a.counts.needs > 0) || Number(b.counts.working > 0) - Number(a.counts.working > 0));
+  }, [online, sessions, inventory, catalog.manager]);
+  const waiting = groups.flatMap(g => g.sessions.filter(s => stateOf(s) === "needs_you"));
+  const displayed = new Set(groups.map(g => g.workspace));
+  const otherWorkspaces = inventory.filter(w => !displayed.has(w) && !w.hidden_by_directory);
+  const discoveryFailed = catalog.failedMachines === null || catalog.failedMachines?.includes(mid);
+  const disk = m && machineAlerts({ machine: m, metrics: data && data.metrics.latest ? { ...data.metrics, latest: data.metrics.latest } : undefined, managerOffline: Boolean(goneWith) }).find(a => a.kind === "disk");
   const agentCount = groups.reduce((n, g) => n + g.sessions.length, 0);
   const hub = hubLabel(m, machines);
   const route = routeText(m, machines);
@@ -247,7 +268,7 @@ export function MachineDetail({ mid, onToggleSidebar }: { mid: string; onToggleS
 
   if (!m) {
     return (
-      <Page mid={mid} title={mid} onToggleSidebar={onToggleSidebar}>
+      <Page mid={mid} subview={subview} title={t("machines.computer_label")} onToggleSidebar={onToggleSidebar}>
         {!loaded ? (
           <Loading />
         ) : (
@@ -267,16 +288,10 @@ export function MachineDetail({ mid, onToggleSidebar }: { mid: string; onToggleS
     <Page
       mid={mid}
       title={m.name}
+      subview={subview}
       onToggleSidebar={onToggleSidebar}
       right={
         <>
-          <span className="hidden whitespace-nowrap text-[11.5px] text-ink-3 sm:inline">{range === "1h" ? t("machines-machinedetail.refresh_10s") : t("machines-machinedetail.refresh_1m")}</span>
-          {online && (
-            // the computer's files from its home, in the side panel (#5827; the iPhone's Files row)
-            <Button icon="folder" onClick={() => openPanel({ kind: "files", mid, sid: "", cwd: "~" })} title={t("machines-machinedetail.files_hint")}>
-              {t("machines-machinedetail.files")}
-            </Button>
-          )}
           {showsScreen(m) && standaloneOn(SCREEN_PAGE) && (
             <Button icon="monitor" href={screenPath(mid)} title={t("machines-machinedetail.screen_hint")}>
               {t("machines-machinedetail.screen")}
@@ -287,45 +302,35 @@ export function MachineDetail({ mid, onToggleSidebar }: { mid: string; onToggleS
     >
       {/* the computer */}
       <section className="overflow-hidden rounded-card bg-surface shadow-card" style={{ animation: `fade-up 420ms ${EASE} both` }}>
-        <div className="flex items-start gap-3 px-4 py-3.5">
-          <span className={cx("flex size-10 shrink-0 items-center justify-center rounded-[10px]", online ? "bg-field text-ink-2" : "bg-inset text-ink-3")}>
-            <Icon name="machine" size={18} />
-          </span>
-          <div className="min-w-0 flex-1">
-            {renaming && <RenameMachine key={m.id} m={m} onDone={() => setRenaming(false)} />}
-            <div className={cx("flex flex-wrap items-center gap-x-2 gap-y-1", renaming && "hidden")}>
-              <h2 className="truncate text-[15px] font-semibold text-ink">{m.name}</h2>
-              {canRename && <IconButton icon="write" label={t("machines-machinedetail.rename")} size={24} iconSize={12} onClick={() => setRenaming(true)} />}
-              <span className={cx("inline-flex h-5 items-center gap-1 whitespace-nowrap rounded-full px-1.5 text-[11px] font-medium", online ? "bg-green-tint text-green" : "bg-field text-ink-3")}>
-                <span className={cx("size-1.5 rounded-full", online ? "bg-green" : "bg-ink-3")} />
-                {online ? t("machines-machinedetail.online") : t("machines-machinedetail.offline")}
-              </span>
-              {hub && (
-                <span className="inline-flex h-5 items-center gap-1 whitespace-nowrap rounded-full bg-inset px-1.5 text-[11px] font-medium text-ink-2 shadow-hairline" title={t("machines-machinedetail.belongs_to_hub", { hub })}>
-                  <Icon name="hub" size={11} />
-                  {hub}
+        <div className="flex flex-wrap items-center gap-3 px-4 py-3.5">
+          <div className="flex min-w-0 flex-1 basis-60 items-start gap-3">
+            <span className={cx("flex size-10 shrink-0 items-center justify-center rounded-[10px]", online ? "bg-field text-ink-2" : "bg-inset text-ink-3")}>
+              <Icon name="machine" size={18} />
+            </span>
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                <h2 className="truncate text-[15px] font-semibold text-ink">{m.name}</h2>
+                <span className={cx("inline-flex h-5 items-center gap-1 whitespace-nowrap rounded-full px-1.5 text-[11px] font-medium", online ? "bg-green-tint text-green" : "bg-field text-ink-3")}>
+                  <span className={cx("size-1.5 rounded-full", online ? "bg-green" : "bg-ink-3")} />
+                  {online ? t("machines-machinedetail.online") : t("machines-machinedetail.offline")}
                 </span>
-              )}
-              {/* its engine and botmux, one click away (#2842): the engine opens Engine below, botmux flips */}
-              <button
-                type="button"
-                data-testid="engine-pill"
-                title={t("machines-machinedetail.engine_pill_hint")}
-                onClick={() => openEngineSection()}
-                className="touch-hit inline-flex h-5 items-center gap-1 whitespace-nowrap rounded-full bg-inset px-1.5 text-[11px] font-medium text-ink-2 shadow-hairline transition-colors hover:bg-hover"
-              >
-                <Icon name="terminal" size={11} />
-                {supportsHostSets(m) ? hostsName(currentHosts(m), m) : engineName(currentEngine(m), m)}
-              </button>
-              <BotmuxSwitch key={m.id} machineID={m.id} />
+                {hub && (
+                  <span className="inline-flex h-5 items-center gap-1 whitespace-nowrap rounded-full bg-inset px-1.5 text-[11px] font-medium text-ink-2 shadow-hairline" title={t("machines-machinedetail.belongs_to_hub", { hub })}>
+                    <Icon name="hub" size={11} />
+                    {hub}
+                  </span>
+                )}
+              </div>
+              <p className="mt-0.5 truncate text-[12px] text-ink-3" title={systemLine(system, m)}>
+                {systemLine(system, m)}
+              </p>
+              {route && <p className="mt-0.5 truncate text-[11.5px] text-ink-3" title={t("machines-machinedetail.route_hint")}>{t("machines-machinedetail.route", { route })}</p>}
             </div>
-            <p className="mt-0.5 truncate text-[12px] text-ink-3" title={systemLine(system, m)}>
-              {systemLine(system, m)}
-            </p>
-            {route && <p className="mt-0.5 truncate text-[11.5px] text-ink-3" title={t("machines-machinedetail.route_hint")}>{t("machines-machinedetail.route", { route })}</p>}
           </div>
-          {/* with several managers: give it to another one (a linked hub's computer is its own hub's) */}
-          <MoveToManager machineId={m.id} manager={m.manager} movable={m.kind !== "hub" && ownHub} />
+          {online && <div className="flex flex-wrap items-center gap-2">
+            <Button tone="primary" className="[@media(pointer:coarse)]:min-h-11" icon="plus" onClick={() => openNewAgent({ machineId: mid })}>{t("space-page.new_agent")}</Button>
+            {panesOn && <Button className="[@media(pointer:coarse)]:min-h-11" icon="terminal" onClick={() => openMachineTerminal({ mid })}>{t("sidebar.nav_terminal")}</Button>}
+          </div>}
           {!online && !expectedDisconnect && !goneWith && (
             <Button tone="secondary" icon="retry" busy={reconnecting} onClick={() => void reconnect()}>
               {reconnecting ? t("machines-machinedetail.connecting") : t("machines.reconnect")}
@@ -348,195 +353,272 @@ export function MachineDetail({ mid, onToggleSidebar }: { mid: string; onToggleS
           </div>
         )}
         {online && m.error && <p className="mx-4 mb-3.5 rounded-[8px] bg-red-tint px-2.5 py-1.5 text-[12px] text-red">{m.error}</p>}
-        {/* switching it to Persona Link (#10662), on this hub's own computer (a linked hub's switches there); while one
-            runs, its disconnect is expected (machineDeployment) */}
-        <LinkSwitch
-          machineId={m.id}
-          name={m.name}
-          state={ownHub ? m.link_switch : undefined}
-          post={() => api<{ link_switch?: MachineLinkSwitch }>(`/machines/${enc(m.id)}/link-switch`, { method: "POST" })}
-          refresh={refresh}
-          user={homeUser(m.home)}
-          className="mx-4 mb-3.5"
-        />
-        {deployment?.visible && <MachineDeploy machine={m} hostedManagers={hostedManagers} className="mb-3.5" onClose={NOOP} />}
-        <HostedManagersList managers={hostedManagers} nodeVersion={m.node_version} className="border-t border-line px-4 py-3" />
       </section>
+      <MachineViewLinks mid={mid} view={subview} />
+      {deployment?.visible && !management && <div role="status" className="flex flex-wrap items-center gap-2 rounded-card bg-surface px-4 py-2 text-label text-orange shadow-card">
+        <span>{deployment.message} {deployment.error}</span>
+        <a className="text-accent-ink" href={href({ name: "machine", mid, subview: "management" })}
+          onClick={e => onLinkClick(e, { name: "machine", mid, subview: "management" })}>{t("machines.view_management")}</a>
+      </div>}
+      {work && disk && <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-card bg-surface shadow-card px-4 py-1">
+        <span className="inline-flex items-center gap-2 text-sm font-medium text-ink"><Icon name="archive" size={14} className="text-orange" />{alertLabel(disk)}</span>
+        <Button tone="quiet" className="min-h-11" onClick={() => openUsageMap(mid)}>{t("machines-usagemap.reclaim_open")}</Button>
+      </div>}
 
-      {/* agents */}
-      <section>
-        {/* until its agents are read, how many there are is unknown: no count, and no "No agents running" */}
-        <Heading title="Agent" count={online && full.loaded ? agentCount : undefined} />
-        {groups.length === 0 ? (
-          <p className="rounded-card bg-surface px-4 py-3 text-[12.5px] text-ink-3 shadow-card" data-agents={online ? (full.loaded ? "yes" : full.error ? "failed" : "loading") : undefined}>
-            {!online ? t("machines-machinedetail.agents_offline") : full.loaded ? t("machines-machinedetail.no_agents") : full.error ? t("machines-machinedetail.agents_failed_detail") : t("machines-machinedetail.agents_loading")}
-          </p>
-        ) : (
-          <div className="flex flex-col gap-2.5">
-            {groups.map((g, gi) => (
-              <div key={g.key} className="overflow-hidden rounded-card bg-surface shadow-card" style={{ animation: `fade-up 420ms ${EASE} ${Math.min(gi, 6) * 50}ms both` }}>
-                <div className="flex items-center gap-2 border-b border-line px-4 py-2">
-                  <Icon name={g.key ? "layers" : "agent"} size={13} className="shrink-0 text-ink-3" />
-                  {g.key ? (
-                    // a space's name opens its page (/space/…); agents outside any space have none
-                    <a
-                      href={href({ name: "space", mid, space: g.name })}
-                      onClick={(e) => onLinkClick(e, { name: "space", mid, space: g.name })}
-                      className="group/space flex min-w-0 items-center gap-0.5 truncate rounded-[5px] text-[12.5px] font-medium text-ink hover:text-accent-ink"
-                      title={t("machines-machinedetail.open_space", { name: g.name })}
-                    >
-                      <span className="truncate">{g.name}</span>
-                      <Icon name="chevronRight" size={11} stroke={2.4} className="shrink-0 text-ink-3 transition-transform duration-150 group-hover/space:translate-x-0.5" />
-                    </a>
-                  ) : (
-                    <span className="truncate text-[12.5px] font-medium text-ink">{g.name}</span>
-                  )}
-                  <span className="min-w-0 flex-1 truncate text-[11.5px] text-ink-3">{countsText(g.counts)}</span>
-                  <span className="shrink-0 text-[11.5px] text-ink-3 tabular-nums">{g.sessions.length}</span>
-                </div>
-                <div className="divide-y divide-line">
-                  {g.sessions.map((s) => (
-                    <AgentRow key={s.session_id} s={s} />
-                  ))}
-                </div>
-              </div>
-            ))}
+      {work && <>
+        {waiting.length > 0 && <section>
+          <Heading title={t("lib-state-labels.needs_you")} count={waiting.length} />
+          <div className="divide-y divide-line overflow-hidden rounded-card bg-surface shadow-card">
+            {waiting.map(s => <AgentRow key={s.session_id} s={s} />)}
           </div>
-        )}
-      </section>
+        </section>}
 
-      {/* its token usage, then how busy it is, then the engine and what it can do (#4973, as in the apps) */}
-      <UsageSection mid={mid} heading={(right) => <Heading title={t("machines-usage.title")} right={right} />} />
-
-      {/* monitoring */}
-      <section>
-        <Heading
-          title={t("machines-machinedetail.monitoring")}
-          right={
-            <div className="flex items-center gap-0.5 rounded-control bg-inset p-0.5 shadow-hairline" role="radiogroup" aria-label={t("machines-machinedetail.range")}>
-              {RANGE_KEYS.map((k) => (
-                <button
-                  key={k}
-                  type="button"
-                  role="radio"
-                  aria-checked={range === k}
-                  onClick={() => setRange(k)}
-                  className={cx(
-                    "flex h-7 items-center whitespace-nowrap rounded-[7px] px-2.5 text-[12px] transition-[background-color,color] duration-150",
-                    range === k ? "bg-surface font-medium text-ink shadow-btn" : "text-ink-3 hover:text-ink-2",
-                  )}
-                >
-                  {RANGES[k].label}
-                </button>
+        {/* agents */}
+        <section>
+          {/* until its agents are read, how many there are is unknown: no count, and no "No agents running" */}
+          <Heading title="Agent" count={online && full.loaded ? agentCount : undefined} />
+          {groups.length === 0 ? (
+            <p className="rounded-card bg-surface px-4 py-3 text-[12.5px] text-ink-3 shadow-card" data-agents={online ? (full.loaded ? "yes" : full.error ? "failed" : "loading") : undefined}>
+              {!online ? t("machines-machinedetail.agents_offline") : full.loaded ? t("machines-machinedetail.no_agents") : full.error ? t("machines-machinedetail.agents_failed_detail") : t("machines-machinedetail.agents_loading")}
+            </p>
+          ) : (
+            <div className="flex flex-col gap-2.5">
+              {groups.map((g, gi) => (
+                <div key={g.key} className="overflow-hidden rounded-card bg-surface shadow-card" style={{ animation: `fade-up 420ms ${EASE} ${Math.min(gi, 6) * 50}ms both` }}>
+                  <div className="flex items-center gap-2 border-b border-line px-4 py-2">
+                    <Icon name={g.key ? "layers" : "agent"} size={13} className="shrink-0 text-ink-3" />
+                    <div className="min-w-0 flex-1">
+                    {g.key ? (
+                      // a space's name opens its page (/space/…); agents outside any space have none
+                      <a
+                        href={href({ name: "space", mid, space: g.name, workspace: g.workspace?.id })}
+                        onClick={(e) => onLinkClick(e, { name: "space", mid, space: g.name, workspace: g.workspace?.id })}
+                        className="group/space flex min-w-0 items-center gap-0.5 truncate rounded-[5px] text-[12.5px] font-medium text-ink hover:text-accent-ink"
+                        title={t("machines-machinedetail.open_space", { name: g.name })}
+                      >
+                        <span className="truncate">{g.name}</span>
+                        <Icon name="chevronRight" size={11} stroke={2.4} className="shrink-0 text-ink-3 transition-transform duration-150 group-hover/space:translate-x-0.5" />
+                      </a>
+                    ) : (
+                      <span className="truncate text-[12.5px] font-medium text-ink">{g.name}</span>
+                    )}
+                    <span className="block truncate text-submeta text-ink-3">{countsText(g.counts)}</span>
+                    </div>
+                    {g.key && <WorkspaceActions mid={mid} cwd={g.workspace?.cwd || g.sessions[0]?.workspace_cwd || g.sessions[0]?.cwd}
+                      workspace={g.workspace} panesOn={panesOn} online={online} />}
+                  </div>
+                  <div className="divide-y divide-line">
+                    {g.sessions.filter(s => stateOf(s) !== "needs_you").map((s) => (
+                      <AgentRow key={s.session_id} s={s} />
+                    ))}
+                  </div>
+                </div>
               ))}
             </div>
-          }
-        />
-        {!data ? (
-          failure ? (
-            <div className="rounded-card bg-surface px-4 py-6 text-center shadow-card">
-              <p className="text-[13px] font-medium text-ink">{t("machines-machinedetail.no_metrics")}</p>
-              <p className="mt-1 text-[12px] text-ink-3">{failure}</p>
-            </div>
-          ) : (
-            <div className="flex h-40 items-center justify-center rounded-card bg-surface shadow-card">
-              <Loading />
-            </div>
-          )
-        ) : (
-          <Monitor data={data} range={range} online={online} system={system} onRange={setRange} machine={{ id: m.id, name: m.name }} />
-        )}
-        {data && failure && <p className="mt-2 px-1 text-[11.5px] text-red">{t("machines-machinedetail.refresh_failed", { error: failure })}</p>}
-        <p className="mt-2 px-1 text-[11.5px] leading-relaxed text-ink-3">{t("machines-machinedetail.metrics_note")}</p>
-        {/* what load counts, under the tile and the chart that show it (#12519) */}
-        {data && <p className="mt-1 px-1 text-submeta leading-relaxed text-ink-3" data-testid="load-definition">{loadDefinition()}</p>}
-      </section>
-
-      {/* which engine the agents above come from (iOS engineRow) */}
-      <EngineSection key={m.id} machine={m} heading={<Heading title={t("machines-machinedetail.engine")} />} />
-
-      {/* what this computer can do for Persona, from the node's self-check (docs/server/machines.md "Doctor: what this computer can do") */}
-      <NodeHealth machine={m} heading={<Heading title={t("node-health.title")} />} />
-
-      {m.computer && <ComputerSection mid={mid} computer={m.computer} online={online} manager={m.manager} />}
-      {m.browser && <BrowserSection mid={mid} browser={m.browser} online={online} />}
-      {m.iphone && <IPhoneSection mid={mid} iphone={m.iphone} online={online} mac={osFamily(m) === "macos"} />}
-
-      {/* system */}
-      <section>
-        <Heading title={t("machines-machinedetail.system")} />
-        <div className="overflow-hidden rounded-card bg-surface shadow-card">
-          <dl className="-mb-px grid grid-cols-1 md:grid-cols-2">
-            {systemFacts(system, m, Date.now() / 1000).map(([k, v, mono]) => (
-              <div key={k} className="flex items-baseline gap-3 border-b border-line px-4 py-2 md:odd:border-r">
-                <dt className="w-[84px] shrink-0 whitespace-nowrap text-[12px] text-ink-3">{k}</dt>
-                <dd className={cx("min-w-0 flex-1 text-[12.5px] break-words text-ink-2 select-text", mono && "font-mono text-[12px]")}>{v}</dd>
-              </div>
-            ))}
-          </dl>
-        </div>
-      </section>
-
-      {/* launchers */}
-      <section>
-        <Heading title={t("machines-machinedetail.launchers")} count={online && launchers?.length ? launchers.length : undefined} />
-        <div className="overflow-hidden rounded-card bg-surface shadow-card">
-          {!online ? (
-            <p className="px-4 py-3 text-[12.5px] text-ink-3">{t("machines-machinedetail.launchers_offline")}</p>
-          ) : launcherError && !launchers ? (
-            <p className="px-4 py-3 text-[12.5px] text-red">{t("machines-machinedetail.launchers_failed", { error: launcherError })}</p>
-          ) : !launchers ? (
-            <div className="px-4 py-3">
-              <Loading />
-            </div>
-          ) : launchers.length === 0 ? (
-            <p className="px-4 py-3 text-[12.5px] text-ink-3">{t("machines-machinedetail.no_launchers")}</p>
-          ) : (
-            <div className="divide-y divide-line">
-              {launchers.map((l) => {
-                const kind = l.agent_type || l.agent || "claude";
-                return (
-                  <div key={l.name} className="flex items-center gap-3 px-4 py-2">
-                    {/* a provider's display name, its startup ID beside it (#5029); an rc alias's ID in mono, as before */}
-                    <ProviderName of={l} className="min-w-0 truncate text-[12.5px] text-ink" idClassName="min-w-0 shrink-[2] truncate text-[11.5px] text-ink-3" />
-                    {kind !== "claude" && <span className="inline-flex h-5 shrink-0 items-center whitespace-nowrap rounded-full bg-inset px-1.5 text-[11px] font-medium text-ink-2 shadow-hairline">{kind === "codex" || isTraeCli(kind) ? agentName(kind) : kind}</span>}
-                    <span className="flex-1" />
-                    {l.model && <span className="shrink-0 truncate font-mono text-[11.5px] text-ink-3">{l.model}</span>}
-                  </div>
-                );
-              })}
-            </div>
           )}
-        </div>
-      </section>
+        </section>
 
-      {/* the extensions' sections (docs/extensions/extensions.md "UI slots" machine_section), after the machine's own */}
-      <MachineExtensionSections mid={mid} heading={(title, right) => <Heading title={title} right={right} />} />
+        {ownHub && <section>
+          <Heading title={t("machines-machinedetail.other_workspaces")} />
+          <div className="divide-y divide-line rounded-card bg-surface shadow-card">
+            {otherWorkspaces.map(w => {
+              const name = w.title || w.branch || w.cwd;
+              const to = { name: "space" as const, mid, space: name, workspace: w.id };
+              return <div key={w.id} className="flex items-center gap-2 px-4 py-1">
+                <Icon name="layers" size={14} className="shrink-0 text-ink-3" />
+                <a href={href(to)} onClick={e => onLinkClick(e, to)}
+                  className="flex min-h-11 min-w-0 flex-1 items-center text-sm font-medium text-ink hover:text-accent-ink"><span className="truncate">{name}</span></a>
+                <WorkspaceActions mid={mid} cwd={w.cwd} workspace={w} panesOn={panesOn} online={online} />
+              </div>;
+            })}
+            {(!online || discoveryFailed || catalog.failedMachines === undefined || !otherWorkspaces.length) &&
+              <p className="px-4 py-3 text-sm text-ink-3">{!online ? t("space-page.machine_offline") : discoveryFailed ? t("machines-machinedetail.workspaces_failed")
+                : catalog.failedMachines === undefined ? t("machines-machinedetail.workspaces_loading") : t("machines-machinedetail.no_other_workspaces")}</p>}
+          </div>
+        </section>}
+      </>}
+      {subview === "monitoring" && <>
+        {/* its token usage, then how busy it is, then the engine and what it can do (#4973, as in the apps) */}
+        <UsageSection mid={mid} heading={(right) => <Heading title={t("machines-usage.title")} right={right} />} />
+
+        {/* monitoring */}
+        <section>
+          <Heading
+            title={t("machines-machinedetail.monitoring")}
+            right={
+              <div className="flex items-center gap-0.5 rounded-control bg-inset p-0.5 shadow-hairline" role="radiogroup" aria-label={t("machines-machinedetail.range")}>
+                {RANGE_KEYS.map((k) => (
+                  <button
+                    key={k}
+                    type="button"
+                    role="radio"
+                    aria-checked={range === k}
+                    onClick={() => setRange(k)}
+                    className={cx(
+                      "flex h-7 items-center whitespace-nowrap rounded-[7px] px-2.5 text-[12px] transition-[background-color,color] duration-150",
+                      range === k ? "bg-surface font-medium text-ink shadow-btn" : "text-ink-3 hover:text-ink-2",
+                    )}
+                  >
+                    {RANGES[k].label}
+                  </button>
+                ))}
+              </div>
+            }
+          />
+          {!data ? (
+            failure ? (
+              <div className="rounded-card bg-surface px-4 py-6 text-center shadow-card">
+                <p className="text-[13px] font-medium text-ink">{t("machines-machinedetail.no_metrics")}</p>
+                <p className="mt-1 text-[12px] text-ink-3">{failure}</p>
+              </div>
+            ) : (
+              <div className="flex h-40 items-center justify-center rounded-card bg-surface shadow-card">
+                <Loading />
+              </div>
+            )
+          ) : (
+            <Monitor data={data} range={range} online={online} system={system} onRange={setRange} machine={{ id: m.id, name: m.name }} />
+          )}
+          <p className="mt-2 px-1 text-submeta text-ink-3">{range === "1h" ? t("machines-machinedetail.refresh_10s") : t("machines-machinedetail.refresh_1m")}</p>
+          {data && failure && <p className="mt-2 px-1 text-[11.5px] text-red">{t("machines-machinedetail.refresh_failed", { error: failure })}</p>}
+          <p className="mt-2 px-1 text-[11.5px] leading-relaxed text-ink-3">{t("machines-machinedetail.metrics_note")}</p>
+          {/* what load counts, under the tile and the chart that show it (#12519) */}
+          {data && <p className="mt-1 px-1 text-submeta leading-relaxed text-ink-3" data-testid="load-definition">{loadDefinition()}</p>}
+        </section>
+      </>}
+      {subview === "diagnostics" && <>
+        {/* what this computer can do for Persona, from the node's self-check (docs/server/machines.md "Doctor: what this computer can do") */}
+        <NodeHealth machine={m} heading={null} />
+
+        {/* system */}
+        <section>
+          <Heading title={t("machines-machinedetail.system")} />
+          <div className="overflow-hidden rounded-card bg-surface shadow-card">
+            <dl className="-mb-px grid grid-cols-1 md:grid-cols-2">
+              {systemFacts(system, m, Date.now() / 1000).map(([k, v, mono]) => (
+                <div key={k} className="flex items-baseline gap-3 border-b border-line px-4 py-2 md:odd:border-r">
+                  <dt className="w-[84px] shrink-0 whitespace-nowrap text-[12px] text-ink-3">{k}</dt>
+                  <dd className={cx("min-w-0 flex-1 text-[12.5px] break-words text-ink-2 select-text", mono && "font-mono text-[12px]")}>{v}</dd>
+                </div>
+              ))}
+            </dl>
+          </div>
+        </section>
+      </>}
+      {management && <>
+        <section>
+          <Heading title={t("machines-machinedetail.configuration")} />
+          <EngineSection key={m.id} machine={m} heading={<h3 className="mb-2 flex items-center gap-2 text-sm font-medium text-ink"><Icon name="gear" size={14} />{t("machines-machinedetail.engine")}</h3>} />
+          <div className="my-3 flex flex-wrap items-center gap-2">
+            {canRename && (renaming ? <RenameMachine m={m} onDone={() => setRenaming(false)} /> :
+              <Button icon="write" onClick={() => setRenaming(true)}>{t("machines-machinedetail.rename")}</Button>)}
+            <MoveToManager machineId={m.id} manager={m.manager} movable={m.kind !== "hub" && ownHub} />
+          </div>
+          {deployment?.visible && <MachineDeploy machine={m} hostedManagers={hostedManagers} className="mb-3.5" onClose={NOOP} />}
+          <div className="my-3"><BotmuxSwitch key={m.id} machineID={m.id} /></div>
+          {/* switching it to Persona Link (#10662), on this hub's own computer (a linked hub's switches there); while one
+              runs, its disconnect is expected (machineDeployment) */}
+          <LinkSwitch
+            machineId={m.id}
+            name={m.name}
+            state={ownHub ? m.link_switch : undefined}
+            post={() => api<{ link_switch?: MachineLinkSwitch }>(`/machines/${enc(m.id)}/link-switch`, { method: "POST" })}
+            refresh={refresh}
+            user={homeUser(m.home)}
+            className="mx-4 mb-3.5"
+          />
+          <HostedManagersList managers={hostedManagers} nodeVersion={m.node_version} className="border-t border-line px-4 py-3" />
+        </section>
+
+        {m.computer && <ComputerSection mid={mid} computer={m.computer} online={online} manager={m.manager} />}
+        {m.browser && <BrowserSection mid={mid} browser={m.browser} online={online} />}
+        {m.iphone && <IPhoneSection mid={mid} iphone={m.iphone} online={online} mac={osFamily(m) === "macos"} />}
+
+        {/* launchers */}
+        <section>
+          <Heading title={t("machines-machinedetail.launchers")} count={online && launchers?.length ? launchers.length : undefined} />
+          <div className="overflow-hidden rounded-card bg-surface shadow-card">
+            {!online ? (
+              <p className="px-4 py-3 text-[12.5px] text-ink-3">{t("machines-machinedetail.launchers_offline")}</p>
+            ) : launcherError && !launchers ? (
+              <p className="px-4 py-3 text-[12.5px] text-red">{t("machines-machinedetail.launchers_failed", { error: launcherError })}</p>
+            ) : !launchers ? (
+              <div className="px-4 py-3">
+                <Loading />
+              </div>
+            ) : launchers.length === 0 ? (
+              <p className="px-4 py-3 text-[12.5px] text-ink-3">{t("machines-machinedetail.no_launchers")}</p>
+            ) : (
+              <div className="divide-y divide-line">
+                {launchers.map((l) => {
+                  const kind = l.agent_type || l.agent || "claude";
+                  return (
+                    <div key={l.name} className="flex items-center gap-3 px-4 py-2">
+                      {/* a provider's display name, its startup ID beside it (#5029); an rc alias's ID in mono, as before */}
+                      <ProviderName of={l} className="min-w-0 truncate text-[12.5px] text-ink" idClassName="min-w-0 shrink-[2] truncate text-[11.5px] text-ink-3" />
+                      {kind !== "claude" && <span className="inline-flex h-5 shrink-0 items-center whitespace-nowrap rounded-full bg-inset px-1.5 text-[11px] font-medium text-ink-2 shadow-hairline">{kind === "codex" || isTraeCli(kind) ? agentName(kind) : kind}</span>}
+                      <span className="flex-1" />
+                      {l.model && <span className="shrink-0 truncate font-mono text-[11.5px] text-ink-3">{l.model}</span>}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </section>
+
+        {/* the extensions' sections (docs/extensions/extensions.md "UI slots" machine_section), after the machine's own */}
+        <MachineExtensionSections mid={mid} heading={(title, right) => <Heading title={title} right={right} />} />
+      </>}
+      <MachineToolView machine={m} view={subview} mode={mode} path={address.name === "machine" && address.mid === mid ? address.path : undefined} />
     </Page>
   );
 }
 
-function Page({ mid, title, right, onToggleSidebar, children }: { mid: string; title: string; right?: React.ReactNode; onToggleSidebar: () => void; children: React.ReactNode }) {
+function WorkspaceActions({ mid, cwd, workspace, panesOn, online }: {
+  mid: string; cwd?: string; workspace?: HostWorkspace; panesOn: boolean; online: boolean;
+}) {
+  if (!cwd) return null;
+  const disabled = !online || workspace?.available === false || workspace?.online === false;
+  const binding = workspace && ENGINE_HOSTS.includes(workspace.source) ? { host: workspace.source, workspaceId: workspace.source_id } : {};
+  return <div className="flex shrink-0 items-center">
+    <IconButton icon="plus" size={44} label={t("space-page.new_agent")} disabled={disabled}
+      onClick={() => openNewAgent(workspace ? boardAgentPreset(workspace) : { machineId: mid, cwd })} />
+    <IconButton icon="folder" size={44} label={t("machines-machinedetail.files")} disabled={disabled} onClick={() => navigate({ name: "machine", mid, subview: "files", path: cwd })} />
+    {panesOn && <IconButton icon="terminal" size={44} label={t("sidebar.nav_terminal")} disabled={disabled} onClick={() => openMachineTerminal({ mid, cwd, ...binding })} />}
+  </div>;
+}
+
+function Page({ mid, subview, title, right, onToggleSidebar, children }: { mid: string; subview: MachineSubview; title: string; right?: React.ReactNode; onToggleSidebar: () => void; children: React.ReactNode }) {
+  const box = useRef<HTMLDivElement>(null);
+  useScrollMemory(box, href({ name: "machine", mid, subview }));
+  const previous = history.state?.machineBack;
+  const parent: Route = subview === "work" ? { name: "machines" } : { name: "machine", mid };
+  const back = typeof previous === "string" && previous.startsWith("/") && routeAt(previous) ? previous : undefined;
   return (
     <div className="flex h-full flex-col">
       <header className="flex h-14 shrink-0 items-center gap-2 border-b border-line px-3 sm:px-4">
         <IconButton icon="sidebar" label={t("machines-machinedetail.sidebar")} onClick={onToggleSidebar} className="lg:hidden" />
         <a
-          href={href({ name: "machines" })}
-          onClick={(e) => onLinkClick(e, { name: "machines" })}
-          className="flex h-7 shrink-0 items-center gap-0.5 whitespace-nowrap rounded-[7px] pr-2 pl-1 text-[12.5px] text-ink-3 transition-colors hover:bg-hover hover:text-ink"
-          title={t("machines-machinedetail.back_to_list")}
+          href={back ?? href(parent)}
+          onClick={e => {
+            if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+            e.preventDefault();
+            if (back) history.back();
+            else navigate(parent, true);
+          }}
+          className="flex min-h-11 shrink-0 items-center gap-0.5 whitespace-nowrap rounded-[7px] pr-2 pl-1 text-[12.5px] text-ink-3 transition-colors hover:bg-hover hover:text-ink"
         >
           <Icon name="chevronLeft" size={14} stroke={2.2} />
-          {t("machines-machinedetail.machines")}
+          {t(back || parent.name === "machine" ? "machines.view_back" : "machines-machinedetail.machines")}
         </a>
         <h1 className="min-w-0 flex-1 truncate text-[14px] font-semibold text-ink" title={mid}>
           {title}
         </h1>
         {right}
       </header>
-      <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="mx-auto flex max-w-[880px] flex-col gap-7 px-4 py-6 sm:px-8">{children}</div>
+      <div ref={box} className="min-h-0 flex-1 overflow-y-auto">
+        <div className="mx-auto flex max-w-[880px] flex-col gap-4 px-4 py-4 sm:px-8">{children}</div>
       </div>
     </div>
   );

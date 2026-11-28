@@ -3,8 +3,10 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -342,4 +344,396 @@ func TestAgentsSwitchBackOntoTheLauncherAnAgentRunsOff(t *testing.T) {
 	if got := waitCallsFor(t, ft.f, "s3offbusy1", 2); strings.Join(got, ",") != "session.modes,session.switch" {
 		t.Fatalf("at the end of its turn: %v", got)
 	}
+}
+
+func savedSwitchQueue(t *testing.T, st Store) map[string]queuedSwitch {
+	t.Helper()
+	var saved map[string]queuedSwitch
+	if _, err := st.Setting(context.Background(), switchQueueKey, &saved); err != nil {
+		t.Fatalf("read saved switch queue: %v", err)
+	}
+	return saved
+}
+
+func waitSwitchIdle(t *testing.T, s *Service, machine, id string) {
+	t.Helper()
+	k := switchKey(machine, id)
+	waitFor(t, "in-flight queued switch to finish", func() bool {
+		s.switchQ.mu.Lock()
+		defer s.switchQ.mu.Unlock()
+		return !s.switchQ.running[k]
+	})
+}
+
+func pickedLaunchersFor(t *testing.T, f *fakeHub, id string) []string {
+	t.Helper()
+	var out []string
+	for _, c := range nodeCalls(f) {
+		if c.Method != DeviceSessionModes {
+			continue
+		}
+		p := callParams(t, c)
+		if p["session_id"] == id {
+			if l, ok := p["launcher"].(string); ok {
+				out = append(out, l)
+			}
+		}
+	}
+	return out
+}
+
+// holdFirstSwitch blocks the first session.switch call on ft.s.hub outside fakeHub.mu until release is called.
+func holdFirstSwitch(t *testing.T, ft *fleetTest) (started <-chan struct{}, release func()) {
+	t.Helper()
+	chStarted := make(chan struct{})
+	chRelease := make(chan struct{})
+	var once sync.Once
+	release = func() { once.Do(func() { close(chRelease) }) }
+	t.Cleanup(release)
+	var calls atomic.Int32
+	inner := ft.s.hub
+	ft.s.hub = &firstToolsTimingHub{
+		Hub: inner,
+		beforeCall: func(ctx context.Context, p DeviceCall) (json.RawMessage, error) {
+			if p.Method == DeviceSessionSwitch && calls.Add(1) == 1 {
+				close(chStarted)
+				<-chRelease
+			}
+			return inner.DeviceCall(ctx, p)
+		},
+	}
+	return chStarted, release
+}
+
+type hookSwitchQueueStore struct {
+	Store
+	onPut func(key string, value any)
+}
+
+func (h *hookSwitchQueueStore) PutSetting(ctx context.Context, key string, value any) error {
+	if h.onPut != nil && key == switchQueueKey {
+		h.onPut(key, value)
+	}
+	return h.Store.PutSetting(ctx, key, value)
+}
+
+// A newer agents_switch queued while an earlier queued switch is executing moveAgent must not be deleted
+// or stalled by the earlier switch's completion cleanup (#16110).
+func TestRunQueuedSwitchPreservesNewerQueuedSwitch(t *testing.T) {
+	t.Run("in_flight_failure_preserves_newer_switch", func(t *testing.T) {
+		st := newFleetMem()
+		ft, _ := switchRigOn(t, st)
+		firstStarted, releaseFirst := holdFirstSwitch(t, ft)
+		var switchCalls atomic.Int32
+		ft.f.answerNode(DeviceSessionSwitch, func(string, json.RawMessage) (any, error) {
+			if switchCalls.Add(1) == 1 {
+				return nil, &rpc.Error{Code: proto.CodeSwitchFailed, Message: "switch failed; back on sub"}
+			}
+			return nil, nil
+		})
+		const id = "s1race0001"
+		ft.sessions("mac", agentRow(id, "sub", proto.StatusWorking))
+		waitFleetOrder(t, ft.s)
+		if _, err := batchSwitch(ft, map[string]any{"launcher": "work", "agents": []map[string]any{{"machine": "mac", "session_id": id}}}); err != nil {
+			t.Fatal(err)
+		}
+		if got := ft.s.queuedSwitchOf("mac", id); got != "work" {
+			t.Fatalf("initial queued launcher = %q, want work", got)
+		}
+
+		// First queued switch starts executing moveAgent and blocks inside session.switch.
+		ft.sessions("mac", agentRow(id, "sub", proto.StatusIdle))
+		<-firstStarted
+
+		// While the first switch is in flight, queue a replacement switch to backup.
+		ft.sessions("mac", agentRow(id, "sub", proto.StatusWorking))
+		waitFleetOrder(t, ft.s)
+		if res, err := batchSwitch(ft, map[string]any{"launcher": "backup", "agents": []map[string]any{{"machine": "mac", "session_id": id}}}); err != nil || !strings.Contains(res, "1 queued") {
+			t.Fatalf("queue replacement switch: err=%v\n%s", err, res)
+		}
+		if got := ft.s.queuedSwitchOf("mac", id); got != "backup" {
+			t.Fatalf("replacement queued launcher = %q, want backup", got)
+		}
+
+		// Finish the first switch with a non-busy failure (rolled back to sub).
+		releaseFirst()
+		waitSwitchIdle(t, ft.s, "mac", id)
+
+		if got := ft.s.queuedSwitchOf("mac", id); got != "backup" {
+			t.Fatalf("newer queued switch was dropped from memory after in-flight failure: got %q, want backup", got)
+		}
+		if got := savedSwitchQueue(t, st)[switchKey("mac", id)].Launcher; got != "backup" {
+			t.Fatalf("newer queued switch was dropped from persisted store: got %q, want backup", got)
+		}
+
+		// On the next idle session list, the preserved backup switch runs and completes.
+		ft.sessions("mac", agentRow(id, "sub", proto.StatusIdle))
+		waitFor(t, "replacement switch to complete", func() bool { return ft.s.queuedSwitchOf("mac", id) == "" })
+		if got := pickedLaunchersFor(t, ft.f, id); !slices.Contains(got, "backup") {
+			t.Fatalf("replacement switch never picked backup: %v", got)
+		}
+	})
+
+	t.Run("in_flight_success_preserves_newer_switch", func(t *testing.T) {
+		st := newFleetMem()
+		ft, _ := switchRigOn(t, st)
+		firstStarted, releaseFirst := holdFirstSwitch(t, ft)
+		const id = "s1succ0001"
+		ft.sessions("mac", agentRow(id, "sub", proto.StatusWorking))
+		waitFleetOrder(t, ft.s)
+		if _, err := batchSwitch(ft, map[string]any{"launcher": "work", "agents": []map[string]any{{"machine": "mac", "session_id": id}}}); err != nil {
+			t.Fatal(err)
+		}
+
+		ft.sessions("mac", agentRow(id, "sub", proto.StatusIdle))
+		<-firstStarted
+
+		ft.sessions("mac", agentRow(id, "sub", proto.StatusWorking))
+		waitFleetOrder(t, ft.s)
+		if _, err := batchSwitch(ft, map[string]any{"launcher": "backup", "agents": []map[string]any{{"machine": "mac", "session_id": id}}}); err != nil {
+			t.Fatal(err)
+		}
+
+		releaseFirst()
+		waitSwitchIdle(t, ft.s, "mac", id)
+
+		if got := ft.s.queuedSwitchOf("mac", id); got != "backup" {
+			t.Fatalf("newer queued switch was dropped from memory after in-flight success: got %q, want backup", got)
+		}
+		if got := savedSwitchQueue(t, st)[switchKey("mac", id)].Launcher; got != "backup" {
+			t.Fatalf("newer queued switch was dropped from persisted store: got %q, want backup", got)
+		}
+	})
+
+	t.Run("in_flight_busy_does_not_delay_newer_switch", func(t *testing.T) {
+		st := newFleetMem()
+		ft, _ := switchRigOn(t, st)
+		firstStarted, releaseFirst := holdFirstSwitch(t, ft)
+		var switchCalls atomic.Int32
+		ft.f.answerNode(DeviceSessionSwitch, func(string, json.RawMessage) (any, error) {
+			if switchCalls.Add(1) == 1 {
+				return nil, &rpc.Error{Code: proto.CodeSwitchBusy, Message: "busy"}
+			}
+			return nil, nil
+		})
+		const id = "s1busy0002"
+		ft.sessions("mac", agentRow(id, "sub", proto.StatusWorking))
+		waitFleetOrder(t, ft.s)
+		if _, err := batchSwitch(ft, map[string]any{"launcher": "work", "agents": []map[string]any{{"machine": "mac", "session_id": id}}}); err != nil {
+			t.Fatal(err)
+		}
+
+		ft.sessions("mac", agentRow(id, "sub", proto.StatusIdle))
+		<-firstStarted
+
+		ft.sessions("mac", agentRow(id, "sub", proto.StatusWorking))
+		waitFleetOrder(t, ft.s)
+		if _, err := batchSwitch(ft, map[string]any{"launcher": "backup", "agents": []map[string]any{{"machine": "mac", "session_id": id}}}); err != nil {
+			t.Fatal(err)
+		}
+
+		releaseFirst()
+		waitSwitchIdle(t, ft.s, "mac", id)
+
+		ft.s.switchQ.mu.Lock()
+		retryAt := ft.s.switchQ.retry[switchKey("mac", id)]
+		ft.s.switchQ.mu.Unlock()
+		if !retryAt.IsZero() {
+			t.Fatalf("superseded busy switch set retry backoff %v for newer queued switch", retryAt)
+		}
+
+		// Replacement switch must execute immediately on the next idle list without a 30s retry delay.
+		ft.sessions("mac", agentRow(id, "sub", proto.StatusIdle))
+		waitFor(t, "replacement switch to run without stale busy backoff", func() bool {
+			return ft.s.queuedSwitchOf("mac", id) == ""
+		})
+		if got := pickedLaunchersFor(t, ft.f, id); !slices.Contains(got, "backup") {
+			t.Fatalf("replacement switch never picked backup: %v", got)
+		}
+	})
+
+	t.Run("requeue_after_busy_clears_stale_retry_backoff", func(t *testing.T) {
+		st := newFleetMem()
+		ft, _ := switchRigOn(t, st)
+		var switchCalls atomic.Int32
+		ft.f.answerNode(DeviceSessionSwitch, func(string, json.RawMessage) (any, error) {
+			if switchCalls.Add(1) == 1 {
+				return nil, &rpc.Error{Code: proto.CodeSwitchBusy, Message: "busy"}
+			}
+			return nil, nil
+		})
+		const id = "s1rtry0001"
+		ft.sessions("mac", agentRow(id, "sub", proto.StatusWorking))
+		waitFleetOrder(t, ft.s)
+		if _, err := batchSwitch(ft, map[string]any{"launcher": "work", "agents": []map[string]any{{"machine": "mac", "session_id": id}}}); err != nil {
+			t.Fatal(err)
+		}
+
+		// First attempt hits CodeSwitchBusy and records a 30s retry backoff.
+		ft.sessions("mac", agentRow(id, "sub", proto.StatusIdle))
+		waitFor(t, "busy attempt to record retry backoff", func() bool {
+			ft.s.switchQ.mu.Lock()
+			defer ft.s.switchQ.mu.Unlock()
+			k := switchKey("mac", id)
+			return !ft.s.switchQ.running[k] && !ft.s.switchQ.retry[k].IsZero()
+		})
+
+		// Queueing a replacement switch clears the stale retry backoff so it runs on the next idle list.
+		ft.sessions("mac", agentRow(id, "sub", proto.StatusWorking))
+		waitFleetOrder(t, ft.s)
+		if _, err := batchSwitch(ft, map[string]any{"launcher": "backup", "agents": []map[string]any{{"machine": "mac", "session_id": id}}}); err != nil {
+			t.Fatal(err)
+		}
+		ft.s.switchQ.mu.Lock()
+		retryAt := ft.s.switchQ.retry[switchKey("mac", id)]
+		ft.s.switchQ.mu.Unlock()
+		if !retryAt.IsZero() {
+			t.Fatalf("queueSwitch left stale retry backoff %v", retryAt)
+		}
+
+		ft.sessions("mac", agentRow(id, "sub", proto.StatusIdle))
+		waitFor(t, "replacement switch to run after retry backoff cleared", func() bool {
+			return ft.s.queuedSwitchOf("mac", id) == ""
+		})
+		if got := pickedLaunchersFor(t, ft.f, id); !slices.Contains(got, "backup") {
+			t.Fatalf("replacement switch never picked backup: %v", got)
+		}
+	})
+
+	t.Run("same_target_identical_timestamp_distinguished_by_seq", func(t *testing.T) {
+		st := newFleetMem()
+		ft, _ := switchRigOn(t, st)
+		firstStarted, releaseFirst := holdFirstSwitch(t, ft)
+		var switchCalls atomic.Int32
+		ft.f.answerNode(DeviceSessionSwitch, func(string, json.RawMessage) (any, error) {
+			if switchCalls.Add(1) == 1 {
+				return nil, &rpc.Error{Code: proto.CodeSwitchFailed, Message: "switch failed; back on sub"}
+			}
+			return nil, nil
+		})
+		const id = "s1same0001"
+		k := switchKey("mac", id)
+		ft.sessions("mac", agentRow(id, "sub", proto.StatusWorking))
+		waitFleetOrder(t, ft.s)
+		if _, err := batchSwitch(ft, map[string]any{"launcher": "work", "agents": []map[string]any{{"machine": "mac", "session_id": id}}}); err != nil {
+			t.Fatal(err)
+		}
+		ft.s.switchQ.mu.Lock()
+		firstAt := ft.s.switchQ.items[k].At
+		ft.s.switchQ.mu.Unlock()
+
+		ft.sessions("mac", agentRow(id, "sub", proto.StatusIdle))
+		<-firstStarted
+
+		ft.sessions("mac", agentRow(id, "sub", proto.StatusWorking))
+		waitFleetOrder(t, ft.s)
+		if _, err := batchSwitch(ft, map[string]any{"launcher": "work", "agents": []map[string]any{{"machine": "mac", "session_id": id}}}); err != nil {
+			t.Fatal(err)
+		}
+		// Force identical timestamps to prove seq alone distinguishes the replacement entry.
+		ft.s.switchQ.mu.Lock()
+		w2 := ft.s.switchQ.items[k]
+		w2.At = firstAt
+		ft.s.switchQ.items[k] = w2
+		ft.s.switchQ.mu.Unlock()
+
+		releaseFirst()
+		waitSwitchIdle(t, ft.s, "mac", id)
+
+		if got := ft.s.queuedSwitchOf("mac", id); got != "work" {
+			t.Fatalf("re-queued same-target switch was dropped after in-flight failure: got %q, want work", got)
+		}
+		if got := savedSwitchQueue(t, st)[k].Launcher; got != "work" {
+			t.Fatalf("re-queued same-target switch was dropped from persisted store: got %q, want work", got)
+		}
+		ft.sessions("mac", agentRow(id, "sub", proto.StatusIdle))
+		waitFor(t, "re-queued same-target switch to run", func() bool {
+			return ft.s.queuedSwitchOf("mac", id) == ""
+		})
+		if got := switchCalls.Load(); got != 2 {
+			t.Fatalf("session.switch calls = %d, want 2", got)
+		}
+	})
+
+	t.Run("load_switch_queue_preserves_in_flight_running_state", func(t *testing.T) {
+		st := newFleetMem()
+		ft, _ := switchRigOn(t, st)
+		const id = "s1load0001"
+		k := switchKey("mac", id)
+		retryUntil := time.Now().Add(time.Minute)
+		ft.s.switchQ.mu.Lock()
+		ft.s.switchQ.items = map[string]queuedSwitch{k: {Machine: "mac", Session: id, Launcher: "work", From: "sub", At: time.Now().UTC(), seq: 1}}
+		ft.s.switchQ.running = map[string]bool{k: true}
+		ft.s.switchQ.retry = map[string]time.Time{k: retryUntil}
+		ft.s.switchQ.loaded = false
+		ft.s.switchQ.mu.Unlock()
+
+		ft.s.loadSwitchQueue(context.Background())
+
+		ft.s.switchQ.mu.Lock()
+		defer ft.s.switchQ.mu.Unlock()
+		if !ft.s.switchQ.running[k] {
+			t.Fatal("loadSwitchQueue wiped active q.running state")
+		}
+		if !ft.s.switchQ.retry[k].Equal(retryUntil) {
+			t.Fatalf("loadSwitchQueue wiped active q.retry state: got %v, want %v", ft.s.switchQ.retry[k], retryUntil)
+		}
+	})
+
+	t.Run("save_switch_queue_serializes_concurrent_writes", func(t *testing.T) {
+		base := newFleetMem()
+		putEntered := make(chan struct{})
+		releaseFirstPut := make(chan struct{})
+		var once sync.Once
+		release := func() { once.Do(func() { close(releaseFirstPut) }) }
+		t.Cleanup(release)
+		var puts atomic.Int32
+		st := &hookSwitchQueueStore{
+			Store: base,
+			onPut: func(string, any) {
+				if puts.Add(1) == 1 {
+					close(putEntered)
+					<-releaseFirstPut
+				}
+			},
+		}
+		ft, _ := switchRigOn(t, st)
+		const id = "s1save0001"
+		k := switchKey("mac", id)
+		ft.s.switchQ.mu.Lock()
+		ft.s.switchQ.loaded = true
+		ft.s.switchQ.items = map[string]queuedSwitch{}
+		ft.s.switchQ.running = map[string]bool{}
+		ft.s.switchQ.retry = map[string]time.Time{}
+		ft.s.switchQ.mu.Unlock()
+
+		// Start a slow saveSwitchQueue of the empty queue.
+		doneFirst := make(chan struct{})
+		go func() {
+			defer close(doneFirst)
+			ft.s.saveSwitchQueue(context.Background())
+		}()
+		<-putEntered
+
+		// Concurrently queue a new switch and save it while the first PutSetting is still in flight.
+		doneSecond := make(chan struct{})
+		go func() {
+			defer close(doneSecond)
+			ft.s.queueSwitch(context.Background(), &switchItem{
+				m: Device{ID: "mac", Name: "Mac"},
+				c: agentRow(id, "sub", proto.StatusWorking),
+			}, switchTarget{Launcher: "backup"}, "conv1")
+		}()
+		// Wait until queueSwitch has inserted the item into memory before releasing the first PutSetting.
+		waitFor(t, "concurrent queueSwitch to populate memory", func() bool {
+			return ft.s.queuedSwitchOf("mac", id) == "backup"
+		})
+		release()
+		<-doneFirst
+		<-doneSecond
+
+		if got := savedSwitchQueue(t, base)[k].Launcher; got != "backup" {
+			t.Fatalf("stale concurrent saveSwitchQueue overwrote persisted switch: got %q, want backup", got)
+		}
+	})
 }

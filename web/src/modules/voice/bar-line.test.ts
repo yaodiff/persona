@@ -14,13 +14,13 @@ function line(o: Partial<BarLineInput>) {
 
 describe("the voice bar's second line", () => {
   it("says to just speak, or that it is muted", () => {
-    expect(line({})).toMatchObject({ kind: "ready", text: "直接说，会交给 Claude", actions: [] });
+    expect(line({})).toMatchObject({ kind: "ready", text: "直接说话，内容会交给 Claude", actions: [] });
     expect(line({ muted: true })).toMatchObject({ kind: "muted", actions: [] });
   });
 
   it("hands over, then follows the work with how long and Stop", () => {
     expect(line({ runs: [run("r1", "sending")] })).toMatchObject({ kind: "handing", text: "正在交给 Claude…" });
-    expect(line({ runs: [run("r1", "sending")], session: session({ starting: true }) })).toMatchObject({ kind: "handing", text: "正在把 Claude 拉起来…" });
+    expect(line({ runs: [run("r1", "sending")], session: session({ starting: true }) })).toMatchObject({ kind: "handing", text: "正在启动 Claude…" });
     const since = "2026-11-06T10:00:00Z";
     const working = line({ runs: [run("r1", "working")], session: session({ state: "working", status: "working", activity: "在跑测试", state_since: since }) });
     expect(working).toEqual({ kind: "working", text: "Claude 在跑测试", since: Date.parse(since), actions: [{ kind: "stopAgent" }] });
@@ -35,18 +35,18 @@ describe("the voice bar's second line", () => {
   });
 
   it("says the voice paused while the conversation works, with Stop", () => {
-    expect(line({ link: "paused", session: session({ state: "working", status: "working" }) })).toMatchObject({ kind: "paused", text: "在等 Claude · 一开口就接上", actions: [{ kind: "stopAgent" }] });
+    expect(line({ link: "paused", session: session({ state: "working", status: "working" }) })).toMatchObject({ kind: "paused", text: "正在等待 Claude · 说话即可继续", actions: [{ kind: "stopAgent" }] });
   });
 
   it("says what a blocked conversation waits on", () => {
-    expect(line({ session: session({ work: { phase: "blocked", on: "external", line: "部署完成" } }) })).toMatchObject({ kind: "waiting", text: "Claude 在等：部署完成" });
-    expect(line({ runs: [run("r1", "blocked")] })).toMatchObject({ kind: "waiting", text: "Claude 在等别的事" });
+    expect(line({ session: session({ work: { phase: "blocked", on: "external", line: "部署完成" } }) })).toMatchObject({ kind: "waiting", text: "Claude 正在等待：部署完成" });
+    expect(line({ runs: [run("r1", "blocked")] })).toMatchObject({ kind: "waiting", text: "Claude 正在等待其他事项" });
   });
 
   it("asks for a tap, or marks the card being asked by voice", () => {
     const cards = [{ id: "ix1", kind: "question" as const }];
     expect(line({ cards })).toMatchObject({ kind: "needsTap" });
-    expect(line({ cards, asking: "ix1" })).toMatchObject({ kind: "asking", text: "Claude 在问你，直接说出回答" });
+    expect(line({ cards, asking: "ix1" })).toMatchObject({ kind: "asking", text: "Claude 正在向你提问，直接说出你的回答即可" });
     expect(line({ cards, asking: "gone" })).toMatchObject({ kind: "needsTap" });
   });
 
@@ -57,33 +57,33 @@ describe("the voice bar's second line", () => {
   it("says why the last instruction did not go, with what can be done", () => {
     const refused = run("r2", "refused", { code: "input_draft", draft: "[⧉ Selected 3 lines from foo.go] fix it", clearable: "fix it" });
     expect(line({ runs: [run("r1", "working"), refused], resendable: ["r2"] })).toEqual({
-      kind: "notSent", text: "Claude 的输入框里有电脑上没发出去的字：『[⧉ Selected 3 lines from foo.go] fix it』",
+      kind: "notSent", text: "Claude 电脑端输入框中有未发送的内容：「[⧉ Selected 3 lines from foo.go] fix it」",
       actions: [{ kind: "clearAndSend", run: "r2" }, { kind: "dismiss", run: "r2" }],
     });
     // a run the connection up now no longer knows (after a reconnect): only Never Mind
     expect(line({ runs: [refused] }).actions).toEqual([{ kind: "dismiss", run: "r2" }]);
     expect(line({ runs: [run("r3", "refused", { code: "conflict" })], resendable: ["r3"] }).actions).toEqual([{ kind: "resend", run: "r3" }, { kind: "dismiss", run: "r3" }]);
-    expect(line({ runs: [run("r4", "unknown")] }).text).toBe("不确定发出去没有，看一下对话");
-    expect(line({ runs: [run("r5", "failed")] }).text).toBe("没能交给 Claude");
+    expect(line({ runs: [run("r4", "unknown")] }).text).toBe("暂不确定是否已发送，请查看对话确认");
+    expect(line({ runs: [run("r5", "failed")] }).text).toBe("未能交给 Claude");
   });
 
   it("offers Send Anyway for what the user-speech gate held back, quoted, never saying someone else said it (#5904)", () => {
     const held = run("r6", "refused", { code: "unprompted" });
     const known = line({ runs: [held], resendable: ["r6"] });
     // quoted: Send Anyway confirms words the user can see
-    expect(known).toEqual({ kind: "notSent", text: "刚才没听到你要做这件事，所以没发出去：『修登录页失败的测试』", actions: [{ kind: "sendAnyway", run: "r6" }, { kind: "dismiss", run: "r6" }] });
+    expect(known).toEqual({ kind: "notSent", text: "刚才未听到你明确提出此要求，因此未发送：「修登录页失败的测试」", actions: [{ kind: "sendAnyway", run: "r6" }, { kind: "dismiss", run: "r6" }] });
     expect(known.text).not.toContain("不是你说的");
     // not after a reconnect, nor from an extension that does not keep it (no speech_gate): only Never Mind
     expect(line({ runs: [held] }).actions).toEqual([{ kind: "dismiss", run: "r6" }]);
     // nothing to quote is nothing to send anyway (the extension keeps no run without a task)
     expect(line({ runs: [run("r7", "refused", { code: "unprompted", task: " " })], resendable: ["r7"] }))
-      .toEqual({ kind: "notSent", text: "刚才没听到你要做这件事，所以没发出去", actions: [{ kind: "dismiss", run: "r7" }] });
+      .toEqual({ kind: "notSent", text: "刚才未听到你明确提出此要求，因此未发送", actions: [{ kind: "dismiss", run: "r7" }] });
   });
 
   it("offers a plan card the refused words as feedback", () => {
     const l = line({ runs: [run("r1", "refused", { code: "dialog_open", task: "跳过第三步" })], cards: [{ id: "plan1", kind: "plan" }] });
     expect(l.actions).toEqual([{ kind: "returnPlan", card: "plan1", feedback: "跳过第三步", run: "r1" }, { kind: "dismiss", run: "r1" }]);
-    expect(line({ runs: [run("r1", "refused", { code: "dialog_open" })] }).text).toBe("Claude 在等你先处理上面的卡片");
+    expect(line({ runs: [run("r1", "refused", { code: "dialog_open" })] }).text).toBe("Claude 正在等你先处理上方的卡片");
   });
 
   it("forgets a refusal put away, and one a later instruction took over", () => {
@@ -94,7 +94,7 @@ describe("the voice bar's second line", () => {
   });
 
   it("says a held answer still works in the background", () => {
-    expect(line({ runs: [run("r1", "held")] })).toMatchObject({ kind: "working", text: "Claude 答过了，后台还在跑" });
+    expect(line({ runs: [run("r1", "held")] })).toMatchObject({ kind: "working", text: "Claude 已回复，后台仍在继续处理" });
   });
 
   it("announces only what asks for the user or stops the voice", () => {
@@ -110,17 +110,17 @@ describe("the voice bar's first line", () => {
     expect(status({ kind: "connecting" })).toEqual({ text: "正在连接…", orb: "connecting" });
     expect(status({ kind: "reconnecting", attempt: 2 })).toEqual({ text: "重新连接中…", orb: "connecting" });
     expect(status({ kind: "ended", end: { kind: "lost" } })).toEqual({ text: "语音已结束", orb: "ended" });
-    expect(status(live)).toEqual({ text: "在听", orb: "listening" });
-    expect(status(live, { working: true })).toEqual({ text: "在听", orb: "working" });
-    expect(status({ kind: "live", state: "hearing" })).toEqual({ text: "在听你说", orb: "hearing" });
-    expect(status({ kind: "live", state: "speaking" }, { muted: true })).toEqual({ text: "正在说", orb: "speaking" });
+    expect(status(live)).toEqual({ text: "聆听中", orb: "listening" });
+    expect(status(live, { working: true })).toEqual({ text: "聆听中", orb: "working" });
+    expect(status({ kind: "live", state: "hearing" })).toEqual({ text: "正在听你说", orb: "hearing" });
+    expect(status({ kind: "live", state: "speaking" }, { muted: true })).toEqual({ text: "正在说话", orb: "speaking" });
     expect(status(live, { muted: true })).toEqual({ text: "已静音", orb: "muted" });
     expect(status(live, { tool: "Searching the knowledge base" })).toEqual({ text: "Searching the knowledge base…", orb: "listening" });
   });
 
   it("says when the upstream pauses, wakes or reconnects", () => {
     expect(status(live, { link: "paused" })).toEqual({ text: "语音已暂停", orb: "paused" });
-    expect(status(live, { link: "waking" })).toEqual({ text: "正在接上…", orb: "connecting" });
+    expect(status(live, { link: "waking" })).toEqual({ text: "正在恢复…", orb: "connecting" });
     expect(status(live, { link: "reconnecting" })).toEqual({ text: "重新连接中…", orb: "connecting" });
   });
 });

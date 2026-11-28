@@ -151,6 +151,12 @@ func foldWorkKeeping(items []proto.Item, latestPage bool, opening map[int]bool) 
 func fold(run []proto.Item) proto.Item {
 	first, last := run[0], run[len(run)-1]
 	fo := &proto.Fold{Items: len(run), Until: last.TS, ThroughSeq: last.Seq, ThroughID: last.ID, ToolNames: []string{}}
+	results := map[string]*proto.Item{}
+	for i := range run {
+		if run[i].Kind == proto.KindToolResult && run[i].ToolUseID != "" {
+			results[run[i].ToolUseID] = &run[i]
+		}
+	}
 	latestThought, latestTool := -1, -1
 	var firstTTFT *int64
 	for i, it := range run {
@@ -163,6 +169,9 @@ func fold(run []proto.Item) proto.Item {
 			fo.Tools++
 			if it.ToolName != "" && len(fo.ToolNames) < proto.FoldToolNamesMax && !slices.Contains(fo.ToolNames, it.ToolName) {
 				fo.ToolNames = append(fo.ToolNames, it.ToolName)
+			}
+			if it.Botmux != nil && botmuxToolResultSucceeded(results[it.ToolUseID]) {
+				fo.Botmux = append(fo.Botmux, *it.Botmux)
 			}
 		case it.Kind == proto.KindToolResult && it.IsError:
 			fo.Errors++
@@ -206,9 +215,20 @@ func thinkingPreview(it proto.Item) *proto.Item {
 // Range returns the items of lines fromSeq through throughSeq, at most about limit of them (whole lines); more says
 // the range goes on after the last one. It is how a fold is opened.
 func (f *File) Range(fromSeq, throughSeq, limit int) ([]proto.Item, bool) {
+	items, more, _ := f.RangeSpan(fromSeq, throughSeq, limit)
+	return items, more
+}
+
+// RangeSpan returns the items of lines fromSeq through throughSeq, at most about limit of them (whole lines),
+// whether more lines remain in the range, and the transcript span covering the returned lines.
+func (f *File) RangeSpan(fromSeq, throughSeq, limit int) ([]proto.Item, bool, Span) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.ensureAfter(fromSeq - 1)
+	from := max(0, fromSeq-1)
+	f.ensureAfter(from)
+	if f.base > from {
+		from = f.base
+	}
 	i := sort.Search(len(f.items), func(k int) bool { return f.items[k].Seq >= fromSeq })
 	end := i
 	for end < len(f.items) && f.items[end].Seq <= throughSeq && end-i < limit {
@@ -218,5 +238,70 @@ func (f *File) Range(fromSeq, throughSeq, limit int) ([]proto.Item, bool) {
 		end++
 	}
 	more := end < len(f.items) && f.items[end].Seq <= throughSeq
-	return append([]proto.Item(nil), f.items[i:end]...), more
+	to := min(f.lines, max(0, throughSeq))
+	if more && end > i {
+		to = f.items[end-1].Seq
+	} else if end > i {
+		to = max(to, f.items[end-1].Seq)
+	}
+	if to < from {
+		from = to
+	}
+	return append([]proto.Item(nil), f.items[i:end]...), more, Span{History: f.history(), From: from, To: to}
+}
+
+// TurnWindow returns the surrounding items in f needed to evaluate full turn boundaries for a slice spanning
+// [firstSeq, lastSeq] (such as a fold Range, an AfterSeq batch, a live push, or a mid-turn Page):
+//   - prefix: items from the enclosing user text item up to (not including) firstSeq
+//   - suffix: items after lastSeq up to (not including) the next user text item
+//
+// Each side is bounded to avoid unbounded scans on pathological turns.
+func (f *File) TurnWindow(firstSeq, lastSeq int) (prefix, suffix []proto.Item) {
+	if f == nil || firstSeq <= 0 || lastSeq <= 0 {
+		return nil, nil
+	}
+	const maxContextItems = 2000
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ensureAfter(firstSeq - 1)
+	startIdx := sort.Search(len(f.items), func(k int) bool { return f.items[k].Seq >= firstSeq })
+	// If the slice does not start on a user text item, ensure the enclosing user turn is loaded.
+	if startIdx >= len(f.items) || !isBotmuxUserItem(f.items[startIdx]) {
+		hasUserBefore := false
+		for p := startIdx - 1; p >= 0 && startIdx-p <= maxContextItems; p-- {
+			if isBotmuxUserItem(f.items[p]) {
+				hasUserBefore = true
+				break
+			}
+		}
+		if !hasUserBefore && f.base > 0 {
+			f.ensureTurns(firstSeq, 1, maxContextItems)
+			startIdx = sort.Search(len(f.items), func(k int) bool { return f.items[k].Seq >= firstSeq })
+		}
+		// ensureTurns may parse back far more than maxContextItems (a whole page budget), so the prefix is cut here:
+		// the enclosing user item if it is close enough, else only the newest maxContextItems items before firstSeq.
+		lo := max(0, startIdx-maxContextItems)
+		for p := startIdx - 1; p >= lo; p-- {
+			if isBotmuxUserItem(f.items[p]) {
+				lo = p
+				break
+			}
+		}
+		if lo < startIdx {
+			prefix = append([]proto.Item(nil), f.items[lo:startIdx]...)
+		}
+	}
+	endIdx := sort.Search(len(f.items), func(k int) bool { return f.items[k].Seq > lastSeq })
+	q := endIdx
+	for q < len(f.items) && q-endIdx < maxContextItems && !isBotmuxUserItem(f.items[q]) {
+		q++
+	}
+	if q > endIdx {
+		suffix = append([]proto.Item(nil), f.items[endIdx:q]...)
+	}
+	return prefix, suffix
+}
+
+func isBotmuxUserItem(it proto.Item) bool {
+	return it.Role == "user" && it.Kind == proto.KindText && it.From == ""
 }

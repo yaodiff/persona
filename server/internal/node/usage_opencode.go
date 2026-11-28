@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -26,6 +27,9 @@ type usageQuery interface {
 	between(ctx context.Context, n *Node, start, end time.Time) ([]tokenuse.Record, error)
 	// first is the time of the earliest request it holds (zero: none, or unknown).
 	first(ctx context.Context, n *Node) time.Time
+	// dir is the directory session started in, as the database says ("" when it does not): read with the rows that
+	// name the session (usage_dirs.go).
+	dir(session string) string
 }
 
 // usageQueries are the agents this node meters by query (new values: a live meter keeps its own).
@@ -54,6 +58,55 @@ type opencodeUsage struct {
 	pending map[int64]int64 // rows read before they finished: rowid → when the step began (Unix ms)
 	started bool
 	failed  string // the last read's error, logged once
+	// dirs: each session's directory (session.directory), read once for the sessions the rows name; "" for one
+	// the database does not say (an older schema, a session gone).
+	dirs map[string]string
+}
+
+func (o *opencodeUsage) dir(session string) string { return o.dirs[session] }
+
+// readDirs reads the directories of the sessions recs name that it has not read, apart from the usage query: a
+// database without a session table still has its usage read.
+func (o *opencodeUsage) readDirs(ctx context.Context, n *Node, recs []tokenuse.Record) {
+	if o.dirs == nil {
+		o.dirs = map[string]string{}
+	}
+	var ids []string
+	for _, r := range recs {
+		if _, ok := o.dirs[r.Session]; !ok && opencodeSessionID(r.Session) && !slices.Contains(ids, r.Session) {
+			ids = append(ids, r.Session)
+		}
+	}
+	if len(ids) == 0 || n.opencodeDB() == "" {
+		return
+	}
+	for _, id := range ids {
+		o.dirs[id] = ""
+	}
+	var rows []struct {
+		ID        string `json:"id"`
+		Directory string `json:"directory"`
+	}
+	if querySQLite(ctx, n.opencodeDB(), `SELECT id, coalesce(directory, '') AS directory FROM session WHERE id IN ('`+
+		strings.Join(ids, "', '")+`')`, &rows) != nil {
+		return
+	}
+	for _, r := range rows {
+		o.dirs[r.ID] = r.Directory
+	}
+}
+
+// opencodeSessionID: an id that can go into the query as it is (opencode's are letters, digits, "_" and "-").
+func opencodeSessionID(id string) bool {
+	if id == "" || len(id) > 128 {
+		return false
+	}
+	for _, c := range id {
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_' || c == '-') {
+			return false
+		}
+	}
+	return true
 }
 
 func (*opencodeUsage) agent() string { return tokenuse.Opencode }
@@ -136,6 +189,7 @@ func (o *opencodeUsage) poll(ctx context.Context, n *Node, cutoff time.Time) []t
 			delete(o.pending, id)
 		}
 	}
+	o.readDirs(ctx, n, out)
 	return out
 }
 
@@ -148,6 +202,7 @@ func (o *opencodeUsage) between(ctx context.Context, n *Node, start, end time.Ti
 			out = append(out, rec)
 		}
 	}
+	o.readDirs(ctx, n, out)
 	return out, ctx.Err()
 }
 

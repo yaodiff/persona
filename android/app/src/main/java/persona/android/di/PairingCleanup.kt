@@ -33,7 +33,7 @@ internal fun clearUnversionedPairingData(app: Application, disconnect: Boolean =
         clearOpenedHubFiles(app)
     }
     if (disconnect) {
-        listOf("settings-readiness", "notification_actions", "notify_recovery", "platform-entry").forEach { name ->
+        listOf("settings-readiness", "notification_actions", "notify_recovery", "platform-entry", "main_chat_widget").forEach { name ->
             check(app.getSharedPreferences(name, Application.MODE_PRIVATE).edit().clear().commit())
         }
         check(app.getSharedPreferences("notify_recovery", Application.MODE_PRIVATE).edit()

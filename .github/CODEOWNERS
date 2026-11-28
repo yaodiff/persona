@@ -49,7 +49,6 @@
 /server/internal/protectedapps/
 /server/internal/rexcli/
 /server/internal/terncli/
-/server/internal/transcribelive/
 /server/internal/modules/briefing/
 /server/internal/modules/github/
 /server/internal/modules/health/
@@ -63,6 +62,7 @@
 /server/internal/modules/screen-share/
 /server/internal/modules/voice/
 /server/internal/modules/volc/
+/server/scripts/transcribelive/
 /web/eslint.modules.config.mjs @chyroc @szupzj18
 /web/src/core/module-boundary.lint.test.ts @chyroc @szupzj18
 /web/src/core/module-features.ts @chyroc @szupzj18

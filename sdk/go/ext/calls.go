@@ -158,12 +158,22 @@ func (h *Hub) ChannelStatus(ctx context.Context, p wire.ChannelStatusParams) err
 // hub does not try again.
 func CannotSend(why string) error { return &Error{Code: wire.ChannelErrorCodeCannotSend, Message: why} }
 
-// The knowledge base (docs/extensions/extensions.md "Knowledge base RPC"): the permission kb.read (kb.write for KBUpdate) in
+// The knowledge base (docs/extensions/extensions.md "Knowledge base RPC"): the permission kb.read (kb.write for KBUpdate and KBPutRecording) in
 // the manifest's permissions.hub, granted by the user. Errors carry wire.KBErrorCode* or permission_denied.
 
 // KBList is one kind's entities, a page at a time (next_offset).
 func (h *Hub) KBList(ctx context.Context, p wire.KBListParams) (wire.KBListResult, error) {
 	return callHub[wire.KBListResult](ctx, h, "kb.list", p)
+}
+
+// KBImportCheckpoint reads the selected import's current progress.
+func (h *Hub) KBImportCheckpoint(ctx context.Context) (wire.KBImportCheckpointResult, error) {
+	return callHub[wire.KBImportCheckpointResult](ctx, h, "kb.import_checkpoint", wire.KBImportCheckpointParams{})
+}
+
+// KBSentMarkers reads sent-as-user annotations for the approved import and day.
+func (h *Hub) KBSentMarkers(ctx context.Context, p wire.KBSentMarkersParams) (wire.KBSentMarkersResult, error) {
+	return callHub[wire.KBSentMarkersResult](ctx, h, "kb.sent_markers", p)
 }
 
 // KBRecent is what came in from every source since a time, newest first, a page at a time (next_offset).
@@ -189,6 +199,12 @@ func (h *Hub) KBSearch(ctx context.Context, p wire.KBSearchParams) (wire.KBSearc
 // KBUpdate changes an entity's fields (kb.write).
 func (h *Hub) KBUpdate(ctx context.Context, p wire.KBUpdateParams) (wire.KBUpdateResult, error) {
 	return callHub[wire.KBUpdateResult](ctx, h, "kb.update", p)
+}
+
+// KBPutRecording creates or updates the extension's own recording with its minutes and, optionally, its transcript
+// (kb.write; docs/extensions/extensions.md "Writing recordings and minutes"). The same params again change nothing.
+func (h *Hub) KBPutRecording(ctx context.Context, p wire.KBPutRecordingParams) (wire.KBPutRecordingResult, error) {
+	return callHub[wire.KBPutRecordingResult](ctx, h, "kb.put_recording", p)
 }
 
 // KBOwner is the user's name, aliases and identities.

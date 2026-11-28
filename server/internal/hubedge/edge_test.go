@@ -58,6 +58,15 @@ func fakeSlot(name string) int {
 		s.Failed("cannot migrate")
 		return 1
 	}
+	if name == "slow-activate" {
+		if addr := os.Getenv("HUBEDGE_TEST_ACTIVATED_ADDR"); addr != "" {
+			if c, err := net.DialTimeout("tcp", addr, 2*time.Second); err == nil {
+				_ = c.Close()
+			}
+		}
+		<-s.Released()
+		return 0
+	}
 	ln, err := s.Listen("127.0.0.1:" + os.Getenv(envTestPort))
 	if err != nil {
 		s.Failed(err.Error())
@@ -589,4 +598,97 @@ func TestUpdateRestoreFailureStopsEdge(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Cancelling the edge context (graceful shutdown) while an update handover is waiting for the
+// new slot to become ready, or when an unconfirmed timer fires alongside shutdown, must not
+// invoke RestoreUpdate or spawn a rollback slot.
+func TestShutdownDuringUpdateHandoverDoesNotRestoreUpdate(t *testing.T) {
+	t.Run("cancel_during_activation_handover", func(t *testing.T) {
+		sigLn, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = sigLn.Close() })
+		activated := make(chan struct{})
+		go func() {
+			if c, err := sigLn.Accept(); err == nil {
+				_ = c.Close()
+				close(activated)
+			}
+		}()
+		t.Setenv("HUBEDGE_TEST_ACTIVATED_ADDR", sigLn.Addr().String())
+
+		var restoreCalls atomic.Int32
+		te := startEdge(t, "v1", func(o *Options) {
+			o.RestoreUpdate = func(build int64, cause error) (string, bool, error) {
+				restoreCalls.Add(1)
+				return "", false, fmt.Errorf("unexpected restore during shutdown (build=%d cause=%v)", build, cause)
+			}
+		})
+
+		binary := te.binary("slow-activate")
+		switchDone := make(chan struct{})
+		go func() {
+			defer close(switchDone)
+			_, _ = call(te.control, Msg{T: MsgSwitch, Binary: binary, Kind: KindUpdate, Expect: 0}, 10*time.Second, nil)
+		}()
+
+		select {
+		case <-activated:
+		case <-time.After(10 * time.Second):
+			t.Fatal("slow-activate slot did not enter activation")
+		}
+
+		// Gracefully stop the edge while handover is awaiting MsgReady.
+		te.cancel()
+
+		select {
+		case err := <-te.done:
+			te.done <- err // retain for startEdge cleanup
+			if err != nil {
+				t.Fatalf("edge exited with error on graceful shutdown during handover: %v", err)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatal("edge did not exit after cancellation during handover")
+		}
+		select {
+		case <-switchDone:
+		case <-time.After(5 * time.Second):
+			t.Fatal("control switch call did not finish")
+		}
+		if got := restoreCalls.Load(); got != 0 {
+			t.Fatalf("RestoreUpdate called %d times during graceful edge shutdown, want 0", got)
+		}
+		te.mu.Lock()
+		logText := te.logs.String()
+		te.mu.Unlock()
+		if strings.Contains(logText, "going back to") {
+			t.Fatalf("edge attempted rollback during graceful shutdown:\n%s", logText)
+		}
+	})
+
+	t.Run("unconfirmed_with_canceled_ctx", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		var restoreCalls atomic.Int32
+		e := &edge{
+			ctx:          ctx,
+			confirmBuild: 42,
+			confirmBy:    time.NewTimer(time.Hour),
+			o: Options{
+				Logf: func(string, ...any) {},
+				RestoreUpdate: func(int64, error) (string, bool, error) {
+					restoreCalls.Add(1)
+					return "", false, errors.New("unexpected restore")
+				},
+			},
+		}
+		if err := e.unconfirmed(); err != nil {
+			t.Fatalf("unconfirmed with canceled ctx returned %v, want nil", err)
+		}
+		if got := restoreCalls.Load(); got != 0 {
+			t.Fatalf("RestoreUpdate called %d times when ctx already canceled, want 0", got)
+		}
+	})
 }

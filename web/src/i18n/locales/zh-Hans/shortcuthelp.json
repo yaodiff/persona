@@ -1,8 +1,8 @@
 {
   "title": "快捷键",
-  "edit_in_settings": "在设置里改键",
-  "in_terminal": "终端里",
-  "in_terminal_fixed": "终端里（固定）",
+  "edit_in_settings": "在设置中修改",
+  "in_terminal": "终端内",
+  "in_terminal_fixed": "终端内（固定）",
   "off": "已停用",
   "unset": "未设置"
 }

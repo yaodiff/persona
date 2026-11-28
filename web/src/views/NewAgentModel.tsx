@@ -8,6 +8,8 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import { startCatalogHost, type PickerTier, type UnavailableLauncher } from "../lib/launcher-models";
 import type { ModelBinding } from "../lib/model-config";
 import type { PanelConfig } from "../lib/model-panel";
+import type { SpeedOption } from "../lib/session-speed";
+import { lazyPage } from "../lib/lazy-page";
 import { formChoice, newAgentPanel, newAgentPill, type ModelChoice } from "../lib/new-agent-panel";
 import { launcherBlock } from "../lib/launcher-health";
 import { forgetModel, modelList, readModels, subscribeModelLists, useModelLists, type ModelList } from "../lib/session-models";
@@ -16,6 +18,7 @@ import { toast } from "../ui/atoms";
 import { lazyOverlay } from "./LazyOverlay";
 
 const ModelPanel = lazyOverlay(() => import("../ui/model-panel/ModelPanel").then((m) => m.ModelPanel));
+const SpeedSwitch = lazyPage(() => import("../ui/model-panel/Columns").then((m) => m.SpeedSwitch));
 import { ModelPill } from "./chat/ModelPill";
 
 const NO_LIST: ModelList = {};
@@ -53,6 +56,8 @@ export interface NewAgentModelProps {
   follow?: { active: boolean; detail?: string; warning?: string; label: string };
   /** What the pill says while no launcher is known to run (the model settings run something else, or none is read). */
   fallback: string;
+  /** A speed choice for the current Codex model for this start only. */
+  speed?: { options: SpeedOption[]; value?: string; onChange: (value: string) => void };
   /** Claude Code's ultracode switch for this start (#3428): in the chosen model's flyout. */
   ultracode?: ReactNode;
   /** The workflow mark on the pill: ultracode is on. */
@@ -99,7 +104,7 @@ export function NewAgentModel(props: NewAgentModelProps) {
 /** The panel while it is open: the computer's launchers with their lists, read again behind the ones shown once per
  *  opening (the one that runs first; not the ones that can't start here, whose rows are off anyway; at most three at a
  *  time, as each may start its agent's CLI on the computer). */
-function NewAgentPanel({ mid, host, startHost, launchers, choice, runs, configured, tiers, unavailable, follow, ultracode, onChoice, onPreset, onFollow, onHelp, onConfigure, anchor, onClose }: NewAgentModelProps & { anchor: HTMLElement; onClose: () => void }) {
+function NewAgentPanel({ mid, host, startHost, launchers, choice, runs, configured, tiers, unavailable, follow, speed, ultracode, onChoice, onPreset, onFollow, onHelp, onConfigure, anchor, onClose }: NewAgentModelProps & { anchor: HTMLElement; onClose: () => void }) {
   const version = useModelLists();
   const omp = launchers.find((l) => l.name === "omp");
   const catalogHost = (name: string) => name === "omp" ? startCatalogHost(omp, host, startHost) : host;
@@ -135,9 +140,10 @@ function NewAgentPanel({ mid, host, startHost, launchers, choice, runs, configur
       scope="agent"
       onPick={onPick}
       onApplyCurrent={onApplyCurrent}
-      onReload={(provider) => void readModels(mid, provider, { again: true, first: provider === runs, host: catalogHost(provider) })}
+      onReload={(provider) => void readModels(mid, provider, { refresh: true, first: provider === runs, host: catalogHost(provider) })}
       onForget={onForget}
-      currentExtra={ultracode}
+      currentExtra={speed ? <SpeedSwitch options={speed.options} speed={speed.value} disabled={false} onSpeed={speed.onChange} /> : ultracode}
+      currentExtraReset={speed?.value && speed.value !== "standard" ? () => speed.onChange("standard") : undefined}
       follow={follow && { ...follow, onFollow: () => (onFollow(), true) }}
       presets={presets}
       onPreset={(key) => (onPreset(key), true)}

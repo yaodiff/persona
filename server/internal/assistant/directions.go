@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"net/http"
 	"slices"
 	"strings"
@@ -132,12 +133,13 @@ func nameOf(d *direction, title string, pn map[string]string, ok bool) string {
 }
 
 type directionBook struct {
-	mu     sync.Mutex
-	loaded bool
-	m      map[string]*direction // by leader conversation id
-	armed  bool                  // a compare is scheduled
-	after  func(d time.Duration, f func())
-	now    func() time.Time // tests: the clock notes are saved and the owner's messages are aged by (nil: time.Now)
+	mu         sync.Mutex
+	loaded     bool
+	m          map[string]*direction // by leader conversation id
+	todoLabels map[string]string     // last labels observed by directionsSync, including fallbacks
+	armed      bool                  // a compare is scheduled
+	after      func(d time.Duration, f func())
+	now        func() time.Time // tests: the clock notes are saved and the owner's messages are aged by (nil: time.Now)
 	// inflight: by conversation, the moves of its notes block in effect and the owner's messages whose outcomes are
 	// not yet known (direction_notes.go notesSendOutcome); ownerSeen: the owner's latest message ids it gave parameters
 	// for (notesOwnerCarry); namedOn: one more than the newest connection to the hub on which a notice named its
@@ -260,8 +262,8 @@ func (s *Service) directionsSync(ctx context.Context) {
 	tell := s.todoEventsOn()
 
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	if !s.directionsLocked(ctx) {
+		b.mu.Unlock()
 		return
 	}
 	changed := false
@@ -289,12 +291,16 @@ func (s *Service) directionsSync(ctx context.Context) {
 		ids = append(ids, id)
 	}
 	slices.Sort(ids)
+	labels := make(map[string]string, len(ids))
 	for _, id := range ids {
 		d := b.m[id]
 		if !leaders[id] && d.EndedAt == nil {
 			d.EndedAt, changed = &now, true
 		}
 		curName := nameOf(d, titles[id].title, pnames, pok)
+		if id != "" && id != cfg.Main {
+			labels[id] = curName
+		}
 		curTitle := titles[id].title
 		if d.Outside != nil {
 			curTitle = curName // no conversation title exists; event consumers still get a useful non-empty title
@@ -315,6 +321,12 @@ func (s *Service) directionsSync(ctx context.Context) {
 	}
 	for _, n := range notices {
 		s.todoQueue(todoNotice{assistantwire.EventLeaderChanged, n})
+	}
+	labelsChanged := !maps.Equal(b.todoLabels, labels)
+	b.todoLabels = labels
+	b.mu.Unlock()
+	if labelsChanged {
+		s.todoRevisionChanged()
 	}
 	if changed {
 		go s.publish(context.WithoutCancel(ctx)) // the snapshot carries the records (SessionView.Direction)

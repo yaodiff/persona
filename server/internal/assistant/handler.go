@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -94,15 +93,6 @@ type Handler interface {
 	SessionDelta(ctx context.Context, p SessionDelta)
 	// ChannelNoted is channels.noted: a channel's message went in through the apps' routes.
 	ChannelNoted(ctx context.Context, p ChannelNoted)
-	// The inbox (inbox.go).
-	// InboxCollected is inbox.collected: what one collection of the sources read.
-	InboxCollected(ctx context.Context, r assistantwire.InboxRound) error
-	// InboxItemJSON is inbox.item: one item as it is stored.
-	InboxItemJSON(ctx context.Context, id string) (json.RawMessage, bool)
-	// InboxForget is inbox.forget: a source's data was deleted; its items go.
-	InboxForget(ctx context.Context, source string) (int, error)
-	// InboxRepoMutes is inbox.repo_mutes: a source's muted repositories (set first when asked).
-	InboxRepoMutes(ctx context.Context, p assistantwire.InboxRepoMutes) ([]string, error)
 }
 
 // roleFull is a device that may do everything (an answer-only watch may not).

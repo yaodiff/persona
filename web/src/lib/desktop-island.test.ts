@@ -40,9 +40,9 @@ describe("islandState", () => {
     // frozen as the hooks' shared lists are treated: sorting it in place would throw
     const state = islandState(Object.freeze(sessions), [card, childCard]);
     expect(state.rows.map((r) => [r.title, r.state, r.label, r.line])).toEqual([
-      ["示例 n3", "needs_you", "需要你", "在问你：先合哪个分支？"],
+      ["示例 n3", "needs_you", "需要你", "向你提问：先合哪个分支？"],
       ["示例 n2", "needs_you", "需要你", "等你确认发布"],
-      ["示例 n1", "needs_you", "需要你", "在问你：用哪个框架？"],
+      ["示例 n1", "needs_you", "需要你", "向你提问：用哪个框架？"],
       ["示例 w2", "working", "工作中", ""],
       ["示例 w1", "working", "工作中", "在跑测试"],
     ]);

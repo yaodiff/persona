@@ -86,7 +86,7 @@ describe("a task card's agent line", () => {
 
   it("says no effort when the agent reports none", () => {
     const line = agentLine([todo("a", { agents: [on("cx")] })], [row("cx", { agent: "codex", model: "gpt-5.5" })]);
-    expect(line?.who).toBe("MacBook · 5.5");
+    expect(line?.who).toBe("MacBook · GPT-5.5");
   });
 
   it("keeps the gateway channel in an unnamed model label as the model pill does (#10125)", () => {

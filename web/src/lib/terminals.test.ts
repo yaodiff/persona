@@ -75,7 +75,7 @@ describe("the terminal browser's tree", () => {
     const shell: PaneDTO = { pane: "w1:p3", terminal: "pane:w1:p3", tab_id: "t", workspace_id: "w", cwd: "/home/me/proj" };
     expect(paneRow(shell, undefined)).toEqual({ title: "proj", detail: "~/proj" });
     expect(paneRow({ ...shell, title: "zsh" }, undefined)).toEqual({ title: "zsh", detail: "~/proj" });
-    expect(paneRow({ ...shell, cwd: undefined }, undefined).title).toBe("终端");
+    expect(paneRow({ ...shell, cwd: undefined }, undefined).title).toBe("Shell");
     expect(paneRow({ ...shell, agent: "codex" }, undefined)).toEqual({ title: "codex", detail: "codex · ~/proj" });
     expect(paneRow({ ...shell, agent: "claude" }, session())).toEqual({ title: "修登录崩溃", detail: "claude · ~/proj" });
     expect(paneState({ ...shell, agent: "claude", status: "mystery" }, undefined)).toBe("unknown");

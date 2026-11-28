@@ -50,11 +50,12 @@ const previewTitleJS = `(() => {
 
 // Viewport bounds (CSS pixels) and the picture's quality.
 const (
-	previewMinSide   = 200
-	previewMaxWidth  = 3840
-	previewMaxHeight = 2400
-	previewMaxDPR    = 2
-	previewQuality   = 70
+	previewMinSide      = 200
+	previewMaxWidth     = 3840
+	previewMaxHeight    = 2400
+	previewMaxDPR       = 2
+	previewQuality      = 82
+	previewStillQuality = 92
 	// previewInFlight: pictures sent and not yet drawn by the web. The browser makes the next one when one is
 	// acknowledged, so a slow link gets fewer pictures, not a backlog.
 	previewInFlight = 2
@@ -62,9 +63,12 @@ const (
 	previewShotMaxHeight = 12000
 )
 
+// previewStillDelay is how long the page stays without a new screencast frame before sending a sharper still frame.
+var previewStillDelay = 150 * time.Millisecond
+
 // Binary messages to the web: a picture of the page or a screenshot.
 const (
-	previewFrameMsg byte = 'f' // seq (4), CSS width (2), CSS height (2), JPEG
+	previewFrameMsg byte = 'f' // seq (4), CSS width (2), CSS height (2), JPEG or PNG
 	previewShotMsg  byte = 's' // id (4), PNG
 )
 
@@ -100,6 +104,9 @@ type previewIn struct {
 	On       bool    `json:"on,omitempty"`
 	Accept   bool    `json:"accept,omitempty"`
 	Name     string  `json:"name,omitempty"`
+	Select   bool    `json:"select,omitempty"`
+	PNG      bool    `json:"png,omitempty"`
+	Index    *int    `json:"index,omitempty"`
 }
 
 type previewViewport struct {
@@ -144,13 +151,33 @@ type previewTab struct {
 
 	vp       previewViewport
 	seq      uint32
-	unacked  int
-	heldAck  []int // screencast frames not acknowledged to the browser yet
+	inFlight map[uint32]struct{} // frames sent to the web and not yet acknowledged
+	heldAck  []int               // screencast frames not acknowledged to the browser yet
 	url      string
 	title    string
 	loading  bool
 	picking  bool
 	lastPage string
+
+	featPNG            bool
+	frameGen           uint64
+	stillTimer         *time.Timer
+	stillInFlight      bool
+	stillPendingGen    uint64
+	stillSentPNG       bool
+	hasLastScreencast  bool
+	lastScreencastHash [32]byte
+	lastScreencastW    uint16
+	lastScreencastH    uint16
+
+	featSelect       bool
+	selectActivating bool
+	deferredInput    []*previewIn
+	selectSeq        uint32
+	selectID         uint32
+	selectToken      uint32
+	selectExecCtxID  int
+	selectValid      map[int]struct{}
 
 	mouseSequence    atomic.Uint64 // assigned by the panel reader
 	dropMouseThrough uint64        // queued pointer input cannot click the page if inspection fails
@@ -347,10 +374,12 @@ func (t *previewTab) applyViewport(restart bool) {
 	}
 	if restart {
 		t.cdp("Page.stopScreencast", nil)
-		t.unacked, t.heldAck = 0, nil
+		t.inFlight, t.heldAck = nil, nil
+		t.resetStill()
 	}
 	t.cdp("Page.startScreencast", map[string]any{
-		"format": "jpeg", "quality": previewQuality, "maxWidth": int(float64(v.w) * v.dpr), "maxHeight": int(float64(v.h) * v.dpr), "everyNthFrame": 1,
+		"format": "jpeg", "quality": previewQuality,
+		"maxWidth": int(math.Round(float64(v.w) * v.dpr)), "maxHeight": int(math.Round(float64(v.h) * v.dpr)), "everyNthFrame": 1,
 	})
 }
 
@@ -381,6 +410,7 @@ func (t *previewTab) close() {
 // run serves the tab until the web leaves or the tab goes away.
 func (t *previewTab) run(start string) {
 	defer t.conn.Close()
+	defer t.stopStill()
 	defer t.close()
 	go t.readWeb()
 	t.send(map[string]any{"t": "ready", "browser": t.b.name, "w": t.vp.w, "h": t.vp.h})

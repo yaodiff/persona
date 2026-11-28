@@ -5,6 +5,8 @@
 // (apple/Shared/HubPageLink.swift) and Android read the same table; spec/fixtures/deep-links/cases.json is what every
 // client checks (lib/deep-links.test.ts for both kinds of link here). Only the keys a page lists are read: a link only
 // opens a page, it never signs in or acts.
+import { decodeURIComponentSafe } from "./uri";
+import { machineLocation, machinePath, type MachineLocation } from "./machine-route";
 import { APP_SCHEMES, assistantPath } from "./compatibility";
 
 
@@ -21,8 +23,8 @@ export type DeepPage =
   | { page: "knowledge"; kind?: string }
   | { page: "knowledge-entry"; kind: string; id: string }
   | { page: "machines" }
-  | { page: "machine"; id: string; range?: string }
-  | { page: "settings"; tab?: string; item?: string; manager?: string }
+  | ({ page: "machine"; id: string } & MachineLocation)
+  | { page: "settings"; tab?: string; item?: string; manager?: string; otherManager?: string; filter?: string; prefill?: string; integration?: string }
   | { page: "extension"; extension: string; ui: string; state?: string };
 
 /** The knowledge base's kinds (lib/kb.ts KB_KINDS; a test keeps the two the same). */
@@ -35,6 +37,58 @@ export const DEEP_SETTINGS_TABS: Record<string, string | null> = {
   connectors: "connector", sources: "state", extensions: "extension", integrations: "integration", shortcuts: null, advanced: null, devices: null, hub: null,
   managers: null, knowledge: null, avatar: null, labs: null,
 };
+
+export type LegacyIntegrationTab = "channels" | "connectors" | "extensions" | "sources";
+
+export function isLegacyIntegrationTab(tab: string | null | undefined): tab is LegacyIntegrationTab {
+  return tab === "channels" || tab === "connectors" || tab === "extensions" || tab === "sources";
+}
+
+export function splitSettingsOwner(raw: string): { id: string; manager?: string } {
+  const at = raw.indexOf("@");
+  if (at <= 0) return { id: raw };
+  const manager = raw.slice(at + 1);
+  return manager ? { id: raw.slice(0, at), manager } : { id: raw.slice(0, at) };
+}
+
+/**
+ * Parses path-based Settings URLs such as `/settings/connectors/github@work`,
+ * `/settings/channels/feishu`, `/settings/extensions/larkx@work/ui/board`,
+ * `/settings/sources`, `/settings/sources/<state>`, `/settings/sources@work/<state>`,
+ * `/settings/plugins/larkx`, `/settings/integrations/builtin:mail`, or `/settings/sent`.
+ */
+export function parseSettingsPath(path: string): { tab: string; sub: string | null; manager?: string } | null {
+  const trimmed = path.replace(/\/+$/, "");
+  if (!trimmed.startsWith("/settings/")) return null;
+  const rest = trimmed.slice("/settings/".length);
+  if (!rest) return null;
+  const slash = rest.indexOf("/");
+  const head = decodeURIComponentSafe(slash >= 0 ? rest.slice(0, slash) : rest);
+  const { id: tab, manager } = splitSettingsOwner(head);
+  if (head === "sent") return { tab: "sent", sub: null };
+  if (head !== "plugins" && tab !== "integrations" && !isLegacyIntegrationTab(tab)) return null;
+
+  const parts = slash >= 0 ? rest.slice(slash + 1).split("/") : [];
+  const first = decodeURIComponentSafe(parts[0] ?? "");
+  // The integration sub-codec owns the escaping inside a sources route. Other settings
+  // items (including legacy sources state) use decoded path components.
+  let sub = tab === "integrations" && splitSettingsOwner(first).id === "-sources"
+    ? [first, ...parts.slice(1)].join("/")
+    : parts.map(decodeURIComponentSafe).join("/");
+
+  if (manager && sub && tab !== "sources") {
+    // Detail views read ownership from the item. Keep list ownership in the manager
+    // parameter and let an explicitly owned item override its tab's default owner.
+    const segments = sub.split("/");
+    const ownerIndex = segments[0] === "-market" ? 2 : segments[0] === "-channels" ? 1 : 0;
+    const item = segments[ownerIndex];
+    if (item && (!item.startsWith("-") || item === "-sources") && !splitSettingsOwner(item).manager) {
+      segments[ownerIndex] = `${item}@${manager}`;
+      sub = segments.join("/");
+    }
+  }
+  return { tab: head === "plugins" ? "extensions" : tab, sub: sub || null, ...(manager ? { manager } : {}) };
+}
 
 /** Sent records: an item of the connectors tab (views/settings/nav.ts SENT_SUB). */
 const SENT = "-sent";
@@ -52,13 +106,21 @@ function segments(path: string): string[] | null {
   }
 }
 
-function settingsPage(q: URLSearchParams): DeepPage {
-  const tab = q.get("tab") ?? "";
-  const manager = q.get("manager") ?? undefined;
-  if (tab === "sent") return clean({ page: "settings", tab: "connectors", item: SENT, manager });
+function settingsPage(q: URLSearchParams, route?: ReturnType<typeof parseSettingsPath>): DeepPage {
+  const rawTab = route?.tab ?? q.get("tab") ?? "";
+  const tab = rawTab === "plugins" ? "extensions" : rawTab === "sent" ? "connectors" : rawTab;
+  const managers = [...new Set([...q.getAll("manager"), route?.manager].filter(Boolean))];
+  const [manager, otherManager] = managers;
   if (!(tab in DEEP_SETTINGS_TABS)) return clean({ page: "settings", manager });
   const key = DEEP_SETTINGS_TABS[tab];
-  return clean({ page: "settings", tab, item: key ? q.get(key) ?? undefined : undefined, manager });
+  const item = rawTab === "sent" ? SENT : route?.sub ?? (key ? q.get(key) ?? (tab === "extensions" ? q.get("plugin") : null) : null);
+  if (tab === "integrations" || isLegacyIntegrationTab(tab)) {
+    const set = q.getAll("set");
+    const prefill = set.length === 1 ? set[0] : undefined;
+    const integration = tab === "integrations" ? undefined : q.get("integration") ?? undefined;
+    return clean({ page: "settings", tab, item: item ?? undefined, manager, otherManager, filter: q.get("filter") ?? undefined, prefill, integration });
+  }
+  return clean({ page: "settings", tab, item: item ?? undefined, manager });
 }
 
 /** The page a path of the hub's web app is (without the sub-path), with its query; null for a path the table does not
@@ -95,17 +157,18 @@ export function pageOfPath(path: string, search = ""): DeepPage | null {
       if (!DEEP_KB_KINDS.includes(p[1]!)) return null;
       if (p.length === 2) return { page: "knowledge", kind: p[1]! };
       return p.length === 3 ? { page: "knowledge-entry", kind: p[1]!, id: p[2]! } : null;
-    case "machines":
+    case "machines": {
       if (p.length === 1) return { page: "machines" };
-      return p.length === 2 ? clean({ page: "machine", id: p[1]!, range: v("range") }) : null;
-    case "settings":
+      const location = machineLocation(p, search);
+      return location ? { page: "machine", id: p[1]!, ...location } : null;
+    }
+    case "settings": {
       if (p.length === 2 && p[1] === "sent") return { page: "settings", tab: "connectors", item: SENT };
-      if (p.length >= 2 && (p[1] === "sources" || p[1]!.startsWith("sources@"))) {
-        const pathManager = p[1]!.startsWith("sources@") ? p[1]!.slice("sources@".length) || undefined : undefined;
-        const item = p.length > 2 ? p.slice(2).join("/") : v("state");
-        return clean({ page: "settings", tab: "sources", item, manager: v("manager") ?? pathManager });
-      }
-      return p.length === 1 ? settingsPage(q) : null;
+      if (p.length === 1) return settingsPage(q);
+      const route = parseSettingsPath(path);
+      if (!route || route.tab === "sent") return null;
+      return settingsPage(q, route);
+    }
     case "extension":
     case "plugin":
       return p.length === 3 ? clean({ page: "extension", extension: p[1]!, ui: p[2]!, state: v("state") }) : null;
@@ -215,10 +278,11 @@ export function pagePath(p: DeepPage): string {
     case "machines":
       return "/machines";
     case "machine":
-      return withQuery(`/machines/${enc(p.id)}`, [["range", p.range]]);
+      return machinePath(p.id, p);
     case "settings": {
       const key = p.tab ? DEEP_SETTINGS_TABS[p.tab] : null;
-      return withQuery("/settings", [["tab", p.tab], [key ?? "", key ? p.item : undefined], ["manager", p.manager]]);
+      return withQuery("/settings", [["tab", p.tab], [key ?? "", key ? p.item : undefined],
+        ["manager", p.manager], ["manager", p.otherManager], ["filter", p.filter], ["set", p.prefill], ["integration", p.integration]]);
     }
     case "extension":
       return withQuery(`/extension/${enc(p.extension)}/${enc(p.ui)}`, [["state", p.state]]);

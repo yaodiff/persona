@@ -2,16 +2,18 @@ import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { STATE_LABEL } from "../lib/state-labels";
 import { foldedCounts } from "../lib/folded-counts";
-import type { AgentState, Session } from "../lib/types";
+import type { AgentState, StatusMarkState, Session } from "../lib/types";
 import { markOf, StateTally, StatusMark, type MarkShape } from "./StatusMark";
 
-const ALL = Object.keys(STATE_LABEL) as AgentState[];
+const ALL = Object.keys(STATE_LABEL) as StatusMarkState[];
 
 describe("state → mark", () => {
   it("draws each state with the shape and color it is known by", () => {
-    const want: Record<AgentState, [MarkShape, string]> = {
+    const want: Record<StatusMarkState, [MarkShape, string]> = {
       working: ["arc", "var(--status-working)"],
       needs_you: ["alert", "var(--status-needs)"],
+      done: ["glow", "var(--status-unread)"],
+      error: ["alert", "var(--red)"],
       unread: ["glow", "var(--status-unread)"],
       idle: ["dot", "var(--status-idle)"],
       unknown: ["dot", "var(--status-idle)"],

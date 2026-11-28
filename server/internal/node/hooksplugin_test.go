@@ -156,10 +156,26 @@ func TestHerdrStartManagedWithHooksPlugin(t *testing.T) {
 	}
 	waitCalls(t, f, "pane.send_input", 1)
 	dir := personaDir(home)
+	// A managed launcher's start gets a private per-start settings file: its gateway env and the model this start
+	// runs, not the shared "<launcher>-env-settings.json" (#17035). A per-start alias must change neither the
+	// launcher's file nor another conversation's start.
+	settings, err := filepath.Glob(filepath.Join(dir, "launcher-settings", "model-aliases-*.json"))
+	if err != nil || len(settings) != 1 {
+		t.Fatalf("per-start settings %v, %v; want one model-aliases file", settings, err)
+	}
+	if info, err := os.Stat(settings[0]); err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("the per-start settings must be private: %v", err)
+	}
+	s := readSettings(t, settings[0])
+	env, _ := s["env"].(map[string]any)
+	if env["ANTHROPIC_BASE_URL"] != "https://gateway.example.com" || env["ANTHROPIC_MODEL"] != "m" || s["model"] != "m" {
+		t.Fatalf("the launcher's gateway and model are missing: %v", s)
+	}
 	want := inAgentEnv(dir, "HERDR_AGENT=claude /tmp/persona-test/personad launch work_gw --session-id "+startID+
-		" --settings "+shellQuote(filepath.Join(dir, "launcher-settings", "work_gw-env-settings.json"))+
+		" --settings "+shellQuote(settings[0])+
 		" --mcp-config "+shellQuote(filepath.Join(dir, "mcp.json"))+
 		" --allowedTools "+shellQuote(pluginToolsRule(dir))+
+		" --model m"+
 		" --plugin-dir "+shellQuote(filepath.Join(dir, "agent-plugin"))+
 		" --plugin-dir "+shellQuote(filepath.Join(dir, "claude-hooks"))+
 		" --plugin-dir "+shellQuote(filepath.Join(dir, "claude-live-replies")), shellQuote)

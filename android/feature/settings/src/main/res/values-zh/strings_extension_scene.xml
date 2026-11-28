@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="settings_ext_scene">3D 场景</string>
+    <string name="settings_ext_scene_turn_left">向左旋转场景</string>
+    <string name="settings_ext_scene_turn_right">向右旋转场景</string>
+    <string name="settings_ext_scene_tilt_up">抬高视角</string>
+    <string name="settings_ext_scene_tilt_down">降低视角</string>
+    <string name="settings_ext_scene_reset">重置视图</string>
+</resources>

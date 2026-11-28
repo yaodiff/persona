@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/larkhost"
 )
@@ -14,12 +15,7 @@ import (
 // botPost sends a card: as a reply to replyTo, else into the owner's chat; one Feishu refuses goes as rich text
 // (fallback).
 func (s *Service) botPost(ctx context.Context, replyTo string, card *botcard.Card, fallback string) (string, error) {
-	return s.botPostKeyed(ctx, replyTo, card, fallback, "")
-}
-
-// botPostKeyed is botPost with a key for a send into the chat that may be made again: the same key lands once.
-func (s *Service) botPostKeyed(ctx context.Context, replyTo string, card *botcard.Card, fallback, key string) (string, error) {
-	return s.botPostTo(ctx, feishuTarget{}, replyTo, card, fallback, key)
+	return s.botPostTo(ctx, feishuTarget{}, replyTo, card, fallback, "")
 }
 
 // feishuTarget says where a feishu.post / feishu.text goes beyond the default (larkhost.Target): the chat to send into
@@ -63,13 +59,13 @@ func (s *Service) botPostContent(ctx context.Context, to feishuTarget, replyTo, 
 	if key != "" {
 		p["uuid"] = key
 	}
-	reminder, _ := ctx.Value(todoReminderSendKey{}).(*todoReminderSend)
-	if reminder != nil {
-		p["todo_reminder_pairing"] = map[string]any{"owner": reminder.owner, "paired_at": reminder.pairedAt}
+	pairing, reminder := assistantwire.LarkReminderPairingOf(ctx)
+	if reminder {
+		p["todo_reminder_pairing"] = map[string]any{"owner": pairing.Owner, "paired_at": pairing.PairedAt}
 	}
 	targetParams(to, p)
 	err := s.appCall(ctx, AppFeishu, FeishuPost, p, &res)
-	if reminder != nil && err == nil && res.MessageID == "" {
+	if reminder && err == nil && res.MessageID == "" {
 		err = errors.New("todo reminder: delivery receipt unavailable")
 	}
 	if err == nil {
@@ -100,13 +96,6 @@ func (s *Service) botNote(ctx context.Context, messageID, text string) {
 func (s *Service) botNoteTo(ctx context.Context, to feishuTarget, messageID, text string) {
 	if err := s.appCall(ctx, AppFeishu, FeishuText, targetParams(to, map[string]any{"reply_to": messageID, "text": text}), nil); err != nil {
 		s.logf("bots: note: %v", err)
-	}
-}
-
-// botSay sends a line of text into the owner's chat.
-func (s *Service) botSay(ctx context.Context, text string) {
-	if err := s.appCall(ctx, AppFeishu, FeishuText, map[string]any{"text": text}, nil); err != nil {
-		s.logf("bots: say: %v", err)
 	}
 }
 

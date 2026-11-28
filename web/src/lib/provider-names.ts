@@ -17,19 +17,40 @@ export interface Named {
   display_name?: string;
 }
 
+const BUILTIN_TITLES: Record<string, string> = {
+  claude: "Claude Code",
+  codex: "Codex",
+  "claude-desktop": "Claude Desktop",
+  "codex-app": "Codex App",
+  agy: "Antigravity CLI",
+  omp: "Oh My Pi",
+  cursor: "Cursor",
+  gemini: "Gemini CLI",
+};
+
 const shown = (l: Named) => l.display_name?.trim() ?? "";
 
-/** The name to show first: the display name, else the startup ID. */
+/** The name to show first: the display name, else a built-in product name, else the startup ID. */
 export function providerTitle(l: Named): string {
-  const name = shown(l) || l.name;
-  return isTraeCli(l.name) ? normalizeTraeCliName(name) : name;
+  const d = shown(l);
+  if (isTraeCli(l.name)) return normalizeTraeCliName(d || l.name);
+  const builtin = Object.hasOwn(BUILTIN_TITLES, l.name) ? BUILTIN_TITLES[l.name] : undefined;
+  if (d) {
+    const lower = d.toLowerCase();
+    if (lower !== l.name.toLowerCase() && (!builtin || lower !== builtin.toLowerCase())) return d;
+  }
+  return builtin ?? (d || l.name);
 }
 
-/** The startup ID to show as secondary text (small monospace or a tooltip), or "" when the title already is the ID. */
+/** The startup ID to show as secondary text (small monospace or a tooltip), or "" when the title already is the ID or a built-in title. */
 export function providerIdNote(l: Named): string {
   if (l.name === "traex") return "";
   const d = shown(l);
-  return d && d !== l.name ? l.name : "";
+  if (!d) return "";
+  const lower = d.toLowerCase();
+  if (lower === l.name.toLowerCase()) return "";
+  if (Object.hasOwn(BUILTIN_TITLES, l.name) && lower === BUILTIN_TITLES[l.name].toLowerCase()) return "";
+  return l.name;
 }
 
 /** One line for a place that holds only plain text (a native `<option>`, a title attribute): "Team relay (team-relay)". */

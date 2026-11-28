@@ -48,7 +48,7 @@ func TestRuntimeStaysAcrossHubConnections(t *testing.T) {
 	if hub, _ := rt.helloR["hub"].(bool); hub {
 		t.Fatal("hello said a hub is connected before one was")
 	}
-	if f, _ := json.Marshal(rt.helloR["features"]); string(f) != `["prefer_running","resume_argv","handover","transcript","launchers","start_params","modes","resume","codex_thread","unlisted_transcripts","workspaces","usage","usage_windows","leader_tools","supervision_policy","a2a_mcp","remote_agent","memory_tools","codex_claims"]` {
+	if f, _ := json.Marshal(rt.helloR["features"]); string(f) != `["prefer_running","resume_argv","handover","transcript","launchers","start_params","modes","resume","codex_thread","unlisted_transcripts","workspaces","usage","usage_windows","leader_tools","supervision_policy","a2a_mcp","remote_agent","memory_tools","codex_claims","input"]` {
 		t.Fatalf("features %s", f)
 	}
 	_ = rt.peer.Notify("runtime.sessions", map[string]any{"sessions": []map[string]any{{"session_id": "session-1", "status": "done"}}})

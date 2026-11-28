@@ -3,14 +3,15 @@
 // pointer (else the one that runs) on the right, and a footer with what that model adds: its speed, Claude Code's
 // ultracode. A launcher that can't take a pick here says why in its tooltip and once above its models, not as a line
 // under every such launcher. A narrow screen keeps the single launcher-first column (LauncherRow).
-import type { ReactNode } from "react";
 import { t } from "../../i18n";
-import { shownEffort, type PanelProvider, type PanelRow, type PanelState } from "../../lib/model-panel";
+import { shownEffort, speedLabel, type PanelProvider, type PanelRow, type PanelState } from "../../lib/model-panel";
 import { weeklyQuota, type LauncherQuotaAnswer } from "../../lib/quota";
+import type { SpeedOption } from "../../lib/session-speed";
 import { effortTitle } from "../../lib/session-actions";
 import { cx } from "../atoms";
 import { Icon } from "../icons";
 import { ProviderMark } from "./ProviderMark";
+import { SpeedMark } from "./SpeedMark";
 
 /** The left column's entry for the saved setups (favorites, then recent) and the presets. */
 export const SAVED_SIDE = "\nsaved";
@@ -108,36 +109,40 @@ export function LevelColumn({ row, disabled, onLevel }: {
   );
 }
 
-/** Standard or Fast (Codex's priority speed, where the model has it), as one control of two halves. */
-export function SpeedSwitch({ fast, disabled, onFast }: { fast: boolean; disabled: boolean; onFast: (on: boolean) => void }) {
-  const half = (on: boolean, label: ReactNode, name: string) => (
-    <button
-      type="button"
-      data-panel-speed={on ? "fast" : "standard"}
-      aria-pressed={fast === on}
-      aria-label={name}
-      title={on ? t("ui-modelpanel.fast") : undefined}
-      disabled={disabled}
-      onClick={() => fast !== on && onFast(on)}
-      className={cx(
-        "flex h-7 items-center gap-1 rounded-[7px] px-2.5 text-label whitespace-nowrap transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-50",
-        fast === on ? "bg-surface text-ink shadow-sm" : "text-ink-2 enabled:hover:text-ink",
-      )}
-    >
-      {label}
-    </button>
-  );
+/** The same compact control in the columns and the narrow flyout. */
+export function SpeedSwitch({ options, speed, disabled, onSpeed }: {
+  options: readonly SpeedOption[];
+  speed?: string;
+  disabled?: boolean;
+  onSpeed: (speed: string) => void;
+}) {
   return (
-    <div role="group" aria-label={t("ui-modelpanel.speed")} className="flex shrink-0 items-center rounded-control bg-hover-2 p-0.5">
-      {half(false, t("ui-modelpanel.speed_standard"), t("ui-modelpanel.speed_standard"))}
-      {half(
-        true,
-        <>
-          <Icon name="bolt" size={12} className="fill-current" />
-          {t("ui-modelpanel.fast_short")}
-        </>,
-        t("ui-modelpanel.fast_short"),
-      )}
+    <div role="group" aria-label={t("ui-modelpanel.speed")} className="inline-flex w-fit max-w-full shrink-0 flex-wrap items-center rounded-control bg-hover-2 p-0.5">
+      {options.map((option) => {
+        const { id } = option;
+        const label = speedLabel(option);
+        const selected = speed === id;
+        const detail = option.description || (id === "fast" ? t("ui-modelpanel.fast") : id === "ultrafast" ? t("ui-modelpanel.ultrafast") : label);
+        return (
+          <button
+            key={id}
+            type="button"
+            data-panel-speed={id}
+            aria-pressed={selected}
+            aria-label={label}
+            title={detail}
+            aria-disabled={disabled || undefined}
+            onClick={() => !disabled && !selected && onSpeed(id)}
+            className={cx(
+              "flex min-h-7 max-w-full shrink-0 items-center gap-1 rounded-[7px] px-2.5 text-label whitespace-nowrap transition-colors duration-150 focus-visible:-outline-offset-2! aria-disabled:cursor-not-allowed aria-disabled:opacity-50 [@media(pointer:coarse)]:min-h-11",
+              selected ? "bg-surface text-ink" : "text-ink-2 hover:text-ink",
+            )}
+          >
+            <SpeedMark speed={id} size={12} />
+            <span className="truncate">{label}</span>
+          </button>
+        );
+      })}
     </div>
   );
 }

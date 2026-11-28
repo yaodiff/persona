@@ -175,15 +175,8 @@ func (h *Hub) browserIssue(w http.ResponseWriter, r *http.Request, f *browserLog
 		f.Issued = true
 		h.logf("device token %s for %q (web, full) by browser sign-in, approved by device %s %q", f.DeviceID, f.Name, approver.ID, approver.Name)
 		// Only a web credential, as in POST /auth/tokens: an id a browser kept cannot take a phone, a watch or a link off.
-		if old := f.Replaces; old != "" && old != f.DeviceID {
-			if ok, err := h.revokeWebToken(r.Context(), old); err != nil {
-				h.logf("device token %s: replacing %s: %v", f.DeviceID, old, err)
-			} else if ok {
-				f.Replaced = old
-				h.revoked(old)
-				h.sendRevocations(newlyReachable(nil, h.meshView()))
-				h.logf("device token %s replaces %s", f.DeviceID, old)
-			}
+		if replaced := h.replaceDeviceToken(r.Context(), f.DeviceID, "web", f.Replaces); replaced != "" {
+			f.Replaced = replaced
 		}
 		h.notifyPairing(f.Name, f.DeviceID)
 	}

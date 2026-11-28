@@ -185,7 +185,7 @@ func (s core) homeCard(ctx context.Context, f assistantwire.FeishuFeatures) (car
 		if i == wbHomeRows {
 			break
 		}
-		primary, secondary := s.h.SessionNames(ctx, r.Session)
+		primary, secondary := s.h.SessionNamesAs(r.Session, s.h.UseHerdrTabName(ctx))
 		label := clip(oneLine(primary), 24)
 		card.Row(map[string]any{"a": "switch", "k": targetAgent, "m": r.Machine, "s": r.Session.SessionID, "t": label + " · " + r.MachineName},
 			agentRowMarkdown(l, label, secondary, r.MachineName, r.Session, 70))

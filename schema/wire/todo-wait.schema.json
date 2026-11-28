@@ -1,0 +1,138 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "todo-wait.schema.json",
+  "title": "To-do waiting reason",
+  "description": "Why a parked or waiting to-do is waiting, computed once on the server (#16168): what or who it waits on, the waiting reason, what wakes it (condition or scheduled wake time), its deadline, and any linked source or contact receipt. Clients render it directly without deriving waiting state themselves. Pinned by spec/fixtures/todo-wait.",
+  "x-out": {
+    "go": "server/internal/assistantwire/todo_wait_gen.go",
+    "swift": "apple/Packages/PersonaWire/Sources/PersonaWire/TodoWaitWire.swift",
+    "kotlin": "android/core/contracts/src/main/kotlin/persona/core/contracts/generated/TodoWaitWire.kt",
+    "ts": "web/src/lib/todo-wait-wire.ts",
+    "arkts": "harmony/entry/src/main/ets/models/TodoWaitWire.ets"
+  },
+  "x-guard": ["rust"],
+  "$defs": {
+    "TodoWaitKind": {
+      "description": "What kind of wait holds a to-do in Waiting: person_reply, waiting on a person to reply; merge_review, waiting on a reviewer to review or merge a ready PR/MR; pr_merge, an open PR waiting to merge; external_event, waiting on an external event, CI run, or upstream change; date, parked until a specific date or time; todo_handoff, waiting on another to-do's handoff check; agent, a run waiting on another Agent; usage_limit, waiting for a subscription usage limit to reset; parked, a legacy or generic park without a narrower kind. Closed: a client decodes a newer value as unknown and counts it.",
+      "type": "string",
+      "x-enum": "closed",
+      "x-unknown": "count",
+      "enum": [
+        "person_reply",
+        "merge_review",
+        "pr_merge",
+        "external_event",
+        "date",
+        "todo_handoff",
+        "agent",
+        "usage_limit",
+        "parked"
+      ]
+    },
+    "TodoWaitPRBlocker": {
+      "description": "Why an open pull request is not merged yet (when TodoWait.kind is pr_merge): review_required, waiting for an approving review; changes_requested, a reviewer requested changes; checks_pending, required checks are running; checks_failing, checks failed; conflicts, merge conflicts must be resolved. Closed: a client decodes a newer value as unknown and counts it.",
+      "type": "string",
+      "x-enum": "closed",
+      "x-unknown": "count",
+      "enum": [
+        "review_required",
+        "changes_requested",
+        "checks_pending",
+        "checks_failing",
+        "conflicts"
+      ]
+    },
+    "TodoWaitContact": {
+      "description": "An already-sent request backing a person_reply or merge_review wait (never a draft or unsent reminder).",
+      "type": "object",
+      "x-decode": "strict",
+      "required": ["channel"],
+      "properties": {
+        "channel": {
+          "type": "string",
+          "description": "Channel where the request was sent (for example email, chat, or github)."
+        },
+        "sender": {
+          "type": "string",
+          "description": "Who sent the request; absent when not recorded."
+        },
+        "sent_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Absolute RFC 3339 UTC time when the request was sent; absent when not recorded."
+        },
+        "url": {
+          "type": "string",
+          "description": "Link to the sent message or receipt; absent when not recorded."
+        },
+        "request": {
+          "type": "string",
+          "description": "One-line summary of what was asked; absent when not recorded."
+        }
+      }
+    },
+    "TodoWait": {
+      "description": "Strongly-typed waiting reason on a row of GET /api/v1/todos and GET /api/v1/todos/{id} (`wait`), emitted by the server whenever the to-do is projected into Waiting and absent otherwise. Every timestamp is an absolute RFC 3339 UTC time so responses remain ETag-stable while time passes.",
+      "type": "object",
+      "x-decode": "strict",
+      "required": ["kind"],
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/TodoWaitKind",
+          "description": "What kind of wait holds the to-do."
+        },
+        "waiting_on": {
+          "type": "string",
+          "description": "Who or what target the to-do waits on (person or reviewer name, PR label, external target, another Agent, linked to-do title, or run title); absent when none is named."
+        },
+        "reason": {
+          "type": "string",
+          "description": "Plain one-line description of what the to-do waits for; absent when kind and waiting_on say it alone."
+        },
+        "wake_condition": {
+          "type": "string",
+          "description": "Observable event, check, or follow-up trigger that wakes the to-do; absent when none is recorded."
+        },
+        "wake_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Absolute RFC 3339 UTC time when the hub or limit is next scheduled to wake the to-do; absent for purely event-driven waits with no scheduled wake before their deadline."
+        },
+        "until": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Absolute RFC 3339 UTC deadline or fallback check-in time; absent when there is no deadline."
+        },
+        "since": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Absolute RFC 3339 UTC time when the current wait began; absent when unknown."
+        },
+        "url": {
+          "type": "string",
+          "description": "Link to the pull request, review, issue, or external source; absent when none."
+        },
+        "handoff_todo_id": {
+          "type": "string",
+          "x-id": "TodoID",
+          "description": "Linked to-do ID that this task waits on when kind is todo_handoff; absent otherwise."
+        },
+        "contact": {
+          "$ref": "#/$defs/TodoWaitContact",
+          "description": "Sent request details backing a person_reply or merge_review wait; absent otherwise."
+        },
+        "pr_blockers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TodoWaitPRBlocker"
+          },
+          "description": "Structured reasons an open PR is still waiting to merge (when kind is pr_merge); absent when none are reported."
+        },
+        "step": {
+          "type": "string",
+          "description": "Title of the child step whose wait rolled up onto this parent to-do; absent when the to-do itself is waiting."
+        }
+      }
+    }
+  }
+}

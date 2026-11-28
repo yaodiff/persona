@@ -43,7 +43,8 @@ func packageFingerprint(root string) (string, error) {
 				return err
 			}
 			targetRel, err := filepath.Rel(resolvedRoot, resolved)
-			if err != nil || !inside(filepath.ToSlash(targetRel)) {
+			targetRelSlash := filepath.ToSlash(targetRel)
+			if err != nil || (targetRelSlash != "." && !inside(targetRelSlash)) {
 				return fmt.Errorf("包里的链接 %s 指向包外", rel)
 			}
 			fmt.Fprintf(hash, "%d:", len(target))

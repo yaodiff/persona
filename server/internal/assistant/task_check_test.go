@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/i18n"
-	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -176,7 +175,7 @@ func TestSupervisedTaskKeepsTheCheck(t *testing.T) {
 func TestTaskDoneJudgeAsksInTheUsersLanguage(t *testing.T) {
 	for _, tc := range []struct{ locale, want string }{{"en", "用English写"}, {"ja", "用" + i18n.Lang("ja").Name() + "写"}, {"zh-Hans", ""}} {
 		m := &cannedJSON{answer: `{"verdict":"waiting","reason":"Waiting for CI"}`}
-		in := taskDoneInput{Owner: "User", Language: answerLanguage(tc.locale), Title: "Fix login", Replies: []prompts.TaskDoneReply{doneReply("PR open")}}
+		in := taskDoneInput{Owner: "User", Language: answerLanguage(tc.locale), Title: "Fix login", Replies: []taskDoneReply{doneReply("PR open")}}
 		if _, err := judgeTaskDoneWith(context.Background(), m, in); err != nil {
 			t.Fatal(err)
 		}

@@ -228,6 +228,7 @@ func (h *Hub) handlePutPushGradingLayer(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	h.push.invalidatePushGradingCache()
+	h.assistantUpdated()
 	ownerEnabled, attentionMode := h.pushGradingOwnerStatus()
 	writeJSON(w, pushGradingLayerResponse{
 		Layer:         pushGradingLayerViewOf(&saved),
@@ -268,6 +269,7 @@ func (h *Hub) handleDeletePushGradingLayer(w http.ResponseWriter, r *http.Reques
 		}
 		if removed {
 			h.push.invalidatePushGradingCache()
+			h.assistantUpdated()
 		}
 		ownerEnabled, attentionMode := h.pushGradingOwnerStatus()
 		writeJSON(w, pushGradingLayerDeleteResponse{
@@ -295,6 +297,7 @@ func (h *Hub) handleDeletePushGradingLayer(w http.ResponseWriter, r *http.Reques
 	}
 	if removed {
 		h.push.invalidatePushGradingCache()
+		h.assistantUpdated()
 	}
 	ownerEnabled, attentionMode := h.pushGradingOwnerStatus()
 	writeJSON(w, pushGradingLayerDeleteResponse{
@@ -425,6 +428,9 @@ func (h *Hub) runPushGradingLayerReconcile() {
 			h.push.invalidatePushGradingCache()
 		}
 		rec.writeMu.Unlock()
+		if err == nil && pruned {
+			h.assistantUpdated()
+		}
 
 		// Record any transient failure before releasing the quiesce slot so a
 		// concurrent pause/resume cannot observe an empty deferred map and skip retry.

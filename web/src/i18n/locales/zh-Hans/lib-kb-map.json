@@ -7,7 +7,7 @@
   "main_chat_notes": "主对话记录",
   "code_dirs": "代码目录",
   "related_chats": "关联会话",
-  "related_people": "关联的人",
+  "related_people": "关联人物",
   "status_active": "进行中",
   "status_done": "已完成",
   "status_paused": "已暂停",
@@ -18,7 +18,7 @@
   "projects_root": "项目",
   "projects_root_sub": "按状态",
   "other": "其他",
-  "other_body": "直接挂在「{topic}」下、没有再细分的知识点",
+  "other_body": "直接归属于「{topic}」、未划分至子主题的知识点",
   "topics_root": "知识",
   "topics_root_sub": "按主题"
 }

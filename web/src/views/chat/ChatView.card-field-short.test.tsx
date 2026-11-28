@@ -167,7 +167,7 @@ describe("a waiting card's own field on a page the keyboard made short", () => {
     expect(folded()).toBe(true);
   });
 
-  it("never folds the chat's own question, which holds its turn, on a short page either", async () => {
+  it("opens the chat's own question by default on a short page", async () => {
     const own = { ...question, id: "ix_own", session_id: "c1", session_title: "Persona", folded_under: undefined, folded_as: undefined, tool_name: "ask_user" } as Interaction;
     Object.assign(getState(), { interactions: [own, question], answered: {} });
     media.short = true;
@@ -175,7 +175,7 @@ describe("a waiting card's own field on a page the keyboard made short", () => {
     await flush();
     // the worker's folds into the one line; the chat's own stands open above the capsules with its answers
     expect(folded()).toBe(true);
-    const open = host.querySelector(`[data-turn-asks] [data-card="${own.id}"]`);
+    const open = host.querySelector(`[data-decision-pager] [data-card="${own.id}"]`);
     expect(open).not.toBeNull();
     expect(open!.querySelector("[data-pending-card] button")).not.toBeNull();
   });

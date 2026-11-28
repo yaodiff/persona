@@ -15,6 +15,12 @@ var (
 		// time moves every few seconds, new steps or not: a long turn must not look stuck.
 		"progress_after": time.Second,
 		"progress_idle":  3 * time.Second,
+		// cot_unified_grace is how long, of the turn's took, unified mode holds the progress card back while no agent
+		// message is open yet (#16847): a text-only turn past it gets its card and stays a card turn.
+		"cot_unified_grace": 10 * time.Second,
+		// cot_answer_wait is how long the answer waits for the worker's terminal result in unified mode before sending
+		// cards (#16847).
+		"cot_answer_wait": 25 * time.Second,
 		// turn_wait is how long a message of the chat waits for the one before it (feishuTurnWait).
 		"turn_wait": feishuTurnWait,
 		// topic_lookup_wait is how long the topic of a message just sent waits between two reads of it
@@ -30,6 +36,10 @@ var (
 		// card_recheck is how long after a reconnection the cards that may still be waiting are looked at again (the
 		// manager restores its interactions meanwhile; closeEndedBotCards).
 		"card_recheck": 90 * time.Second,
+		// mirror_retry is the pause before another attempt to deliver a mirror or a to-do reminder.
+		"mirror_retry": mirrorRetry,
+		// read_working_after is how long a held /read works before its owner is told privately (readWorkingAfter).
+		"read_working_after": readWorkingAfter,
 	}
 	defaultTimingLists = map[string][]time.Duration{
 		// cot_end_tries are the waits between tries of cotEnd (a rate limit that hit the end likely hits the first

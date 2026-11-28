@@ -98,7 +98,7 @@ describe("BrowserSection", () => {
     await flush();
     expect(toasts).toHaveLength(1);
     expect(toasts[0]!.tone).toBe("error");
-    expect(toasts[0]!.text).toContain("打开失败");
+    expect(toasts[0]!.text).toContain("开启失败");
     expect(sw()?.getAttribute("aria-checked")).toBe("false");
   });
 

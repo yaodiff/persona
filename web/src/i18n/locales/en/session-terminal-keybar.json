@@ -6,5 +6,12 @@
   "shortcuts": "Shortcuts",
   "copy_selection": "Copy selected text",
   "paste": "Paste from clipboard",
-  "enter": "Return"
+  "enter": "Return",
+  "line": "Type a hidden line",
+  "line_title": "Type a line, hidden",
+  "line_placeholder": "A password, a token, a code…",
+  "line_send": "Type it and press Return",
+  "line_show": "Show what you type",
+  "line_hide": "Hide what you type",
+  "line_hint": "Goes into the terminal as typed, then Return. Persona doesn't keep it."
 }

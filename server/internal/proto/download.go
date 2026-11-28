@@ -23,6 +23,23 @@ type FileChunk struct {
 	Data     []byte    `json:"data,omitempty"`
 }
 
+// BrowserDownloadInfo is a named file in the browser machine's Downloads directory and the hash of its bytes.
+type BrowserDownloadInfo struct {
+	Name   string `json:"name"`
+	Path   string `json:"path"`
+	Size   int64  `json:"size"`
+	SHA256 string `json:"sha256"`
+}
+
+// BrowserDownloadChunk carries part of a browser download and its byte range.
+type BrowserDownloadChunk struct {
+	Name   string `json:"name"`
+	Offset int64  `json:"offset"`
+	Size   int64  `json:"size"`
+	Data   []byte `json:"data"`
+	EOF    bool   `json:"eof"`
+}
+
 // Thumbnails (GET /api/v1/machines/{mid}/file/thumb → node file.thumb): an image of a file at most Size pixels on
 // its long side, for file lists and preview cards.
 const (

@@ -126,7 +126,7 @@ func (s *Service) reviewRecorded(todo, verdict string, v Supervision, reviewer, 
 }
 
 // roundRan adds to a round event's detail what machine's conversation session ran on as the round ended, as its node
-// lists it: model, effort, and output_tokens, the output it has generated so far in all (Session.OutputTokens; the
+// lists it: model, effort, and output_tokens, the output it has generated so far in all (Session.OutputTokensValue; the
 // read takes the difference between two rounds). Each is left out while not known.
 func (s *Service) roundRan(machine, session string, detail map[string]any) map[string]any {
 	c, ok := s.nodeSession(machine, session)
@@ -139,8 +139,8 @@ func (s *Service) roundRan(machine, session string, detail map[string]any) map[s
 	if c.Effort != "" {
 		detail["effort"] = c.Effort
 	}
-	if c.OutputTokens > 0 {
-		detail["output_tokens"] = c.OutputTokens
+	if c.OutputTokensValue() > 0 {
+		detail["output_tokens"] = int(c.OutputTokensValue())
 	}
 	return detail
 }

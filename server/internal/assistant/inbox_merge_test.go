@@ -197,7 +197,7 @@ func TestInboxTodoReplyItemIsAnObject(t *testing.T) {
 
 func TestInboxTodoUndoDeleteFailureKeepsRowFiled(t *testing.T) {
 	h := muteHub(t)
-	database, err := db.Open(context.Background(), newDatabase(t), db.ManagerSet)
+	database, err := db.Open(context.Background(), newMigratedDatabase(t, db.ManagerSet), db.ManagerSet)
 	if err != nil {
 		t.Fatal(err)
 	}

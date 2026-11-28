@@ -331,11 +331,7 @@ func (ps *extensions) setSandbox(ctx context.Context, p *extension.Extension, on
 	st := ps.sandboxOf(ctx, p)
 	ps.reg.Audit(ctx, p.Record.ID, "sandbox", who, map[string]any{"enabled": st.Enabled, "chosen": st.Chosen})
 	ps.logf("extension %s: sandbox %v (by %s)", p.Record.ID, st.Enabled, who)
-	run := ps.ctx // its program lives as long as the extensions do, not as long as this request
-	if run == nil {
-		run = context.Background()
-	}
-	ps.apply(run, p.Record.ID)
+	ps.apply(ps.runtimeContext(ctx), p.Record.ID)
 	return nil
 }
 

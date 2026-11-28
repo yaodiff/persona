@@ -12,6 +12,7 @@ cd apple/Packages/PersonaKit && swift test                             # Persona
 cd apple/Packages/PersonaWire && swift test -Xswiftc -warnings-as-errors # PersonaWire unit tests, warnings as errors as CI runs them
 cd apple/Packages/PersonaModuleAPI && swift test -Xswiftc -warnings-as-errors # module contract and registry (#13432, docs/apple/ios.md "Modules")
 python3 -B scripts/test/test_sim_boot.py                               # sim-boot.sh (fake xcrun / simslim, no simulator)
+(cd web && npm run build && npm run test:e2e)                          # P0 Playwright UI suite against local vite preview
 n=0 failed=""; for f in $(find scripts -name 'test_*.py' -not -path '*/node_modules/*' | sort); do grep -q unittest "$f" || continue; n=$((n + 1)); (cd "$(dirname "$f")" && python3 -B -m unittest -q "$(basename "$f" .py)") || failed="$failed $f"; done; echo "$n suites, failed:${failed:- none}"; [ -z "$failed" ]   # all Python suites in scripts/, like CI (it skips files that never mention unittest); any failure exits nonzero
 ```
 
@@ -35,6 +36,7 @@ gh workflow run ci.yml --ref main -f full=true                       # full suit
 gh workflow run ci.yml --ref main -f lanes=all -f full=false         # equivalent explicit lane choice
 gh workflow run ci.yml --ref <branch> -f full=false -f lanes=server,web
 gh workflow run ci.yml --ref <branch> -f full=false -f lanes=auto -f base=<commit>
+gh workflow run web-ui-e2e.yml --ref <branch>                        # P0 Playwright Web UI suite (manual only, never runs on PRs)
 gh workflow run apple-test.yml --ref main -f lane=ios                # iOS and embedded Watch
 gh workflow run apple-test.yml --ref main -f lane=macos
 gh workflow run pr-needs-issue.yml --ref main -f pr_number=<number>  # metadata enforcement
@@ -137,7 +139,7 @@ setting; the 4 GB Gradle daemon and non-heap allocations are separate.
 | --- | --- | --- | --- | --- |
 | Server / `.github/workflows/server-test.yml` | `scripts/ci/server.sh` | gofmt, vet, complete Go tests against disposable Postgres 18, build, Windows cross-build/vet, the programs and tunnel tests with `server/build-tags.txt`, extension schema/examples/SDK bundle, Go SDK tests; hub route/architecture, prompts and hub i18n guards are Go tests | ubuntu-latest | 8–15 / 15–30 min |
 | Web / `.github/workflows/web-test.yml` | `scripts/ci/web.sh` | npm ci, scoped ESLint, TypeScript, complete Vitest in two disjoint native file shards, production build and privacy; the core-only build and suite use the same two shards | ubuntu-latest, two lanes | 2–4 / 4–7 min |
-| Android / `.github/workflows/android-test.yml` | `scripts/ci/android.sh` | i18n/token/motion checker tests, translations/literals, token and motion ratchets, all-module lint and unit-test variants, debug APK | ubuntu-latest, two lanes | 8–15 / 15–30 min (branch runs with main's caches measured 15–18 min, #3056); each shard's job timeout is 90 minutes, while individual checks retain their own timeout and final verdict |
+| Android / `.github/workflows/android-test.yml` | `scripts/ci/android.sh` | i18n/token/motion/Compose-budget/nested-exception checker tests, translations/literals, token, motion and Compose budget ratchets, nested exception name rules, all-module lint and unit-test variants, debug APK | ubuntu-latest, two lanes | 8–15 / 15–30 min (branch runs with main's caches measured 15–18 min, #3056); each shard's job timeout is 90 minutes, while individual checks retain their own timeout and final verdict |
 | Apple / `.github/workflows/apple-test.yml` | `scripts/ci/apple.sh ios` and `scripts/ci/apple.sh macos` | PersonaKit/iOS/Watch/HTML and Mac build/unit tests, and in the iOS lane the isolation lint with its own tests (`scripts/test/isolation-lint.sh`; `docs/apple/performance.md`, "Isolation lint") and the no-CallKit check of the device and simulator apps (`scripts/release/check_no_callkit.py`; `docs/operations/release.md`, "No CallKit"); synthetic configuration, no distribution signing; real results remain visible | macos-26 runners, Xcode 26.0.1 (Swift 6.2) | queue and execution measured separately |
 | iOS 18.6 compatibility / `.github/workflows/apple-test.yml` | `scripts/ci/apple.sh ios18` | offline `PersonaTests` at the deployment floor, with iPhone 16 Pro and iPad layout coverage, separate HTML batches and a test-host restart check | macos-15 (arm64), Xcode 26.3 | one runner for up to 150 minutes per manual dispatch, about 8.86 GB to download a missing runtime |
 | Scripts/docs / `.github/workflows/scripts-tests.yml` | `scripts/ci/scripts.sh` | every Python script test, doc/code paths and index, layout/shell/Python compatibility, privacy-rule regression, catalog/translation/token checks, actionlint, issue-link logic, website worker | ubuntu-latest | 2–4 / 4–7 min |
@@ -333,6 +335,8 @@ repair worker may not edit baselines (`docs/operations/main-verification.md`), s
 | Android tokens | hard-coded values and Material 3 components per file | `android/core/designsystem/tools/token-baseline.json` | `scripts/app/android_token_baseline.py` (Android lane, check-fast) | `--update-baseline` |
 | Android motion | literal animation specs per file | `android/core/designsystem/tools/motion-baseline.json` | `scripts/app/android_motion_baseline.py` (Android lane, check-fast) | `--update-baseline` |
 | Android slot order | design-system components that end after their slot | `android/core/designsystem/tools/slot-order-baseline.json` | `scripts/app/android_slot_order.py` (Android lane, check-fast) | `--update-baseline` |
+| Android Compose budget | per `@Composable` function, its code lines, `remember*` calls and effects over the caps (400, 30, 12); a count the baseline does not list is held to its cap | `scripts/app/android_compose_budget_baseline.json` | `scripts/app/android_compose_budget.py` (Android lane, scripts lane, check-fast) | `--update-baseline` |
+| Android nested exception names | nested Throwables whose outer class no `-keepnames` / `-keep` rule names, so R8 drops their simple name (`docs/android/android.md`, "Release shrinking") | `scripts/app/android_nested_throwables_baseline.json` | `scripts/app/android_nested_throwables.py` (Android lane, scripts lane, check-fast) | `--update-baseline` |
 
 - **Only a rise fails.** A count at or under its baseline passes; under it, the check says so and how to lower the baseline.
   A change that takes sleeps, font sizes or hard-coded text out need not touch the baseline at all, which keeps baseline files out
@@ -559,6 +563,13 @@ example configs and services) and both watcher skills under `.claude/skills/`. T
   Xcode after `sim.sh`, run `native/app-core/scripts/build-apple.sh` with no flag:** a simulator-only framework has no
   device slice, so Xcode stops with "no library for this platform was found", which looks like a broken build. The
   script prints the same reminder whenever it leaves the simulator slice only.
+- **The Rust core on Linux, for a Linux Apple toolchain** (one that builds the iOS app without Xcode, #16944). The same
+  `native/app-core/scripts/build-apple.sh` (with or without `--simulator`) needs no Xcode there: it builds the device
+  and arm64 simulator slices as static libraries whatever the machine's architecture, writes the XCFramework in the
+  layout `xcodebuild -create-xcframework` produces, and builds no macOS slice (it says so in one line: macOS
+  `swift test` needs a Mac). The cache sits under `${XDG_CACHE_HOME:-~/.cache}/persona/app-core` and works as on a
+  Mac; the key takes each SDK's build version from the toolchain's copy of the Xcode SDKs (`APPLE_BUILD_SDK_ROOT`, else
+  `sdk_root` in apple-build's `config.json`), or `none` when it cannot be read.
 
 ## Fast local checks (`scripts/check-fast.sh`, #2849)
 
@@ -601,7 +612,7 @@ Path mapping (a new mapping is a rule in check-fast's per-path table, `scripts/c
 | `spec/fixtures/**`, `schema/<dir>/**` (each schema family: `extension`, `wire`, `configuration`), `integrations/**`, `docs/<file>`, `scripts/test/server_test_env.py` | In addition to other checks in this table, `go test ./internal/<package>/...` for server packages reading these files (repository inputs covered by `server-test.yml` filters). At runtime, `git grep` finds packages referencing the path in `server/**/*_test.go` (strings or `filepath.Join` components; `//` comment lines excluded), so new readers need no script changes; other `spec/` files remain unmapped |
 | `apple/**`, `android/**` | In addition to other checks in this table, `go test` on the server packages whose tests name the changed file whole, in quotes (`internal/proto` reads `"apple/Shared/Models.swift"` for its Swift contract checks; a longer string such as a wire sample's `"apple/Shared/Models.swift: Fold"` does not count). One search lists every client path the server tests name, and the changed paths are matched against it, so a change of thousands of client files costs the same (#11250). CI's server lane covers these client sources too (`SERVER_CLIENT_INPUTS` in `scripts/ci/paths.py`) |
 | `spec/**`, `schema/**` read by a runtime package | In addition to other checks in this table, the tests of each `integrations/<pkg>` and of `sdk/ts` whose files name the changed path or a directory it is in, outside a comment line (`integrations/runtime-sdk` reads `spec/fixtures/input-clip/cases.json`, `sdk/ts` reads `schema/extension/examples/`). Found at run time with `git grep`; CI's runtimes lane runs for all of `spec/` and `schema/` |
-| `android/**`, `scripts/app/*android*` (including the `test_android_*` self-tests) | `scripts/app/android_i18n_check.py` and Android checker unittests (i18n, token and motion baselines; no Gradle build) |
+| `android/**`, `scripts/app/*android*` (including the `test_android_*` self-tests) | `scripts/app/android_i18n_check.py`, the token, motion, slot order, Compose budget and nested exception name checks, and Android checker unittests (i18n, token and motion baselines; no Gradle build) |
 | `.github/**` | `scripts/test/pr_needs_issue_test.mjs` |
 | `.github/workflows/*.yml`, `scripts/ci/*.sh`, `scripts/ci/*.py`, `scripts/operations/*.py`, `scripts/operations/*watch*.json`, `scripts/operations/*watch*.service`, `.claude/skills/pr-review-merge-loop/**`, `.claude/skills/main-verify-fix-loop/**` (not `test_*` files) | Also `scripts/test/test_heavy_slot.py`: a CI lane or a watcher step that names a script taking a heavy slot must set `PERSONA_HEAVY_SLOTS=0` ("Heavy build slots" above). A new lane script once broke it with nothing local running it (#11026) |
 | `schema/**` | `scripts/test/test_extension_schema.py`, `scripts/test/test_sdk_bundle.py`, plus `go test ./...` in sdk/go (the same three checks as CI's Extension schema job) |
@@ -617,7 +628,7 @@ Path mapping (a new mapping is a rule in check-fast's per-path table, `scripts/c
 | `server/**`, `web/src/**`, `web/e2e/**`, `scripts/**`, `sdk/**`, `apple/**`, `android/**`, `integrations/**`, `spec/**`, `schema/**` | Also `scripts/test/test_doc_sections.py`: most of the section names it checks are in code comments there |
 | `apple/**` | `scripts/test/test_apple_l10n.py` (complete String Catalogs and Swift Chinese literals included in catalogs) and `scripts/test/test_apple_no_callkit.py` (no CallKit import or link setting; also run for `scripts/persona_config.py`); iOS / macOS builds and tests need a Mac and are reported as skipped |
 | `apple/project.yml` and the includes its tests turn on (`apple/app-entitlements.yml`, `apple/watch-and-share.yml`, `apple/lean-dev-build.yml`, `apple/siri-calls.yml`), `scripts/app/sim.sh`, `scripts/app/ui-test.sh`, `scripts/app/perf-test.sh`, `scripts/app/share-from-apps.sh`, `scripts/app/lean-build-note.sh`, `scripts/app/island_peer.sh`, `scripts/diag/stream-scroll/run-ios.sh`, `scripts/release/release.sh`, `scripts/ci/apple.sh`, `native/iphone-bridge/build.sh` | Also `scripts/test/test_apple_dev_build.py`: the switch that leaves the watch app and the share extension out of a development build, that only `sim.sh` sets it and every other script that generates a project clears it, which slices of the Rust core each build takes, the line a lean build prints, and the Release-only commit stamp ("Development builds"; the project checks need xcodegen). Its searches of the whole tree also catch a new caller, which no row maps |
-| `native/app-core/scripts/build-apple.sh` | `scripts/test/test_app_core_apple_build.py`: the simulator-only build and the XCFramework cache shared between worktrees, with fake cargo and Xcode tools ("Development builds") |
+| `native/app-core/scripts/build-apple.sh` | `scripts/test/test_app_core_apple_build.py`: the simulator-only build and the XCFramework cache shared between worktrees, with fake cargo and Xcode tools, and the Linux path with no Xcode tool on PATH ("Development builds") |
 | `deploy/docker/**`, `docs/operations/docker.md`, root `Dockerfile` | `scripts/test/test_docker_entrypoint.py` (also checks root `Dockerfile`’s `EXPOSE`) |
 | Other paths | No code checks; list unmapped paths individually |
 
@@ -724,6 +735,9 @@ real web app.
 ```bash
 DOCKER=<docker client> python3 scripts/ci/module-e2e.py --modules voice,health,recording \
     [--checkout <dir>] [--shots ~/persona-pr-shots/<pr>] [--evidence <file>] [--strict-before-hello]
+
+# The core alone against a client: build with -tags persona_core_only and check every module is off (#16243).
+DOCKER=<docker client> python3 scripts/ci/module-e2e.py --core-only [--no-build-web] [--shots <dir>]
 ```
 
 - **Start-up**: builds `personad`, `persona-hub`, `persona-manager` and `persona-node` (a default build) and the web app
@@ -770,7 +784,21 @@ DOCKER=<docker client> python3 scripts/ci/module-e2e.py --modules voice,health,r
   or push them). The last line is the verdict (`PASS`, `FAIL` or `TIMEOUT` after `--timeout`, default 40 minutes); the
   exit code is non-zero unless it is `PASS`. A run takes about four to six minutes after the builds.
 - **A module the tables lack** is still checked for its hello flag and the manager line, and the run says so: the PR
-  that moves a module adds its rows (what the hub has of it, what the web app shows of it).
+  that moves a module adds its rows (what the hub has of it, what the web app shows of it). A module with nothing of its
+  own on a hub (only its flag and the manager line) gets the honest empty `SERVER` row `{}`, not a missing one; a module
+  the web gates nothing on may have no `WEB` row (only a `NOTE`), or a chunks-only one (its chunks must not be requested
+  while it is off).
+- **Row forms that are not "on or absent"**: `off_stays` is a page the default panel keeps for existing data while the
+  module is off (`health`'s `/health` is the read-only archive, #15704): it stays and shows what it stores, with none of
+  the module's controls. `needs_on` on a kept item is data only the `on` phase makes (the recording the gate uploads),
+  skipped in a run with no `on` phase.
+- **The core-only mode** (`--core-only`, #16243) is the one check that runs a client against a hub built with
+  `-tags persona_core_only` instead of a default build with modules switched off. It builds the four programs with the
+  tag (its own `persona_core_only` build, `--no-build-web` serving the existing `web/dist`), starts a disposable hub the
+  same way, and runs the browser half with **every** module expected off: the hello carries the `modules` marker and no
+  built-in flag, the manager says `modules: loaded none`, the core's pages render with no page or console error, no
+  module's entry, address or chunk is there, and stored recordings stay readable. `--modules` is optional (every module
+  by default). It has no `on`/`off`/`back-on` and no mock phases; the full gate above covers those.
 
 ## End-to-end (verified 2026-10-24)
 
@@ -792,6 +820,77 @@ DOCKER=<docker client> python3 scripts/ci/module-e2e.py --modules voice,health,r
 - Watch: list, interaction details, Inbox details (AI reply), session details.
 
 Simulator limits: computer-use can't click simulators while the screen is locked; use DEBUG launch arguments to open pages directly. Push, real HealthKit data and WatchConnectivity sync need devices.
+
+## iOS real core-only and full hubs
+
+Run `python3 scripts/ci/ios-core-only-hub.py --shots ~/persona-pr-shots/ios-core-only` from the repository root with macOS,
+Xcode, Go and Docker (`DOCKER` names another client). This is an opt-in local gate, not a hosted-CI step or a test that runs
+in an ordinary suite. The output directory must be empty and outside the checkout.
+
+The driver copies the current tracked and uncommitted source inputs into a disposable source snapshot, builds the **default**
+iOS app once (never `PERSONA_CORE_ONLY=YES`), and starts a real core-only hub and then a real full hub. Every hub has a fresh
+temporary `HOME` and explicit `PERSONA_HOME`, a generated master token, a free loopback port and a uniquely named disposable
+Postgres 18 container. The app uses only the synthetic `org.example.persona.ci` bundle configuration. The driver boots a new
+simulator through `scripts/app/sim-boot.sh`, keeps its audio muted where the local audio guard is installed, and shuts down and
+deletes only that simulator at the end.
+
+For each edition the app receives a real single-use `jp_…` code from `POST /api/v1/auth/pair-codes` and pairs through
+`-openPairLink`, without `-pairURL` (whose presence would skip the credential exchange). The driver reads the fresh sessions,
+Inbox and To-dos API responses before pairing, then drives the actual app through the DEBUG Runtime CLI: active pairing, the
+real hello's module registry, Agents with its synthetic offline computer, the empty Inbox / To-dos pages, the drawer, Settings home and Advanced, Connectors,
+Channels, Extensions, Devices and the main-chat composer. Both Inbox styles check the shared retained-source rule (#17399, #17814):
+a fresh core-only hub has no Lark or Mail chip or Lark/mail empty-state wording and uses the generic message, while the full hub keeps
+its current chips and wording; @Me / DM / Group filters remain unchanged. The current device must be marked in Devices, a second exchange of
+the pair code must answer 401, and the app must still answer at the end. Health, Screen Share, Voice, recording-write,
+Mail and Lark entry assertions are checked against the full-hub positive control. The recording archive's read entry remains
+available in both editions. Each hub declares only a synthetic offline computer named `Fixture Computer`. After the initial
+core-page checks, the driver inserts a clearly marked synthetic idle main-session
+record into the real manager's Postgres store and opens it through the app's real assistant route for the composer comparison;
+a short-lived real Link/node pair, in its own short-path temporary home and without any service installation, keeps that
+computer online while the app reads the session. The node has an independent state root and `PERSONA_NODE_SESSION_DIR`,
+`CLAUDE_CONFIG_DIR` and `CODEX_HOME` inside it, so it cannot discover the OS user's other Agent sessions. Before opening
+the composer, the driver requires both real projections to contain the synthetic main session and fails if either contains
+any additional session. Herdr and botmux autostart are off because the fixture runs no engine; no daemon is left behind.
+The driver stops both processes and removes the node home. The composer's
+`PersonaUITests/CoreOnlyHubLiveUITests` uses XCTest's real press-and-hold and skips when `PERSONA_IOS_CORE_HUB_FIXTURE` is absent;
+a malformed fixture fails. This does not claim model or Agent execution.
+
+Light/dark PNGs, including Settings › Advanced at the largest accessibility text size, per-edition sanitized proofs and
+`evidence.json` (commit, Xcode and pre-build local-time / idle readings) are
+written below `--shots`; credentials are never included. Each heavy build checks the idle reading again: from 07:00 through
+22:59 it starts only when the reading is greater than 900 seconds; below 120 seconds it stops
+before that build for a clean retry later; the owner's 23:00–07:00 window remains allowed. A failed app phase also leaves
+a screenshot and a credential-free state/accessibility diagnostic there. Inspect every PNG. `--keep` retains the temporary
+hub homes and logs for diagnosis; without it the driver removes them. Every run ends with one `PASS`, `FAIL` or `TIMEOUT` line.
+A failed build or assertion, a missing proof, or a missing capture is never a pass.
+
+This is simulator UI evidence, not visionOS, physical-device, push, microphone, permission or performance verification.
+
+## Android real core-only and full hubs
+
+Run `python3 scripts/ci/android-core-only-hub.py --evidence /tmp/android-hub-editions.json` from the repository root with
+Go, Docker (`DOCKER` names another client), JDK 21 and the Android build toolchain. Lane 0 of `scripts/ci/android.sh`
+runs the same check without private configuration.
+
+The driver builds and starts two independent hubs in turn: one with `-tags persona_core_only`, then a default full build.
+Each has a temporary `HOME` and explicit `PERSONA_HOME`, a generated pairing token, a free loopback port and its own
+uniquely named disposable Postgres 18 container; the driver prints the home and confirmed loopback address before
+Android pairs, and removes only its own hub processes and container. It runs
+`persona.android.CoreOnlyHubLiveTest` in the default app build with `PERSONA_ANDROID_CORE_HUB_FIXTURE` naming the
+phase's 0600 fixture. Ordinary Android test runs skip this test when that variable is absent.
+
+The JVM test uses the production `HubPairingClient` to obtain a device credential (falling back to the pairing token is
+a failure), opens `OkHttpHubConnection`, consumes the real WebSocket hello, reads the manager roster, sessions, the
+Inbox and To-dos lists, and the current device through the production transports, and applies the live features to
+`Modules.carried`, `ModuleRegistry`
+and `HubModule`. On the core-only hub every carried module and Recording/Lark/Mail is off, so no module's `navEntries`
+runs and every debug page the carried modules expose falls through to the unavailable-page fallback; on the full hub
+the same modules and pages are on and registered. The
+sanitized evidence contains counts, ids and flags, never either credential. The script bounds each Gradle invocation
+(`--gradle-timeout`, default 900 seconds) and prints one `PASS`, `FAIL` or `TIMEOUT` verdict.
+
+This is hub/client integration evidence, not an emulator or device UI test. It does not claim Android screen rendering,
+crash freedom across UI flows, microphone or permission behavior, push, or other device-only paths.
 
 ## Android Inbox Agent handoff to a named manager
 
@@ -853,6 +952,7 @@ xcrun simctl launch --terminate-running-process $SIM <bundle id> \
 - Tool names in words (#2986, `ToolNaming` in `apple/Persona/Views/Chat/ToolNaming.swift`): `MOCK_TOOL_NAMES=1` adds MacBook's "Why the CSV export times out" (`macbook/a1f3c2d4-0000-4000-8000-0000000c2986`), one turn that calls ToolSearch, TaskCreate, TaskUpdate (started, then completed), NotebookEdit, Monitor, SendMessage, ScheduleWakeup, another server's MCP tool (`mcp__github__create_issue`, "GitHub · Create issue") and a tool no table knows with nested arguments (`RenderChart`). The MCP call and the unknown one also have a chat of their own (`…0c2987`, `…0c2988`): open the work (`-openAllWork YES`) and tap the row to see its arguments as a key/value list with Raw Input under it. `…0c2989` is a review whose ReportFindings lists two findings, each with its file and line. `…0c298a` is the Monitor alone, its Background badge on the first screen at the largest text size. `-showAsUnread YES` lands the long turn at its first step.
   The first three also end chats of their own (`…c2916` Edit, `…c2917` MultiEdit, `…c2918` Write), so `-openSession macbook/<id> -openAllWork YES -showToolDetails YES` shows each diff without scrolling; `scripts/app/personactl.py tap --label-prefix "Show All"` opens the long one.
 - A reply's Markdown as written (#3863, `CJKEmphasis` in PersonaKit and `MarkdownTable.swift`): `MOCK_REPLY_MARKDOWN=1` adds MacBook's "导出耗时整理" (`macbook/a1f3c2d4-0000-4000-8000-0000000c3863`) and puts the same turn at the end of Persona's conversation: a table whose delimiter row aligns its columns (the seconds right-aligned so the decimals line up, the result centered), headings at levels 4 to 6, and bold labels next to full-width punctuation (`**注意：**后文`, `**「必须」**`), which render bold with no asterisks left over.
+- Word lookup (#10977, docs/apple/ios.md "Word lookup (text_lookup)"): `MOCK_TEXT_LOOKUP=1` adds the `text_lookup` feature and an enabled "Relingo" that answers `GET/POST /api/v1/text-lookup…` from a made-up dictionary (context, deploy, latency, review, summary, weather, widget, landscape; forms such as "deployed" give their lemma), an English Inbox row `assistant:tl1`, and announces each save as `text_lookup_changed`; `=off` has the feature with no extension (`available: false`). `MOCK_TEXT_LOOKUP_UNDERLINE=1` sets `underline_saved`, `MOCK_TEXT_LOOKUP_LATENCY=<s>` delays every lookup (default 0.4). `GET /mock/text-lookup?available=0|1&underline=0|1&fail=0|1&latency=<s>&reset=1` changes it live and returns what the app sent (`log`). UI suite `TextLookupUITests` (`TEST_RUNNER_PERSONA_TEXT_LOOKUP_HUB=<mock URL>`, `TEST_RUNNER_PERSONA_SHOTS`, `TEST_RUNNER_PERSONA_SHOTS_APPEARANCE`); mock tests `scripts/mock/test_text_lookup_mock.py`.
 - Paths with non-ASCII names in a reply (#8386, `PathRefs` in PersonaKit and `web/src/lib/path-refs.ts`): `MOCK_CJK_PATHS=1` adds MacBook's "报表整理" (`macbook/a1f3c2d4-0000-4000-8000-000000008386`) and puts the same turn at the end of Persona's conversation: bare paths to files with Chinese and Japanese names, which are there (so they link), one glued to the sentence after its extension and one before a full-width full stop.
 - Tool outcomes (#4303, `ToolOutcomeText` in `apple/Persona/Views/Chat/ToolOutcomeViews.swift`): `MOCK_TOOL_OUTCOMES=1` adds MacBook's "Why the last export batch goes missing" (`macbook/a1f3c2d4-0000-4000-8000-0000000c4303`), one turn whose tool results carry the node's `outcome`: a test run that failed with exit code 1 and an output the page cut (its last lines in `tail`), an edit the user denied, a write refused before it ran, a command the user interrupted and one that timed out and went on in the background. Only the failed run is red; the others say in gray what stopped them. The failed run and the denied edit also end chats of their own (`…c4304`, `…c4305`): `-openSession macbook/<id> -openAllWork YES -showToolDetails YES` shows "Exit code 1" with "End of output" under the cut output, or "Denied".
 - Full access by a restart (#6476, #6513): `MOCK_BYPASS_PENDING=1` gives the widget agent (`macbook/a1f3c2d4-0000-4000-8000-000000000001`, working in Auto-Edit) `bypass_pending`, a restart into Full access that waits for its turn to end, so the clients' pending state can be screenshotted without picking it. Any other mock agent in a pane takes a Full access pick by a restart (`MOCK_BYPASS_RESTART_SECONDS`).
@@ -864,7 +964,7 @@ xcrun simctl launch --terminate-running-process $SIM <bundle id> \
   `MOCK_HERDR_START=slow|fail|stale`: startup takes 6 seconds / fails (node's reason) / starts but `GET` still reports stopped (old hub). `GET /mock/herdr?stopped=…&start=…` changes it live,
   `/mock/reset` restores environment settings; `starts` counts requests per machine. `-showHerdrStart YES` auto-taps Start once on the first row (capture "Starting…" and failure).
   UI suite `HerdrNoticeTests` (`TEST_RUNNER_PERSONA_MOCK_HUB`, screenshots in `PERSONA_SHOTS`).
-- Personal agents' Remove from list (#138): `MOCK_PERSONAL_AGENTS=1` lists six made-up personal agent conversations and keeps hide / unhide / `GET /agents/hidden` in memory (each write sends `agents`); `GET /mock/personal-agents?reset=1` brings every one back, and `?state=partial` (#3216) keeps them listed while a second source fails (`?state=partial_setup`: isn't set up), for the notice above the list. Preferences are kept in memory too; `?prefs_fail=500` refuses their PUT (#1880), and `?reset=1` clears both the saved fixture and the failure. The page is reached from the shell's **Personal Agents ›** pill (regular-width iPad: toolbar button). UI suite `PersonalAgentRemoveTests` (`TEST_RUNNER_PERSONA_PERSONAL_HUB`, screenshots in `PERSONA_SHOTS`, `PERSONA_SHOTS_SUFFIX` appended to each name).
+- Personal agents' Remove from list (#138): `MOCK_PERSONAL_AGENTS=1` lists six made-up personal agent conversations and keeps hide / unhide / `GET /agents/hidden` in memory (each write sends `agents`); `GET /mock/personal-agents?reset=1` brings every one back, and `?state=partial` (#3216) keeps them listed while a second source fails (`?state=partial_setup`: isn't set up), for the notice above the list. Preferences are kept in memory too; `?prefs_fail=500` refuses their PUT (#1880), and `?reset=1` clears both the saved fixture and the failure. The page is reached from the shell's **Personal Agents** group heading above the computers (regular-width iPad: toolbar button). UI suite `PersonalAgentRemoveTests` (`TEST_RUNNER_PERSONA_PERSONAL_HUB`, screenshots in `PERSONA_SHOTS`, `PERSONA_SHOTS_SUFFIX` appended to each name).
 - Computer control (docs/extensions/computer-use.md): `MOCK_COMPUTER=ready|permissions|both|locked|missing` enables extension `cua` and mock MacBook (ready / missing Screen Recording / missing both permissions / locked / not installed: "Install Cua Driver" advances through download, verification, disabling analytics, authorization and Allow, every `MOCK_COMPUTER_STEP` seconds, default 2). Add `MOCK_WEB=web/dist` (first `npm run build`) to host the web VNC page and forward MacBook's 5900 to this Mac's own Screen Sharing (UI tests only with `TEST_RUNNER_PERSONA_COMPUTER_SCREEN=1`); Mac Studio remains disabled. `=off` enables the extension but no machines. With `MOCK_EXTENSIONS=1`, the extension list includes "Computer control (Cua)"; "Computers it can control" syncs bidirectionally with each Mac's `computer.enabled` (`-tab settings -openExtension cua`). `-tab settings -openMachines YES -openMachineDetail macbook` opens MacBook's machine page. `MOCK_COMPUTER_OPERATING=1` adds a running operation to the assistant's "Calculate 6×7" and the Agent widget chat, showing "Operating MacBook · …" above input (`ScreenDrawerTests`). `MOCK_DEVICE_TOKEN=jd_…` (same `TEST_RUNNER_PERSONA_DEVICE_TOKEN` in UI tests, `UITestToken`) makes mock `/api/` accept only that token (`Authorization` or `?token=`), returning 401 invalid token otherwise, like hub (#1498: VNC page got a double-encoded token). `MOCK_COMPUTER_APPS=1` gives MacBook two assistant-approved apps (Calculator, entire screen), removable on its machine page (`ComputerSectionTests.testAllowedAppsCanBeTakenBack`, `TEST_RUNNER_PERSONA_COMPUTER_APPS=1`). "Don't auto-lock while the extension is on": machine toggle asks first (`ComputerSectionTests.testNoAutoLockAsksFirst`), and per-machine extension toggles honor `x-confirm` (`ExtensionMachineSwitchesTests.testAListWithAConfirmAsksFirst`, `MOCK_EXTENSIONS=1`); mock syncs extension-page `no_auto_lock` to each `computer.no_auto_lock`. `MOCK_SCREEN=fake` replaces forwarding to real Screen Sharing with a mock server (macOS-like ARD login first when openssl exists, then VeNCrypt Plain, account `me`, password `mock-pass`; `GET /mock/screen-password?p=…` changes password, `&clear=1` clears recorded keys; correct password+Return unlocks mock MacBook). It draws one desktop frame, supplies ZRLE when requested, records pointers/clicks/clipboard (node `GET/POST …/computer/clipboard` shares it); `?clip=…` sends clipboard to clients, `&slow=S` delays S seconds (miniwindow "Connecting…"), `&down=1` drops current and future connections (`0` restores). `MOCK_SCREEN_ANIMATE=1` moves a square at about 30 fps (`ScreenPasswordTests`, `VNCTests`, native client; UI tests use `TEST_RUNNER_PERSONA_FAKE_SCREEN=1`). `MOCK_SCREEN_SCROLL=1` fills the mock Mac's window with lines of made-up text that its wheel scrolls (6 pixels a notch, no square), so a screen recording shows a scroll reaching the Mac (`VNCTests.testTwoFingers`, #6196). `MOCK_SCREEN_DISPLAYS=2` gives the mock Mac two 480×300 displays side by side (a 960×300 picture; display 2 green, each numbered) and has its Screen Sharing list them (ExtendedDesktopSize); `=2:node` lists none there and puts them in MacBook's computer status as `displays` instead, as a node reads them (`VNCTests.testOneDisplay` with `TEST_RUNNER_PERSONA_SCREEN_DISPLAYS=2`). `MOCK_SCREEN_BG=black|white|gray|terminal` makes the mock Mac 1920×1080 in one plain color (a terminal: near black with lines of light text); like macOS's, its Screen Sharing sends no pointer (the app draws its own arrow), and `MOCK_SCREEN_CURSOR=1` has it send macOS's 1× arrow (Cursor pseudo-encoding) as other servers do; `?bg=…` switches the background on connected screens (`VNCTests.testThePointerReads`: a second mock with `MOCK_SCREEN_BG`, its address in `TEST_RUNNER_PERSONA_SCREEN_BG`, so one run takes the suite too; screenshots of the pointer over each). The mock also keeps `events`: clipboard writes (`via` node or rfb) and keys in arrival order, cleared with `clear=1` (`VNCTests.testPasteFromIPhone`: ⌘V only after the node's write; then another app's text, Allow Paste answered in SpringBoard: Don't Allow, then Allow). Simulators have no PiP; VNC falls back to a full page, miniwindow needs a device. The live screen's video channel (#3954): `MOCK_SCREEN_VIDEO=1` (with `MOCK_SCREEN=fake`) has MacBook offer `screen_video` and plays `scripts/mock/screen_video/fixture.bin` (a made-up desktop, 3 s of HEVC; `make_fixture.sh` next to it makes it again), or `fixture-h264.bin` when the `start` offers H.264 before HEVC or only H.264 (as the helper picks), for a pair a 5900 connection carried; `=missing` offers it without Screen Recording, before macOS asked; `=denied` without it, after asking. `GET /mock/screen-video` shows what the phone sent; `?drop=1`, `?refuse=1|0`, `?pause=<reason>` and `?resume=1` act as the helper would, and `timing` goes out each second (capture and encode made up, the network half measured from the phone's reports). `MOCK_SCREEN_X264=1` (#8859) adds `screen_video.x264` ("ffmpeg 9.0.2") to it, so MacBook's page offers x264 for the live screen; the machine page's switch and the extension page's `screen_x264` stay in step, as `no_auto_lock` does. `MOCK_PHONE_SCREEN=1` (#9314, with `MOCK_SCREEN=fake`) has MacBook offer `phone_screen`: its picture is 750×510, the 480×300 main display and a 270×510 portrait one beside it showing a terminal-like window (both at 2×, in `displays`), and `POST …/computer/phone-screen` answers `start` (that display), `windows` (five made-up windows, one minimized), `place` and `stop`.
 - File browser upload / Save to Files (#4858, `docs/protocol/protocol.md` "Changing files"): `MOCK_FILE_OPS=1` makes the mock take `dest=dir` (files go into the mock tree, a taken name is 409 `exists`, `conflict=keep|replace` as the node does, outside the home `read_only`) and the rename / move / trash / restore routes. `-tab settings -openMachines YES -openMachineDetail macbook -openMachineFiles YES` opens the MacBook's Files directly; `-showFolderUpload <name>` uploads a 24 MB fake file into the current folder (`MOCK_UPLOAD_KBPS=300` makes the progress visible); an existing name (`README.md` in session `macbook/a1f3c2d4-0000-4000-8000-000000000002 -openPane files`) asks first. UI tests `FolderUploadTests` and `FolderEditTests` (rename → move → select → trash → Undo in the MacBook's home; on an iPad also `-showFilesDrop YES`, the outline of a drag over the folder) with `TEST_RUNNER_PERSONA_FILES_HUB`.
 - Remote copy / compress progress (#6113): `MOCK_FILE_OP_DELAY=<seconds>` holds copy and zip POSTs open while `GET …/files/operations/{id}` reports synthetic file / byte progress; disconnecting the POST marks the operation cancelled and leaves no output. `python3 scripts/test/test_mock_file_operations.py` checks this over real HTTP. `FolderEditTests/testRemoteCopyProgressLight` and `testRemoteCompressProgressDark` use the same `TEST_RUNNER_PERSONA_FILES_HUB` and `TEST_RUNNER_PERSONA_SHOTS` to inspect the transfer row and Cancel in both appearances; their `…LargestText` variants repeat this at `UICTContentSizeCategoryAccessibilityXXXL`; `testRemoteCopyProgressResumesAfterEarlyReturn` leaves before the first delayed row appears and requires progress and Cancel after returning; `FolderTransfersTests/remoteProgressAndPollingStayWithTheirSession` checks that a retained Chat model does not show or poll another session's operation. `FolderTransfersTests/copyThenUploadQuestionsBothResume`, `uploadThenCopyQuestionsBothResume` and `cancelAndStopAnswerEveryWaitingQuestion` keep concurrent name questions apart; `FilesPaneLifecycleTests` hosts the page in a window and changes its `scenePhase` (an inactive or background scene keeps the download, the open Save to Files and the question; polling resumes when active; leaving the page still stops them), it also presses the question alert's own buttons for two queued questions; `FolderEditTests/testSaveToFilesSurvivesTheAppGoingToTheBackground` sends the app to the background with the system's Save to Files open, then saves into On My iPhone (start with no `notes.txt` under the simulator's `File Provider Storage`, or the picker asks to replace it; check afterwards that the file arrived there). For the real web panel, start Vite with `PERSONA_HUB_URL` pointing at that mock and run `node web/e2e/file-operations.mjs http://127.0.0.1:<web port> --hub http://127.0.0.1:<mock port> --shots <directory>`; add `--large-text` to repeat it with the app's largest text setting. The browser check also leaves and returns to the operation's folder to verify restored progress and Cancel, and completes an operation while away to verify that its workspace notice survives returning. Restart the mock between runs so earlier synthetic outputs cannot contaminate the cancellation assertion.
@@ -1316,6 +1416,19 @@ Persona has no Universal Links (no associated domains), so web isn't kept; no in
   Slimming failure runs `simslim off` to restore stock, then continues (`failed→stock`); tests still run. Usage errors (missing profile/udid, duplicate names) exit 2 without changes.
 - Actual slimming: `scripts/app/slim-sim.sh <udid> [profile JSON]` (one boot for shut-down devices; running mismatched devices reboot), usually not called directly.
 - Creation, `simctl erase`, runtime changes lose per-device slimming; rerun sim-boot.sh. Afterwards `xcrun simctl shutdown <udid>`, task end `xcrun simctl delete <udid>`.
+- **At most 3 simulators booted per Mac, reuse first, shut down when done (#17089)**: every simulator costs roughly 1-2 GB slim and
+  4-6 GB stock, and Agents share the Mac. `sim-boot.sh` counts the Booted and Booting simulators; a boot (or create plus boot) that would
+  exceed `SIM_MAX_BOOTED` (default 3) waits up to `SIM_SLOT_WAIT` seconds (default 1200) for a slot, then exits 75 and lists the booted
+  ones, so shut down one you own (`xcrun simctl shutdown <udid>`) or wait. Using an already booted simulator is never blocked.
+  Boots take a machine-wide lock (`SIM_BOOT_LOCK_DIR`, default `$TMPDIR/persona-sim-boot.lock`; a dead holder's lock is taken over), so two
+  Agents cannot both pass the check.
+  - **Reuse before creating**: a new name adopts a shut-down `Persona …` simulator with the same device type and runtime (it is renamed;
+    `SIM_REUSE=0` creates a new one instead). So don't keep a udid across tasks: once shut down, a simulator may become someone else's.
+    Keep one name per task (`Persona Shots <issue>`) and rerun `sim-boot.sh` with it; it finds the same device.
+  - **Clean up**: `simctl shutdown` as soon as the run or screenshots are done, not at the end of the day; `simctl delete <udid>` when the
+    task ends, with a udid you checked is not empty (`docs/lessons/testing.md`).
+  - `--create-only` and `--start-only` (hosted CI, which owns its deadline) skip the limit, the lock and the adoption.
+  - `scripts/test/test_sim_boot.py` covers the limit, the wait, the lock and the adoption.
 - If a test fails only slimmed, rerun on a new `--profile stock` device (or `simslim off <udid>` on yours) before blaming code.
 - Temporarily enable services: `simslim enable <udid> <category or launchd name>` on running device, no reboot, lasts until next `on` or reboot.
   Permanent: add to profile (`simslim enable … --save apple/simslim/<name>.json`), then `--reslim`. `on --no-reboot` only disables more, never reenables. Categories: `simslim profiles`; features: `simslim doctor --list`.
@@ -1880,6 +1993,46 @@ with denial reason/already answered), question then approval, two Plan questions
   Codex model-service errors (e.g. Selected model is at capacity, not Persona) log `SERVICE-RETRY` and rerun once;
   each RESULT reports retry count—include in stability reports, not pretend absent.
 
+## Isolated Orca runtime (#17058)
+
+Orca's writes are tested against the fake runtime (`server/internal/orcart/orcarttest`, which checks every request
+against Orca's schema), and the `orcalive` test only reads the Orca that runs on the computer. The `orcaiso` tests
+write to a real Orca without touching the user's: each starts its own headless Orca server with a temporary HOME,
+profile and loopback port, and drives Persona's own Orca host and client against it
+(`server/internal/node/hostorca_iso_test.go`):
+
+- **Start, type, keys, close**: open a terminal for a start in a throwaway Git repository Orca holds (`repo.add`),
+  check that a shell at rest takes no typed text and that a second start in the terminal is refused, start `cat`, type
+  a line and press Enter (the screen shows it twice), ctrl+c back to the shell, and close the terminal.
+- **Split, rename, close tab**: split a pane and close the new one, rename the tab (Orca's tab model has the new name),
+  open a second tab and close it whole, and rename the worktree.
+- **Worktree**: make a worktree through Orca (New worktree…), then remove it as an Agent's worktree is removed
+  (`worktree.rm`, the branch kept).
+- **Refusal**: metadata of another profile, a socket outside the temporary root, no local socket, or a process with
+  another HOME is refused before anything is written (needs no server).
+
+Run them, Linux only, with an Orca server install (the directory holding `orcad/orcad-server.js` and
+`runtimes/node-*/bin/node`; Orca 1.4.277 checked), from `server/`:
+
+```sh
+PERSONA_ORCA_ISO_SERVER=<Orca server install> go test -tags orcaiso -run OrcaIsolated ./internal/node/ -v -timeout 10m
+```
+
+Without the variable the tests skip. Safety:
+
+- The server gets an environment of its own (no `ORCA_*` variable, HOME or XDG directory of yours), binds to
+  `127.0.0.1` with pairing off (`--no-pairing --refuse-public`), and keeps its metadata in the temporary HOME.
+- The client is pinned to that metadata, and the tests refuse to write unless it is under the temporary root and not
+  in your home, every local socket it lists is under the temporary root, a process it names has the temporary HOME,
+  and the runtime that answers is the one it names. The test process points `ORCA_USER_DATA_PATH` there too, and the
+  host's process scan keeps only processes with the temporary HOME, so your agents are never looked at.
+- Run it with the `ORCA_*` variables of the shell it starts from unset when that shell is itself in an Orca terminal
+  (`for v in $(env | grep -o '^ORCA_[A-Z_]*'); do unset $v; done`): the server and git get environments of their own
+  anyway, but nothing else in the test process should see the user's Orca.
+- At the end the tests stop the server they started and every process whose `/proc/<pid>/environ` holds the temporary
+  HOME (the terminal daemon, its shells, what ran in them), each by PID after checking, never by name, and fail if one
+  is left; then they remove the temporary root. A failed run prints the server's log tail.
+
 ## New-user copy guard (`scripts/test/test_onboarding_copy.py`, #287)
 
 Onboarding copy (guide cards, main-chat errors, login, add computer, model wizard, empty states) must not mention hub.json, token (pairing code allowed), jq, personad, TLS, node, herdr,
@@ -2415,19 +2568,19 @@ What a large request body costs the hub's slot and the manager it is relayed to,
 
 Hub transcription (`docs/assistant/meeting-minutes.md`, "Phase 5: hub transcription") against a real service, for what
 the tests' scripted contribution cannot tell: how well the words come back, how soon, and what it costs.
-`server/internal/transcribelive` plays the phone against a running test hub whose voice extension is set up with a
+`server/scripts/transcribelive` plays the phone against a running test hub whose voice extension is set up with a
 GPT-Live-compatible upstream (the contribution chosen for transcription, `meeting_transcription_ready` true; it also
 reads the meeting aloud through that extension's speech). Run it on the hub machine, from `server/`:
 
 ```sh
 cd server
-go run ./internal/transcribelive -hub <hub address> -token-file <file> -kb <PERSONA_HOME>/data -lang zh-CN -out <directory>
+go run ./scripts/transcribelive -hub <hub address> -token-file <file> -kb <PERSONA_HOME>/data -lang zh-CN -out <directory>
 ```
 
 - Without `-hub` and `-token-file` it takes `public_url` and `token` from `$PERSONA_HOME/hub.json` (`-kb` defaults to
   `$PERSONA_HOME/data`, where it reads the meeting's files). Never point it at a hub in use: it also sets the hub's
   `meeting_glossary` to the script's terms.
-- The meeting is made up (`server/internal/transcribelive/testdata/mixed_meeting.json`): a third Chinese, a third
+- The meeting is made up (`server/scripts/transcribelive/testdata/mixed_meeting.json`): a third Chinese, a third
   English, a third both in one sentence, and one line said by "Persona". The hub reads each line aloud
   (`POST /api/v1/extensions/voice/speak`, `-voices F=<id>,M=<id>,E=<id>,P=<id>` picks the voices); the audio and the
   script with each line's times go to `<out>/meeting.pcm` and `<out>/script.json`, which a later run reuses
@@ -2440,8 +2593,56 @@ go run ./internal/transcribelive -hub <hub address> -token-file <file> -kb <PERS
   line and in all, the Latin words kept as said); the latency of each `line` frame after its sentence ended, of the
   first caption after each sentence began, of the final pass after the complete upload and of the minutes after it;
   Persona's echo (marked in the hub's transcript, never a live line); the minutes' share of Han letters against
-  `-lang`; the upstream's billed seconds (`-price-per-minute` adds the cost) and whether the hub deleted the audio.
-  `<out>/frames.json` has every socket frame with when it came, `<out>/detail.json` the recording as the API returns it.
+  `-lang`; `meeting_transcription_extension` (from `GET /api/v1/assistant`, with a warning when it is not `""`); the
+  upstream's billed seconds (`-price-per-minute` adds the cost) and whether the hub deleted the audio.
+  `<out>/frames.json` has every socket frame with when it came, `<out>/detail.json` the recording as the API returns it,
+  and `<out>/hub_segments.json` is copied from the knowledge base before the recording is deleted.
+- Sentence-time and speaker-label scoring (`timing` and `labels` in `<out>/report.json`):
+  - **Text-only matching (`timing.match`)**: hub sentences (live `line` frames ordered by `n`; `hub_segments.json` in
+    stored order) are aligned monotonically to non-echo script lines by normalized text alone, with no timestamps in the
+    cost (1:1, up to 1:3 / 3:1 merges and splits, and skips on either side; Persona's echo lines and segments are left
+    out).
+  - **Start and end errors (`timing.live`, `timing.final`, `timing.final_replay`)**: for each matched group
+    (`H1…Hk`, `L1…Lm`), start error is `H1.start - L1.start` and end error is `Hk.end - Lm.end`, reported as `{n, min,
+    p50, p90, max}` of the absolute error in seconds plus `start_signed_p50` and `end_signed_p50` (`null` when a group
+    is empty). `final_replay` is the subset of `final` written by the final pass rather than kept from live: a non-echo
+    final segment counts as `live_kept` when a live `line` frame has the same normalized text and both `start` and `end`
+    within 0.01 s, and `replay` otherwise (`timing.final_split`).
+  - **Perfect-timeline speaker labels (`labels.rule`, `labels.<group>`)**: using the non-echo script lines as a perfect
+    turn timeline, each matched hub sentence is labelled by overlap with each voice's turns (no overlap: `unlabelled`;
+    otherwise the voice with the most overlap is sure when it has at least 70% of the sentence's total overlap, at least
+    1 s of overlap, and at least 20 s of total speech in the timeline, else `unsure`; a sentence matched to lines from
+    more than one voice is `mixed`). The rule runs once with hub times and once with the matched lines' true span, and
+    reports `time_caused_wrong_pts` and `time_caused_unsure_unlabelled_pts` (in percentage points), both over all matched
+    sentences and under `substantive` (true span >= 2 s, or >= 8 Han characters in the normalized text; English counts by
+    duration only).
+- **Result line and fail-fast checks**: the last line on stdout is `RESULT ...` on success (naming a `failed` minutes
+  state without stopping scoring), `TIMEOUT ...` when the final pass does not finish within 40 minutes, or `FAIL ...` on
+  any fatal error (including a `failed` final pass, or `<kb>/recordings/<id>/meta.json` not appearing within 60 s of the
+  first upload, which deletes the recording and reports a bad `-kb`).
+- **Offline rescoring (`-rescore <dir>`)**: recomputes `timing` and `labels` from `<dir>/script.json`,
+  `<dir>/frames.json` and `<dir>/hub_segments.json` with no hub and no network, writing `<dir>/rescore.json` and the
+  `RESULT` line.
+- **Reusing a longer meeting**: place `<out>/meeting.pcm` (raw signed 16-bit little-endian mono 16 kHz, no header) and
+  `<out>/script.json` (JSON array with all six keys `{voice, lang, text, echo, start, end}` on every line, with
+  `"echo": false` written explicitly on non-echo lines; times in seconds on that PCM's clock). Keep a backup of both
+  files: a `script.json` that fails to parse falls back to synthesizing the embedded meeting and overwrites both files.
+- **Zero-cost dry run**: configure the voice extension with the `fake` dialect (`manager.json` only,
+  `server/internal/modules/voice/transcribe_fake.go`) and set `PERSONA_VOICE_FAKE_TRANSCRIPT` in its environment to the
+  script's `[{start, end, text}]` JSON file. With `<out>/meeting.pcm` and `<out>/script.json` pre-populated, no speech
+  is synthesized and no upstream is called; timing errors and time-caused label shifts should be about 0 (and
+  `final_replay` empty, since the fake emits identical live and replay times).
+- **Running against a real upstream (manual only, never in CI)**:
+  - Use a throwaway test hub (`docs/lessons/workflow.md`, "Temporary test hubs") with its own `HOME`, `PERSONA_HOME`,
+    port and Postgres, never a hub in use. Pass `-hub`, `-token-file` (full device token) and `-kb` explicitly with
+    `PERSONA_HOME` pointing at the test hub so the tool cannot fall back to `~/.persona/hub.json`.
+  - Enable the knowledge base, recording module and built-in `voice` extension with a `live`-dialect upstream
+    (`meeting_transcription_extension` `""` and `meeting_transcription_ready` true). Keep upstream keys only in the
+    test hub's own settings or secret provider, never in issues or PRs. Without a minutes model, every run waits the
+    full 30-minute minutes timeout and audio stays until the final `DELETE`.
+  - Expect roughly 5× the meeting duration in billed upstream minutes (live multi-session pass plus 4× replay), plus
+    one-time speech synthesis (not in `usage_seconds`), minutes model calls and any listener-role room conversation. Run
+    the short embedded script first and extrapolate from its `usage_seconds` before running a 20+ minute script.
 
 ## Live Activity screenshots (`LiveActivityShots`)
 

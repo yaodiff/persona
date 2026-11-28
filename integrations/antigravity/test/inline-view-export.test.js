@@ -130,7 +130,8 @@ test('unexported settled turn syncs final persisted item id once native transcri
   assert.equal(finalReply.text, CARD_REPLY)
 
   const page = await node.peer.call('session.items', { session_id: SESSION })
-  assert.equal(page.items.at(-1).id, finalReply.id)
+  assert.equal(page.items.findLast((it) => it.role === 'assistant' && it.kind === 'text')?.id, finalReply.id)
+  assert.equal(page.items.at(-1).kind, 'turn_duration')
 })
 
 test('unwatched settled turn clears unexportedTurns and publishes updated rev once native transcript flushes', { timeout: 20_000 }, async (t) => {

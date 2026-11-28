@@ -143,6 +143,19 @@ private struct PersonaHostedPiece: UIViewRepresentable {
     }
 }
 
+/// SwiftUI can assign the embedded view's bounds after its parent's layout pass.
+private final class PersonaMotionContainer: UIView {
+    var onBoundsChange: (() -> Void)?
+    private var lastBounds = CGRect.null
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        guard bounds != lastBounds else { return }
+        lastBounds = bounds
+        onBoundsChange?()
+    }
+}
+
 /// The original disc, ZStack order, circular clip and ring overlay stay in one static SwiftUI host. Only the pieces
 /// whose layers move are UIKit children inside fixed-size containers; SwiftUI never lays out a transformed view.
 private struct PersonaMotionComposition: View {
@@ -248,14 +261,14 @@ final class PersonaPieceHost: UIView {
 /// remains above that clip, exactly as in PersonaFace.
 final class PersonaFaceMotionView: UIView {
     private var host: UIHostingController<PersonaMotionComposition>!
-    private let arcContainer = UIView()
+    private let arcContainer = PersonaMotionContainer()
     let arc = PersonaPieceHost(.arc)
-    private let bodyContainer = UIView()
+    private let bodyContainer = PersonaMotionContainer()
     let body = UIView()
     private let bodyCanvas = PersonaPieceHost(.body)
     let workingBodies: [PersonaPieceHost]
     let workingEyes: [PersonaPieceHost]
-    private let eyeContainers: [UIView]
+    private let eyeContainers: [PersonaMotionContainer]
     var eyes: PersonaPieceHost { workingEyes[0] }
     let dots = (0..<3).map { PersonaPieceHost(.dot($0)) }
     let grayDots = (0..<3).map { PersonaPieceHost(.grayDot($0)) }
@@ -275,7 +288,7 @@ final class PersonaFaceMotionView: UIView {
 
     override init(frame: CGRect) {
         let eyes = (0..<3).map { _ in PersonaPieceHost(.workingEyes) }
-        let containers = (0..<3).map { _ in UIView() }
+        let containers = (0..<3).map { _ in PersonaMotionContainer() }
         for (container, eye) in zip(containers, eyes) {
             container.backgroundColor = .clear
             container.isOpaque = false
@@ -310,6 +323,9 @@ final class PersonaFaceMotionView: UIView {
         addSubview(host.view)
         body.addSubview(bodyCanvas)
         for phase in workingBodies { body.addSubview(phase) }
+        for container in [arcContainer, bodyContainer] + eyeContainers {
+            container.onBoundsChange = { [weak self] in self?.setNeedsLayout() }
+        }
     }
 
     @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
@@ -367,19 +383,22 @@ final class PersonaFaceMotionView: UIView {
 
     private func layoutPieces() {
         host.view.frame = bounds
-        if let content { host.view.contentScaleFactor = content.displayScale }
+        guard let content else { return }
+        host.view.contentScaleFactor = content.displayScale
         host.view.layoutIfNeeded()
-        if let content {
-            host.view.contentScaleFactor = content.displayScale
-            host.view.layer.contentsScale = content.displayScale
-            for piece in allHosts { piece.updateScale(content.displayScale) }
-        }
-        setFullFrame(arc, in: arcContainer.bounds)
-        let anchor = content?.state == .needsYou ? Mochi.pivot : CGPoint(x: 0.5, y: 0.5)
-        setFullFrame(body, in: bodyContainer.bounds, anchor: anchor)
+        host.view.contentScaleFactor = content.displayScale
+        host.view.layer.contentsScale = content.displayScale
+        for piece in allHosts { piece.updateScale(content.displayScale) }
+        // Start at the requested size before SwiftUI supplies the wrapper's actual geometry.
+        let square = CGRect(x: 0, y: 0, width: content.size, height: content.size)
+        setFullFrame(arc, in: arcContainer.bounds.isEmpty ? square : arcContainer.bounds)
+        let anchor = content.state == .needsYou ? Mochi.pivot : CGPoint(x: 0.5, y: 0.5)
+        setFullFrame(body, in: bodyContainer.bounds.isEmpty ? square : bodyContainer.bounds, anchor: anchor)
         for host in [bodyCanvas] + workingBodies { setFullFrame(host, in: body.bounds) }
         for phase in workingBodies { phase.layoutIfNeeded() }
-        for (eye, container) in zip(workingEyes, eyeContainers) { setFullFrame(eye, in: container.bounds) }
+        for (eye, container) in zip(workingEyes, eyeContainers) {
+            setFullFrame(eye, in: container.bounds.isEmpty ? square : container.bounds)
+        }
     }
 
     private func setFullFrame(_ view: UIView, in rect: CGRect, anchor: CGPoint = CGPoint(x: 0.5, y: 0.5)) {

@@ -429,3 +429,17 @@ Codex can append a command completion after `task_complete`. It remains visible 
 advance `LastActivity` or `updated_at`: doing so makes a finished, seen turn look newly completed. If a bounded
 read starts after the turn closed, recover its state from the previous read or bounded lookback before using the
 command's timestamp.
+
+## Antigravity background results can complete in place (#13594)
+
+The CLI exports parallel tool results by completion order. Match each result to the planner call by its step index.
+A later record for the same running step can replace the task announcement with final output. Keep the task ID and
+its start metadata through that replacement, along with the intervening steps. Tool arguments can be JSON strings
+inside JSON, including both the action and the task ID in a `manage_task` kill.
+
+A one-shot timer can report its firing through a system message whose `sender` is the task ID. Use the message
+step's creation time for completion. Cron iterations and heartbeat messages leave the schedule active.
+
+- Terminal Codex paginated history needs the database originator and CLI source to include its running turn. Keep the
+  old-schema sidebar fallback, decode compressed rollout metadata as a stream, and bump the projection cache version
+  when adding item types so existing history rebuilds instead of retaining dropped items (#17768).

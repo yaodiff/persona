@@ -584,12 +584,15 @@ func (d *Devices) prepareShareCall(ctx context.Context, p devicewire.NodeCall, p
 	store := d.shareDB()
 	result := ""
 	if devicewire.IsSessionStart(p.Method) {
-		result = "store_unavailable"
-		if store != nil {
+		switch {
+		case p.Caller == nil || p.Caller.Kind != "device":
+			result = "caller_not_device"
+		case store == nil:
+			result = "store_unavailable"
+		case p.Caller.OwnerSubject == "":
 			result = "caller_unbound"
-			if p.Caller != nil && p.Caller.Kind == "device" && p.Caller.OwnerSubject != "" {
-				result = "authority_missing"
-			}
+		default:
+			result = "authority_missing"
 		}
 	}
 	incarnation := ""
@@ -679,6 +682,8 @@ func (d *Devices) observeCreationCall(p devicewire.NodeCall, prepared, out json.
 		if request.CreationID != "" && request.Incarnation != "" && request.CreationID == response.CreationID && request.Incarnation == response.Incarnation {
 			reply = "receipt_match"
 		}
+	case request.CreationID == "" && request.Incarnation == "":
+		reply = "receipt_not_requested"
 	}
 	devicewire.ShareCreationLog(d.logf, response.Session.ID, "node_reply", reply)
 }

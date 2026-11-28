@@ -7,6 +7,7 @@ import (
 	"github.com/nwverse/persona/server/internal/moduleswitch"
 	"github.com/nwverse/persona/server/internal/node/imessageport"
 	"github.com/nwverse/persona/server/internal/node/iphoneport"
+	"github.com/nwverse/persona/server/internal/node/larkgateport"
 	"github.com/nwverse/persona/server/internal/node/screenport"
 	"github.com/nwverse/persona/server/internal/nodecmd/commandport"
 )
@@ -44,5 +45,12 @@ func TestPhoneExtraFollowsTheBuildTags(t *testing.T) {
 	}
 	if _, got := commandport.LookupCommand("iphone"); got != want {
 		t.Fatalf("personad iphone provided: %v, want %v for this build's tags", got, want)
+	}
+}
+
+// The Lark module's gate rules are provided to the node exactly when the build tags keep it.
+func TestLarkFollowsTheBuildTags(t *testing.T) {
+	if got, want := larkgateport.Get(moduleswitch.Set{}) != nil, slices.Contains(want, "lark"); got != want {
+		t.Fatalf("lark gate rules provided to the node: %v, want %v for this build's tags", got, want)
 	}
 }

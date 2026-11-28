@@ -329,11 +329,11 @@ func (o Options) filters() filters {
 		}
 	}
 	return filters{ID: o.ID, State: o.State, Machine: machine, Project: o.Project, Group: o.Group, Source: o.Source, Provider: o.Provider, Providers: providersKey(o.Providers), Q: o.Q, PaneSource: o.PaneSource, Manager: o.Manager,
-		Roots: o.Roots, CrossMachineHierarchy: o.CrossMachineHierarchy, IncludeHidden: o.IncludeHidden, Under: o.Under, UnderMachine: underMachine, NoPrivate: o.NoPrivate, AgentsOnly: o.AgentsOnly, Places: placesKey(o.Places), Spaces: placesKey(o.Spaces), Todo: o.Todo, Waiting: o.Waiting, ExcludePaneSource: o.ExcludePaneSource, JustFinished: o.JustFinished}
+		Roots: o.Roots, CrossMachineHierarchy: o.CrossMachineHierarchy, IncludeHidden: o.IncludeHidden, Under: o.Under, UnderMachine: underMachine, NoPrivate: o.NoPrivate, AgentsOnly: o.AgentsOnly, Places: placesKey(o.Places), Spaces: placesKey(o.Spaces), AllowedMachines: allowedMachineKey(o.AllowedMachines), Todo: o.Todo, Waiting: o.Waiting, ExcludePaneSource: o.ExcludePaneSource, JustFinished: o.JustFinished}
 }
 
 func (o Options) binding() binding {
-	return binding{filters: o.filters(), Summary: o.Summary, Since: o.Since, Search: o.Search, AllowedMachines: allowedMachineKey(o.AllowedMachines)}
+	return binding{filters: o.filters(), Summary: o.Summary, Since: o.Since, Search: o.Search}
 }
 
 func validTokenPart(s string) bool {

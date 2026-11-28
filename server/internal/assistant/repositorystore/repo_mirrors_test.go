@@ -1,6 +1,8 @@
 package repositorystore
 
 import (
+	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -12,7 +14,7 @@ func TestRepoMirrorsStoreCRUDAndQueries(t *testing.T) {
 	ctx := t.Context()
 	now := time.Date(2026, 11, 22, 12, 0, 0, 0, time.UTC)
 
-	// Missing row reads as nil (implicitly disabled).
+	// Missing row has no saved settings.
 	got, err := d.RepoMirror(ctx, "dev1", "repo_web")
 	if err != nil || got != nil {
 		t.Fatalf("expected nil for unconfigured mirror: %+v %v", got, err)
@@ -44,9 +46,9 @@ func TestRepoMirrorsStoreCRUDAndQueries(t *testing.T) {
 		t.Fatalf("unexpected upsert result: %+v %v", saved, err)
 	}
 
-	enabled, err := d.ListEnabledRepoMirrors(ctx, "dev1", []string{"repo_web", "repo_api"})
-	if err != nil || len(enabled) != 1 || enabled[0].RepoID != "repo_web" {
-		t.Fatalf("unexpected enabled list: %+v %v", enabled, err)
+	listed, err := d.ListRepoMirrors(ctx, "dev1", "repo_web")
+	if err != nil || len(listed) != 1 || !listed[0].Enabled || listed[0].RepoID != "repo_web" {
+		t.Fatalf("unexpected mirror list: %+v %v", listed, err)
 	}
 
 	dueList, err := d.ListDueAutoSyncRepoMirrors(ctx, now.Add(time.Second))
@@ -94,5 +96,53 @@ func TestRepoMirrorsStoreCRUDAndQueries(t *testing.T) {
 	got, err = d.RepoMirror(ctx, "dev1", "repo_web")
 	if err != nil || got != nil {
 		t.Fatalf("expected nil after delete: %+v %v", got, err)
+	}
+}
+
+func TestCreateOnDemandRepoMirrorKeepsSavedConfig(t *testing.T) {
+	d := open(t)
+	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
+	defer cancel()
+	now := time.Date(2026, 11, 22, 12, 0, 0, 0, time.UTC)
+
+	// A user's opt-out can land after workspace prepare reads an absent row.
+	if _, err := d.UpsertRepoMirrorConfig(ctx, repository.RepoMirrorRecord{
+		MachineID:           "dev1",
+		RepoID:              "repo_disabled",
+		Enabled:             false,
+		SyncIntervalMinutes: 60,
+		UpdatedAt:           now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := d.CreateOnDemandRepoMirror(ctx, "dev1", "repo_disabled", now.Add(time.Minute))
+	if err != nil || got == nil || got.Enabled || got.AutoSync || got.SyncIntervalMinutes != 60 || !got.UpdatedAt.Equal(now) {
+		t.Fatalf("expected the saved opt-out after enrollment conflict: %+v, %v", got, err)
+	}
+
+	const callers = 4
+	var records [callers]*repository.RepoMirrorRecord
+	var errs [callers]error
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := range callers {
+		wg.Go(func() {
+			<-start
+			records[i], errs[i] = d.CreateOnDemandRepoMirror(ctx, "dev1", "repo_web", now.Add(time.Duration(i)*time.Second))
+		})
+	}
+	close(start)
+	wg.Wait()
+	for i, rec := range records {
+		if errs[i] != nil || rec == nil || !rec.Enabled || rec.AutoSync || rec.NextSyncAt != nil ||
+			rec.SyncIntervalMinutes != repository.DefaultMirrorSyncIntervalMinutes {
+			t.Fatalf("caller %d did not receive on-demand defaults: %+v, %v", i, rec, errs[i])
+		}
+		if !rec.UpdatedAt.Equal(records[0].UpdatedAt) {
+			t.Fatalf("caller %d received a different row timestamp: got %v, want %v", i, rec.UpdatedAt, records[0].UpdatedAt)
+		}
+	}
+	if due, err := d.ListDueAutoSyncRepoMirrors(ctx, now.Add(time.Hour)); err != nil || len(due) != 0 {
+		t.Fatalf("on-demand enrollment should not schedule periodic sync: %+v, %v", due, err)
 	}
 }

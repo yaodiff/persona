@@ -13,7 +13,7 @@ import { copyText, toast } from "./atoms";
 import { tableHtml, tableToTsv, writeTableClipboard } from "./tableCopy";
 import { t } from "../i18n";
 import { Icon } from "./icons";
-import { MermaidBlock } from "./Mermaid";
+import { lazyPage } from "../lib/lazy-page";
 import { ExternalImage } from "./ExternalImage";
 import { ReplyPicturesContext } from "./reply-pictures-context";
 import { LocalImageRun, ReplyImagesRun, useReplyImages } from "./reply-images-lazy";
@@ -370,6 +370,22 @@ function Link({ href, children, mid, cwd, line, title: hover, readOnly }: { href
   );
 }
 
+// A ```mermaid block's component (Mermaid.tsx, with lib/mermaid.ts and the words only they read) loads with the first
+// block drawn, not with every first screen that can draw a reply. Until it is in, the block shows its source dimmed, as
+// the component itself does until the diagram is drawn; once in, every block after draws at once.
+export const MermaidDiagram = lazyPage(() => import("./Mermaid").then((m) => m.MermaidBlock));
+
+/** A diagram's source while its component loads: MermaidBlock's own look before its drawing. */
+function MermaidPending({ code }: { code: string }) {
+  return (
+    <div className="group/code relative my-3" data-mermaid="">
+      <pre className="opacity-60">
+        <code>{code}</code>
+      </pre>
+    </div>
+  );
+}
+
 // A formula KaTeX has not drawn yet (it loads when a reply first has one, ui/stream/math.ts): remark-math leaves it as a
 // <code class="math-inline"> / <pre><code class="math-display">, shown as the TeX it was written in. Once KaTeX is in,
 // rehype-katex turns those into formulas before they get here.
@@ -379,7 +395,14 @@ function renderPre(children: React.ReactNode) {
   const code = () => textOf(children).replace(/\n$/, "");
   if (hasClass(codeClass(children), "math-display")) return <div className="whitespace-pre-wrap" data-math-pending="display">{`$$\n${code()}\n$$`}</div>;
   const lang = codeLanguage(children);
-  if (lang === "mermaid") return <MermaidBlock code={code()} />;
+  if (lang === "mermaid") {
+    const source = code();
+    return (
+      <Suspense fallback={<MermaidPending code={source} />}>
+        <MermaidDiagram code={source} />
+      </Suspense>
+    );
+  }
   // the assistant's cards (#1850): drawn with the extensions' components; a block that does not read stays code
   if (CARD_LANGUAGES.includes(lang)) return <AssistantCard lang={lang} code={textOf(children)} fallback={<CodeBlock lang={lang}>{children}</CodeBlock>} />;
   return <CodeBlock lang={lang}>{children}</CodeBlock>;
@@ -421,7 +444,7 @@ export const markdownComponents: Components = {
 // doesn't wrap and needs no minimum width, so a column of numbers or names is as narrow as they are (audit item 77).
 // A wide character (CJK, full-width, emoji: from U+2E80 on) counts 1em, any other about half; a line break or a picture
 // never fits.
-type HastNode = { type: string; value?: string; tagName?: string; children?: HastNode[] };
+type HastNode = { type: string; value?: string; tagName?: string; properties?: Record<string, unknown>; children?: HastNode[] };
 
 export function cellFits(node: unknown): boolean {
   let em = 0;
@@ -433,6 +456,21 @@ export function cellFits(node: unknown): boolean {
     return n.tagName !== "br" && n.tagName !== "img" && (n.children ?? []).every(walk);
   };
   return Boolean(node) && walk(node as HastNode);
+}
+
+// Convert only parsed break tags in cells before ReactMarkdown escapes its remaining raw nodes.
+function rehypeTableBreaks() {
+  const walk = (node: HastNode, inCell: boolean) => {
+    const cell = inCell || node.tagName === "td" || node.tagName === "th";
+    node.children?.forEach((child, i, children) => {
+      if (cell && child.type === "raw" && /^<br(?: ?\/)?>$/.test(child.value ?? "")) {
+        children[i] = { type: "element", tagName: "br", properties: {}, children: [] };
+      } else {
+        walk(child, cell);
+      }
+    });
+  };
+  return (tree: HastNode) => walk(tree, false);
 }
 
 function handleInlineCodeCopy(e: React.MouseEvent<HTMLElement> | React.KeyboardEvent<HTMLElement>) {
@@ -678,7 +716,7 @@ export const Markdown = memo(function Markdown({ text: raw, small, compact, mid,
   const images = useReplyImages(wantsReplyImages)?.rehypeReplyImages;
   const picturesContext = useMemo(() => ({ text, ask: Boolean(askImages), mid, cwd }), [text, askImages, mid, cwd]);
   const rehypePlugins = useMemo<PluggableList>(
-    () => [...(images ? [[images, { local: Boolean(mid) }] as [typeof images, { local: boolean }]] : []), ...(katex ? [katex] : []), ...(highlight ? [highlight] : []), ...(key ? [rehypePathLinks(linkable)] : []), rehypeLinkedCode],
+    () => [...(images ? [[images, { local: Boolean(mid) }] as [typeof images, { local: boolean }]] : []), ...(katex ? [katex] : []), ...(highlight ? [highlight] : []), ...(key ? [rehypePathLinks(linkable)] : []), rehypeTableBreaks, rehypeLinkedCode],
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [key, highlight, katex, images, Boolean(mid)],
   );

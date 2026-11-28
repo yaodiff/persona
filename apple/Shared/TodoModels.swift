@@ -67,6 +67,7 @@ nonisolated extension TodoItem {
         }
         if waitsForOwner { return StateName.needsYou.text }
         if deliveredAwaitingReview(state) { return String(localized: "Delivered · Awaiting Review [To-do Sections]") }
+        if wait != nil { return StateName.taskWaiting.text }
         return state.todoLabel
     }
 
@@ -110,6 +111,7 @@ nonisolated extension TodoItem {
         if acceptedAtRest(state) { return .done }
         if waitsForOwner { return .needsYou }
         if deliveredAwaitingReview(state) { return .unread }
+        if wait != nil { return .waiting }
         return state
     }
 
@@ -560,6 +562,12 @@ nonisolated enum TodosLogic {
 // MARK: - APIClient extensions for Todos
 
 extension APIClient {
+    /// How long closing or accepting a to-do may wait for the owner's confirmation card: the assistant manager waits up
+    /// to 45 s (`confirmOwnerTaskClose` in `server/internal/assistant/task_close_work.go`) when a linked Agent still
+    /// has active monitoring, background work, or a scheduled wake, so the request waits longer than that to receive
+    /// the confirmation result or 422 refusal instead of aborting early at 30 s.
+    nonisolated static let todoCloseConfirmWait: TimeInterval = 45 + 20
+
     struct TodoResponse: Decodable, Sendable {
         var todo: TodoItem
     }
@@ -604,7 +612,8 @@ extension APIClient {
     public func updateTodo(id: String, title: String? = nil, notes: String? = nil, done: Bool? = nil) async throws -> TodoItem {
         let encId = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
         let body = UpdateTodoRequest(title: title, notes: notes, done: done)
-        let data = try await request("PATCH", "/api/v1/todos/\(encId)", body: body)
+        let timeout: TimeInterval = done == true ? Self.todoCloseConfirmWait : 30
+        let data = try await request("PATCH", "/api/v1/todos/\(encId)", body: body, timeout: timeout)
         return try JSON.decoder.decode(TodoResponse.self, from: data).todo
     }
 

@@ -306,6 +306,8 @@ type modelsState struct {
 
 	ownMu sync.Mutex
 	own   map[string]ownSeen // machine + "/" + agent → its own service as the node said (models_launchers_scope.go)
+
+	launcherLists launcherListCache // per-(machine, host) short-TTL launchers.list cache with singleflight (launcher_list_cache.go)
 }
 
 func (s *Service) modelRecord(ctx context.Context, id string) (modelRecord, error) {

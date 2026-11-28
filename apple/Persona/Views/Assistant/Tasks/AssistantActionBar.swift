@@ -463,9 +463,15 @@ nonisolated struct ActionTrayContent: Equatable, Sendable {
     /// The number its entry shows: its rows (shelved ones are not counted). Finished's is finished work, never open work.
     func count(_ tray: ActionTray) -> Int { rows(tray).count }
 
-    /// The entries the bar shows: Needs You and In Progress always, Finished while it lists something or `open` is it.
+    /// The entries the bar shows: Needs You (always visible) and In Progress always; Finished is not persistent on the
+    /// collapsed bar and appears on the bar only while its tray is open (reachable from any open tray's header).
     func entries(open: ActionTray?) -> [ActionTray] {
-        ActionTray.allCases.filter { $0 != .finished || !finished.isEmpty || open == .finished }
+        ActionTray.allCases.filter { $0 != .finished || open == .finished }
+    }
+
+    /// Whether the open tray header offers a one-tap link into the 24-hour Finished list.
+    func offersFinishedLink(for tray: ActionTray) -> Bool {
+        tray != .finished && !finished.isEmpty
     }
 
     /// Groups Needs You (`grouped`) when `enabled` (the main conversation folding background rounds); otherwise one list.
@@ -547,6 +553,9 @@ struct AssistantActionBar: View {
     /// is the one open: in the trays' place, so never with `open` (#8223).
     @State private var held: PushInterceptsModel?
     @State private var heldOpen = false
+    /// Whether the main conversation's Inbox wrap-up tray is open in the shared tray slot (mutually exclusive with
+    /// `open`, `heldOpen`, and `dock`).
+    @State private var wrapUpOpen = false
     private var store: TasksStore { .shared }
 
     private var entryRow: AnyLayout { AnyLayout(HStackLayout(spacing: Theme.Space.s)) }
@@ -560,13 +569,15 @@ struct AssistantActionBar: View {
             if let open {
                 tray(open, content)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
+            } else if wrapUpOpen, inMain {
+                WrapUpTray(conversation: conversation) { withAnimation(Theme.Motion.state) { wrapUpOpen = false } }
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
             } else if heldOpen, let held {
                 PushInterceptsTray(model: held) { withAnimation(Theme.Motion.state) { heldOpen = false } }
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
-            // Wider than the bar (Finished beside the two, Held Pushes and the computer's pill, a large text size), the
-            // entries scroll sideways instead of running off its edge, as on the web and Android (#10922); while they fit
-            // nothing moves.
+            // Wider than the bar (Wrap Up, Held Pushes, the computer's pill, or a large text size), the entries scroll
+            // sideways instead of running off its edge, as on the web and Android (#10922); while they fit nothing moves.
             ScrollView(.horizontal, showsIndicators: false) {
                 row {
                     if let dock {
@@ -580,6 +591,7 @@ struct AssistantActionBar: View {
                                         dock.fold(ids)
                                     } else {
                                         open = nil
+                                        wrapUpOpen = false
                                         heldOpen = false
                                         dock.show()
                                     }
@@ -588,10 +600,20 @@ struct AssistantActionBar: View {
                         }
                     }
                     ForEach(content.entries(open: open)) { entry($0, count: content.count($0)) }
+                    if inMain {
+                        WrapUpEntry(conversation: conversation, open: wrapUpOpen) {
+                            withAnimation(Theme.Motion.state) {
+                                open = nil
+                                heldOpen = false
+                                wrapUpOpen.toggle()
+                            }
+                        }
+                    }
                     if inMain, let held {
                         PushInterceptsEntry(model: held, open: heldOpen) {
                             withAnimation(Theme.Motion.state) {
                                 open = nil
+                                wrapUpOpen = false
                                 heldOpen.toggle()
                             }
                         }
@@ -608,11 +630,11 @@ struct AssistantActionBar: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         // No fade of its own: the chat runs on behind the bar and fades out there (`FooterFog`, #3696).
-        .onChange(of: conversation) { open = nil; expanded = []; drawn = []; planChoices = [:] }
-        // One tray at a time: Needs You's or In Progress' opening closes the held pushes'.
-        .onChange(of: open) { if open == nil { expanded = []; drawn = []; planChoices = [:] } else { heldOpen = false } }
+        .onChange(of: conversation) { open = nil; wrapUpOpen = false; heldOpen = false; expanded = []; drawn = []; planChoices = [:] }
+        // One tray at a time: Needs You's, In Progress' or Finished's opening closes Wrap Up and Held Pushes.
+        .onChange(of: open) { if open == nil { expanded = []; drawn = []; planChoices = [:] } else { wrapUpOpen = false; heldOpen = false } }
         // The pager steps aside while a tray is open (#12831).
-        .onChange(of: open != nil || heldOpen, initial: true) { _, tray in dock?.trayOpen = tray }
+        .onChange(of: open != nil || wrapUpOpen || heldOpen, initial: true) { _, tray in dock?.trayOpen = tray }
         // The held pushes are read in the main conversation while its tab is in front, every 30 s, with ln mode off too,
         // so the entry comes when the mode is turned on; the bar reads none of the model's values itself.
         .tabActiveTask(id: inMain) {
@@ -621,7 +643,7 @@ struct AssistantActionBar: View {
             if held == nil { held = model }
             await model.run()
         }
-        .onChange(of: inMain) { _, inMain in if !inMain { held = nil; heldOpen = false } }
+        .onChange(of: inMain) { _, inMain in if !inMain { held = nil; heldOpen = false; wrapUpOpen = false } }
         #if DEBUG
         .onAppear {
             if let value = UserDefaults.standard.string(forKey: "showActionTray"), let tray = ActionTray(rawValue: value) {
@@ -665,7 +687,7 @@ struct AssistantActionBar: View {
         let entries = AssistantEntries.split(
             conversation: conversation, main: model.assistantMain?.sessionID, group: model.hub?.group ?? "", todos: todos,
             sessions: todos.filter { $0.doneAt == nil || $0.failedToStart }.flatMap { store.sessions($0) },
-            interactions: model.pendingInteractions, plans: store.plans,
+            interactions: model.aggregatePendingInteractions, plans: store.plans,
             feed: store.feed(conversation), restored: TodoRestores.load(), going: model.goingAgents,
             // the hub's fields, the inbox's word on the item, and Later
             messageWaits: { item in
@@ -717,6 +739,26 @@ struct AssistantActionBar: View {
             HStack(spacing: Theme.Space.s) {
                 Text(tray.title).font(Theme.Font.sectionHeader).foregroundStyle(.secondary).lineLimit(1)
                 Spacer(minLength: Theme.Space.s)
+                if content.offersFinishedLink(for: tray) {
+                    Button {
+                        Haptics.tap()
+                        withAnimation(Theme.Motion.state) { open = .finished }
+                    } label: {
+                        HStack(spacing: Theme.Space.xs) {
+                            if content.finished.contains(where: \.fresh) {
+                                StatusDot(state: .unread, size: Theme.Size.dot)
+                            }
+                            Text(ActionTray.finished.title)
+                            if let text = CountBadge.text(content.count(.finished)) { Text(text).monospacedDigit() }
+                        }
+                        .dockCapsule()
+                        .fixedSize()
+                        .tapTargetHeight()
+                        .contentShape(.rect)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("action-tray.finished-link")
+                }
                 // The board has everything; of what finished, the trays list only the last 24 hours' (Finished).
                 Button {
                     open = nil

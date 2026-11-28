@@ -1,8 +1,11 @@
 package extmgr
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 )
@@ -144,5 +147,84 @@ func TestConfigReadsTheLedgerSettingsFromManagerJSON(t *testing.T) {
 		if limit, limited := (&Manager{cfg: cfg}).recallWindow(); !limited || limit != 48*time.Hour {
 			t.Errorf("%s: the recall window is %v (limited %v)", name, limit, limited)
 		}
+	}
+}
+
+// Legacy trusted_extension_markets still decodes during the deprecation window, emits a startup warning when
+// non-empty, never blocks manager startup, and stays quiet when absent or empty (#2656).
+func TestConfigLegacyTrustedExtensionMarketsWarnsOnStartup(t *testing.T) {
+	tests := []struct {
+		name        string
+		hubJSON     string
+		managerJSON string
+		wantValues  []string
+		wantWarning bool
+	}{
+		{
+			name:        "non-empty manager setting warns and decodes",
+			hubJSON:     `{"token":"hub-token"}`,
+			managerJSON: `{"trusted_extension_markets":["https://market.example.com"]}`,
+			wantValues:  []string{"https://market.example.com"},
+			wantWarning: true,
+		},
+		{
+			name:        "empty manager array stays quiet",
+			hubJSON:     `{"token":"hub-token"}`,
+			managerJSON: `{"trusted_extension_markets":[]}`,
+			wantWarning: false,
+		},
+		{
+			name:        "absent setting stays quiet",
+			hubJSON:     `{"token":"hub-token"}`,
+			managerJSON: `{}`,
+			wantWarning: false,
+		},
+		{
+			name:        "stale hub.json copy is not read and does not warn",
+			hubJSON:     `{"token":"hub-token","trusted_extension_markets":["https://stale.example.com"]}`,
+			managerJSON: `{}`,
+			wantWarning: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dir, "hub.json"), []byte(tt.hubJSON), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			file := filepath.Join(dir, "managers", "assistant", "manager.json")
+			if err := os.MkdirAll(filepath.Dir(file), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(file, []byte(tt.managerJSON), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			cfg, err := LoadConfig(dir, file)
+			if err != nil {
+				t.Fatalf("LoadConfig: %v", err)
+			}
+			if !slices.Equal(cfg.TrustedExtensionMarkets, tt.wantValues) {
+				t.Fatalf("TrustedExtensionMarkets = %v, want %v", cfg.TrustedExtensionMarkets, tt.wantValues)
+			}
+
+			for pathName, opts := range map[string]Options{
+				"LoadConfig+New":  {Dir: dir, Config: cfg},
+				"New(ConfigFile)": {Dir: dir, ConfigFile: file},
+			} {
+				var logs strings.Builder
+				opts.Logf = func(format string, args ...any) {
+					fmt.Fprintf(&logs, format+"\n", args...)
+				}
+				New(opts)
+				output := logs.String()
+				hasWarning := strings.Contains(output, "trusted_extension_markets") &&
+					strings.Contains(output, "deprecated") &&
+					strings.Contains(output, "sandbox")
+				if hasWarning != tt.wantWarning {
+					t.Errorf("%s: startup deprecation warning = %v, want %v; logs:\n%s", pathName, hasWarning, tt.wantWarning, output)
+				}
+			}
+		})
 	}
 }

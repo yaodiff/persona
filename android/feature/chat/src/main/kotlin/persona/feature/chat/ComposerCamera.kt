@@ -14,8 +14,10 @@ import androidx.core.content.ContextCompat
  * then goes in like a picked one. Those originals belong to one draft and are deleted when they leave it.
  */
 
-/** A photo this app took for a draft (cache/chat-captures behind the chat FileProvider), not a picked one. */
-internal fun isCaptureUri(uri: String, packageName: String): Boolean = uri.startsWith("content://$packageName.chat.files/chat-captures/")
+/** A photo this app captured for a draft (`cache/chat-captures` or `cache/assist` behind the chat FileProvider), not a picked one. */
+internal fun isCaptureUri(uri: String, packageName: String): Boolean =
+    uri.startsWith("content://$packageName.chat.files/chat-captures/") ||
+        uri.startsWith("content://$packageName.chat.files/assist/")
 
 /**
  * The captures that were in [before] and are no longer in [now] (removed, or sent and cleared), by attachment id. An

@@ -2,6 +2,7 @@ import type { EngineInterface, Register } from 'claude-code'
 import {
   BASE,
   CAPABILITIES,
+  COMPACTION_REPORT_TIMEOUT_MS,
   PERMISSION_BODY_MOST,
   PERMISSION_GRACE_MS,
   PERMISSION_MAX_ERRORS,
@@ -12,15 +13,20 @@ import {
   POLL_WAIT_MS,
   SUBMIT_QUEUE_SETTLE_MS,
   applyStepOverride,
+  buildCompactionPayload,
   buildPermissionPayload,
   clearAgentPreTools,
+  createClassicHookObservation,
   createPreToolCache,
+  finishClassicTurn,
   hasPermissionDecision,
   homeDir,
   isToolCompleted,
   markToolCompleted,
   mergeOverride,
   nextBackoff,
+  noteClassicPreToolUse,
+  noteTurnStepToolUses,
   readPermissionAnswer,
   readPoll,
   recordPreTool,
@@ -29,6 +35,7 @@ import {
   toolCallKey,
   verdict,
   type ActiveTurn,
+  type CompactionTrigger,
   type InterruptRequest,
   type Message,
   type PermissionAnswer,
@@ -38,17 +45,16 @@ import {
   type SettingsUpdate,
 } from './bridge'
 
-// Persona's plugin (README.md): while this session lives it asks the local Persona node for the owner's own messages,
-// owner turn interrupts, session-scoped model / effort picks, and interactive permission / plan / question approvals
-// from the Persona apps. Messages go in as the person's words (`asUser`, immediately when idle or queued natively
-// while a turn runs), interrupts cancel the active main-loop turn (`$.turn.abort`), model / effort overrides apply to
-// main-loop `turn.step` requests without touching global settings files, and permission requests bridge over the local
-// node socket only when explicitly authorized on `/poll`. The plugin runs no command, reads no file but its own
-// manifest, and keeps quiet (the debug log only) when no node answers.
+// The plugin README documents the process-bound poll, owner delivery and permission authorization.
 
 type Engine = EngineInterface
 
+type StepEffort = { at_ms: number; level?: string; reset?: boolean }
+
 type PermissionAuth = { sock: string; session: string }
+
+/** Time a main-loop tool call gets to reach classic.PreToolUse before the session counts as passed over. */
+const CLASSIC_HOOK_GRACE_MS = 2_000
 
 type ActivePerm = {
   reqId: string
@@ -69,14 +75,22 @@ export const register: Register = on => {
   // its environment. A /clear keeps the loop: each poll names the session open now.
   let loop = 0
   let activeTurn: ActiveTurn | undefined
+  let observed: { session: string; effort: StepEffort } | undefined
   let override: SessionOverride | undefined
   let permissionAuth: PermissionAuth | undefined
+  let classicHooks = createClassicHookObservation()
+  let classicTurn = 0
+  let wakePoll: (() => void) | undefined
+  let compacting = false
+  let compactTrigger: CompactionTrigger = 'manual'
+  let compactionReport = Promise.resolve()
   const preToolCache = createPreToolCache()
   const activePerms = new Map<string, ActivePerm>()
   let permSeq = 0
 
   on('turn.start', async ($, e, next) => {
     if (e.agentId === undefined) {
+      classicTurn++
       const session = await $.session.id().catch(() => '')
       activeTurn = { session, turnId: e.turnId }
     }
@@ -86,6 +100,19 @@ export const register: Register = on => {
   on('turn.complete', ($, e, next) => {
     if (e.agentId === undefined && activeTurn?.turnId === e.turnId) {
       activeTurn = undefined
+    }
+    if (e.agentId === undefined) {
+      if (compacting) {
+        compacting = false
+        compactionReport = queueCompactionReport($, compactionReport, 'end', compactTrigger)
+      }
+      classicTurn++
+      const wasPassedOver = classicHooks.passedOver
+      classicHooks = finishClassicTurn(classicHooks)
+      if (classicHooks.passedOver) {
+        permissionAuth = undefined
+        if (!wasPassedOver) wakePoll?.()
+      }
     }
     try {
       const agentId = e.agentId ?? ''
@@ -97,21 +124,66 @@ export const register: Register = on => {
     return next(e)
   })
 
-  on('turn.step', async function* ($, e, next) {
-    if (e.agentId === undefined && activeTurn?.turnId !== e.turnId) {
-      const session = await $.session.id().catch(() => '')
-      activeTurn = { session, turnId: e.turnId }
+  on('session.compact', async ($, e, next) => {
+    if (e.agentId !== undefined) return next(e)
+    compacting = true
+    compactTrigger = e.trigger
+    compactionReport = queueCompactionReport($, compactionReport, 'start', compactTrigger)
+    try {
+      return await next(e)
+    } finally {
+      compacting = false
+      compactionReport = queueCompactionReport($, compactionReport, 'end', compactTrigger)
     }
-    if (e.agentId !== undefined || override === undefined) return yield* next(e)
-    const session = await $.session.id().catch(() => '')
-    const sessionModel = override.model !== undefined ? await $.session.model().catch(() => undefined) : undefined
-    const applied = applyStepOverride(e, override, session, sessionModel)
-    override = applied.nextOverride
-    return yield* next(applied.step)
+  })
+
+  on('turn.step', async function* ($, e, next) {
+    let step = e
+    const observingTurn = classicTurn
+    if (e.agentId === undefined) {
+      const session = activeTurn?.turnId === e.turnId ? activeTurn.session : await $.session.id().catch(() => '')
+      if (session !== '') activeTurn = { session, turnId: e.turnId }
+      if (override !== undefined) {
+        const sessionModel = override.model !== undefined ? await $.session.model().catch(() => undefined) : undefined
+        const applied = applyStepOverride(e, override, session, sessionModel)
+        override = applied.nextOverride
+        step = applied.step
+      }
+      const at = await $.clock.now().catch(() => 0)
+      const level = override?.effort === 'auto' ? 'auto' : step.effort
+      if (at > 0 && session !== '') observed = { session, effort: { at_ms: at, ...(typeof level === 'string' ? { level } : {}) } }
+    }
+    const output = yield* next(step)
+    try {
+      classicHooks = noteTurnStepToolUses(classicHooks, e.agentId, output)
+      if (e.agentId === undefined && !classicHooks.passedOver && classicHooks.toolUses > 0) {
+        void sleep($, CLASSIC_HOOK_GRACE_MS)
+          .then(() => {
+            if (
+              observingTurn !== classicTurn ||
+              classicHooks.passedOver ||
+              classicHooks.toolUses === 0 ||
+              classicHooks.preToolUses > 0
+            ) {
+              return
+            }
+            classicHooks = { ...classicHooks, passedOver: true }
+            permissionAuth = undefined
+            wakePoll?.()
+          })
+          .catch(() => {
+            // A missing clock only delays the turn.complete fallback.
+          })
+      }
+    } catch {
+      // Observation never changes the step.
+    }
+    return output
   })
 
   on('classic.PreToolUse', (_$, e, next) => {
     try {
+      classicHooks = noteClassicPreToolUse(classicHooks, e)
       recordPreTool(preToolCache, e)
       return next(e)
     } catch {
@@ -331,6 +403,7 @@ export const register: Register = on => {
 
   on('session.start', async ($, e, next) => {
     const started = await next(e)
+    observed = undefined
     const mine = ++loop
     void run(
       $,
@@ -338,6 +411,11 @@ export const register: Register = on => {
       () => activeTurn,
       turnId => {
         if (activeTurn?.turnId === turnId) activeTurn = undefined
+      },
+      session => observed?.session === session ? observed.effort : undefined,
+      () => classicHooks.passedOver,
+      wake => {
+        wakePoll = wake
       },
       async (session, update) => {
         const sessionModel = update.model !== undefined ? await $.session.model().catch(() => undefined) : undefined
@@ -445,6 +523,9 @@ async function run(
   current: () => boolean,
   getActiveTurn: () => ActiveTurn | undefined,
   clearActiveTurn: (turnId: string) => void,
+  observedEffort: (session: string) => StepEffort | undefined,
+  classicPassedOver: () => boolean,
+  setWakePoll: (wake: (() => void) | undefined) => void,
   onSettings: (session: string, update: SettingsUpdate) => Promise<void>,
   setPermissionAuth: (auth: PermissionAuth | undefined) => void,
 ): Promise<void> {
@@ -458,8 +539,29 @@ async function run(
     .catch(() => '')
   let backoff = 0
   let reachable: boolean | undefined
+  let previousSession: string | undefined
+  let reset: StepEffort | undefined
   while (current()) {
     const session = await $.session.id()
+    if (previousSession !== session) {
+      previousSession = session
+      const at = await $.clock.now().catch(() => 0)
+      reset = at > 0 ? { at_ms: at, reset: true } : undefined
+    }
+    setWakePoll(() => {
+      void $.http
+        .fetch(`${BASE}/poll`, post(sock, {
+          session_id: session,
+          plugin_version: pluginVersion,
+          engine_version: engineVersion,
+          capabilities: CAPABILITIES,
+          classic_passed_over: true,
+          wait_ms: 0,
+        }))
+        .catch(() => {
+          // The regular poll loop reconnects.
+        })
+    })
     let answer: PollAnswer
     try {
       const res = await $.http.fetch(`${BASE}/poll`, post(sock, {
@@ -467,6 +569,8 @@ async function run(
         plugin_version: pluginVersion,
         engine_version: engineVersion,
         capabilities: CAPABILITIES,
+        observed_effort: observedEffort(session) ?? reset,
+        ...(classicPassedOver() ? { classic_passed_over: true } : {}),
         wait_ms: POLL_WAIT_MS,
       }))
       answer = readPoll(res.status, res.text)
@@ -516,6 +620,33 @@ async function notifyPermissionDone($: Engine, sock: string, body: Record<string
   } catch {
     // The node went away; its own watcher withdraws the card.
   }
+}
+
+async function reportCompaction($: Engine, phase: 'start' | 'end', trigger: CompactionTrigger): Promise<void> {
+  const sock = socketPath(
+    homeDir(await $.env.get('USERPROFILE'), await $.env.get('HOME')),
+    await $.env.get('PERSONA_HOME'),
+  )
+  const session = await $.session.id().catch(() => '')
+  if (sock === undefined || session === '') return
+  try {
+    await $.http.fetch(
+      `${BASE}/compact`,
+      post(sock, buildCompactionPayload(session, phase, trigger), COMPACTION_REPORT_TIMEOUT_MS),
+    )
+  } catch {
+    // The compaction itself neither waits for this report nor fails with it.
+  }
+}
+
+/** Orders start before end without making the compaction wait for either report. */
+function queueCompactionReport(
+  $: Engine,
+  previous: Promise<void>,
+  phase: 'start' | 'end',
+  trigger: CompactionTrigger,
+): Promise<void> {
+  return previous.then(() => reportCompaction($, phase, trigger)).catch(() => {})
 }
 
 async function applyInterrupt(
@@ -630,12 +761,13 @@ function asRecord(v: unknown): Record<string, unknown> | undefined {
   return typeof v === 'object' && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : undefined
 }
 
-function post(socket: string, body: Record<string, unknown>) {
+function post(socket: string, body: Record<string, unknown>, timeoutMs?: number) {
   return {
     method: 'POST',
     socketPath: socket,
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),
+    ...(timeoutMs !== undefined ? { timeoutMs } : {}),
   }
 }
 

@@ -1,0 +1,12 @@
+<resources>
+    <string name="chat_to_decide">To Decide</string>
+    <string name="chat_to_decide_arrived">To Decide +%1$d</string>
+    <string name="chat_to_decide_view_source">View in Chat</string>
+    <string name="chat_to_decide_skip">Skip</string>
+    <string name="chat_to_decide_skip_terminal">This question needs a reply in its chat.</string>
+    <string name="chat_to_decide_skip_permission">Use Deny to stop the tool.</string>
+    <string name="chat_to_decide_skip_plan">Use Send back to return the plan.</string>
+    <string name="chat_to_decide_previous">Previous card</string>
+    <string name="chat_to_decide_next">Next card</string>
+    <string name="chat_to_decide_position">%1$d / %2$d</string>
+</resources>

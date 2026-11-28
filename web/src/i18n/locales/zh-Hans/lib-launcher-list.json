@@ -1,9 +1,9 @@
 {
-  "timeout": "hub {seconds} 秒内没有回应",
+  "timeout": "hub 在 {seconds} 秒内未响应",
   "ok": "已同步",
   "offline": "离线",
   "timed_out": "超时",
   "failed": "失败",
-  "showing_last": "显示上次同步的结果（{when}）",
+  "showing_last": "当前显示上次同步的列表（{when}）",
   "never_synced": "从未同步"
 }

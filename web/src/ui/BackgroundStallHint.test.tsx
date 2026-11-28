@@ -9,8 +9,8 @@ describe("BackgroundStallHint (#13744)", () => {
   it("shows a muted line with a tooltip for a stalled Working session", () => {
     const html = renderToStaticMarkup(<BackgroundStallHint session={{ ...working, background_stalled_since: new Date(Date.now() - 3 * 3600_000 - 60_000).toISOString() }} />);
     expect(html).toContain("data-bg-stalled");
-    expect(html).toContain("后台命令 3 小时没有动静");
-    expect(html).toContain("仍按「工作中」计算");
+    expect(html).toContain("后台命令已 3 小时无活动");
+    expect(html).toContain("当前状态仍计为「工作中」");
   });
   it("renders nothing without a stall or when the commands only wait", () => {
     expect(renderToStaticMarkup(<BackgroundStallHint session={working} />)).toBe("");

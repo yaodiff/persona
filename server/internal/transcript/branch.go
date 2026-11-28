@@ -60,8 +60,8 @@ type treeLine struct {
 }
 
 // treeRec is a line with a uuid, as the tree keeps it: prompt says it is one of the user's own messages, reply that it
-// is the assistant's, system that it is a system line and turnEnd a turn_duration one. raw is the parsed record to
-// replay when it remains visible; hasOutcome is false for a structural-only skipped tool result or compact summary.
+// is the assistant's, system that it is a system line and turnEnd a turn_duration one. Only Tail keeps raw for
+// visible-record replay; hasOutcome is false for a structural-only skipped tool result or compact summary.
 // round: it is a supervision message sent as a round of the background supervisor (prompts.IsSuperviseRound, #7315).
 type treeRec struct {
 	uuid, parent string
@@ -344,7 +344,7 @@ func trackLine(t *branchTree, meta *Meta, items []proto.Item, kept, sent *[]prot
 
 func (tl treeLine) rec(items []proto.Item) treeRec {
 	prompt := isMessage(items)
-	return treeRec{uuid: tl.uuid, parent: tl.parent, prompt: prompt, reply: tl.assistant, system: tl.system, turnEnd: tl.turnEnd, raw: tl.raw,
+	return treeRec{uuid: tl.uuid, parent: tl.parent, prompt: prompt, reply: tl.assistant, system: tl.system, turnEnd: tl.turnEnd,
 		round: prompt && isSuperviseRound(items)}
 }
 
@@ -411,6 +411,7 @@ func (t *Tail) line(meta *Meta, items []proto.Item, recordOutcome bool, skippedS
 		return
 	}
 	rec := tl.rec(items)
+	rec.raw = tl.raw
 	// A parsed record is replayable. A skipped large prompt is replayable too (its quick-tail transition is real),
 	// while a skipped tool result or compact summary is tree shape only.
 	rec.hasOutcome = recordOutcome || rec.prompt || len(skippedStart) > 0 && skippedStart[0]

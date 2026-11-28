@@ -131,21 +131,44 @@ func (s *Service) extensionEvent(ctx context.Context, req assistantwire.Extensio
 	}
 	c, ok := s.session(ctx, machine, to)
 	idle := ok && c.Status != proto.StatusWorking && !c.Starting
+	directFailed, directErr := false, error(nil)
 	if idle && s.queuedFor(to) == 0 {
 		dctx, cancel := context.WithTimeout(ctx, 90*time.Second)
-		err := s.deliverRelay(dctx, machine, to, msg)
+		err := s.tryDirectRelay(dctx, machine, to, &msg)
 		cancel()
 		if err == nil {
 			return assistantwire.AssistantEventResult{Delivery: assistantwire.EventDelivered}, nil
 		}
+		if s.refusedDirect(ctx, machine, to, msg, err) {
+			return assistantwire.AssistantEventResult{}, err
+		}
+		if relayFailureOf(err) == relayFailedGone {
+			s.logf("extension %s: event %q: %v; dropped", req.Extension, ev.Key, err)
+			return assistantwire.AssistantEventResult{}, &rpc.Error{
+				Code:    assistantwire.CodeNoMainConversation,
+				Message: assistantwire.MethodAssistantEvent + ": " + err.Error(),
+			}
+		}
+		directFailed, directErr = true, err
 		s.logf("extension %s: event %q: %v; queued", req.Extension, ev.Key, err)
 	}
-	delivery, err := s.queueExtensionEvent(to, msg, ev.replace)
+	bg := backgroundRunning(c)
+	if directFailed {
+		if fresh, ok := s.session(ctx, machine, to); ok {
+			c = fresh
+			idle = fresh.Status != proto.StatusWorking && !fresh.Starting
+			bg = backgroundRunning(fresh)
+		} else {
+			idle = false
+			bg = false
+		}
+	}
+	delivery, shouldDrain, err := s.queueExtensionEvent(machine, to, msg, ev.replace, directFailed, directErr, bg)
 	if err != nil {
 		return assistantwire.AssistantEventResult{}, err
 	}
 	s.publish(ctx) // shown waiting above the composer
-	if idle {
+	if shouldDrain && idle {
 		s.drainRelays(machine, []proto.Session{c})
 	}
 	return assistantwire.AssistantEventResult{Delivery: delivery}, nil
@@ -153,41 +176,97 @@ func (s *Service) extensionEvent(ctx context.Context, req assistantwire.Extensio
 
 // queueExtensionEvent queues msg behind conversation to's turn: in the place of the same extension's queued event with
 // the same key when replace (assistant.event's replace; the one going in right now is left), else after the others,
-// unless the extension already has extEventQueueMost waiting.
-func (s *Service) queueExtensionEvent(to string, msg relayMsg, replace bool) (string, error) {
+// unless the extension already has extEventQueueMost waiting. When directFailed is true and the queued message lands at
+// the head of a non-draining queue, failure backoff (failedAt, stuck, roleChange) and drainAfterLocked are applied
+// atomically under b.mu before s.publish runs; if another message is already ahead at q[0], shouldDrain requests a
+// drain so a healthy head is not stalled.
+func (s *Service) queueExtensionEvent(machine, to string, msg relayMsg, replace, directFailed bool, directErr error, background bool) (delivery string, shouldDrain bool, err error) {
 	book := &s.extEvents
 	book.mu.Lock()
 	defer book.mu.Unlock()
-	if replace && s.replaceQueuedEvent(to, msg) {
-		return assistantwire.EventReplaced, nil
-	}
-	if s.queuedEvents(to, msg.From) >= extEventQueueMost {
-		return "", &rpc.Error{Code: assistantwire.CodeQueueFull, Message: assistantwire.MethodAssistantEvent + ": " + msg.From + " already has " + strconv.Itoa(extEventQueueMost) + " events waiting for the main conversation"}
-	}
-	if s.queueRelay(to, msg) == 0 {
-		return "", &rpc.Error{Code: assistantwire.CodeAssistantOffline, Message: assistantwire.MethodAssistantEvent + ": the relay queue could not be read, try again"}
-	}
-	return assistantwire.EventQueued, nil
-}
 
-// replaceQueuedEvent: an event of msg's extension with msg's key still waits in conversation to's queue: msg takes its
-// place (true). The first one may be going in right now (drainRelays takes it off once delivered): it is left.
-func (s *Service) replaceQueuedEvent(to string, msg relayMsg) bool {
 	b := &s.relays
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	if !s.relayLocked(context.Background()) {
-		return false
+		b.mu.Unlock()
+		return "", false, &rpc.Error{Code: assistantwire.CodeAssistantOffline, Message: assistantwire.MethodAssistantEvent + ": the relay queue could not be read, try again"}
 	}
-	q := b.st.Queue[to]
-	for i := range q {
-		if q[i].Tool == extensionEventTool && q[i].From == msg.From && q[i].Key == msg.Key && (i > 0 || !b.draining[to]) {
-			q[i] = msg
-			s.saveRelayLocked()
-			return true
+
+	var queuedCopy relayMsg
+	if replace {
+		q := b.st.Queue[to]
+		for i := range q {
+			if q[i].Tool == extensionEventTool && q[i].From == msg.From && q[i].Key == msg.Key && (i > 0 || !b.draining[to]) {
+				q[i] = msg
+				_ = s.saveRelayLocked()
+				queuedCopy = q[i]
+				delivery = assistantwire.EventReplaced
+				break
+			}
 		}
 	}
-	return false
+	if delivery == "" {
+		if queuedEventsLocked(b.st.Queue[to], msg.From) >= extEventQueueMost {
+			b.mu.Unlock()
+			return "", false, &rpc.Error{Code: assistantwire.CodeQueueFull, Message: assistantwire.MethodAssistantEvent + ": " + msg.From + " already has " + strconv.Itoa(extEventQueueMost) + " events waiting for the main conversation"}
+		}
+		msg.QueuedAt, msg.Depth = time.Now().UTC(), len(b.st.Queue[to])+1
+		b.st.Queue[to] = append(b.st.Queue[to], msg)
+		_ = s.saveRelayLocked()
+		queuedCopy = msg
+		delivery = assistantwire.EventQueued
+	}
+
+	if directFailed {
+		q := b.st.Queue[to]
+		if !b.draining[to] && len(q) > 0 && q[0] == queuedCopy {
+			wait := relayRetryGap
+			if relayInDoubt(directErr) {
+				wait = relayLookGap
+				delete(b.stuck, to)
+				delete(b.failedAt, to)
+				delete(b.msgFailedAt, to)
+				delete(b.roleChange, to)
+			} else {
+				now := time.Now()
+				if b.failedAt != nil {
+					b.failedAt[to] = now
+				}
+				b.recordMsgFailedLocked(to, queuedCopy, now)
+				if b.stuck != nil {
+					b.stuck[to] = queuedCopy
+				}
+				if b.roleChange != nil {
+					if roleChangeBusy(directErr) {
+						b.roleChange[to] = background
+					} else {
+						delete(b.roleChange, to)
+					}
+				}
+			}
+			s.drainAfterLocked(machine, to, wait)
+		} else {
+			shouldDrain = !b.draining[to]
+		}
+	} else {
+		shouldDrain = true
+	}
+	b.mu.Unlock()
+
+	if delivery == assistantwire.EventQueued {
+		go s.releaseHeldAsks(to)
+	}
+	return delivery, shouldDrain, nil
+}
+
+func queuedEventsLocked(q []relayMsg, id string) int {
+	n := 0
+	for _, m := range q {
+		if m.Tool == extensionEventTool && m.From == id {
+			n++
+		}
+	}
+	return n
 }
 
 // queuedEvents is how many events of extension id wait in conversation to's queue.
@@ -198,11 +277,5 @@ func (s *Service) queuedEvents(to, id string) int {
 	if !s.relayLocked(context.Background()) {
 		return 0
 	}
-	n := 0
-	for _, m := range b.st.Queue[to] {
-		if m.Tool == extensionEventTool && m.From == id {
-			n++
-		}
-	}
-	return n
+	return queuedEventsLocked(b.st.Queue[to], id)
 }

@@ -175,7 +175,7 @@ func roomRecent(l i18n.Lang, items []proto.Item) []prompts.VoiceLine {
 // meetingInstructions is what a meeting call's session is told (voice/meeting), from what any call's would be (in):
 // the owner's name, the language, the room's title and last turns, what this call said and waits for. Never in.Notes.
 func meetingInstructions(in prompts.VoiceInstructions, tool bool) prompts.VoiceMeeting {
-	m := prompts.VoiceMeeting{Lang: in.Lang, Owner: in.Owner, Tool: tool, History: in.History, Waiting: in.Waiting}
+	m := prompts.VoiceMeeting{Lang: in.Lang, Owner: in.Owner, Tool: tool, History: in.History, Waiting: in.Waiting, TTS: in.TTS}
 	if in.Target != nil {
 		m.Title, m.Recent = in.Target.Title, in.Target.Recent
 	}

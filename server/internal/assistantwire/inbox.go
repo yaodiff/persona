@@ -101,6 +101,9 @@ const (
 	InboxKick = "inbox.kick"
 	// InboxConfigMethod: {} → InboxConfig.
 	InboxConfigMethod = "inbox.config"
+	// InboxMessagePolicy: {} → {sender_identity: true}. Preflight before using a
+	// sender override, so an older extension manager cannot silently ignore it.
+	InboxMessagePolicy = "inbox.message_policy"
 	// InboxMailBody: InboxMailRef → InboxMailMessage: a mail read in full (peeked: it stays unread).
 	InboxMailBody = "inbox.mail_body"
 	// InboxMailFlags: InboxMailFlagsAsk → InboxMailFlags: which of a mailbox's mails are still there, read or not (a mail
@@ -166,7 +169,8 @@ const (
 	CodeInboxSourceSignedOut = "inbox_source_signed_out"
 	// CodeInboxSendDenied: the source refused the send: a missing permission, or the chat or message is gone or closed
 	// to the sender.
-	CodeInboxSendDenied = "inbox_send_denied"
+	CodeInboxSendDenied   = "inbox_send_denied"
+	CodeInboxBotNotInChat = "inbox_bot_not_in_chat"
 	// CodeInboxSendRateLimited: the source is rate limited; data.retry_after is how many seconds, when it said.
 	CodeInboxSendRateLimited = "inbox_send_rate_limited"
 	// CodeInboxSendFailed: the source answered with another error.

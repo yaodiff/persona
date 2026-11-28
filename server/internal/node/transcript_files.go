@@ -58,7 +58,7 @@ func (n *Node) readReason(id, missing string) string {
 	if id != missing || runtimeOwned || n.runtimeAssistant(session) || n.runtimes.transcriptOf(id) != "" {
 		return ""
 	}
-	if n.knownSession(id) {
+	if n.knownSession(id) || n.startingSession(id) {
 		return proto.NotFoundNoTranscript
 	}
 	if runtimeSessionID(session) || !n.recordsLoaded() {
@@ -234,19 +234,28 @@ func (n *Node) findOwnTranscriptPath(id string, pass *codexListPass) string {
 		return n.oldCodexTranscript(id)
 	}
 	// A migrated compatible-CLI conversation may retain its old rollout. Its paginated history is authoritative,
-	// even when a reader cached the rollout before migration; followCopy will relocate that reader too.
-	if _, ok := n.traexThread(id); ok {
-		if p := n.traexPath(id); p != "" {
-			n.setPath(id, p)
-			return p
-		}
-	}
+	// even when a reader cached the rollout before migration.
 	n.mu.Lock()
 	p := n.paths[id]
 	at, fresh := n.pathsAt[id]
 	n.mu.Unlock()
 	known := p != "" && fileExists(p)
-	if known && fresh && time.Since(at) < pathRecheck {
+	freshHit := known && fresh && time.Since(at) < pathRecheck
+	// Answer a fresh cache hit before the TRAE probe when the path is already known to be another agent's transcript:
+	// a Claude <id>.jsonl, or a list-pass row sessionListIn knows is not TRAE (Antigravity and others cache differently
+	// named files). Every Claude/Agy row otherwise asked TRAE's databases for its own id on every list pass. TRAE and
+	// Codex rollout/app-history names are not <id>.jsonl and an untagged caller stays untrusted, so real TRAE
+	// conversations still reach the probe below.
+	if freshHit && n.cachedPathSkipsTraex(id, p, pass) {
+		return p
+	}
+	if _, ok := n.traexThreadIn(id, pass); ok {
+		if p := n.traexPath(id); p != "" {
+			n.setPath(id, p)
+			return p
+		}
+	}
+	if freshHit {
 		return p
 	}
 	if !validID(id) {
@@ -299,6 +308,14 @@ func (n *Node) findOwnTranscriptPath(id string, pass *codexListPass) string {
 
 // pathRecheck is how long a found transcript path is trusted before transcriptPath looks for a newer copy.
 const pathRecheck = 30 * time.Second
+
+// cachedPathSkipsTraex reports whether a fresh cached path p for id is already known not to be a TRAE conversation the
+// TRAE probe could improve: a Claude project transcript (<id>.jsonl), or a list pass whose row for id is tagged as a
+// different agent. Callers without such a pass only skip the unambiguously Claude-named path, so this never changes
+// lookup for a real TRAE/Codex rollout name.
+func (n *Node) cachedPathSkipsTraex(id, p string, pass *codexListPass) bool {
+	return isClaudeTranscript(p, id) || pass.knownNonTraexAgent(id)
+}
 
 // isClaudeTranscript says whether path is a Claude transcript of session id (<projects>/<project>/<id>.jsonl) rather
 // than a Codex or compatible-CLI rollout (rollout-<time>-<id>.jsonl) or another agent's history.

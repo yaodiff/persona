@@ -28,13 +28,17 @@ func TestAskWantedFollowsTheSwitchesAndTheRoute(t *testing.T) {
 		name               string
 		cards, all         bool
 		private, driven    bool
-		sensitive          bool
+		direct, sensitive  bool
 		want, askSensitive bool
 	}{
 		{name: "cards off", driven: true},
+		{name: "direct approval with cards off", direct: true},
 		{name: "a Just me card", cards: true, driven: true, private: true},
+		{name: "a private direct approval", cards: true, direct: true, private: true},
 		{name: "driven", cards: true, driven: true, sensitive: true, want: true},
 		{name: "not driven", cards: true},
+		{name: "direct approval", cards: true, direct: true, want: true, askSensitive: true},
+		{name: "direct sensitive approval", cards: true, direct: true, sensitive: true, askSensitive: true},
 		{name: "all cards", cards: true, all: true, want: true, askSensitive: true},
 		{name: "all cards, sensitive", cards: true, all: true, sensitive: true, askSensitive: true},
 	} {
@@ -48,6 +52,7 @@ func TestAskWantedFollowsTheSwitchesAndTheRoute(t *testing.T) {
 			s.chat().setBotCurrent(botTarget{Kind: targetAgent, MachineID: "server", SessionID: "other"})
 			asked := false
 			s.ch().route = func(proto.Interaction) assistantwire.AskRoute { return assistantwire.AskRoute{Driven: c.driven} }
+			s.ch().direct = func(proto.Interaction) bool { return c.direct }
 			s.ch().sensitive = func(proto.Interaction) bool { asked = true; return c.sensitive }
 			ix := askQuestion("ix_q")
 			ix.Private = c.private
@@ -88,6 +93,7 @@ func TestAskCardGoesWhereItsRunsAre(t *testing.T) {
 	for _, c := range []struct {
 		name          string
 		route         assistantwire.AskRoute
+		direct        bool
 		reply, chat   string
 		noDetour      bool
 		note, noteMsg string
@@ -95,12 +101,14 @@ func TestAskCardGoesWhereItsRunsAre(t *testing.T) {
 		{name: "no run"},
 		{name: "private", route: assistantwire.AskRoute{Private: private}, reply: "om_dm"},
 		{name: "topic", route: assistantwire.AskRoute{Topic: topic}, reply: "om_topic", chat: "oc_g", noDetour: true},
+		{name: "direct approval from a topic", route: assistantwire.AskRoute{Topic: topic}, direct: true, note: "oc_g", noteMsg: "om_topic"},
 		{name: "both", route: assistantwire.AskRoute{Private: private, Topic: topic}, reply: "om_dm", note: "oc_g", noteMsg: "om_topic"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			f, posts := feishuHub("ou_a", time.Unix(100, 0))
 			s := newTestService(t, f)
 			s.ch().route = func(proto.Interaction) assistantwire.AskRoute { return c.route }
+			s.ch().direct = func(proto.Interaction) bool { return c.direct }
 			s.layer.AskPost(context.Background(), askQuestion("ix_q"))
 			if len(*posts) != 1 {
 				t.Fatalf("posts %v", *posts)
@@ -234,5 +242,75 @@ func TestAskDetachedCardComesBack(t *testing.T) {
 	s.layer.AskBack(ix, time.Minute)
 	if len(updates()) != 3 || s.layer.CardsWaiting() != 0 {
 		t.Fatalf("a card away past the grace asked again: %v", updates())
+	}
+}
+
+// A card whose node went away while Feishu had its post but had not answered the message id yet is closed once the id
+// comes, and comes back only for the same interaction still up: a card back for another session or an earlier
+// generation, or one no longer up, does not take the message (the core's TestFeishuReconnectWhileFirstCardPostAwaitsAcknowledgement drives
+// the same path through the fleet).
+func TestAskDetachedWhilePostingComesBackForTheSameGeneration(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		up   bool // the interaction is still up when the card comes back
+	}{{"still up", true}, {"no longer up", false}} {
+		t.Run(c.name, func(t *testing.T) {
+			f, _ := feishuHub("ou_a", time.Unix(100, 0))
+			received, release := make(chan struct{}), make(chan struct{})
+			f.answerAppBlocking(AppFeishu, FeishuPost, func(json.RawMessage) (any, error) {
+				close(received)
+				<-release
+				return map[string]any{"message_id": "om_card"}, nil
+			})
+			s := newTestService(t, f)
+			now := time.Unix(1000, 0)
+			s.ch().now = func() time.Time { return now }
+			first := askQuestion("ix_q")
+			first.CreatedAt = time.Unix(900, 0)
+			next := first
+			next.CreatedAt = time.Unix(950, 0) // the same card asked again once the node is back
+			other := next
+			other.SessionID = "a2" // the same id up for another session
+			up := other
+			s.ch().pendingIx = func(string) (proto.Interaction, bool) { return up, c.up }
+			posted := make(chan struct{})
+			go func() {
+				defer close(posted)
+				s.layer.AskPost(context.Background(), first)
+			}()
+			<-received
+			s.layer.AskDetached([]string{"ix_q"}, time.Minute)
+			close(release)
+			<-posted
+			updates := func() []map[string]any { return f.appParams(AppFeishu, FeishuUpdateCard) }
+			waitFor(t, "the card to close", func() bool { return len(updates()) == 1 })
+			if got := updates()[0]; got["message_id"] != "om_card" || strings.Contains(got["card"].(string), `"callback"`) {
+				t.Fatalf("the card was not closed: %v", got)
+			}
+			s.layer.AskBack(other, time.Minute)
+			if len(updates()) != 1 || s.layer.CardsWaiting() != 0 {
+				t.Fatalf("another session took the card: %v", updates())
+			}
+			s.layer.AskBack(next, time.Minute) // while the id is up for the other session
+			if len(updates()) != 1 || s.layer.CardsWaiting() != 0 {
+				t.Fatalf("the card came back while its id is up for another session: %v", updates())
+			}
+			up = next
+			s.layer.AskBack(first, time.Minute) // an earlier generation's
+			if len(updates()) != 1 || s.layer.CardsWaiting() != 0 {
+				t.Fatalf("an earlier generation took the card: %v", updates())
+			}
+			s.layer.AskBack(next, time.Minute)
+			want := 1
+			if c.up {
+				want = 2
+			}
+			if got := updates(); len(got) != want || (c.up && !strings.Contains(got[1]["card"].(string), `"callback"`)) {
+				t.Fatalf("updates %v, want %d", got, want)
+			}
+			if posts := f.appParams(AppFeishu, FeishuPost); len(posts) != 1 {
+				t.Fatalf("posted %d cards", len(posts))
+			}
+		})
 	}
 }

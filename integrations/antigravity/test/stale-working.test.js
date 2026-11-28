@@ -252,3 +252,18 @@ test('session.rewind on a non-stale idle session does not inject staleWorkingAt'
   await node.peer.call('session.rename', { session_id: SESSION, title: 'Running after clean rewind' })
   await until('non-stale rewind does not mask RUNNING at target.index', () => row()?.title === 'Running after clean rewind' && row()?.status === 'working', SLOW)
 })
+
+test('withoutStaleWorking masks stale CANCELING and BUSY summaries after cancel and unmasks when step_count advances', async (t) => {
+  for (const staleStatus of ['CASCADE_RUN_STATUS_CANCELING', 'CASCADE_RUN_STATUS_BUSY']) {
+    const { node, setSummary, row, stepCount } = await setupSession(t, { summaryStatus: staleStatus })
+    assert.notEqual(row().status, 'working', `stale ${staleStatus} must not stay working after cancel`)
+
+    setSummary(staleStatus, stepCount + 1)
+    await node.peer.call('session.rename', { session_id: SESSION, title: `Active ${staleStatus}` })
+    await until(
+      `new native step unmasks ${staleStatus}`,
+      () => row()?.title === `Active ${staleStatus}` && row()?.status === 'working',
+      SLOW,
+    )
+  }
+})

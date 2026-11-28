@@ -2,7 +2,7 @@
 // waiting only on them are left out of Needs you's number and badge, its sounds and notifications, and its one-tap
 // answers; a delegating question (the assistant's own look, lib/delegate.ts) and an unmarked card stay as they were.
 import { describe, expect, it } from "vitest";
-import { detectNewCards, detectTransitions, heldOnlyNeeds } from "./attention";
+import { cardArrivalKey, detectNewCards, detectTransitions, heldOnlyNeeds } from "./attention";
 import { waitingCard } from "./notify";
 import { quickAnswers } from "./quick-answers";
 import { boundedCounts, stateCounts } from "./sessions";
@@ -39,6 +39,7 @@ describe("supervisorHeld", () => {
   it("supervisorHeldOnly names the sessions whose every card, at least one, is held; a child's under its parent", () => {
     const held = supervisorHeldOnly([
       screen("h1", "only", { delegating: true }),
+      screen("h1-main-copy", "only", { mirror_of: "h1" }),
       screen("h2", "mixed", { delegating: true }),
       card("p", "mixed", "permission"),
       card("q", "asking", "question", { delegating: true }),
@@ -125,7 +126,7 @@ describe("attention for held cards", () => {
     const waiting = prevOf(["a", "needs_you"]);
     const sessions = [session("a", "needs_you")];
     const T = 1_000_000;
-    const first = detectNewCards(new Map([["p", T - 1000]]), [card("p", "a", "permission"), screen("h", "a", { delegating: true })], waiting, waiting, sessions, new Set(), T);
+    const first = detectNewCards(new Map([[cardArrivalKey(card("p", "a", "permission")), T - 1000]]), [card("p", "a", "permission"), screen("h", "a", { delegating: true })], waiting, waiting, sessions, new Set(), T);
     expect(first.events).toEqual([]);
     expect(first.ids.has("h")).toBe(false);
     const back = detectNewCards(first.ids, [card("p", "a", "permission"), screen("h", "a")], waiting, waiting, sessions, new Set(), T + 1000);

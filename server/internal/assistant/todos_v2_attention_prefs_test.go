@@ -78,11 +78,13 @@ func TestTodosV2AttentionPrefsSettingsReadWriteAndValidation(t *testing.T) {
 		t.Fatalf("invalid PUTs mutated defaults: %+v", afterInvalid)
 	}
 
-	// Updating the 4 preferences without todos_v2 does not require explicit manager header.
+	// Updating the 4 preferences without an explicit manager target header is rejected with 400 (#16198).
 	w := doTodoHTTP(s, http.MethodPut, "/api/v1/assistant", `{"todos_v2_auto_seen":"subtasks","todos_v2_pending_review_sla_hours":12,"todos_v2_can_wait_sla_hours":24,"todos_v2_fold_children":false}`)
-	if w.Code != http.StatusOK {
-		t.Fatalf("PUT prefs without explicit target header: code=%d body=%s", w.Code, w.Body.String())
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("PUT prefs without explicit target header: code=%d want %d body=%s", w.Code, http.StatusBadRequest, w.Body.String())
 	}
+	// With an explicit manager target header, updating the 4 preferences succeeds.
+	putRaw(`{"todos_v2_auto_seen":"subtasks","todos_v2_pending_review_sla_hours":12,"todos_v2_can_wait_sla_hours":24,"todos_v2_fold_children":false}`, http.StatusOK)
 
 	// Cycle through every allowed option.
 	for _, mode := range []string{"off", "subtasks", "all_autonomous"} {
@@ -166,14 +168,18 @@ func TestTodosV2AttentionPrefsAutoSeenModesAndUndo(t *testing.T) {
 		}
 	}
 
+	autoSee := func(id string) {
+		completed, _ := s.todoNow(id)
+		s.autoSeeAcceptedTodo(ctx, completionOf(completed), outcomeDone, false)
+	}
 	parentID := makeDoneTodo("Parent goal", "", db.AudienceHuman)
 
 	// 1. todos_v2=false bypasses auto-seen even when mode is all_autonomous.
 	setPrefs(false, "all_autonomous")
 	offTop := makeDoneTodo("Off top autonomous", "", db.AudienceAutonomous)
 	offSub := makeDoneTodo("Off sub autonomous", parentID, db.AudienceAutonomous)
-	s.autoSeeAcceptedTodo(ctx, offTop, outcomeDone, false)
-	s.autoSeeAcceptedTodo(ctx, offSub, outcomeDone, false)
+	autoSee(offTop)
+	autoSee(offSub)
 	if cur, _ := s.todoNow(offTop); cur.SeenAt != nil {
 		t.Fatalf("todos_v2=false unexpectedly auto-saw top task")
 	}
@@ -185,8 +191,8 @@ func TestTodosV2AttentionPrefsAutoSeenModesAndUndo(t *testing.T) {
 	setPrefs(true, "off")
 	modeOffTop := makeDoneTodo("Mode off top", "", db.AudienceAutonomous)
 	modeOffSub := makeDoneTodo("Mode off sub", parentID, db.AudienceAutonomous)
-	s.autoSeeAcceptedTodo(ctx, modeOffTop, outcomeDone, false)
-	s.autoSeeAcceptedTodo(ctx, modeOffSub, outcomeDone, false)
+	autoSee(modeOffTop)
+	autoSee(modeOffSub)
 	if cur, _ := s.todoNow(modeOffTop); cur.SeenAt != nil {
 		t.Fatalf("mode=off unexpectedly auto-saw top task")
 	}
@@ -199,9 +205,9 @@ func TestTodosV2AttentionPrefsAutoSeenModesAndUndo(t *testing.T) {
 	subModeTop := makeDoneTodo("Subtasks mode top autonomous", "", db.AudienceAutonomous)
 	subModeChild := makeDoneTodo("Subtasks mode child autonomous", parentID, db.AudienceAutonomous)
 	subModeHumanChild := makeDoneTodo("Subtasks mode child human", parentID, db.AudienceHuman)
-	s.autoSeeAcceptedTodo(ctx, subModeTop, outcomeDone, false)
-	s.autoSeeAcceptedTodo(ctx, subModeChild, outcomeDone, false)
-	s.autoSeeAcceptedTodo(ctx, subModeHumanChild, outcomeDone, false)
+	autoSee(subModeTop)
+	autoSee(subModeChild)
+	autoSee(subModeHumanChild)
 	if cur, _ := s.todoNow(subModeTop); cur.SeenAt != nil {
 		t.Fatalf("mode=subtasks unexpectedly auto-saw top-level autonomous task")
 	}
@@ -217,7 +223,7 @@ func TestTodosV2AttentionPrefsAutoSeenModesAndUndo(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("DELETE seen: code=%d body=%s", w.Code, w.Body.String())
 	}
-	s.autoSeeAcceptedTodo(ctx, subModeChild, outcomeDone, false)
+	autoSee(subModeChild)
 	if cur, _ := s.todoNow(subModeChild); cur.SeenAt != nil || !cur.AutoSeenUndone {
 		t.Fatalf("mode=subtasks overrode AutoSeenUndone: seen_at=%v undone=%t", cur.SeenAt, cur.AutoSeenUndone)
 	}
@@ -227,9 +233,9 @@ func TestTodosV2AttentionPrefsAutoSeenModesAndUndo(t *testing.T) {
 	setPrefs(true, "all_autonomous")
 	allModeTop := makeDoneTodo("All mode top autonomous", "", db.AudienceAutonomous)
 	allModeChild := makeDoneTodo("All mode child autonomous", parentID, db.AudienceAutonomous)
-	s.autoSeeAcceptedTodo(ctx, allModeTop, outcomeDone, false)
-	s.autoSeeAcceptedTodo(ctx, allModeChild, outcomeDone, false)
-	s.autoSeeAcceptedTodo(ctx, subModeChild, outcomeDone, false)
+	autoSee(allModeTop)
+	autoSee(allModeChild)
+	autoSee(subModeChild)
 	if cur, _ := s.todoNow(allModeTop); cur.SeenAt == nil {
 		t.Fatalf("mode=all_autonomous failed to auto-see top-level autonomous task")
 	}
@@ -505,7 +511,7 @@ func TestTodosV2AttentionPrefsFoldChildrenAndRollback(t *testing.T) {
 	s.todos.mu.Unlock()
 
 	// Save non-default preferences while todos_v2 is still OFF: legacy response must stay untouched.
-	w := doTodoHTTP(s, http.MethodPut, "/api/v1/assistant", `{"todos_v2_fold_children":false,"todos_v2_pending_review_sla_hours":12,"todos_v2_can_wait_sla_hours":24,"todos_v2_auto_seen":"off"}`)
+	w, _ := permissionSettingsRequest(t, s, http.MethodPut, "/api/v1/assistant", s.managerIdentity(), "full", `{"todos_v2_fold_children":false,"todos_v2_pending_review_sla_hours":12,"todos_v2_can_wait_sla_hours":24,"todos_v2_auto_seen":"off"}`)
 	if w.Code != http.StatusOK {
 		t.Fatalf("PUT prefs while off: code=%d body=%s", w.Code, w.Body.String())
 	}
@@ -557,7 +563,7 @@ func TestTodosV2AttentionPrefsFoldChildrenAndRollback(t *testing.T) {
 	}
 
 	// Toggle fold_children=true -> childQuiet folds under goal, sidebar_tree drops to 2 nodes.
-	w = doTodoHTTP(s, http.MethodPut, "/api/v1/assistant", `{"todos_v2_fold_children":true}`)
+	w, _ = permissionSettingsRequest(t, s, http.MethodPut, "/api/v1/assistant", s.managerIdentity(), "full", `{"todos_v2_fold_children":true}`)
 	if w.Code != http.StatusOK {
 		t.Fatalf("PUT fold_children=true: code=%d body=%s", w.Code, w.Body.String())
 	}
@@ -574,9 +580,12 @@ func TestTodosV2AttentionPrefsFoldChildrenAndRollback(t *testing.T) {
 	if len(foldedPayload.Board.SidebarTree) != 2 {
 		t.Fatalf("fold_children=true sidebar_tree len = %d, want 2", len(foldedPayload.Board.SidebarTree))
 	}
-	waitGroup := foldedPayload.Board.StatusGroups[3]
-	if waitGroup.Key != boardSectionWaiting || waitGroup.TotalCount != 1 || waitGroup.VisibleCount != 0 {
-		t.Fatalf("fold_children=true waiting group = %+v, want total=1 visible=0", waitGroup)
+	todoGroup := requireBoardStatusGroup(t, foldedPayload.Board, boardSectionTodo)
+	if todoGroup.TotalCount != 1 || todoGroup.VisibleCount != 0 {
+		t.Fatalf("fold_children=true todo group = %+v, want total=1 visible=0", todoGroup)
+	}
+	if got, want := foldedPayload.Board.Counts, flatPayload.Board.Counts; got != want || got.NeedsYou != 1 || got.OpenTotal != 1 {
+		t.Fatalf("folding changed counts or counted steps separately: folded=%+v flat=%+v", got, want)
 	}
 	var foundGoalFold bool
 	for _, e := range foldedPayload.Board.StatusGroups[0].Entries {

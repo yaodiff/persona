@@ -156,7 +156,7 @@ it("shows and answers the linked task's current decision above the Agent compose
   let todos: Todo[] = [{ ...task, id: "task2", ask: { ...task.ask!, question: "A different task's decision" } }];
   const fallback = fetcher.getMockImplementation() as typeof fetch;
   fetcher.mockImplementation(async (url: string, init?: RequestInit) => {
-    const path = String(url);
+    const path = new URL(String(url), location.origin).pathname; // the list read carries closed_limit (#16680)
     if (path.endsWith("/todos/task1/accept") && init?.method === "POST") {
       todos = [{ ...task, ask: undefined }];
       return Response.json({});
@@ -208,6 +208,44 @@ it("a completed task remains a labelled, clickable owner, not a prompt to link i
   } finally {
     navigate.mockRestore();
   }
+});
+
+it.each([false, true])("a closed task has a persistent ownership banner and keeps its composer (cancelled: %s)", async (cancelled) => {
+  await open(<ChatView mid="mac" sid="s1" inPage />, row({
+    status: "idle", state: "idle", completed_todo: { id: "done-task", title: "Disposable task", cancelled },
+  }));
+  await act(async () => { await vi.dynamicImportSettled(); });
+  const notice = host.querySelector("[data-completed-todo]")!;
+  expect(notice.textContent).toContain(t(cancelled ? "chat-closed.cancelled" : "chat-closed.completed"));
+  expect(notice.textContent).toContain("Disposable task");
+  expect(notice.textContent).toContain(t("chat-closed.continue"));
+  expect(notice.closest("[data-chat-scroll]")).toBeNull();
+  expect(notice.querySelector("a")?.getAttribute("href")).toBe("/todos?id=done-task");
+  expect(host.querySelector("textarea")).not.toBeNull();
+  expect(host.querySelector("[data-stopped-agent]")).toBeNull();
+});
+
+it("active task ownership suppresses a stale completed association", async () => {
+  await open(<ChatView mid="mac" sid="s1" inPage />, row({
+    todo: { id: "active", title: "Current task" },
+    completed_todo: { id: "done-task", title: "Old task", cancelled: true },
+  }));
+  expect(host.querySelector("[data-completed-todo]")).toBeNull();
+});
+
+it("a stopped closed-task session says why and does not promise it can receive messages", async () => {
+  const reason = "Stopped because its to-do was closed. Resume from the terminal to continue.";
+  act(() => applyCompleteSessions([row({
+    status: "offline", state: "offline", read_only_reason: reason,
+    capabilities: { read: true, terminal: true },
+    completed_todo: { id: "done-task", title: "Disposable task", cancelled: true },
+  })]));
+  act(() => root.render(<ChatView mid="mac" sid="s1" inPage />));
+  await act(async () => { await vi.dynamicImportSettled(); });
+  for (let i = 0; i < 6; i++) await settle();
+  expect(host.querySelector("[data-stopped-agent]")?.textContent).toContain(reason);
+  expect(host.querySelector("[data-completed-todo]")?.textContent).not.toContain(t("chat-closed.continue"));
+  expect(host.querySelector("textarea")).toBeNull();
 });
 
 // Rename…, Rename space… and Delete… open dialogs from a chunk of their own (#10382): the ⋯ menu starts it as it opens, so
@@ -380,7 +418,18 @@ it("follows the conversation owner's computer update and pending restart without
   expect(updateNotice()).toBeNull();
   expect(renders).toEqual({ info: 0, chips: 0, modes: 0 });
 
-  for (const phase of ["waiting_idle", "transferring", "restarting", "confirming"] as const) {
+  for (const phase of ["waiting_idle", "transferring"] as const) {
+    await update(phase);
+    await waitForUpdateNotice(t(`chat-assistantupdate.${phase}`));
+    expect(updateNotice()?.getAttribute("role")).toBe("status");
+    expect(updateNotice()?.textContent).toContain(t("chat-assistantupdate.reconnect"));
+  }
+  await update("draining");
+  await waitForUpdateNotice(t("chat-assistantupdate.draining"));
+  expect(updateNotice()?.getAttribute("role")).toBe("status");
+  expect(updateNotice()?.textContent).toContain(t("chat-assistantupdate.restart_when_idle"));
+  expect(updateNotice()?.textContent).not.toContain(t("chat-assistantupdate.reconnect"));
+  for (const phase of ["restarting", "confirming"] as const) {
     await update(phase);
     await waitForUpdateNotice(t(`chat-assistantupdate.${phase}`));
     expect(updateNotice()?.getAttribute("role")).toBe("status");
@@ -692,4 +741,57 @@ it("a stop the hub lost track of is not reported as done, and can be pressed aga
   });
   expect(posted("/sessions/mac/s1/interrupt")).toHaveLength(1);
   expect(host.querySelector(`button[aria-label="${t("chat-composer.interrupt")}"]`)).toBeTruthy();
+});
+
+it("does not interrupt a working turn or close TitleEditor when Escape cancels an IME composition", async () => {
+  await open(<ChatView mid="mac" sid="s1" inPage />);
+  // Open TitleEditor via double-click on the chat title.
+  act(() => {
+    host.querySelector<HTMLElement>("h1[data-chat-title]")!.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+  });
+  const titleInput = host.querySelector<HTMLInputElement>("input[data-chat-title-input]");
+  expect(titleInput).toBeTruthy();
+
+  // 1. IME Escape (isComposing: true) inside TitleEditor bubbles to window: must neither close TitleEditor nor interrupt.
+  await act(async () => {
+    titleInput!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", isComposing: true, bubbles: true, cancelable: true }));
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  expect(host.querySelector("input[data-chat-title-input]")).toBeTruthy();
+  expect(posted("/sessions/mac/s1/interrupt")).toHaveLength(0);
+
+  // 2. Safari IME Escape (keyCode: 229) inside TitleEditor must neither close TitleEditor nor interrupt.
+  const safariTitle = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+  Object.defineProperty(safariTitle, "keyCode", { value: 229 });
+  await act(async () => {
+    titleInput!.dispatchEvent(safariTitle);
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  expect(host.querySelector("input[data-chat-title-input]")).toBeTruthy();
+  expect(posted("/sessions/mac/s1/interrupt")).toHaveLength(0);
+
+  // 3. Normal Escape closes TitleEditor without interrupting.
+  await act(async () => {
+    titleInput!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  expect(host.querySelector("input[data-chat-title-input]")).toBeNull();
+  expect(posted("/sessions/mac/s1/interrupt")).toHaveLength(0);
+
+  // 4. IME Escape (isComposing and Safari keyCode 229) on window while working must not interrupt.
+  const safariWindow = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+  Object.defineProperty(safariWindow, "keyCode", { value: 229 });
+  await act(async () => {
+    document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", isComposing: true, bubbles: true, cancelable: true }));
+    document.body.dispatchEvent(safariWindow);
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  expect(posted("/sessions/mac/s1/interrupt")).toHaveLength(0);
+
+  // 5. Real Escape while working still interrupts.
+  await act(async () => {
+    document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  expect(posted("/sessions/mac/s1/interrupt")).toHaveLength(1);
 });

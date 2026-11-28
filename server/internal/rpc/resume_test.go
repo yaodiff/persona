@@ -887,3 +887,188 @@ func TestResumeSlowReadLoopIsNotSilence(t *testing.T) {
 		t.Fatal("a side took the transport for silent")
 	}
 }
+
+type failAfterWriteConn struct {
+	net.Conn
+	failNext atomic.Bool
+}
+
+func (c *failAfterWriteConn) Write(p []byte) (int, error) {
+	n, err := c.Conn.Write(p)
+	if err == nil && c.failNext.CompareAndSwap(true, false) {
+		return n, errors.New("write error after peer read")
+	}
+	return n, err
+}
+
+// A line whose final write failed on a resumable transport enters lw.held until the resumed transport
+// finishes resending it. If the peer already read that frame before the cut (peerRead >= seq) and this
+// side has nothing else to send, Resume must still release lw.held rather than deadlocking the caller.
+func TestResumeReleasesHeldLinesWhenPeerAlreadyReadThem(t *testing.T) {
+	aRaw, b := net.Pipe()
+	a := &failAfterWriteConn{Conn: aRaw}
+	h, n := New("h", a), New("n", b)
+	h.EnableLanes([]string{"ping"}, []string{"bulk"})
+	n.EnableLanes([]string{"ping"}, []string{"bulk"})
+	h.EnableResume(5 * time.Second)
+	n.EnableResume(5 * time.Second)
+
+	hLost := make(chan error, 4)
+	h.OnLost = func(err error) { hLost <- err }
+	gotEvent := make(chan struct{})
+	var eventOnce sync.Once
+	n.OnEvent = func(event string, _ json.RawMessage) {
+		if event == "ev" {
+			eventOnce.Do(func() { close(gotEvent) })
+		}
+	}
+
+	go func() { _ = h.Serve(context.Background(), a) }()
+	go func() { _ = n.Serve(context.Background(), b) }()
+	t.Cleanup(func() {
+		h.Close(ErrClosed)
+		n.Close(ErrClosed)
+		_ = a.Close()
+		_ = b.Close()
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := h.UpgradeLanes(ctx); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, func() bool { return n.Framed() && h.readsResumable() && n.readsResumable() })
+
+	// Arm a write failure after the peer has received the frame bytes.
+	a.failNext.Store(true)
+	notifyDone := make(chan error, 1)
+	go func() {
+		notifyDone <- h.Notify("ev", map[string]int{"i": 1})
+	}()
+
+	select {
+	case <-gotEvent:
+	case <-time.After(5 * time.Second):
+		t.Fatal("peer never received the event frame")
+	}
+	select {
+	case <-hLost:
+	case <-time.After(5 * time.Second):
+		t.Fatal("sender never marked the transport lost")
+	}
+
+	// Resume over a fresh transport; n already read frame 1 so h has zero frames to resend and no acks due.
+	a2, b2 := net.Pipe()
+	t.Cleanup(func() { _ = a2.Close(); _ = b2.Close() })
+	acceptErr := make(chan error, 1)
+	go func() {
+		line, rest, err := ReadFirstLine(b2, resumeLineMax)
+		if err != nil {
+			acceptErr <- err
+			return
+		}
+		req, ok := ParseResume(line)
+		if !ok {
+			acceptErr <- fmt.Errorf("not a resume line: %q", line)
+			return
+		}
+		acceptErr <- n.AcceptResume(req, rest, b2)
+	}()
+	if err := h.Resume(ctx, a2, a2); err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	if err := <-acceptErr; err != nil {
+		t.Fatalf("AcceptResume: %v", err)
+	}
+
+	select {
+	case err := <-notifyDone:
+		if err != nil {
+			t.Fatalf("Notify after resume: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Notify deadlocked in lw.held after resume when peer had already read its frame")
+	}
+}
+
+type scriptWriter struct {
+	fn func([]byte) (int, error)
+}
+
+func (w scriptWriter) Write(p []byte) (int, error) { return w.fn(p) }
+
+// If an incoming acknowledgement empties lw.kept while lw.resend is still advancing through a multi-frame
+// resend, resendLocked finishes with an empty batch and lw.resend == -1 and must release lw.held.
+func TestLaneWriterReleasesHeldLinesWhenAckClearsResend(t *testing.T) {
+	closed := make(chan struct{})
+	defer close(closed)
+
+	var writes atomic.Int32
+	lostCh := make(chan struct{}, 1)
+	w1 := scriptWriter{fn: func(p []byte) (int, error) {
+		if writes.Add(1) == 2 {
+			return 0, errors.New("second frame failed")
+		}
+		return len(p), nil
+	}}
+
+	var lw *laneWriter
+	lw = newLaneWriter(w1, closed, func(err error) { t.Errorf("unexpected fail: %v", err) }, nil)
+	lw.keep = true
+	lw.lose = func(_ error, gen uint64) bool {
+		lw.loseGen(gen)
+		select {
+		case lostCh <- struct{}{}:
+		default:
+		}
+		return true
+	}
+	lw.start()
+
+	// Two-frame line: frame 1 succeeds, frame 2 fails and moves the line into lw.held.
+	payload := append(bytes.Repeat([]byte("x"), framePayloadMax+100), '\n')
+	line := &outLine{b: payload, lane: LaneEvents, done: make(chan error, 1)}
+	if _, err := lw.enqueue(line); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-lostCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("writer never lost transport on second frame")
+	}
+
+	// Resume from peerRead=0 so resend starts at frame 1; while frame 1 is writing, ack both frames.
+	wroteFirst := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	var releaseOnce sync.Once
+	unblockFirst := func() { releaseOnce.Do(func() { close(releaseFirst) }) }
+	t.Cleanup(unblockFirst)
+	var firstOnce sync.Once
+	w2 := scriptWriter{fn: func(p []byte) (int, error) {
+		firstOnce.Do(func() {
+			close(wroteFirst)
+			<-releaseFirst
+		})
+		return len(p), nil
+	}}
+	lw.resume(w2, 1, 0)
+
+	select {
+	case <-wroteFirst:
+	case <-time.After(5 * time.Second):
+		t.Fatal("resend never started writing frame 1")
+	}
+	if err := lw.acked(2, 0); err != nil {
+		t.Fatalf("acked: %v", err)
+	}
+	unblockFirst()
+
+	select {
+	case err := <-line.done:
+		if err != nil {
+			t.Fatalf("line done: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("line deadlocked in lw.held after ack cleared remaining resend frames")
+	}
+}

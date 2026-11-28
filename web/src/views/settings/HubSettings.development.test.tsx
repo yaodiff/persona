@@ -50,6 +50,10 @@ vi.mock("../../lib/hub-update", async (original) => ({
 }));
 vi.mock("../../lib/hub-update-settings", async (original) => ({
   ...await original<typeof import("../../lib/hub-update-settings")>(),
+  cancelHubUpdate: async () => {
+    saved.push("cancel");
+    return status = { ...status, cancelling: true };
+  },
   hubUpdateHistory: async () => history,
   hubUpdateBackups: async () => { backupReads++; return [{ id: "snapshot-fixture", version: "web-dev-backup", build: 202611120001,
     commit: "c".repeat(40), updated_at: backupCommitAt, created_at: backupCreatedAt }]; },
@@ -137,7 +141,7 @@ it("polls active development phases and replaces the step and metrics", async ()
     phase: "building", step: "npm_install", step_index: 2, step_total: 6, elapsed_seconds: 10,
   } });
   expect(pipelineNodes("Update stages")).toEqual([
-    ["building", "active"], ["backing_up", "pending"], ["waiting_idle", "pending"], ["restarting", "pending"],
+    ["building", "active"], ["waiting_idle", "pending"], ["backing_up", "pending"], ["restarting", "pending"],
   ]);
   expect(pipelineNodes("Phase steps")).toEqual([
     ["fetch", "done"], ["npm_install", "active"], ["web_build", "pending"], ["runtime_packages", "pending"],
@@ -162,7 +166,7 @@ it("polls active development phases and replaces the step and metrics", async ()
   expect(host.textContent).toContain("Files 20/45");
   expect(host.textContent).toContain("Elapsed 11 sec");
   expect(pipelineNodes("Update stages")).toEqual([
-    ["building", "done"], ["backing_up", "active"], ["waiting_idle", "done"], ["restarting", "pending"],
+    ["building", "done"], ["waiting_idle", "done"], ["backing_up", "active"], ["restarting", "pending"],
   ]);
   expect(pipelineNodes("Phase steps")).toEqual([
     ["quiesce", "done"], ["database_dump", "done"], ["archive_files", "active"], ["archive_programs", "pending"], ["verify_snapshot", "pending"],
@@ -172,7 +176,7 @@ it("polls active development phases and replaces the step and metrics", async ()
   await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
   expect(pipelineNodes("Phase steps")).toEqual([]);
   expect(pipelineNodes("Update stages")).toEqual([
-    ["building", "done"], ["backing_up", "done"], ["waiting_idle", "done"], ["restarting", "active"],
+    ["building", "done"], ["waiting_idle", "done"], ["backing_up", "done"], ["restarting", "active"],
   ]);
   expect(host.textContent).toContain("Confirming");
   const reads = updateReads;
@@ -194,6 +198,37 @@ it.each([
   expect(host.querySelector('ol[aria-label="Phase steps"] [aria-current="step"]')?.getAttribute("data-step")).toBe(step);
   expect(host.textContent).toContain("Phase elapsed 24 sec");
   if (step === "database_dump") expect(host.textContent).toContain("Databases 1/2");
+});
+
+it("shows backup preflight before building and the hub reason when it fails", async () => {
+  await mount("backing_up", { development_progress: { phase: "backing_up", step: "preflight",
+    step_index: 1, step_total: 1, elapsed_seconds: 0 } });
+  expect(pipelineNodes("Phase steps")).toEqual([["preflight", "active"]]);
+  expect(host.textContent).toContain("Check backup settings");
+  expect(pipelineNodes("Update stages")).toEqual([
+    ["building", "pending"], ["waiting_idle", "pending"], ["backing_up", "pending"], ["restarting", "pending"],
+  ]);
+  await pushUpdate({ can_cancel: true, cancelling: true });
+  expect(host.textContent).toContain("Cancelling…");
+  expect(host.textContent).not.toContain("Will stop after backup finishes");
+  const reason = "The update stopped at “Check backup settings”. Only the owner may access the backup folder (0700).";
+  await pushUpdate({ state: "failed", development_progress: undefined, error: reason });
+  expect(host.textContent).toContain(reason);
+});
+
+it.each([true, false])("renders snapshot preflight with built-in pause %s", async builtin => {
+  await mount("backing_up", { development: { configured: true, branch: "main", builtin_quiesce: builtin },
+    development_progress: { phase: "backing_up", step: "quiesce", step_index: 2, step_total: builtin ? 6 : 7, elapsed_seconds: 0 } });
+  const steps = pipelineNodes("Phase steps");
+  expect(steps.slice(0, 2)).toEqual([["preflight", "done"], ["quiesce", "active"]]);
+  expect(steps.some(([name]) => name === "resume_writers")).toBe(!builtin);
+});
+
+it("shows writers resumed while the hub packages programs", async () => {
+  const steps = ["preflight", "quiesce", "database_dump", "archive_files", "resume_writers", "archive_programs", "verify_snapshot"];
+  await mount("backing_up", { development_progress: { phase: "backing_up", steps, step: "archive_programs",
+    step_index: 6, step_total: 7, elapsed_seconds: 8 } });
+  expect(pipelineNodes("Phase steps")).toEqual(steps.map((name, i) => [name, i < 5 ? "done" : i === 5 ? "active" : "pending"]));
 });
 
 it("uses the named node before the index and keeps telemetry for an unknown step", async () => {
@@ -218,14 +253,14 @@ it("keeps the backup target and stages through preparation, idle wait and reconn
   await mount("applying_backup", { development_progress: { phase: "applying_backup", step: "prepare_artifacts",
     step_index: 2, step_total: 2, elapsed_seconds: 6, item_done: 0, item_total: 2, percent: 0 } });
   expect(pipelineNodes("Update stages")).toEqual([
-    ["backing_up", "pending"], ["applying_backup", "active"], ["waiting_idle", "pending"], ["restarting", "pending"],
+    ["applying_backup", "active"], ["waiting_idle", "pending"], ["backing_up", "pending"], ["restarting", "pending"],
   ]);
   expect(pipelineNodes("Phase steps")).toEqual([["verify_snapshot", "done"], ["prepare_artifacts", "active"]]);
   expect(host.querySelector('[role="progressbar"]')?.getAttribute("aria-valuenow")).toBe("0");
 
   await pushUpdate({ state: "waiting_idle", busy: [{ title: "Writing a summary", machine: "Desk computer", machine_id: "desk" }] });
   expect(pipelineNodes("Update stages")).toEqual([
-    ["backing_up", "pending"], ["applying_backup", "done"], ["waiting_idle", "active"], ["restarting", "pending"],
+    ["applying_backup", "done"], ["waiting_idle", "active"], ["backing_up", "pending"], ["restarting", "pending"],
   ]);
   expect(pipelineNodes("Phase steps")).toEqual([]);
   const pipeline = host.querySelector('section[aria-label="Update pipeline"]')!;
@@ -239,7 +274,7 @@ it("keeps the backup target and stages through preparation, idle wait and reconn
   expect(saved).toEqual([{ now: true }]);
   await pushUpdate({ state: "confirming", latest: undefined });
   expect(pipelineNodes("Update stages")).toEqual([
-    ["backing_up", "done"], ["applying_backup", "done"], ["waiting_idle", "done"], ["restarting", "active"],
+    ["applying_backup", "done"], ["waiting_idle", "done"], ["backing_up", "done"], ["restarting", "active"],
   ]);
   expect(pipeline.querySelector("header")?.textContent).toContain("b".repeat(12));
 });
@@ -688,4 +723,33 @@ it("uses backup_directory_is_default even when symlinked raw paths differ", asyn
   const save = [...group.querySelectorAll("button")].find((b) => b.textContent === "Save")!;
   await act(async () => save.click());
   expect(saved).toEqual([{ development_backup_retain: 5 }]);
+});
+
+it("confirms cancellation, follows the backup receipt and permits another update", async () => {
+  await mount("building", { can_cancel: true });
+  const button = (parent: ParentNode, label: string) => [...parent.querySelectorAll("button")].find(b => b.textContent === label);
+  const pipeline = host.querySelector('section[aria-label="Update pipeline"]')!;
+  await act(async () => button(pipeline, "Cancel update")!.click());
+  const dialog = document.querySelector('[role="dialog"]')!;
+  expect(saved).toEqual([]);
+  await act(async () => button(dialog, "Keep updating")!.click());
+  expect(saved).toEqual([]);
+  await act(async () => button(pipeline, "Cancel update")!.click());
+  await act(async () => button(document.querySelector('[role="dialog"]')!, "Cancel update")!.click());
+  expect(saved).toEqual(["cancel"]);
+  expect(button(pipeline, "Cancel update")!.disabled).toBe(true);
+  expect(pipeline.textContent).toContain("Cancelling…");
+  await pushUpdate({ state: "backing_up" });
+  expect(pipeline.textContent).toContain("Will stop after backup finishes…");
+  history = [{ ...releaseHistory(1)[0], result: "cancelled" }];
+  await pushUpdate({ state: "idle", can_cancel: false, cancelling: false });
+  expect(historyGroup()?.textContent).toContain("Cancelled");
+  expect(button(host, "Update hub")!.disabled).toBe(false);
+});
+
+it("uses the hub cancellation permission through resolution and adoption", async () => {
+  await mount("resolving", { can_cancel: true });
+  expect(host.textContent).toContain("Cancel update");
+  await pushUpdate({ state: "restarting", can_cancel: false });
+  expect(host.textContent).not.toContain("Cancel update");
 });

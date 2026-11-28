@@ -826,10 +826,17 @@ func (s *Service) notifyFoldDependents(republish []string, cardMachines map[stri
 // unchanged, prune removed machines, republish affected parent/child machines asynchronously, and refresh pending
 // interaction cards whose folded target changed.
 func (s *Service) foldInventory(machine string, list []proto.Session) {
+	s.foldInventoryWithRetained(machine, list, archivedPart{})
+}
+
+// foldInventoryWithRetained folds list (which may exclude archived sessions under Hello.ArchivedApart) while
+// keeping archived sessions in the per-machine subagent negative-cache retention set so alternating publish
+// and live-refresh rounds do not evict archived entries.
+func (s *Service) foldInventoryWithRetained(machine string, list []proto.Session, archived archivedPart) {
 	// Include remembered archive rows added after live inventory decoration, then prune negative
-	// lookup cache entries against this final complete list (live + archived).
+	// lookup cache entries against the machine's full visible + archived retention set.
 	s.decorateSubagents(context.Background(), machine, list)
-	s.pruneSubagentChecked(machine, list)
+	s.pruneSubagentChecked(machine, list, archived)
 	for i := range list {
 		list[i].SetHiddenByDirectory(s.hiddenByDirectory(machine, list[i]))
 	}

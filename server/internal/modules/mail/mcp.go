@@ -15,7 +15,7 @@ import (
 // Tools returns the MCP tool definitions for mail (descriptions and schemas in prompts/mcp/mail).
 func (s *Service) Tools() []proto.Tool {
 	var out []proto.Tool
-	for _, n := range []string{ToolAccounts, ToolSearch, ToolRead, ToolSaveAttachment, ToolSend} {
+	for _, n := range []string{ToolAccounts, ToolSearch, ToolRead, ToolSaveAttachment, ToolSend, ToolMove} {
 		t := prompts.Tool(n)
 		out = append(out, proto.Tool{Name: t.Name, Description: t.Description, InputSchema: t.InputSchema})
 	}
@@ -68,6 +68,9 @@ func (s *Service) Call(ctx context.Context, name string, args json.RawMessage, a
 				"matched yet (search one account with account_id to continue).\n")
 		default:
 			b.WriteString("No messages matched.\n")
+		}
+		if res.UIDValidity != 0 {
+			fmt.Fprintf(&b, "uid_validity=%d\n", res.UIDValidity)
 		}
 		if res.HeadersOnly {
 			b.WriteString("(The server's search found nothing for this query (some servers, such as NetEase 163, do not search " +
@@ -122,6 +125,8 @@ func (s *Service) Call(ctx context.Context, name string, args json.RawMessage, a
 		// Only a caller with no node of its own gets here (the node on the agent's machine answers it otherwise).
 		return proto.TextResult(ToolSaveAttachment+" saves files on the computer the agent runs on and is not available here.", true)
 
+	case ToolMove:
+		return s.callMove(ctx, args, approve)
 	case ToolSend:
 		res, _ := s.callSend(ctx, args, approve)
 		return res

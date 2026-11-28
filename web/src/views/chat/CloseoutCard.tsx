@@ -9,6 +9,7 @@
 import { useEffect, useState, useSyncExternalStore, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import { t } from "../../i18n";
 import { closeoutClaim, shownCloseout, type Claim, type CloseoutStatus } from "../../lib/closeout";
+import { safeWebURL } from "../../lib/format";
 import { clickLink, linkHref } from "../../lib/links";
 import type { Segment } from "../../lib/turns";
 import type { Closeout, Item, Session } from "../../lib/types";
@@ -54,7 +55,7 @@ export interface CloseoutCardProps {
   /** Notified when the user toggles the closeout header. */
   onOpenChange?: (open: boolean) => void;
   /** Builds artifact link addresses without reading the default router or hub state. */
-  resolveLinkHref?: (url: string) => string;
+  resolveLinkHref?: (url: string) => string | undefined;
   /** Handles artifact link activation while preserving the click event for modifier keys. */
   onLinkClick?: CloseoutLinkClick;
   /** Replaces the default lazy `CloseoutEvidence` chunk and store-driven hold when provided. */
@@ -70,14 +71,9 @@ function explicitCloseout(closeout: Closeout | null): (Closeout & { status: Clos
   return closeout as Closeout & { status: CloseoutStatus };
 }
 
-/** An artifact's reference as a web link, when it is one (http or https only). */
+/** An artifact's reference as a web link, when it is one (credential-free http or https only). */
 function webLink(ref: string): string | undefined {
-  try {
-    const u = new URL(ref.trim());
-    return u.protocol === "https:" || u.protocol === "http:" ? u.href : undefined;
-  } catch {
-    return undefined;
-  }
+  return safeWebURL(ref);
 }
 
 export function CloseoutCard({
@@ -205,12 +201,13 @@ function Artifact({
 }: {
   kind: string;
   reference: string;
-  resolveLinkHref?: (url: string) => string;
+  resolveLinkHref?: (url: string) => string | undefined;
   onLinkClick?: CloseoutLinkClick;
 }) {
   const url = webLink(reference);
+  const href = url ? (resolveLinkHref ? resolveLinkHref(url) : linkHref(url)) : undefined;
   const icon = KIND_ICON[kind] ?? "link";
-  if (!url) {
+  if (!url || !href) {
     return (
       <span className="inline-flex min-w-0 items-center gap-1 text-ink-2">
         <Icon name={icon} size={12} className="shrink-0 text-ink-3" />
@@ -223,7 +220,7 @@ function Artifact({
   const text = pr?.text ?? url.replace(/^https?:\/\//, "");
   return (
     <a
-      href={resolveLinkHref ? resolveLinkHref(url) : linkHref(url)}
+      href={href}
       target="_blank"
       rel="noreferrer noopener"
       aria-label={pr?.label}

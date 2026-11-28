@@ -7,6 +7,8 @@ import persona.core.contracts.SessionKey
 import persona.core.contracts.Todo
 import persona.core.contracts.TodoAsk
 import persona.core.contracts.TodoPRStatus
+import persona.core.contracts.generated.TodoWaitKind
+import persona.core.contracts.generated.TodoWaitPRBlocker
 import persona.core.contracts.parseTime
 import persona.core.domain.lines.ApiErrorInfo
 
@@ -109,7 +111,7 @@ private fun normalizedPR(url: String?): String =
     url.orEmpty().trim().replace(Regex("[#?].*$"), "").trimEnd('/').lowercase()
 
 /** Its PRs with fresh facts saying open and non-draft: the current one first, then earlier ones (#7935). */
-private fun Todo.openMergePRs(now: Long): List<TodoPRStatus> {
+fun Todo.openMergePRs(now: Long): List<TodoPRStatus> {
     fun fresh(facts: TodoPRStatus): Boolean {
         val checked = ms(facts.checkedAt)
         return checked > 0 && now - checked >= 0 && now - checked <= PR_STATUS_FRESH_MS && facts.state == "open" && !facts.draft
@@ -126,6 +128,65 @@ private fun Todo.openMergePRs(now: Long): List<TodoPRStatus> {
 
 /** Fresh facts are required: stale, absent, mismatched, draft, merged or closed facts do not imply waiting for merge. */
 fun Todo.hasOpenPR(now: Long): Boolean = openMergePRs(now).isNotEmpty()
+
+/** Accurate display status when an open to-do has no active agent handling it: open non-draft PR state, parked hold,
+ *  or an open main-chat concern ("Tracking") instead of a misleading "Not started". */
+enum class TodoRestStatus {
+    PrConflicts,
+    PrChangesRequested,
+    PrChecksFailed,
+    PrInReview,
+    PrChecksPending,
+    PrWaitingMerge,
+    ParkedMergeReview,
+    Parked,
+    ConcernTracking,
+}
+
+private fun openPRFactsStatus(prs: List<TodoPRStatus>): TodoRestStatus? {
+    if (prs.isEmpty()) return null
+    return when {
+        prs.any { it.conflicts } -> TodoRestStatus.PrConflicts
+        prs.any { it.review == "changes_requested" } -> TodoRestStatus.PrChangesRequested
+        prs.any { it.checks == "failure" || it.checks == "failing" } -> TodoRestStatus.PrChecksFailed
+        prs.any { it.review == "required" || it.review == "review_required" } -> TodoRestStatus.PrInReview
+        prs.any { it.checks == "pending" } -> TodoRestStatus.PrChecksPending
+        else -> TodoRestStatus.PrWaitingMerge
+    }
+}
+
+private fun Todo.openPRRestStatus(now: Long): TodoRestStatus? {
+    if (wait?.kind == TodoWaitKind.PrMerge) {
+        val blockers = wait?.prBlockers.orEmpty()
+        return when {
+            TodoWaitPRBlocker.Conflicts in blockers -> TodoRestStatus.PrConflicts
+            TodoWaitPRBlocker.ChangesRequested in blockers -> TodoRestStatus.PrChangesRequested
+            TodoWaitPRBlocker.ChecksFailing in blockers -> TodoRestStatus.PrChecksFailed
+            TodoWaitPRBlocker.ReviewRequired in blockers -> TodoRestStatus.PrInReview
+            TodoWaitPRBlocker.ChecksPending in blockers -> TodoRestStatus.PrChecksPending
+            else -> openPRFactsStatus(openMergePRs(now)) ?: TodoRestStatus.PrWaitingMerge
+        }
+    }
+    return openPRFactsStatus(openMergePRs(now))
+}
+
+/** Resolves a non-misleading display status when an open to-do is at rest without active agent work; null keeps the standard [TodoState]. */
+fun Todo.restStatus(lookup: (SessionKey) -> Session?, now: Long = System.currentTimeMillis()): TodoRestStatus? {
+    if (isDone || isCancelled || !startError.isNullOrEmpty()) return null
+    if (supervision?.state == "user_check" || acceptedAtRest(lookup, now) || waitsForOwner() || deliveredAwaitingReview(lookup, now)) return null
+    val st = triageStatus(lookup, now)
+    if (st != TriageStatus.NotStarted && st != TriageStatus.FollowUp) return null
+    openPRRestStatus(now)?.let { return it }
+    if (st == TriageStatus.NotStarted) {
+        return when {
+            wait?.kind == TodoWaitKind.MergeReview -> TodoRestStatus.ParkedMergeReview
+            wait != null || supervision?.state == "parked" -> TodoRestStatus.Parked
+            kind == "concern" -> TodoRestStatus.ConcernTracking
+            else -> null
+        }
+    }
+    return null
+}
 
 /** A task (an agent was linked, or a conversation handed it out) with no due date ahead: the user's own reminders never shelve. */
 private fun Todo.shelvable(now: Long, zone: ZoneId): Boolean {

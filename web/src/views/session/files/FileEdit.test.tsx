@@ -144,4 +144,74 @@ describe("FileEdit", () => {
     await appears(() => done.length === 1);
     expect(sent.slice(1).map((b) => [b.path, b.cwd, b.create])).toEqual([["C:\\Users\\me\\docs/a 2.txt", "C:\\Users\\me", true]]);
   });
+
+  it("handles Escape safely: asks to discard when dirty, closes edit when clean, ignores IME/defaultPrevented, and blocks enclosing panel close", async () => {
+    const outerKeyDown = vi.fn();
+    window.addEventListener("keydown", outerKeyDown);
+    const area = () => document.querySelector<HTMLTextAreaElement>('[data-testid="code-editor"]')!;
+    const sendEsc = (init: KeyboardEventInit & { keyCode?: number } = {}, prevent = false) => {
+      const ev = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true, ...init });
+      if (init.keyCode !== undefined) Object.defineProperty(ev, "keyCode", { value: init.keyCode });
+      if (prevent) ev.preventDefault();
+      act(() => { area().dispatchEvent(ev); });
+    };
+    try {
+      // 1. Dirty editor + IME Escape (isComposing / Safari keyCode 229) or already defaultPrevented: neither discards nor closes.
+      await type("unsaved change");
+      sendEsc({ isComposing: true });
+      sendEsc({ keyCode: 229 });
+      sendEsc({}, true);
+      expect(document.body.textContent).not.toContain(t("files-editor.discard_title"));
+      expect(done).toEqual([]);
+
+      // 2. Dirty editor + real Escape: opens discard confirmation dialog and stops propagation so SidePanel does not unmount.
+      outerKeyDown.mockClear();
+      sendEsc();
+      expect(document.body.textContent).toContain(t("files-editor.discard_title"));
+      expect(done).toEqual([]);
+      expect(outerKeyDown).not.toHaveBeenCalled();
+
+      // Dismiss discard dialog, keep editing.
+      await click(t("files-editor.keep_editing"));
+      expect(document.body.textContent).not.toContain(t("files-editor.discard_title"));
+
+      // 2a. External SidePanel Escape delegation (e.g. focus on ResizeHandle) prompts discard when dirty.
+      const editRoot = host.querySelector<HTMLElement>('[data-testid="file-edit"]')!;
+      expect(editRoot.hasAttribute("data-unsaved-edit")).toBe(true);
+      const delegated = new CustomEvent("persona:escape-unsaved", { cancelable: true });
+      act(() => { editRoot.dispatchEvent(delegated); });
+      expect(delegated.defaultPrevented).toBe(true);
+      expect(document.body.textContent).toContain(t("files-editor.discard_title"));
+      await click(t("files-editor.keep_editing"));
+      expect(document.body.textContent).not.toContain(t("files-editor.discard_title"));
+
+      // 2b. While saving is in flight, Escape consumes the event without opening discard dialog or closing.
+      let finishSave!: (r: Response) => void;
+      vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>((resolve) => { finishSave = resolve; })));
+      await act(async () => { button(t("files-editor.save"))!.click(); });
+      outerKeyDown.mockClear();
+      sendEsc();
+      expect(document.body.textContent).not.toContain(t("files-editor.discard_title"));
+      expect(done).toEqual([]);
+      expect(outerKeyDown).not.toHaveBeenCalled();
+      finishSave(Response.json({ path: "/w/a.txt", size: 1, revision: "r2" }));
+      await appears(() => done.length === 1);
+      expect(done).toEqual([true]);
+      done.length = 0;
+
+      // 3. Clean editor + real Escape: exits edit mode cleanly without propagating to enclosing SidePanel.
+      await act(async () => { root.render(null); });
+      await act(async () => {
+        root.render(<FileEdit mid="m1" cwd="/w" file={file()} text={"a\r\nb\r\n"} onDone={(c) => done.push(c)} />);
+        await import("./CodeEditor");
+      });
+      await appears(() => host.querySelector('[data-testid="code-editor"]'));
+      outerKeyDown.mockClear();
+      sendEsc();
+      expect(done).toEqual([false]);
+      expect(outerKeyDown).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener("keydown", outerKeyDown);
+    }
+  });
 });

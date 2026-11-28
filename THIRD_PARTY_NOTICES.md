@@ -39,13 +39,13 @@ redrawn.
 | `brand-microsoft` | Microsoft logo | The four-square logo of Microsoft's sign-in branding guidelines (learn.microsoft.com, Microsoft identity platform), written as four squares in its colors | Microsoft Trademark and Brand Guidelines |
 | `brand-telegram` | Telegram | telegram.org/img/t_logo.svg | Telegram's trademark |
 | `ios-app-*` | Apple 通讯录、日历、提醒事项、健康、照片、地图 app icons | App Store artwork of each app (iTunes lookup `artworkUrl512`, fetched at 240×240), shown next to the data Persona reads from that app | Apple trademarks; Apple's terms for its marks |
-| `web/src/ui/brands/claude.svg` | Claude (Anthropic), agent mark in the web client | Same file as `brand-claude` | Anthropic's brand guidelines |
-| `web/src/ui/brands/codex.svg` | OpenAI Blossom, the Codex agent mark in the web client | Same file as `brand-openai` | openai.com/brand |
+| `web/src/ui/brands/claude.svg` | Claude (Anthropic), agent mark in the web client; also beside a Claude Duet account in the personal Agents list by account (#16248) | Same file as `brand-claude` | Anthropic's brand guidelines |
+| `web/src/ui/brands/codex.svg` | OpenAI Blossom, the Codex agent mark in the web client; also beside a Dots (ChatGPT) account in the personal Agents list by account (#16248) | Same file as `brand-openai` | openai.com/brand |
 | `web/src/ui/brands/opencode.svg`, `brand-opencode` | OpenCode, agent mark | Simple Icons 16.36.0 `opencode.svg` (CC0 for the file; viewBox cropped to the mark); upstream github.com/anomalyco/opencode `packages/identity/mark.svg` (the project is MIT) | OpenCode's trademark |
 | `web/src/ui/brands/cursor.svg`, `brand-cursor` | Cursor, agent mark | Simple Icons 16.36.0 `cursor.svg` (CC0 for the file; viewBox cropped to the mark); upstream cursor.com/brand | Cursor's brand page |
-| `web/src/ui/brands/gemini.svg`, `brand-gemini` | Google Gemini, agent mark | Simple Icons 16.36.0 `googlegemini.svg` (CC0 for the file); upstream gemini.google.com, no brand kit found | Google brand terms |
+| `web/src/ui/brands/gemini.svg`, `brand-gemini` | Google Gemini, agent mark; on the web also beside a Gemini tasks account in the personal Agents list by account (#16248) | Simple Icons 16.36.0 `googlegemini.svg` (CC0 for the file); upstream gemini.google.com, no brand kit found | Google brand terms |
 | `web/src/ui/brands/pi.svg`, `brand-pi` | Pi, agent mark | Simple Icons 16.36.0 `pi.svg` (CC0 for the file); upstream pi.dev/favicon.svg, no licence text found | Pi's trademark |
-| `grok.svg` and `brand-grok` | Grok, agent mark | Lobe Icons 1.104.0 `grok.svg` (MIT license below) | xAI's trademark |
+| `grok.svg` and `brand-grok` | Grok, agent mark; on the web also beside a Grok Bot account in the personal Agents list by account (#16248) | Lobe Icons 1.104.0 `grok.svg` (MIT license below) | xAI's trademark |
 | `agy.svg` and `brand-agy` | Antigravity CLI, agent mark | Lobe Icons 1.104.0 `antigravity.svg` (MIT license below) | Google brand terms |
 | `dsh.svg` and `brand-dsh` | DeepSeek Harness, agent mark | Simple Icons 16.36.0 `deepseek.svg` (CC0 for the file) | DeepSeek's trademark |
 | `kimi.svg` and `brand-kimi` | Kimi CLI, agent mark | Simple Icons 16.36.0 `kimi.svg` (CC0 for the file) | Moonshot AI's trademark |
@@ -100,6 +100,10 @@ a license file.
   published without a license file; their entries point at their source.
 - Authors' email addresses are left out of the license texts: the published hub binary embeds the web client, and the
   release scan (`scripts/release/check_bundle_privacy.py`) refuses email addresses in it.
+
+The client also includes the unmodified Latin variable WOFF2 subsets of Inter and JetBrains Mono from
+Fontsource 5.3.0. Their SIL Open Font License 1.1 texts are included beside their sources in
+`web/src/ui/font-assets/` and in the generated `third-party-licenses.txt`.
 
 ## Ovis
 

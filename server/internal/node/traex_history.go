@@ -57,7 +57,22 @@ func traexHistoryStamp(db, thread, stamp string) string {
 // Reuse the paginated Codex reader: both CLIs store the same ThreadItems. Writer locks still identify the exact
 // process and conversation. Subagent histories never become independent terminal conversations.
 func (n *Node) traexThreads() map[string]codexAppThread {
-	return codexPaginatedThreads(n.traexHome())
+	return traexThreadsForHome(n.traexHome())
+}
+
+// traexThreadsForHome is codexPaginatedThreads, indirected so tests can count TRAE snapshot rebuilds.
+var traexThreadsForHome = codexPaginatedThreads
+
+// traexThreadIn is n.traexThread with the home's paginated snapshot memoized once per list pass (codexListPass): many
+// rows asking for a TRAE id then take one snapshot instead of re-acquiring its lock and map each time. A nil pass
+// resolves the snapshot directly, exactly as n.traexThread does.
+func (n *Node) traexThreadIn(id string, pass *codexListPass) (codexAppThread, bool) {
+	t, ok := pass.paginatedThreadOf(codexSource{home: n.traexHome(), thread: id})
+	if !ok {
+		return codexAppThread{}, false
+	}
+	t.includeRunning = true
+	return t, traexConversation(t)
 }
 
 func traexConversation(t codexAppThread) bool {

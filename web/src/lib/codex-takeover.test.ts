@@ -15,6 +15,12 @@ describe("Codex takeover", () => {
     expect(takeoverBody(plan, true)).toEqual({ token: "opaque-token", confirm_stop: true });
   });
 
+  it.each([false, true])("requires confirmation for an app-owned session (running=%s)", (running) => {
+    const appPlan = { ...plan, running, app_owned: true };
+    expect(takeoverBody(appPlan, false)).toBeNull();
+    expect(takeoverBody(appPlan, true)).toEqual({ token: "opaque-token", confirm_stop: true });
+  });
+
   it("allows an exited session to take over without confirmation", () => {
     expect(takeoverBody({ ...plan, running: false }, false)).toEqual({ token: "opaque-token", confirm_stop: false });
   });

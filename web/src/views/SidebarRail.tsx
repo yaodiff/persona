@@ -2,7 +2,7 @@
 // Imports only SidebarParts among the sidebar's files.
 import { useLayoutEffect, useRef, useState } from "react";
 import { t } from "../i18n";
-import { stateOf } from "../lib/format";
+import { activityOf } from "../lib/format";
 import { href, type Route } from "../lib/router";
 import { pickMainChat } from "../lib/handoff";
 import { useStore } from "../lib/store";
@@ -16,26 +16,31 @@ import { formatChord, jumpHint, useBindings } from "../lib/shortcuts";
 import { takeFocusHandoff, toggleSidebarColumn } from "../lib/layout";
 import { CURRENT_ROW, DOT_CLASS, morePagesMenu, pageLabel, type NavPage, pageIconStyle, useActiveKey, useGo, useNavPages } from "./SidebarParts";
 import { requestDirectWaiting } from "../lib/direct-waiting";
+import { needsYouAutoOpen } from "../lib/needs-you-auto-open";
 import { useMainWaiting } from "./assistant/use-main-waiting";
 import type { UIColor } from "../lib/extension-ui-v6";
 
+export const SIDEBAR_CONTROL = "touch-hit relative z-10 flex shrink-0 items-center justify-center rounded-control text-ink-3 transition-[background-color,color,transform] duration-150 hover:bg-hover hover:text-ink active:scale-[0.94]";
+
 /** The button that folds the sidebar to the rail and opens it again (⌘⌥B by default; the hint follows a rebinding). */
-export function CollapseButton({ collapsed, chord }: { collapsed: boolean; chord?: string }) {
+export function CollapseButton({ collapsed, chord, size = "md", onToggle }: { collapsed: boolean; chord?: string; size?: "sm" | "md"; onToggle?: (keepFocus: boolean) => void }) {
   const label = collapsed ? t("sidebar.expand") : t("sidebar.collapse");
-  // pressed with the focus on it, this one is drawn in place of the other (the rail ⇄ the sidebar) and takes the focus
+  // pressed with the focus on it, this one takes the focus when it is in the active (non-inert) layer,
+  // including mid-flight animation reversals where an already-mounted CollapseButton becomes active again.
   const self = useRef<HTMLButtonElement>(null);
   useLayoutEffect(() => {
-    if (takeFocusHandoff()) self.current?.focus({ preventScroll: true });
-  }, []);
+    const el = self.current;
+    if (el && !el.closest("[inert]") && takeFocusHandoff()) el.focus({ preventScroll: true });
+  });
   return (
     <button
       ref={self}
       type="button"
-      onClick={(e) => toggleSidebarColumn(document.activeElement === e.currentTarget)}
+      onClick={(e) => (onToggle ?? toggleSidebarColumn)(document.activeElement === e.currentTarget)}
       aria-label={label}
       aria-expanded={!collapsed}
       title={chord ? `${label} (${formatChord(chord)})` : label}
-      className="touch-hit relative z-10 flex size-8 shrink-0 items-center justify-center rounded-control text-ink-3 transition-[background-color,color,transform] duration-150 hover:bg-hover hover:text-ink active:scale-[0.94]"
+      className={cx(SIDEBAR_CONTROL, size === "sm" ? "size-7" : "size-8")}
     >
       <Icon name="sidebar" size={15} stroke={1.8} />
     </button>
@@ -64,7 +69,7 @@ const RAIL_ITEM = "touch-hit relative flex size-9 shrink-0 items-center justify-
  * the way back is on screen, so the fold can be kept across reloads (lib/layout.ts). The Agents' list and the
  * conversations are what fold away; ⌘K finds any of them.
  */
-export function SidebarRail({ route, onSearch, onNewAgent }: { route: Route; onSearch: () => void; onNewAgent: () => void }) {
+export function SidebarRail({ route, onSearch, onNewAgent, hideCollapse = false }: { route: Route; onSearch: () => void; onNewAgent: () => void; hideCollapse?: boolean }) {
   const { phase, online, total, main, pages, more } = useNavPages();
   const hasAssistant = useStore((s) => Boolean(s.assistant));
   const [moreMenu, setMoreMenu] = useState<HTMLElement | null>(null);
@@ -72,7 +77,7 @@ export function SidebarRail({ route, onSearch, onNewAgent }: { route: Route; onS
   const activeKey = useActiveKey(route);
   const go = useGo();
   const status = connStatus(phase, online, total);
-  const st = main ? stateOf(main) : undefined;
+  const st = main ? activityOf(main) : undefined;
   const mainWaiting = useMainWaiting(main);
   const pending = mainWaiting.count;
   // `color`: a page's icon color (NavPage.color, #10822), kept under the pointer as well
@@ -96,12 +101,16 @@ export function SidebarRail({ route, onSearch, onNewAgent }: { route: Route; onS
     );
   };
   return (
-    <aside className="flex h-full w-full flex-col items-center bg-canvas py-2.5">
-      <CollapseButton collapsed chord={bindings["left-sidebar"]} />
-      <button type="button" onClick={onSearch} aria-label={t("sidebar.search_sessions")} title={`${t("sidebar.search_sessions")} (${jumpHint(bindings)})`} className={cx(RAIL_ITEM, "mt-1 text-ink-3 hover:bg-hover hover:text-ink")}>
-        <Icon name="search" size={15} stroke={1.8} />
-      </button>
-      <span aria-hidden className="my-2 h-px w-6 shrink-0 bg-line" />
+    <aside data-sidebar-rail className="flex h-full w-full flex-col items-center bg-canvas py-2.5">
+      {!hideCollapse && (
+        <div data-rail-top-controls className="flex flex-col items-center">
+          <CollapseButton collapsed chord={bindings["left-sidebar"]} />
+          <button type="button" onClick={onSearch} aria-label={t("sidebar.search_sessions")} title={`${t("sidebar.search_sessions")} (${jumpHint(bindings)})`} className={cx(RAIL_ITEM, "mt-1 text-ink-3 hover:bg-hover hover:text-ink")}>
+            <Icon name="search" size={15} stroke={1.8} />
+          </button>
+          <span aria-hidden className="my-2 h-px w-6 shrink-0 bg-line" />
+        </div>
+      )}
       <nav aria-label={t("sidebar.pages")} className="flex min-h-0 w-full flex-1 flex-col items-center gap-0.5 overflow-y-auto overscroll-contain">
         {hasAssistant && link("j:new", { name: "persona-new" }, t("sidebar.new_chat"), <Icon name="compose" size={15} stroke={1.8} />)}
         {link(
@@ -113,7 +122,7 @@ export function SidebarRail({ route, onSearch, onNewAgent }: { route: Route; onS
             : st === "working" || st === "needs_you" || st === "unread" ? <span aria-hidden className="absolute top-0.5 right-0.5 flex rounded-full ring-2 ring-canvas"><StatusMark state={st} /></span> : null,
           bindings.persona ? `${t("sidebar.persona_main")} (${formatChord(bindings.persona)})` : t("sidebar.persona_main"),
           undefined,
-          () => { if (main && pending > 0) requestDirectWaiting(main.session_id); },
+          () => { if (main && pending > 0 && needsYouAutoOpen()) requestDirectWaiting(main.session_id); },
         )}
         {pages.map((p) => link(
           p.k,

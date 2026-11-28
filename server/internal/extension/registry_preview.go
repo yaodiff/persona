@@ -54,6 +54,7 @@ type Preview struct {
 	previous              *Manifest // immutable consent baseline captured when the preview was staged
 	source                Source
 	marketSpec, marketKey string
+	builtinHandoff        bool
 	verifiedMarketKey     string       // verified entry and package, separate from the mutable market's pin
 	fingerprint           string       // all staged package bytes/modes as approved at preview
 	root                  string       // the staged package
@@ -153,13 +154,22 @@ func (r *Registry) PreviewMarket(ctx context.Context, mk *Market, marketID strin
 			return nil, i18n.Err("extension-market_security.signature")
 		}
 		verifiedKey = e.verifiedKey
+	} else if len(mk.TrustedKeys) > 0 {
+		// A private market with owner keys: the entry must come from a catalog one of them verified, unchanged since.
+		if e.verifiedKey == "" || !slices.Contains(mk.TrustedKeys, e.verifiedKey) || e.verifiedEntry != entryFingerprint(e) {
+			return nil, i18n.Err("extension-market_security.private_signature")
+		}
+		verifiedKey = e.verifiedKey
+	}
+	if err := e.EngineProblem(r.build); err != nil {
+		return nil, err
 	}
 	pkg := e.PackageFor(Platform())
 	if pkg == nil {
 		return nil, fmt.Errorf("%s 没有这台 hub（%s）能用的包", e.Parsed.ID, Platform())
 	}
 	src := Source{Kind: "market", Path: marketID + "/" + e.Parsed.ID}
-	pv, err := r.previewIdentity(ctx, src, upgrade, renameFrom, func(dir string) (string, error) {
+	pv, err := r.previewIdentity(ctx, src, upgrade, renameFrom, IsOfficialMarket(mk.Spec.String()) && verifiedKey != "" && verifiedKey == Official.SigningKey, func(dir string) (string, error) {
 		file, name, err := mk.Download(ctx, pkg, dir)
 		if err != nil {
 			return "", err
@@ -181,7 +191,7 @@ func (r *Registry) PreviewMarket(ctx context.Context, mk *Market, marketID strin
 		}
 		return nil, fmt.Errorf("下载的包（%s %s）的完整清单和市场索引（%s %s）不一致", m.ID, m.Version, e.Parsed.ID, e.Parsed.Version)
 	}
-	pv.Market, pv.marketSpec, pv.marketKey = marketID, mk.Spec.String(), mk.TrustedKey
+	pv.Market, pv.marketSpec, pv.marketKey = marketID, mk.Spec.String(), TrustPin(mk.Spec.String(), mk.TrustedKey, mk.TrustedKeys)
 	pv.verifiedMarketKey = verifiedKey
 	pv.RenameFrom, pv.replaces = renameFrom, e.Replaces
 	return pv, nil
@@ -204,6 +214,25 @@ func (r *Registry) Discard(previewID string) {
 	if pv, _ := r.take(previewID); pv != nil {
 		r.dropStaging(pv)
 	}
+}
+
+// DetachPreview removes previewID from the registry immediately under r.mu and returns a cleanup
+// function that removes its staging files from disk (nil if absent). Callers that hold another
+// lock can detach atomically before releasing their lock and invoke the cleanup afterward.
+func (r *Registry) DetachPreview(previewID string) func() {
+	if previewID == "" {
+		return nil
+	}
+	r.mu.Lock()
+	pv := r.previews[previewID]
+	if pv != nil {
+		delete(r.previews, previewID)
+	}
+	r.mu.Unlock()
+	if pv == nil {
+		return nil
+	}
+	return func() { r.dropStaging(pv) }
 }
 
 // PreviewMarketOf is the market a preview's package comes from ("" when it does not, or the preview is gone).
@@ -236,10 +265,10 @@ func (r *Registry) PreviewUpload(ctx context.Context, name string, body io.Reade
 
 // preview checks what stage put into a fresh staging directory (or what a remote plugin says of itself).
 func (r *Registry) preview(ctx context.Context, src Source, upgrade string, stage func(dir string) (string, error), candidates ...*Manifest) (*Preview, error) {
-	return r.previewIdentity(ctx, src, upgrade, "", stage, candidates...)
+	return r.previewIdentity(ctx, src, upgrade, "", false, stage, candidates...)
 }
 
-func (r *Registry) previewIdentity(ctx context.Context, src Source, upgrade, renameFrom string, stage func(dir string) (string, error), candidates ...*Manifest) (*Preview, error) {
+func (r *Registry) previewIdentity(ctx context.Context, src Source, upgrade, renameFrom string, verifiedOfficial bool, stage func(dir string) (string, error), candidates ...*Manifest) (*Preview, error) {
 	upgrade = r.CanonicalID(upgrade)
 	r.expire()
 	pv := &Preview{ID: newID(), source: src, ExpiresAt: r.now().Add(previewFor)}
@@ -334,16 +363,25 @@ func (r *Registry) previewIdentity(ctx context.Context, src Source, upgrade, ren
 		}
 		pv.RenameFrom = renameFrom
 	}
+	if cur != nil && errors.Is(cur.problemErr, ErrIdentity) {
+		return fail(ErrIdentity)
+	}
+	pv.builtinHandoff = cur != nil && cur.Record.Source == SourceBuiltin && r.handoffs[m.ID] && upgrade == m.ID
+	if pv.builtinHandoff || cur != nil && cur.Record.BuiltinPredecessor {
+		if !verifiedOfficial || cur.Record.ID != m.ID || renameFrom != "" || r.keptOff[m.ID] != nil {
+			return fail(ErrIdentity)
+		}
+	}
 	switch {
-	case upgrade == "" && cur != nil && !r.yielding(cur):
+	case upgrade == "" && cur != nil && (!r.yielding(cur) || r.handoffs[m.ID]):
 		return fail(fmt.Errorf("已经有一个叫 %s 的扩展（%s）：要换新版本用升级", m.ID, cur.Record.Source))
 	case upgrade != "" && upgrade != m.ID && renameFrom == "":
 		return fail(fmt.Errorf("这个包是 %s，不是 %s", m.ID, upgrade))
-	case upgrade != "" && (cur == nil || cur.Record.Source != SourceInstalled):
+	case upgrade != "" && !pv.builtinHandoff && (cur == nil || cur.Record.Source != SourceInstalled):
 		return fail(i18n.Err("extension-status.upgrade_not_installed", i18n.Args{"id": upgrade}))
 	case upgrade != "" && cur.Record.AttachedPackage():
 		return fail(i18n.Err("extension-status.attached_detach_first", i18n.Args{"id": cur.Record.ID}))
-	case upgrade != "" && !NewerVersion(m.Version, cur.Record.Version):
+	case upgrade != "" && !pv.builtinHandoff && !NewerVersion(m.Version, cur.Record.Version):
 		return fail(fmt.Errorf("%s 不比已装的 %s 新", m.Version, cur.Record.Version))
 	}
 	if renameFrom != "" {

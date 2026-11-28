@@ -4,19 +4,18 @@
 package larkcli
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/lazyre"
@@ -26,6 +25,14 @@ import (
 const defaultTimeout = 15 * time.Second
 
 const loginTimeout = 10 * time.Minute
+
+var (
+	// maxCommandStdout and maxCommandStderr bound buffered output from a single lark-cli run
+	// so a runaway subprocess cannot exhaust hub memory.
+	maxCommandStdout  = 16 << 20
+	maxCommandStderr  = 1 << 20
+	loginReadyTimeout = 10 * time.Second
+)
 
 // Runner executes lark-cli with a bounded context and decodes only JSON output.
 // It never logs stdout or stderr. The latter is captured solely to classify a
@@ -161,6 +168,9 @@ type LoginProcess struct {
 // has its own ten-minute lifetime so the HTTP request that began the login may
 // finish while the process continues in the background.
 func (r *Runner) StartLogin(ctx context.Context) (*LoginProcess, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, cliError(KindTimeout, err)
+	}
 	profile, err := r.resolveProfile(ctx)
 	if err != nil {
 		return nil, err
@@ -176,53 +186,33 @@ func (r *Runner) StartLogin(ctx context.Context) (*LoginProcess, error) {
 	cmd := exec.CommandContext(loginCtx, bin, argv...)
 	cmd.Env = cliEnv(bin)
 	// lark-cli may launch a child process of its own. Killing only the shell
-	// wrapper leaves that child holding stdout open, so terminate the whole
-	// process group on cancellation or timeout.
-	cmd.SysProcAttr = osproc.GroupAttr()
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		cancel()
-		return nil, cliError(KindOther, err)
+	// wrapper leaves that child holding stdout open, so start it in its own
+	// session/process group (avoiding SIGTTOU/SIGTTIN) and terminate the group
+	// on cancellation or timeout via cmd.Cancel.
+	cmd.SysProcAttr = osproc.SessionGroupAttr()
+	var procID atomic.Pointer[osproc.ProcIdentity]
+	cmd.Cancel = func() error {
+		return stopProcessGroup(cmd.Process, &procID)
 	}
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		cancel()
-		return nil, cliError(KindOther, err)
-	}
+	cmd.WaitDelay = time.Second
+	stdoutW := &loginLineWriter{p: p}
+	stderrW := &loginLineWriter{p: p}
+	cmd.Stdout = stdoutW
+	cmd.Stderr = stderrW
 	if err := cmd.Start(); err != nil {
 		cancel()
 		return nil, cliError(KindOther, err)
 	}
-	finished := make(chan struct{})
-	go func(pid int) {
-		select {
-		case <-loginCtx.Done():
-			select {
-			case <-finished:
-				return
-			default:
-				_ = osproc.StopGroup(pid, true)
-				// A child forked while that signal goes out can miss it (macOS) and live on, adopted by launchd, holding
-				// stdout open so the login reports done only once it exits: sweep until the group is empty (#4004).
-				osproc.SweepGroup(pid, time.Second)
-			}
-		case <-finished:
-		}
-	}(cmd.Process.Pid)
-	var readers sync.WaitGroup
-	read := func(in io.Reader) {
-		defer readers.Done()
-		s := bufio.NewScanner(io.LimitReader(in, 1<<20))
-		for s.Scan() {
-			p.line(s.Text())
-		}
-	}
-	readers.Add(2)
-	go read(stdout)
-	go read(stderr)
+	id := osproc.Identify(cmd.Process.Pid)
+	procID.Store(&id)
 	go func() {
-		readers.Wait()
 		err := cmd.Wait()
+		stdoutW.Flush()
+		stderrW.Flush()
+		if errors.Is(err, exec.ErrWaitDelay) && loginCtx.Err() == nil {
+			cleanupWaitDelayGroup(cmd.Process, &procID)
+			err = nil
+		}
 		p.mu.Lock()
 		if loginCtx.Err() == context.DeadlineExceeded {
 			p.err = &Error{Kind: KindTimeout}
@@ -230,22 +220,31 @@ func (r *Runner) StartLogin(ctx context.Context) (*LoginProcess, error) {
 			p.err = cliError(KindOther, err)
 		}
 		p.mu.Unlock()
-		close(finished)
 		cancel()
 		r.invalidateAuth()
 		close(p.done)
 	}()
 	// The URL is normally printed immediately. A short independent wait keeps
 	// a malformed or very old CLI from making the request hang forever.
-	timer := time.NewTimer(10 * time.Second)
+	timer := time.NewTimer(loginReadyTimeout)
 	defer timer.Stop()
 	select {
 	case <-p.ready:
 		return p, nil
 	case <-p.done:
-		return p, p.startError()
+		select {
+		case <-p.ready:
+			return p, nil
+		default:
+			return p, p.startError()
+		}
+	case <-ctx.Done():
+		p.Cancel()
+		<-p.done
+		return nil, cliError(KindTimeout, ctx.Err())
 	case <-timer.C:
 		p.Cancel()
+		<-p.done
 		return nil, &Error{Kind: KindTimeout}
 	}
 }
@@ -917,6 +916,13 @@ func (r *Runner) SearchLimit(ctx context.Context, kind, query string, limit int)
 // SendText sends a plain text message as the bot identity. The idempotency key
 // is optional and is passed through to lark-cli when supplied.
 func (r *Runner) SendText(ctx context.Context, chatID, text, idempotencyKey string) (json.RawMessage, error) {
+	return r.SendTextAs(ctx, "bot", chatID, text, idempotencyKey)
+}
+
+func (r *Runner) SendTextAs(ctx context.Context, identity, chatID, text, idempotencyKey string) (json.RawMessage, error) {
+	if identity != "bot" && identity != "user" {
+		return nil, errors.New("unsupported message sender identity")
+	}
 	if strings.TrimSpace(chatID) == "" {
 		return nil, errors.New("chat_id is required")
 	}
@@ -927,12 +933,19 @@ func (r *Runner) SendText(ctx context.Context, chatID, text, idempotencyKey stri
 	if idempotencyKey != "" {
 		args = append(args, "--idempotency-key", idempotencyKey)
 	}
-	return r.RunAs(ctx, "bot", args...)
+	return r.RunAs(ctx, identity, args...)
 }
 
 // ReplyText replies to a known message as the bot identity. The caller may ask
 // for a topic reply; normal Inbox replies keep the source message's topic.
 func (r *Runner) ReplyText(ctx context.Context, messageID, text, idempotencyKey string, inThread bool) (json.RawMessage, error) {
+	return r.ReplyTextAs(ctx, "bot", messageID, text, idempotencyKey, inThread)
+}
+
+func (r *Runner) ReplyTextAs(ctx context.Context, identity, messageID, text, idempotencyKey string, inThread bool) (json.RawMessage, error) {
+	if identity != "bot" && identity != "user" {
+		return nil, errors.New("unsupported message sender identity")
+	}
 	if strings.TrimSpace(messageID) == "" {
 		return nil, errors.New("message_id is required")
 	}
@@ -946,7 +959,7 @@ func (r *Runner) ReplyText(ctx context.Context, messageID, text, idempotencyKey 
 	if inThread {
 		args = append(args, "--reply-in-thread")
 	}
-	return r.RunAs(ctx, "bot", args...)
+	return r.RunAs(ctx, identity, args...)
 }
 
 func (r *Runner) rawSearch(ctx context.Context, args []string) (json.RawMessage, error) {
@@ -995,7 +1008,119 @@ func (r *Runner) executeInput(ctx context.Context, args []string, mode outputMod
 	return r.executeInputProfile(ctx, args, mode, identity, input, true)
 }
 
+const (
+	loginLineLimit = 64 << 10
+	loginScanLimit = 1 << 20
+)
+
+// loginLineWriter scans stdout/stderr lines for the device-flow login URL with bounded memory
+// while always draining excess bytes so the child process never blocks on a full pipe.
+type loginLineWriter struct {
+	mu      sync.Mutex
+	p       *LoginProcess
+	buf     []byte
+	scanned int
+	skip    bool
+}
+
+func (w *loginLineWriter) Write(b []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	n := len(b)
+	if w.scanned >= loginScanLimit {
+		return n, nil
+	}
+	rem := loginScanLimit - w.scanned
+	truncated := len(b) > rem
+	if truncated {
+		b = b[:rem]
+	}
+	w.scanned += len(b)
+	for len(b) > 0 {
+		nl := bytes.IndexByte(b, '\n')
+		var chunk []byte
+		if nl >= 0 {
+			chunk = b[:nl]
+			b = b[nl+1:]
+		} else {
+			chunk = b
+			b = nil
+		}
+		if !w.skip {
+			if len(w.buf)+len(chunk) > loginLineLimit {
+				w.buf = nil
+				w.skip = true
+			} else {
+				w.buf = append(w.buf, chunk...)
+			}
+		}
+		if nl >= 0 {
+			if !w.skip && len(w.buf) > 0 {
+				w.p.line(strings.TrimRight(string(w.buf), "\r"))
+			}
+			w.buf = w.buf[:0]
+			w.skip = false
+		}
+	}
+	if truncated || w.scanned >= loginScanLimit {
+		// Discard any unterminated partial line at the scan cap so Flush cannot parse
+		// a half-written URL or user_code, and release the line buffer.
+		w.buf = nil
+		w.skip = true
+	}
+	return n, nil
+}
+
+func (w *loginLineWriter) Flush() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if !w.skip && len(w.buf) > 0 {
+		w.p.line(strings.TrimRight(string(w.buf), "\r"))
+	}
+	w.buf = nil
+	w.skip = false
+}
+
+type cappedBuffer struct {
+	mu        sync.Mutex
+	buf       bytes.Buffer
+	limit     int
+	truncated bool
+}
+
+func (b *cappedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.limit <= 0 {
+		if len(p) > 0 {
+			b.truncated = true
+		}
+		return len(p), nil
+	}
+	room := b.limit - b.buf.Len()
+	if room > 0 {
+		if len(p) <= room {
+			_, _ = b.buf.Write(p)
+			return len(p), nil
+		}
+		_, _ = b.buf.Write(p[:room])
+	}
+	if len(p) > room {
+		b.truncated = true
+	}
+	return len(p), nil
+}
+
+func (b *cappedBuffer) bytes() ([]byte, bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return append([]byte(nil), b.buf.Bytes()...), b.truncated
+}
+
 func (r *Runner) executeInputProfile(ctx context.Context, args []string, mode outputMode, identity string, input []byte, includeProfile bool) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, cliError(KindTimeout, err)
+	}
 	profile, err := r.resolveProfile(ctx)
 	if err != nil {
 		return nil, err
@@ -1026,14 +1151,35 @@ func (r *Runner) executeInputProfile(ctx context.Context, args []string, mode ou
 	defer cancel()
 	cmd := exec.CommandContext(cctx, bin, argv...)
 	cmd.Env = cliEnv(bin)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	cmd.SysProcAttr = osproc.SessionGroupAttr()
+	var procID atomic.Pointer[osproc.ProcIdentity]
+	cmd.Cancel = func() error {
+		return stopProcessGroup(cmd.Process, &procID)
+	}
+	cmd.WaitDelay = time.Second
+	stdout := &cappedBuffer{limit: maxCommandStdout}
+	stderr := &cappedBuffer{limit: maxCommandStderr}
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
 	if input != nil {
 		cmd.Stdin = bytes.NewReader(input)
 	}
-	err = cmd.Run()
-	result := commandResult{stdout: stdout.Bytes(), stderr: stderr.Bytes()}
+	if err = cmd.Start(); err != nil {
+		if cctx.Err() != nil {
+			return nil, cliError(KindTimeout, cctx.Err())
+		}
+		return nil, cliError(KindOther, err)
+	}
+	id := osproc.Identify(cmd.Process.Pid)
+	procID.Store(&id)
+	err = cmd.Wait()
+	if errors.Is(err, exec.ErrWaitDelay) && cctx.Err() == nil {
+		cleanupWaitDelayGroup(cmd.Process, &procID)
+		err = nil
+	}
+	stdoutBytes, stdoutTruncated := stdout.bytes()
+	stderrBytes, _ := stderr.bytes()
+	result := commandResult{stdout: stdoutBytes, stderr: stderrBytes}
 	if cctx.Err() != nil {
 		return nil, cliError(KindTimeout, cctx.Err())
 	}
@@ -1045,6 +1191,9 @@ func (r *Runner) executeInputProfile(ctx context.Context, args []string, mode ou
 			return nil, classified
 		}
 		return nil, cliError(KindOther, err)
+	}
+	if stdoutTruncated {
+		return nil, cliError(KindOther, errors.New("lark-cli output exceeded limit"))
 	}
 	return result.stdout, nil
 }
@@ -1098,11 +1247,23 @@ func firstRegex(raw []byte, re *lazyre.Regexp) string {
 	return ""
 }
 
+func hasControlChar(s string) bool {
+	for _, r := range s {
+		if r < 0x20 || r == 0x7f {
+			return true
+		}
+	}
+	return false
+}
+
 func parseLoginInfo(line string) (LoginInfo, bool) {
 	for _, candidate := range loginURLPattern.FindAllString(line, -1) {
 		candidate = strings.TrimRight(candidate, ".,;)")
+		if hasControlChar(candidate) {
+			continue
+		}
 		u, err := url.Parse(candidate)
-		if err != nil || u.Scheme != "https" || u.Host == "" {
+		if err != nil || u.Scheme != "https" || u.Hostname() == "" || strings.Contains(u.Host, "\\") || u.User != nil {
 			continue
 		}
 		code := u.Query().Get("user_code")
@@ -1126,8 +1287,11 @@ func (r *Runner) binary(ctx context.Context) (string, error) {
 	if bin == "" {
 		bin = "lark-cli"
 	}
+	if hasControlChar(bin) {
+		return "", cliError(KindNotInstalled, errors.New("invalid lark-cli binary path"))
+	}
 	if filepath.IsAbs(bin) {
-		if _, err := os.Stat(bin); err != nil {
+		if fi, err := os.Stat(bin); err != nil || fi.IsDir() {
 			return "", cliError(KindNotInstalled, err)
 		}
 		r.mu.Lock()
@@ -1140,11 +1304,37 @@ func (r *Runner) binary(ctx context.Context) (string, error) {
 		// npm global installs are often visible only in an interactive login shell.
 		lookupCtx, cancel := context.WithTimeout(ctx, minDuration(r.cfg.Timeout, 5*time.Second))
 		defer cancel()
-		cmd := exec.CommandContext(lookupCtx, loginShell(), "-lc", "command -v "+shellQuote(bin))
-		out, _ := cmd.Output()
-		lines := strings.Split(strings.TrimSpace(string(out)), "\n")
-		if len(lines) > 0 && filepath.IsAbs(strings.TrimSpace(lines[len(lines)-1])) {
-			path = strings.TrimSpace(lines[len(lines)-1])
+		cmd := exec.CommandContext(lookupCtx, loginShell(), "-lc", "command -v -- "+shellQuote(bin))
+		cmd.SysProcAttr = osproc.SessionGroupAttr()
+		var procID atomic.Pointer[osproc.ProcIdentity]
+		cmd.Cancel = func() error {
+			return stopProcessGroup(cmd.Process, &procID)
+		}
+		cmd.WaitDelay = time.Second
+		outBuf := &cappedBuffer{limit: 64 << 10}
+		cmd.Stdout = outBuf
+		if startErr := cmd.Start(); startErr == nil {
+			id := osproc.Identify(cmd.Process.Pid)
+			procID.Store(&id)
+			waitErr := cmd.Wait()
+			if errors.Is(waitErr, exec.ErrWaitDelay) && lookupCtx.Err() == nil {
+				cleanupWaitDelayGroup(cmd.Process, &procID)
+				waitErr = nil
+			}
+			if waitErr == nil {
+				outBytes, truncated := outBuf.bytes()
+				if !truncated {
+					lines := strings.Split(strings.TrimSpace(string(outBytes)), "\n")
+					if len(lines) > 0 {
+						cand := strings.TrimSpace(lines[len(lines)-1])
+						if cand != "" && !hasControlChar(cand) && filepath.IsAbs(cand) {
+							if fi, statErr := os.Stat(cand); statErr == nil && !fi.IsDir() {
+								path = cand
+							}
+						}
+					}
+				}
+			}
 		}
 	}
 	if path == "" {
@@ -1157,7 +1347,18 @@ func (r *Runner) binary(ctx context.Context) (string, error) {
 }
 
 func cliEnv(bin string) []string {
-	return append(os.Environ(), "PATH="+filepath.Dir(bin)+string(os.PathListSeparator)+os.Getenv("PATH"))
+	env := make([]string, 0, len(os.Environ())+1)
+	for _, kv := range os.Environ() {
+		if len(kv) >= 5 && strings.EqualFold(kv[:5], "PATH=") {
+			continue
+		}
+		env = append(env, kv)
+	}
+	pathVal := filepath.Dir(bin)
+	if cur := os.Getenv("PATH"); cur != "" {
+		pathVal += string(os.PathListSeparator) + cur
+	}
+	return append(env, "PATH="+pathVal)
 }
 
 func loginShell() string {
@@ -1167,7 +1368,10 @@ func loginShell() string {
 	return "/bin/sh"
 }
 
-func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'" }
+// shellQuote quotes s safely across POSIX shells (sh/bash/zsh), fish, and csh/tcsh.
+func shellQuote(s string) string {
+	return "'" + strings.NewReplacer(`'`, `'\''`, `\`, `'\\'`, `!`, `'\!'`).Replace(s) + "'"
+}
 
 func minDuration(a, b time.Duration) time.Duration {
 	if a <= 0 || a > b {
@@ -1233,15 +1437,27 @@ func classifyFailure(result commandResult) *Error {
 			continue
 		}
 		var env struct {
+			Code  json.RawMessage `json:"code"`
+			Msg   string          `json:"msg"`
 			Error struct {
-				Type           string   `json:"type"`
-				Subtype        string   `json:"subtype"`
-				Message        string   `json:"message"`
-				MissingScopes  []string `json:"missing_scopes"`
-				MissingScopes2 []string `json:"missingScopes"`
+				Code           json.RawMessage `json:"code"`
+				Type           string          `json:"type"`
+				Subtype        string          `json:"subtype"`
+				Message        string          `json:"message"`
+				MissingScopes  []string        `json:"missing_scopes"`
+				MissingScopes2 []string        `json:"missingScopes"`
 			} `json:"error"`
 		}
-		if json.Unmarshal(raw, &env) != nil || env.Error.Type == "" && env.Error.Subtype == "" {
+		if json.Unmarshal(raw, &env) != nil {
+			continue
+		}
+		words := strings.ToLower(env.Msg + " " + env.Error.Message + " " + env.Error.Subtype)
+		if strings.Trim(string(env.Code), `"`) == "230002" || strings.Trim(string(env.Error.Code), `"`) == "230002" ||
+			strings.Contains(words, "bot not in the chat") || strings.Contains(words, "bot is not in the group") ||
+			strings.Contains(words, "bot_not_in_chat") {
+			return &Error{Kind: KindBotNotInChat}
+		}
+		if env.Error.Type == "" && env.Error.Subtype == "" {
 			continue
 		}
 		sub := strings.ToLower(env.Error.Subtype)

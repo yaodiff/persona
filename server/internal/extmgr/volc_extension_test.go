@@ -275,4 +275,13 @@ func TestVolcMeetingsSwitch(t *testing.T) {
 	if _, err := h.setExtensionSettings(volc.ExtensionID, "x", json.RawMessage(`{"meetings": true}`)); err == nil {
 		t.Fatal("the assistant's tool set the meetings switch")
 	}
+	// The row in the store never holds the switch either (#16263, plan §14-1): a package's schema has no meetings key,
+	// so a row holding one could not be handed off or adopted.
+	stored := h.store.(*extensionStore)
+	stored.mu.Lock()
+	row := stored.rows[volc.ExtensionID]
+	stored.mu.Unlock()
+	if row.Source != extension.SourceBuiltin || strings.Contains(string(row.Config), "meetings") || !strings.Contains(string(row.Config), "zh_male_m191_uranus_bigtts") {
+		t.Fatalf("stored row %s %s", row.Source, row.Config)
+	}
 }

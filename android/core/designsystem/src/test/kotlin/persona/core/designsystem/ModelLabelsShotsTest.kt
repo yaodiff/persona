@@ -60,13 +60,13 @@ class ModelLabelsShotsTest {
         for (s in AppStyle.entries) for (d in listOf(false, true)) {
             style = s; dark = d
             rule.waitForIdle()
-            listOf("6.1 Sol", "6.1", "4o Mini", "6.1 Codex Max", "自定义名称", "Claude Opus").forEach {
+            listOf("GPT-6.1 Sol", "GPT-6.1", "GPT-4o Mini", "GPT-6.1 Codex Max", "自定义名称", "Claude Opus").forEach {
                 rule.onNodeWithText(it).assertExists()
             }
             // A formatted title must not create a raw-id subtitle in an otherwise unnamed row.
             assertEquals(0, rule.onAllNodesWithText("gpt-6.1-sol").fetchSemanticsNodes().size)
             rule.onNodeWithText("alias → gpt-6.1-sol").assertExists()
-            rule.onNodeWithText("6.1 Sol").performClick()
+            rule.onNodeWithText("GPT-6.1 Sol").performClick()
             assertEquals("gpt-6.1-sol", picked)
             rule.onNodeWithText("自定义名称").performClick()
             assertEquals("alias", picked)
@@ -85,7 +85,7 @@ class ModelLabelsShotsTest {
             }
         }
         selected = "gpt-4.1"
-        rule.onNodeWithText("4.1").assertExists()
+        rule.onNodeWithText("GPT-4.1").assertExists()
         rule.onNodeWithText("gpt-4.1").assertDoesNotExist()
         rule.onNodeWithText("当前配置，列表里没有").assertExists()
     }

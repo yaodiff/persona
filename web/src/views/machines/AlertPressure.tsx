@@ -4,7 +4,7 @@
 // computer. Without the node's diagnosis the Agents and both actions still work.
 import { useMemo, useState } from "react";
 import { t } from "../../i18n";
-import { sessionTitle, stateOf } from "../../lib/format";
+import { sessionTitle, activityOf, stateOf } from "../../lib/format";
 import { stateName } from "../../lib/state-labels";
 import { bytesBin, load as loadText, percent, uptime, usedOfTotal } from "../../lib/machine-detail";
 import { loadDefinition, perCoreLabel, readings, type AlertKind } from "../../lib/machine-alerts";
@@ -109,7 +109,7 @@ function ProcessList({ data, byCpu, cores }: { data: Diagnosis; byCpu: boolean; 
 
 type Group = "needs_you" | "working" | "idle";
 const groupOf = (s: Session): Group => {
-  const st = stateOf(s);
+  const st = activityOf(s);
   return st === "needs_you" ? "needs_you" : st === "working" ? "working" : "idle";
 };
 

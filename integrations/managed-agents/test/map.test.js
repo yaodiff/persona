@@ -36,6 +36,16 @@ test('events become the items the apps draw', () => {
   assert.equal(items[8].text, `${NOTE_ERROR_LEAD}model failed`)
 })
 
+test('botmux sentinel replies preserve the current turn preview and original content', () => {
+  const marker = 'BOTMUX_NOTHING_TO_SEND'
+  const reply = (content) => ({ type: 'agent.message', content })
+  const mixed = reply('Notes\n' + marker + '\nready')
+  assert.equal(lastText([mixed]), 'Notes ready')
+  assert.equal(lastText([mixed, reply(marker)]), 'Notes ready')
+  assert.equal(lastText([mixed, { type: 'user.message' }, reply(marker)]), '')
+  assert.equal(eventItems(mixed, 1, new Map())[0].text, mixed.content)
+})
+
 test('status and last line come from the log', () => {
   assert.equal(logStatus([]), 'unknown')
   assert.equal(logStatus([{ type: 'user.message' }]), 'working')

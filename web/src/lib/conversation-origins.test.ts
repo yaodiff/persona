@@ -45,6 +45,17 @@ describe("conversation origins (docs/protocol/protocol.md「Origin of assistant 
     expect(matchesOrigin(conv("a", { origin: "task" }), "all")).toBe(true);
   });
 
+  it("filters to every chat an external source opened for the phone tab bar's External", () => {
+    expect(parseOriginFilter("external")).toBe("external");
+    expect(matchesOrigin(conv("a", { origin: "lark_agent" }), "external")).toBe(true);
+    expect(matchesOrigin(conv("a", { origin: "extension" }), "external")).toBe(true);
+    for (const origin of [undefined, "", "user", "channel", "inbox", "task", "spawned", "something_new"]) {
+      expect(matchesOrigin(conv("a", { origin }), "external"), String(origin)).toBe(false);
+    }
+    // the background supervisor is with the scheduled tasks whatever its row says
+    expect(matchesOrigin(conv("bg", { origin: "lark_agent" }), "external", "bg")).toBe(false);
+  });
+
   it("counts only Lark /agent and other extensions as external, by the trimmed origin (#3758)", () => {
     expect(externalOrigin(conv("a", { origin: "lark_agent" }))).toBe("lark_agent");
     expect(externalOrigin(conv("a", { origin: " extension " }))).toBe("extension");

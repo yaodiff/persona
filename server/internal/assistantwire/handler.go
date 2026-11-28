@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/wireids"
 )
 
 // ---- what the hub sends the assistant (Handler) ----
@@ -28,6 +29,11 @@ const AdminHeader = "X-Persona-Admin"
 // manager can say who did something (a model profile's switch, docs/assistant/model-profiles.md); set by the hub like
 // RoleHeader, never the client's.
 const DeviceNameHeader = "X-Persona-Device-Name"
+
+// DeviceIDHeader carries the hub-authenticated paired device ID (for example "dev_...") of the device a relayed
+// request came from ("" when the caller is not a paired user device), set by the hub like RoleHeader, never the
+// client's.
+const DeviceIDHeader = "X-Persona-Device-ID"
 
 // PersonHeader is "1" on a relayed request from a person's own full device (a device token with its own id, not the
 // hub's token or a pairing code), set by the hub like RoleHeader, never the client's: what may change a message held
@@ -113,22 +119,43 @@ type SessionRef struct {
 	SessionID string `json:"session_id"`
 }
 
-// UserSpokeParams carries text only when the hub authenticated a person's own app.
+// UserSpokeParams carries text only when the hub authenticated a person's own app, for both
+// Agent conversations and the assistant's own supervisor / direction conversations. The event
+// reaches the manager before the message is persisted, so a direction's decision cards rely on
+// this text rather than a transcript read.
 // Keep it out of SessionRef: session references are also used as map keys.
 type UserSpokeParams struct {
 	SessionRef
 	Text string `json:"text,omitempty"`
+	// Source is set only with Text from authenticated owner input to an Agent: "app" for the app's message route,
+	// "terminal" for the terminal Agent-message route. It is never a runtime transcript role.
+	Source string `json:"source,omitempty"`
+	// ClientMsgID is the send's client_msg_id, sent with Text when the message has one: the same id its
+	// session.assistant_sent (ConversationSent) names, so the manager can wait for the send's outcome before an
+	// irreversible step (#13041). An older hub sends none; an older manager ignores it.
+	ClientMsgID wireids.ClientMsgID `json:"client_msg_id,omitempty"`
+	At          time.Time           `json:"at,omitempty"`
 }
 
+// Verified owner-input provenance carried by UserSpokeParams.
+const (
+	OwnerInputApp      = "app"
+	OwnerInputTerminal = "terminal"
+)
+
 // ContextParams is assistant.context's params. MachineID is the asking node's machine: the hub sets it from the
-// node's connection, never from the node's params. With Ack the call only confirms that a message carrying those
-// view errors (ContextResult.ViewErrors) was delivered, and answers nothing.
+// node's connection, never from the node's params. Cwd is the conversation's launch directory as the node reports it,
+// used only before the session is noted or listed (such as a new space conversation's first turn, including an
+// empty-id Codex start). With Ack the call only confirms that a message carrying those view errors
+// (ContextResult.ViewErrors) was delivered, and answers nothing.
 type ContextParams struct {
 	RecoveryID      string             `json:"recovery_id,omitempty"`
 	RecoveryOnly    bool               `json:"recovery_only,omitempty"`
 	PrepareRecovery bool               `json:"prepare_recovery,omitempty"`
 	SessionID       string             `json:"session_id"`
 	MachineID       string             `json:"machine_id,omitempty"`
+	Cwd             string             `json:"cwd,omitempty"`
+	Query           string             `json:"query,omitempty"`
 	Ack             []ViewErrorReceipt `json:"ack,omitempty"`
 }
 
@@ -200,7 +227,7 @@ type MessageCard struct {
 	ProgressVersion string `json:"progress_version,omitempty"`
 	// SentAt: the reply to the item went out (from this card or from the inbox, on any device) and Sent is what it
 	// said; set when the inbox sent the reply (the inbox is the assistant's too), never cleared, so the card stays sent
-	// when the item opens again. A card sent before that was recorded has no Sent (the draft is what went out).
+	// when the item opens again. Older send records can lack Sent, in which case the sent text is unknown.
 	SentAt *time.Time `json:"sent_at,omitempty"`
 	Sent   string     `json:"sent,omitempty"`
 	// Dismissal is per draft card, not inbox filing or task completion. Undo

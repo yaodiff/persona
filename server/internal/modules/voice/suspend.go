@@ -137,6 +137,8 @@ func (c *conversation) pauseDue(now time.Time) bool {
 		return false // a meeting call never pauses: it is there for the next Talk (meeting.go); it takes no hold either
 	case c.sus.onHold:
 		return true // the user is on another call: at once, whatever the conversation does, whatever waits to be said
+	case c.tts != nil && c.tts.Active():
+		return false // TTS is still synthesizing or playing a turn
 	case !c.sus.works:
 		return false
 	case len(c.queue) > 0 || len(c.pending) > 0 || c.askCur != "" || c.user != nil:
@@ -184,6 +186,12 @@ func (c *conversation) pause(now time.Time) {
 	c.dropAudio, c.cutAt, c.barge = false, time.Time{}, barge{}
 	if c.pace.playEnd.After(now) {
 		c.pace.playEnd = now // a hold mid-speech: the app drops what it had not played (a quiet pause is long past it)
+	}
+	if c.tts != nil {
+		c.ttsDropText = false
+		c.ttsCutReply = ""
+		c.ttsCutAt = time.Time{}
+		c.cancelTTSLocked(false)
 	}
 	c.closeAsst()
 	c.closeUser()

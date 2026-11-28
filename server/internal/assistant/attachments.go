@@ -1,10 +1,14 @@
 package assistant
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"path"
+	"slices"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/lazyre"
@@ -34,8 +38,24 @@ var appUploadName = lazyre.New(`-\d{8}-\d{6}(-[0-9a-f]{4})?(\.[A-Za-z0-9]+)*$`)
 // too), up to the next of them.
 var textPath = lazyre.New(`(?:^|[\s"'“‘(（：:，,、])(~?/[^\s"'“”‘’()（）<>，。；、,;]+)`) // i18n-ignore: match literal path delimiters in user messages, including Chinese punctuation.
 
+func hasUnsafeAttachmentPath(p string) bool {
+	if p == "" || strings.ContainsRune(p, '\x00') {
+		return true
+	}
+	norm := strings.ReplaceAll(p, "\\", "/")
+	if norm == "/" || norm == "." || norm == "~" || norm == "~/" || strings.HasSuffix(norm, "/") {
+		return true
+	}
+	for _, seg := range strings.Split(norm, "/") {
+		if seg == "." || seg == ".." {
+			return true
+		}
+	}
+	return false
+}
+
 // cleanAttachments trims the paths, drops repeats and empties, and refuses more than attachmentsMost or one that is not
-// absolute (~/ is the home of the assistant's computer).
+// a valid absolute file path (~/ is the home of the assistant's computer).
 func cleanAttachments(in []string) ([]string, error) {
 	var out []string
 	seen := map[string]bool{}
@@ -46,6 +66,9 @@ func cleanAttachments(in []string) ([]string, error) {
 		}
 		if !strings.HasPrefix(p, "/") && !strings.HasPrefix(p, "~/") {
 			return nil, fmt.Errorf("attachment %q is not an absolute path on your computer", p)
+		}
+		if hasUnsafeAttachmentPath(p) {
+			return nil, fmt.Errorf("attachment %q is not a valid file path", p)
 		}
 		seen[p] = true
 		out = append(out, p)
@@ -89,21 +112,111 @@ func (r attachmentRules) resolve(p string) string {
 	return path.Clean(p)
 }
 
-// saved: p is where Persona or Claude Code keeps the user's pictures.
+// Path boundaries intentionally exclude Han/letter runes so paths like "/Users/张三/etc/passwd" or
+// "/home/me/.ssh/id_rsa备份" never falsely match "/etc/passwd" or "/home/me/.ssh/id_rsa".
+func isPathLeftBoundary(r rune) bool {
+	return unicode.IsSpace(r) || strings.ContainsRune("\"'“”‘’()（）<>[]{}「」『』【】《》：:，,。；;、=!?！？`", r) // i18n-ignore: path delimiters in user messages, including Chinese punctuation
+}
+
+func isPathRightDelim(r rune) bool {
+	return unicode.IsSpace(r) || strings.ContainsRune("\"'“”‘’()（）<>[]{}「」『』【】《》：，。；、,;！？!?`", r) // i18n-ignore: path delimiters in user messages, including Chinese punctuation
+}
+
+func isPathRightBoundary(rest string) bool {
+	if rest == "" {
+		return true
+	}
+	r, n := utf8.DecodeRuneInString(rest)
+	if isPathRightDelim(r) {
+		return true
+	}
+	if r == '.' || r == ':' {
+		after := rest[n:]
+		if after == "" {
+			return true
+		}
+		r2, _ := utf8.DecodeRuneInString(after)
+		return isPathRightDelim(r2)
+	}
+	return false
+}
+
+func saidContainsPath(said, candidate string) bool {
+	if candidate == "" || hasUnsafeAttachmentPath(candidate) {
+		return false
+	}
+	for off := 0; off < len(said); {
+		idx := strings.Index(said[off:], candidate)
+		if idx < 0 {
+			return false
+		}
+		pos := off + idx
+		leftOK := pos == 0
+		if !leftOK {
+			r, _ := utf8.DecodeLastRuneInString(said[:pos])
+			leftOK = isPathLeftBoundary(r)
+		}
+		if leftOK && isPathRightBoundary(said[pos+len(candidate):]) {
+			return true
+		}
+		off = pos + 1
+	}
+	return false
+}
+
+// saved: p is a file where Persona or Claude Code keeps the user's pictures.
 func (r attachmentRules) saved(clean string) bool {
-	return r.uploads != "" && strings.HasPrefix(clean, r.uploads) || r.self != "" && strings.Contains(clean, "/"+r.self+"/images/")
+	if hasUnsafeAttachmentPath(clean) {
+		return false
+	}
+	if r.uploads != "" && strings.HasPrefix(clean, r.uploads) && len(clean) > len(r.uploads) {
+		return true
+	}
+	if r.self != "" && !strings.ContainsAny(r.self, "/\\") && r.self != "." && r.self != ".." {
+		marker := "/" + r.self + "/images/"
+		if idx := strings.Index(clean, marker); idx >= 0 && len(clean) > idx+len(marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func (r attachmentRules) saidPath(p, clean string) bool {
+	said := r.said()
+	if saidContainsPath(said, p) {
+		return true
+	}
+	if clean != p && saidContainsPath(said, clean) {
+		return true
+	}
+	if r.home != "" {
+		home := path.Clean(r.home)
+		if home != "/" && strings.HasPrefix(clean, home+"/") {
+			if saidContainsPath(said, "~/"+strings.TrimPrefix(clean, home+"/")) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // given: p may be named as an attachment, a picture saved for the user or a path the user wrote.
 func (r attachmentRules) given(p string) bool {
-	return r.saved(r.resolve(p)) || strings.Contains(r.said(), p)
+	if hasUnsafeAttachmentPath(p) {
+		return false
+	}
+	clean := r.resolve(p)
+	return r.saved(clean) || r.saidPath(p, clean)
 }
 
 // mentioned: p written in a text is taken as an attachment by itself only where the user's own files land, never any
 // path the user named (a file of a repository there would be copied instead of edited where it is).
 func (r attachmentRules) mentioned(p string) bool {
+	if hasUnsafeAttachmentPath(p) {
+		return false
+	}
 	clean := r.resolve(p)
-	return r.saved(clean) || appUploadName.MatchString(path.Base(clean)) && strings.Contains(r.said(), p)
+	return r.saved(clean) || appUploadName.MatchString(path.Base(clean)) && r.saidPath(p, clean)
 }
 
 // checkAttachments resolves the named attachments and refuses one the user did not give, so the tool cannot move any
@@ -257,13 +370,74 @@ func (h handedAttachments) said() string {
 
 // withAttachments is text with each copied path named by its copy, ended by the attachments' part.
 func withAttachments(text string, h handedAttachments) string {
-	for from, to := range h.moved {
-		text = strings.ReplaceAll(text, from, to)
-	}
+	text = replaceAttachmentPaths(text, h.moved)
 	if a := h.text(); a != "" {
 		return text + "\n\n" + a
 	}
 	return text
+}
+
+func replaceAttachmentPaths(text string, moved map[string]string) string {
+	if len(moved) == 0 || text == "" {
+		return text
+	}
+	keys := make([]string, 0, len(moved))
+	for k := range moved {
+		if k != "" {
+			keys = append(keys, k)
+		}
+	}
+	if len(keys) == 0 {
+		return text
+	}
+	slices.SortFunc(keys, func(a, b string) int {
+		if len(a) != len(b) {
+			return cmp.Compare(len(b), len(a))
+		}
+		return cmp.Compare(a, b)
+	})
+	var out strings.Builder
+	out.Grow(len(text))
+	for i := 0; i < len(text); {
+		leftOK := i == 0
+		if !leftOK {
+			r, _ := utf8.DecodeLastRuneInString(text[:i])
+			leftOK = isPathLeftBoundary(r)
+		}
+		matched := false
+		if leftOK {
+			for _, k := range keys {
+				if strings.HasPrefix(text[i:], k) && isPathRightBoundary(text[i+len(k):]) {
+					out.WriteString(moved[k])
+					i += len(k)
+					matched = true
+					break
+				}
+			}
+		}
+		if !matched {
+			_, size := utf8.DecodeRuneInString(text[i:])
+			out.WriteString(text[i : i+size])
+			i += size
+		}
+	}
+	return out.String()
+}
+
+func sanitizeAttachmentName(raw string) string {
+	base := path.Base(strings.ReplaceAll(raw, "\\", "/"))
+	base = strings.ToValidUTF8(base, "")
+	base = strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f || unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, base)
+	base = strings.TrimSpace(base)
+	if base == "" || base == "/" || strings.Trim(base, ".") == "" {
+		return ""
+	}
+	return base
 }
 
 // readAttachment reads a file on machine whole, in file.chunk's pieces (as the hub's downloads read one), refusing one
@@ -273,24 +447,39 @@ func (s *Service) readAttachment(ctx context.Context, machine, p string) (name, 
 	if err := s.call(ctx, machine, "file.chunk", proto.FileChunkRequest{Path: p}, &head); err != nil {
 		return "", "", nil, err
 	}
+	if head.Size < 0 {
+		return "", "", nil, fmt.Errorf("invalid file size")
+	}
 	if head.Size > attachmentMostBytes {
 		return "", "", nil, fmt.Errorf("over %d MB", attachmentMostBytes>>20)
 	}
-	data = make([]byte, 0, head.Size)
+	data = make([]byte, 0, min(head.Size, int64(proto.FileDownloadChunkBytes)))
 	for int64(len(data)) < head.Size {
 		var c proto.FileChunk
-		req := proto.FileChunkRequest{Path: p, Offset: int64(len(data)), Length: proto.FileDownloadChunkBytes, Revision: head.Revision}
+		remaining := head.Size - int64(len(data))
+		req := proto.FileChunkRequest{
+			Path:     p,
+			Offset:   int64(len(data)),
+			Length:   int(min(int64(proto.FileDownloadChunkBytes), remaining)),
+			Revision: head.Revision,
+		}
 		if err := s.call(ctx, machine, "file.chunk", req, &c); err != nil {
 			return "", "", nil, err
 		}
 		if len(c.Data) == 0 {
 			return "", "", nil, fmt.Errorf("the file ended early")
 		}
+		if int64(len(c.Data)) > attachmentMostBytes-int64(len(data)) || int64(len(c.Data)) > remaining {
+			return "", "", nil, fmt.Errorf("file size exceeded declared limit")
+		}
 		data = append(data, c.Data...)
 	}
-	name = head.Name
+	name = sanitizeAttachmentName(head.Name)
 	if name == "" {
-		name = path.Base(p)
+		name = sanitizeAttachmentName(p)
+	}
+	if name == "" {
+		name = "file"
 	}
 	return name, head.Mime, data, nil
 }

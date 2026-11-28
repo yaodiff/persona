@@ -195,7 +195,7 @@ describe("QueueStrip and QueuePanel with controlled props", () => {
       offline: false,
     });
 
-    // Edit pulls back via onEditQueue + onRestoreQueued + onNotify.
+    // Edit pulls back via onEditQueue + onRestoreQueued + onNotify and hides the pulled row optimistically.
     click(within(0, "[data-queue-edit]"));
     await flush();
     expect(onEditQueue).toHaveBeenCalledWith([1]);
@@ -206,13 +206,45 @@ describe("QueueStrip and QueuePanel with controlled props", () => {
       [],
     );
     expect(onNotify).toHaveBeenCalledWith(t("chat-queuepanel.pulled_back"), "ok");
+    expect(rows()).toHaveLength(1);
 
-    // Delete uses onEditQueue + onNotify without restoring.
-    click(within(1, "[data-queue-delete]"));
+    // Deliver updated queue before deleting the remaining row.
+    await renderPanel({
+      session: makeSession("host-a", "s-1", ["Second message"]),
+      draftKey: "draft-a",
+      canEdit: true,
+      onEditQueue,
+      onSendNow,
+      onRestoreQueued,
+      onNotify,
+      resolveThumbURL,
+      resolveDownloadURL,
+      getSendFeedback,
+      offline: false,
+    });
+
+    // Delete uses onEditQueue + onNotify without restoring and hides at once.
+    click(within(0, "[data-queue-delete]"));
+    expect(rows()).toHaveLength(0);
     await flush();
-    expect(onEditQueue).toHaveBeenLastCalledWith([0]);
+    expect(onEditQueue).toHaveBeenLastCalledWith([]);
     expect(onRestoreQueued).toHaveBeenCalledTimes(1);
     expect(onNotify).toHaveBeenLastCalledWith(t("chat-queuepanel.deleted"), "ok");
+
+    // Re-deliver both rows, then test keyboard reorder.
+    await renderPanel({
+      session,
+      draftKey: "draft-a",
+      canEdit: true,
+      onEditQueue,
+      onSendNow,
+      onRestoreQueued,
+      onNotify,
+      resolveThumbURL,
+      resolveDownloadURL,
+      getSendFeedback,
+      offline: false,
+    });
 
     // Keyboard reorder uses onEditQueue and holds order until the reordered queue arrives.
     key(within(1, "[data-queue-handle]"), "ArrowUp");
@@ -365,6 +397,9 @@ describe("QueueStrip and QueuePanel with controlled props", () => {
     expect(onNotify).toHaveBeenCalledTimes(1);
     expect(onNotify).toHaveBeenCalledWith(t("chat-queuepanel.deleted"), "ok");
     expect(onRestoreQueued).toHaveBeenCalledTimes(1);
+    expect(rows()).toHaveLength(1);
+    // Pushed hub update clears the optimistic hold and unlocks the remaining row.
+    await renderPanel({ ...common, session: makeSession("host-a", "s-a", ["Alpha 1"]), draftKey: "draft-a" });
     expect(within(0, "[data-queue-edit]").hasAttribute("disabled")).toBe(false);
     expectNoDefaultSingletons();
   });
@@ -455,6 +490,12 @@ describe("QueueStrip and QueuePanel default compatibility", () => {
     expect(mocks.restoreQueued).toHaveBeenCalledTimes(1);
     expect(mocks.toast).toHaveBeenCalledWith(t("chat-queuepanel.pulled_back"), "ok");
 
+    // Hub pushes the remaining queued row so default Send now can be exercised.
+    await renderStrip({
+      session: makeSession("host-a", "s-1", ["Second item"]),
+      draftKey: "draft-default",
+      canEdit: true,
+    });
     click(within(0, "[data-send-now]"));
     await flush();
     expect(mocks.api).toHaveBeenLastCalledWith("/sessions/host-a/s-1/queue/send-now", { method: "POST", json: {} });

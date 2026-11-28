@@ -111,3 +111,113 @@ func TestTaskDecidedIsADecisionOnTheTodo(t *testing.T) {
 		t.Fatalf("decisions %+v", list)
 	}
 }
+
+// When the owner verbally passes a personal verification (user_check) in chat, task_decided with an explicit pass
+// option settles the open verification ask and closes the task as accepted. Non-pass options, unauthorized
+// conversations, and duplicate calls are refused without modifying the waiting verification.
+func TestTaskDecidedPassesOwnerUserCheckInChat(t *testing.T) {
+	s, f, todo := newSupervisedService(t)
+	waitsForReview(t, s, f, todo.ID, "Ready for the owner to verify.")
+	f.judge = `{"changed":"Updated the layout","link":"","how":"Open the page and check"}`
+	reviewTask(t, s, todo.ID, map[string]any{
+		"verdict":    "accepted",
+		"note":       "Checks met; owner to verify",
+		"user_check": true,
+		"checks":     completeReviewChecks(todoNow(s, todo.ID)),
+	})
+	waitFor(t, "the user_check ask", func() bool {
+		a := askOf(s, todo.ID)
+		return a != nil && !a.AskedAt.IsZero()
+	})
+	if listedAsk(t, s, todo.ID) == nil || todoNow(s, todo.ID).Supervision.State != reviewUserCheck || todoNow(s, todo.ID).DoneAt != nil {
+		t.Fatalf("expected open user_check waiting on owner: todo=%+v ask=%+v", todoNow(s, todo.ID), askOf(s, todo.ID))
+	}
+
+	// Another conversation may not settle this task's verification.
+	if got, isErr := toolFrom(t, s, "conv-other", "task_decided", map[string]any{
+		"todo_id": todo.ID, "option": "Pass", "said": "Looks good",
+	}); !isErr || !strings.Contains(got, "supervised by another conversation") {
+		t.Fatalf("another conversation: %v %s", isErr, got)
+	}
+
+	// Non-pass options must be refused so change requests go through rework instead of closing the task.
+	if got, isErr := tool(t, s, "task_decided", map[string]any{
+		"todo_id": todo.ID, "option": "Needs changes", "said": "Fix the header",
+	}); !isErr || !strings.Contains(got, "user_check") {
+		t.Fatalf("non-pass option: %v %s", isErr, got)
+	}
+	if todoNow(s, todo.ID).DoneAt != nil || todoNow(s, todo.ID).Supervision.State != reviewUserCheck || listedAsk(t, s, todo.ID) == nil {
+		t.Fatal("refused call modified the waiting user_check")
+	}
+
+	// Explicit oral approval from the supervising conversation settles the verification and closes the task.
+	if got, isErr := tool(t, s, "task_decided", map[string]any{
+		"todo_id": todo.ID, "option": "通过", "said": "通过，验证没问题",
+	}); isErr {
+		t.Fatalf("task_decided user_check pass: %s", got)
+	}
+	after := todoNow(s, todo.ID)
+	if after.DoneAt == nil || after.Supervision.State != reviewAccepted || listedAsk(t, s, todo.ID) != nil {
+		t.Fatalf("expected closed accepted task after oral pass: done=%v state=%q ask=%+v", after.DoneAt, after.Supervision.State, listedAsk(t, s, todo.ID))
+	}
+	if a := askOf(s, todo.ID); a == nil || a.AcceptedAt.IsZero() {
+		t.Fatalf("expected accepted ask timestamp, got %+v", a)
+	}
+
+	// A second pass attempt is refused because the task is already closed.
+	if got, isErr := tool(t, s, "task_decided", map[string]any{
+		"todo_id": todo.ID, "option": "Pass", "said": "Pass again",
+	}); !isErr {
+		t.Fatalf("second pass should fail: %s", got)
+	}
+}
+
+// On the store, passing a personal verification through task_decided also records a manual audit decision.
+func TestTaskDecidedUserCheckRecordsDecisionOnTodo(t *testing.T) {
+	database := todoTestDB(t)
+	s, f, todo, _, _ := conclusionServiceOn(t, database, false)
+	waitsForReview(t, s, f, todo.ID, "Ready for the owner to verify.")
+	f.judge = `{"changed":"Updated the layout","link":"","how":"Open the page and check"}`
+	reviewTask(t, s, todo.ID, map[string]any{
+		"verdict":    "accepted",
+		"note":       "Checks met; owner to verify",
+		"user_check": true,
+		"checks":     completeReviewChecks(todoNow(s, todo.ID)),
+	})
+	waitFor(t, "the user_check ask", func() bool {
+		a := askOf(s, todo.ID)
+		return a != nil && !a.AskedAt.IsZero()
+	})
+	said := "Looks good, passed"
+	if got, isErr := tool(t, s, "task_decided", map[string]any{
+		"todo_id": todo.ID, "option": "Pass", "said": said,
+	}); isErr {
+		t.Fatalf("task_decided user_check pass: %s", got)
+	}
+	// The pass closes the task, so what it came to is recorded in the background as well (goRecordTaskOutcome, a
+	// decision of source outcome). Wait for it rather than read the store while it may still be writing: the owner's
+	// pass is the one manual decision, the completion's outcome the one outcome decision, whichever was written first
+	// (#17879).
+	s.tasks.outcomeRuns.Wait()
+	list, err := database.ListTodoDecisions(context.Background(), todo.ID, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manual, outcome []db.TodoDecisionRow
+	for _, d := range list {
+		switch d.Source {
+		case db.DecisionManual:
+			manual = append(manual, d)
+		case db.DecisionOutcome:
+			outcome = append(outcome, d)
+		default:
+			t.Fatalf("unexpected decision %+v", d)
+		}
+	}
+	if len(manual) != 1 || manual[0].Choice != "Pass" || manual[0].Reason != said || manual[0].SourceSession != "conv1" {
+		t.Fatalf("owner decisions %+v (all %+v)", manual, list)
+	}
+	if len(outcome) != 1 || !strings.HasPrefix(outcome[0].SourceMessage, "outcome:"+todo.ID+":") {
+		t.Fatalf("outcome decisions %+v (all %+v)", outcome, list)
+	}
+}

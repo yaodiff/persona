@@ -244,6 +244,25 @@ class HttpMachineManagementTest {
         assertEquals("""{"engine":"herdr"}""", server.takeRequest().body.readUtf8())
     }
 
+    // #17052: a new default inside a set of several engines goes as the set itself, never as one engine that would replace it.
+    @Test fun aNewDefaultKeepsTheSet() = withHub { server, machines ->
+        server.enqueue(MockResponse().setBody("""{"id":"m1","engine":"herdr","engine_hosts":["herdr","orca","paseo"],"engine_default":"herdr"}"""))
+        val saved = machines.setEngineHosts("m1", listOf("herdr", "orca", "paseo"), "herdr")
+        val put = server.takeRequest()
+        assertEquals("PUT", put.method)
+        assertEquals("/api/v1/machines/m1/engine", put.path)
+        assertEquals("""{"hosts":["herdr","orca","paseo"],"default":"herdr"}""", put.body.readUtf8())
+        assertEquals(listOf("herdr", "orca", "paseo"), saved.engineHosts)
+        assertEquals("herdr", saved.engineDefault)
+        // Another machine's state is never taken for this one's.
+        server.enqueue(MockResponse().setBody("""{"id":"other","engine":"orca"}"""))
+        assertTrue(runCatching { machines.setEngineHosts("m1", listOf("herdr", "orca"), "orca") }.exceptionOrNull() is HubFailure)
+        server.takeRequest()
+        // A default outside the set is never sent.
+        assertTrue(runCatching { machines.setEngineHosts("m1", listOf("herdr", "orca"), "paseo") }.exceptionOrNull() is IllegalArgumentException)
+        assertEquals(2, server.requestCount)
+    }
+
     @Test fun putsTheEngineAndDecodesTheMachine() = withHub { server, machines ->
         server.enqueue(MockResponse().setBody("""{"id":"m1","engine":"orca","engines":[{"id":"orca","name":"Orca","available":true}]}"""))
         val saved = machines.setEngine("m1", "orca")

@@ -16,8 +16,13 @@ data class PairedDevice(
     val revokedAt: String? = null,
 )
 
-/** [devices] are the credentials in use; [revoked] the ones already revoked, kept by the hub for reference. */
-data class PairedDevices(val devices: List<PairedDevice>, val currentId: String?, val revoked: List<PairedDevice> = emptyList())
+/** [devices] are the credentials in use; [revoked] the ones already revoked; [onlineIds] are currently connected. */
+data class PairedDevices(
+    val devices: List<PairedDevice>,
+    val currentId: String?,
+    val revoked: List<PairedDevice> = emptyList(),
+    val onlineIds: Set<String> = emptySet(),
+)
 
 /** The hub cannot list device credentials: too old a version (404), or no database (503). [message] says which. */
 class DeviceCredentialsUnavailable(text: CoreText) : CoreTextException(text)

@@ -71,6 +71,8 @@ class UsageCalendarShotsTest {
         override suspend fun send(session: SessionKey, text: String, clientMessageId: String, clearDraft: String?) = Unit
         override suspend fun usageDays(days: Int): UsageDays { dayReads++; return history }
         override suspend fun usageHours(days: Int): UsageHours { hourReads++; return hourly }
+        override suspend fun usageProjects(): UsageProjects? = null
+        override suspend fun usageProjectDetail(key: String): UsageProjectDetail = error("not used")
     }
 
     private fun hub(): Hub {

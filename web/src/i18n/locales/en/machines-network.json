@@ -2,7 +2,6 @@
   "tab_label": "Network",
   "title": "Network & proxy diagnostics",
   "subtitle": "On-demand connectivity check against fixed developer endpoints. No background polling.",
-  "machine_select_label": "Select computer",
   "recheck": "Re-check",
   "checking": "Checking network and proxy connectivity…",
   "offline": "This computer is offline. Bring it online to run network diagnostics.",

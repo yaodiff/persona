@@ -21,9 +21,40 @@ The manager's own sections of the configuration moved out of `hub.json` into `ma
 
 **An install made under the product's former name** keeps former names for its hub service, the binary in `bin/`, its data directory, its Postgres container, and its database and role. Wherever this guide says `personad` (the service or the binary), `~/.persona` or `persona-postgres`, use what your install has; [rolling-upgrade-compatibility.md](../protocol/rolling-upgrade-compatibility.md) lists them. The variables below pick up the data directory; set `PD` from the service's `ExecStart` (below).
 
+## In-place upgrade for existing installs
+
+The [rolling-upgrade compatibility matrix](../protocol/rolling-upgrade-compatibility.md) covers existing
+installs that use the former names. Use the installed service and its actual state directory, and follow the
+update procedure for that installation. This checklist records compatibility and recovery planning; it does
+not by itself authorize production changes. The production-authorization boundary remains unresolved in
+[#1102](https://github.com/nwverse/persona/issues/1102). The
+[historical coordinated cutover](persona-cutover.md) keeps its own prohibition.
+
+1. **Record the versions and take backups.** Identify the hub, its managers, the nodes, Persona Link, and the oldest clients that must keep working.
+   Take the [backups below](#backups) before the first update. Include all hub and manager databases, their matching state and sealing keys,
+   the service definitions, and the previous binaries or images.
+2. **Rehearse older clients on the selected builds.** An already-paired iOS app from before the rename can stay in use if the target hub meets
+   the app's protocol requirement, the app meets the hub's build floor, and the required operations pass in an isolated rehearsal.
+   Inspect the target hub's `protocol` and `min_app_build` in `hello` or authenticated health. A zero minimum specifies no build-number floor.
+   Use these requirements and the negotiated capabilities as the compatibility boundary for each upgrade. Verify reconnect, sending a message
+   and any native push or Live Activity behavior the owner uses.
+3. **Plan recovery before the restart.** A direct deploy can restart an older hub when its service or socket changes or no compatible edge is running.
+   Keep the previous binaries and unit files ready for manual recovery on that path. The [hub update and rollback guide](hub-update.md) covers
+   the updater's own rollback. Keep the shared manager tables if you may return to a build from before the built-in manager gained its
+   own database. That build reads the shared copy from the time of the move. A later build that supports the manager's own database still
+   uses it even if the hub starts the manager as a child. Restore matching databases, state and keys together for a consistent rollback.
+4. **Update in stages.** Start with the hub and any separate managers used by it, then update the nodes and Persona Link using their supported
+   update paths. Check the hub's health, manager roster and connected computers after each stage.
+5. **Check the built-in manager's first start.** If it still shares the hub's database and can provision its own, the new manager copies its data once
+   and rotates its own sealing key. If provisioning fails before the move, it can continue on the shared database and retry at a later start.
+   After the move, it requires the populated manager database to start. If the new manager will open a restored database from before its key
+   rotation, provide the matching old hub key as `managers/assistant/secret.key.prev`. See the [manager database location and recovery rules](../server/server.md#the-default-managers-own-database).
+
 ## Before you start
 
 **Run the native steps as the hub's own user**, not as root or with `sudo`: the services are that user's. The checks need `curl` and `jq`.
+
+Find the actual runtime root and binary in the installed service before running the command blocks. On Linux, inspect the unit's `ExecStart` and environment. On macOS, inspect the LaunchAgent's `Program`, `ProgramArguments` and `EnvironmentVariables`. Use the installed root for `DIR` and the installed binary for `PD`. The example below uses the canonical paths.
 
 **The values the steps use** (native):
 
@@ -90,6 +121,10 @@ expect '"online":true'
 
 ## Backups
 
+Capture the associated databases and files at one recovery point. For the separate commands below, pause the writers during the backup under
+the approved plan. Include the state and database backups of every standalone manager that shares that recovery point. The hub backup covers
+the hub and built-in manager.
+
 Take them before the first step, into one folder:
 
 ```sh
@@ -152,6 +187,8 @@ docker tag "$(docker compose images -q hub)" persona-hub:before-split
 ```
 
 **Restoring** (only when a way back below doesn't bring the hub back): stop the hub and the built-in manager's service if there is one. Put the data directory back (`tar xzf "$BK/data.tgz" -C "$(dirname "$DATA")"`). Restore the databases together, after dropping them or into an empty server: a `pg_dumpall` file with `docker exec -i persona-postgres sh -c 'psql -U "${POSTGRES_USER:-postgres}" -d postgres' < "$BK/db.sql"` (Docker: `docker compose exec -T postgres …`), each `pg_dump` file with the same URL it was taken with (`psql "$url" -f "$BK/hub-db.sql"`, `psql "$base/$mdb$q" -f "$BK/manager-db.sql"`). Then start the hub's service.
+
+Restore a `pg_dumpall` backup of a manager's own container into that manager's Postgres container. Restore each standalone manager with its own matching database backup, state and keys.
 
 ## Native Linux and macOS
 

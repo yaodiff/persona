@@ -19,6 +19,7 @@ const (
 	ScopeCallPrefix              = extwire.ScopeCallPrefix
 	ScopeInboxRead               = extwire.ScopeInboxRead
 	ScopeInboxWrite              = extwire.ScopeInboxWrite
+	ScopeKBImportStatus          = extwire.ScopeKBImportStatus
 	ScopeKBRead                  = extwire.ScopeKBRead
 	ScopeKBWrite                 = extwire.ScopeKBWrite
 	ScopeSentRead                = extwire.ScopeSentRead
@@ -31,6 +32,8 @@ const (
 	ScopeTodosWrite              = extwire.ScopeTodosWrite
 	ScopeTasksSchedule           = extwire.ScopeTasksSchedule
 	ScopeDecisionsRaise          = extwire.ScopeDecisionsRaise
+	ScopeBotsFeishuIdentity      = extwire.ScopeBotsFeishuIdentity
+	ScopeBotsFeishuHandoff       = extwire.ScopeBotsFeishuHandoff
 	ScopeLeadersRead             = extwire.ScopeLeadersRead
 	ScopeLeadersWrite            = extwire.ScopeLeadersWrite
 	ScopeAssistantDispatchPolicy = extwire.ScopeAssistantDispatchPolicy
@@ -43,13 +46,14 @@ const (
 	ScopeTranscription           = extwire.ScopeTranscription
 	ScopeMarketRefreshOwn        = extwire.ScopeMarketRefreshOwn
 	ScopeAssistantEvents         = extwire.ScopeAssistantEvents
+	ScopeLarkMessagesRead        = extwire.ScopeLarkMessagesRead
 )
 
 // HubScopes are the scopes, in the order the install screen lists them.
-var HubScopes = []string{ScopeKBRead, ScopeKBWrite, ScopeSentRead, ScopeInboxRead, ScopeInboxWrite, ScopeAgentsRead, ScopeAgentsControl,
+var HubScopes = []string{ScopeKBRead, ScopeKBWrite, ScopeKBImportStatus, ScopeSentRead, ScopeInboxRead, ScopeInboxWrite, ScopeAgentsRead, ScopeAgentsControl,
 	ScopeAgentsArchiveIdle, ScopeAgentsPermissionMode, ScopeMachinesRead, ScopeMachinesPair, ScopeBrowserRun, ScopeNotify, ScopePushGrading, ScopeAssistantAsk, ScopeSpaces, ScopeAssistantRead, ScopeAssistantMemoryRead, ScopeAssistantEntriesRead,
-	ScopeTodosRead, ScopeTodosWrite, ScopeTasksSchedule, ScopeDecisionsRaise, ScopeLeadersRead, ScopeLeadersWrite, ScopeAssistantDispatchPolicy, ScopeAssistantStartDefaults, ScopeDispatchGuard, ScopeModels,
-	ScopeTranscription, ScopeMarketRefreshOwn, ScopeAssistantEvents}
+	ScopeTodosRead, ScopeTodosWrite, ScopeTasksSchedule, ScopeDecisionsRaise, ScopeBotsFeishuIdentity, ScopeBotsFeishuHandoff, ScopeLeadersRead, ScopeLeadersWrite, ScopeAssistantDispatchPolicy, ScopeAssistantStartDefaults, ScopeDispatchGuard, ScopeModels,
+	ScopeTranscription, ScopeMarketRefreshOwn, ScopeAssistantEvents, ScopeLarkMessagesRead}
 
 // InEveryScope says whether a token of every scope (an extension granted the hub's full token the old way, hub_api,
 // that gets one of every scope instead) has scope s. Scopes whose authority must be agreed to by name are left out:
@@ -59,10 +63,13 @@ var HubScopes = []string{ScopeKBRead, ScopeKBWrite, ScopeSentRead, ScopeInboxRea
 // interrupt the owner with a new decision), dispatch.guard (which changes which conversations may hand work out),
 // machines.pair (which can issue one-time pairing links for new pending computers),
 // browser.run (which runs scripts in a paired computer's browser),
-// tasks.schedule (which assigns target computers for pending tasks), and
-// market.refresh_own (which spends the source marketplace's API quota).
+// tasks.schedule (which assigns target computers for pending tasks),
+// market.refresh_own (which spends the source marketplace's API quota),
+// lark.messages.read (which receives newly synced Lark message metadata events), and
+// bots.feishu.handoff (which makes the bot write in a group and can interrupt the owner).
+// bots.feishu.identity stays in every scope: it names the bot and holds no secret.
 func InEveryScope(s string) bool {
-	return s != ScopeAgentsArchiveIdle && s != ScopeAgentsPermissionMode && s != ScopePushGrading && s != ScopeAssistantStartDefaults && s != ScopeDecisionsRaise && s != ScopeDispatchGuard && s != ScopeMachinesPair && s != ScopeBrowserRun && s != ScopeMarketRefreshOwn && s != ScopeSpaces && s != ScopeTasksSchedule
+	return s != ScopeKBImportStatus && s != ScopeAgentsArchiveIdle && s != ScopeAgentsPermissionMode && s != ScopePushGrading && s != ScopeAssistantStartDefaults && s != ScopeDecisionsRaise && s != ScopeDispatchGuard && s != ScopeMachinesPair && s != ScopeBrowserRun && s != ScopeMarketRefreshOwn && s != ScopeSpaces && s != ScopeTasksSchedule && s != ScopeLarkMessagesRead && s != ScopeBotsFeishuHandoff
 }
 
 // EveryScope is the scopes of a token of every scope (InEveryScope), in HubScopes' order.
@@ -72,6 +79,7 @@ func EveryScope() []string {
 
 var scopeTitles = map[string]string{
 	ScopeKBRead:                  "scope_kb_read",
+	ScopeKBImportStatus:          "scope_kb_import_status",
 	ScopeKBWrite:                 "scope_kb_write",
 	ScopeSentRead:                "scope_sent_read",
 	ScopeInboxRead:               "scope_inbox_read",
@@ -91,6 +99,8 @@ var scopeTitles = map[string]string{
 	ScopeTodosWrite:              "scope_todos_write",
 	ScopeTasksSchedule:           "scope_tasks_schedule",
 	ScopeDecisionsRaise:          "scope_decisions_raise",
+	ScopeBotsFeishuIdentity:      "scope_bots_feishu_identity",
+	ScopeBotsFeishuHandoff:       "scope_bots_feishu_handoff",
 	ScopeLeadersRead:             "scope_leaders_read",
 	ScopeLeadersWrite:            "scope_leaders_write",
 	ScopeAssistantDispatchPolicy: "scope_assistant_dispatch_policy",
@@ -103,6 +113,7 @@ var scopeTitles = map[string]string{
 	ScopeTranscription:           "scope_transcription",
 	ScopeMarketRefreshOwn:        "scope_market_refresh_own",
 	ScopeAssistantEvents:         "scope_assistant_events",
+	ScopeLarkMessagesRead:        "scope_lark_messages_read",
 }
 
 // ScopeTitle is how the install screen says scope s; ok false for what is not a scope.

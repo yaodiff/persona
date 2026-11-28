@@ -248,6 +248,8 @@ class HttpExtensionManagement internal constructor(
             (context?.locale ?: app.locale)?.takeIf { it.isNotEmpty() }?.let { put("locale", it) }
             (context?.platform ?: app.platform)?.takeIf { it.isNotEmpty() }?.let { put("platform", it) }
             (context?.uiVersion ?: app.uiVersion)?.let { put("ui_version", it) }
+            val unsupported = (app.unsupported.orEmpty() + context?.unsupported.orEmpty()).distinct()
+            if (unsupported.isNotEmpty()) put("unsupported", JsonArray(unsupported.map { JsonPrimitive(it) }))
             // Inbox Sources (#5278, #5661): the key itself, even "", says this app opens Set Up with ….
             // Only those pages set it. Empty is not dropped: without the key the pages leave the row out.
             context?.assistant?.let { put("assistant", it) }
@@ -488,9 +490,9 @@ class HttpExtensionManagement internal constructor(
          * date / time / multichoice / multiline fields, title styles, named colours and more icons (#5464); 7 a section's
          * key, which only the native stream reads; 8 the columns layout of a dashboard page and a section's span, icon,
          * link and rows side by side (#9158); 9 gauge rings on grid and carousel tiles (#9337); 10 native graph canvases
-         * (#9727). The native stream sends the same version, but its components still exclude graphs and receive rows.
+         * (#9727); 11 native scenes (#12544); 12 interactive maps. The client draws scenes and maps directly.
          */
-        const val UI_VERSION = 10
+        const val UI_VERSION = 12
         /** Exceeds the hub's 20 s uiTimeout (server/internal/extmgr/extension_ui.go) and matches iOS APIClient / ExtensionUIStreamController (30 s). */
         internal const val UI_READ_TIMEOUT_SECONDS = 30L
 

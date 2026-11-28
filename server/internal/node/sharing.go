@@ -27,8 +27,11 @@ func (n *Node) creationResult(s *proto.Session, err error, resume, creation, inc
 	if err != nil || s == nil || resume != "" || creation == "" || incarnation == "" {
 		if err == nil && s != nil {
 			result = "identity_missing"
-			if resume != "" {
+			switch {
+			case resume != "":
 				result = "resume_skipped"
+			case creation == "" && incarnation == "":
+				result = "receipt_not_requested"
 			}
 		}
 		devicewire.ShareCreationLog(n.logf, id, "node_receipt", result)

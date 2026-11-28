@@ -79,11 +79,12 @@ internal fun HardwareShortcutHelp(owner: Any) {
 }
 
 /** Let a text input open help before its editor consumes the key; all other keys keep their ordinary path. */
-fun Modifier.hardwareShortcutTextInput(): Modifier = composed {
+fun Modifier.hardwareShortcutTextInput(enabled: () -> Boolean = { true }): Modifier = composed {
     val controller = LocalHardwareShortcutController.current ?: return@composed this
     val owner = LocalHardwareShortcutHelpOwner.current
+    val currentEnabled by rememberUpdatedState(enabled)
     onPreviewKeyEvent { event ->
-        if (event.key == Key.Slash && event.isCtrlPressed) controller.handle(event, owner) else false
+        if (currentEnabled() && event.key == Key.Slash && event.isCtrlPressed) controller.handle(event, owner) else false
     }
 }
 

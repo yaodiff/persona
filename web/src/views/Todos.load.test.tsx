@@ -110,7 +110,7 @@ describe("todo list load failures", () => {
     expect(button.getAttribute("aria-busy")).toBe("true");
     expect(list().textContent).toContain(errorText(unavailable()));
     await act(async () => { button.click(); button.click(); });
-    expect(api.mock.calls).toEqual([["/todos"]]);
+    expect(api.mock.calls.map(([path]) => path)).toEqual(["/todos"]);
 
     await act(async () => pending.resolve({ todos: populated ? [todo] : [] }));
     await flush();
@@ -126,7 +126,7 @@ describe("todo list load failures", () => {
     api.mockClear();
     await act(async () => retry()!.click());
     await flush();
-    expect(api.mock.calls).toEqual([["/todos"]]);
+    expect(api.mock.calls.map(([path]) => path)).toEqual(["/todos"]);
     expect(list().textContent).toContain(errorText(unavailable()));
     expect(retry()?.disabled).toBe(false);
     expect(list().textContent).not.toContain(t("todos.empty_title"));

@@ -367,4 +367,158 @@ struct MinutesCardsTests {
             #expect(runs.map(\.0) == parts.map(\.text) && runs.map(\.1) == parts.map(\.bold), "\(name)")
         }
     }
+
+    // MARK: Disagreements (#16728)
+
+    /// The hub, mock hub, web and iPhone verify the same cleaning cases against `spec/fixtures/minutes-debates/cases.json`:
+    /// valid settled / open debates, empty and malformed blocks, unknown status, unknown keys, and decision link bounds.
+    @Test func sharedDebatesFixtureCases() throws {
+        let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appending(path: "spec/fixtures/minutes-debates/cases.json")
+        let root = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        let cases = try #require(root["cases"] as? [[String: Any]])
+        #expect(cases.count >= 12, "the fixture has \(cases.count) cases")
+
+        for c in cases {
+            let name = c["name"] as? String ?? "?"
+            let input = try #require((c["input"] as? [String: Any])?["minutes"], "\(name)")
+            let minutes = try JSONDecoder().decode(RecordingMinutes.self, from: JSONSerialization.data(withJSONObject: input))
+            let expected = try #require(c["expected"] as? [String: Any], "\(name)")
+            let raw = input as? [String: Any]
+
+            // Malformed or empty debates never prevent the rest of the minutes from decoding.
+            #expect(minutes.points.count == (raw?["points"] as? [Any])?.count ?? 0, "\(name)")
+            #expect(minutes.decisions.count == (raw?["decisions"] as? [Any])?.count ?? 0, "\(name)")
+
+            let got: [[String: Any]] = (minutes.debates ?? []).map { d in
+                let outcome: Any = d.outcome.map { o in
+                    [
+                        "text": o.text,
+                        "at": o.at.map { $0 as Any } ?? NSNull(),
+                        "decision": o.decision.map { $0 as Any } ?? NSNull(),
+                    ] as [String: Any]
+                } ?? NSNull()
+                return [
+                    "question": d.question,
+                    "topic": d.topic.map { $0 as Any } ?? NSNull(),
+                    "status": d.status?.rawValue ?? NSNull(),
+                    "at": d.at.map { $0 as Any } ?? NSNull(),
+                    "positions": d.positions.map { p in
+                        [
+                            "stance": p.stance,
+                            "at": p.at.map { $0 as Any } ?? NSNull(),
+                            "who": p.who.map { $0 as Any } ?? NSNull(),
+                        ] as [String: Any]
+                    },
+                    "outcome": outcome,
+                ]
+            }
+            let want = try #require(expected["debates"] as? [[String: Any]], "\(name)")
+            #expect(NSArray(array: got).isEqual(to: want), "\(name):\n got \(got)\n want \(want)")
+
+            let summary = RecordingMinutesCards.summary(minutes, sentences: [])
+            #expect(summary.debates.count == want.count, "\(name)")
+            for (i, debate) in summary.debates.enumerated() {
+                if debate.status == nil {
+                    #expect(debate.statusLabel == nil, "\(name)[\(i)]: unknown status must have no status word")
+                    #expect(debate.outcome == nil, "\(name)[\(i)]: unknown status must have no outcome")
+                } else {
+                    #expect(debate.statusLabel?.isEmpty == false, "\(name)[\(i)]")
+                }
+            }
+        }
+    }
+
+    /// A settled disagreement links to a decision ONLY via the hub's `outcome.decision` index; the app never matches
+    /// decisions by timestamp.
+    @Test func settledOutcomeLinksOnlyByHubDecisionIndex() throws {
+        var m = minutes
+        m.debates = [
+            .init(question: "No link even when times match?", status: .settled, at: 2, positions: [
+                .init(stance: "Side A", at: 2, who: "Ann"),
+                .init(stance: "Side B", at: 21),
+            ], outcome: .init(text: "Chose A", at: 44, decision: nil)),
+            .init(question: "Linked by hub index 0?", status: .settled, at: 2, positions: [
+                .init(stance: "Side C", at: 2),
+                .init(stance: "Side D", at: 21),
+            ], outcome: .init(text: "Chose C", at: 44, decision: 0)),
+        ]
+        let summary = RecordingMinutesCards.summary(m, sentences: lines)
+        #expect(summary.debates.count == 2)
+        // First debate: outcome.at == 44 matches decision[0].at == 44, but outcome.decision is nil -> no link.
+        let unlinked = try #require(summary.debates[0].outcome)
+        #expect(unlinked.decisionIndex == nil && unlinked.decisionText == nil && unlinked.decisionLabel == nil)
+        // Second debate: outcome.decision == 0 -> links to decision[0].
+        let linked = try #require(summary.debates[1].outcome)
+        #expect(linked.decisionIndex == 0 && linked.decisionText == "decided" && linked.decisionAt == 44)
+        #expect(linked.decisionLabel?.contains("decided") == true)
+        // Positions carry transcript context lines around `at`.
+        #expect(summary.debates[0].positions[0].context.filter(\.said).map(\.id) == [0])
+        #expect(summary.debates[0].positions[1].context.filter(\.said).map(\.id) == [1])
+    }
+
+    /// Without disagreements (absent, empty, or malformed), `text(title:)` is byte-for-byte identical to before.
+    /// With disagreements, `text(title:)` inserts Disagreements after Action Items and before Open Questions.
+    @Test func legacyCopyTextUnchangedWithoutDisagreementsAndOrderedWithThem() throws {
+        let base = minutes
+        let baseText = base.text(title: "Weekly")
+        var withEmpty = base
+        withEmpty.debates = []
+        #expect(withEmpty.text(title: "Weekly") == baseText)
+
+        // Malformed debates JSON decodes to nil and keeps text(title:) identical.
+        let malformedJSON = """
+        {
+          "title": "Weekly", "when": "2027-01-15 16:00–17:00", "where": "Room 3", "attendees": ["Ann", "Bo", "Cy"],
+          "points": [{"text": "intro", "at": 2}, {"text": "lock screen", "at": 21}],
+          "decisions": [{"text": "decided", "at": 44}],
+          "actions": [{"text": "owner", "at": 63, "who": "Ann", "by": "Friday"}],
+          "open": [{"text": "not settled", "at": 86}],
+          "debates": ["bad", {"question": "Only one", "positions": [{"stance": "a", "at": 1}]}]
+        }
+        """
+        let decodedMalformed = try JSONDecoder().decode(RecordingMinutes.self, from: Data(malformedJSON.utf8))
+        #expect(decodedMalformed.debates == nil)
+        #expect(decodedMalformed.text(title: "Weekly") == baseText)
+
+        // With debates: section sits after Action Items and before Open Questions.
+        var withDebates = base
+        withDebates.debates = [
+            .init(question: "Ship cap per item?", status: .settled, at: 2, positions: [
+                .init(stance: "Per item", at: 2, who: "Ann"),
+                .init(stance: "Per recording", at: 21),
+            ], outcome: .init(text: "Per item for now", at: 44, decision: 0)),
+            .init(question: "Unknown status debate?", status: nil, at: 63, positions: [
+                .init(stance: "Option 1", at: 63),
+                .init(stance: "Option 2", at: 86),
+            ]),
+        ]
+        let out = withDebates.text(title: "Weekly")
+        let actionsRange = try #require(out.range(of: "## " + String(localized: "Action Items")))
+        let debatesRange = try #require(out.range(of: "## " + String(localized: "Disagreements")))
+        let openRange = try #require(out.range(of: "## " + String(localized: "Open Questions")))
+        #expect(actionsRange.lowerBound < debatesRange.lowerBound)
+        #expect(debatesRange.lowerBound < openRange.lowerBound)
+        #expect(out.contains("### Ship cap per item? (" + String(localized: "settled") + ")"))
+        #expect(out.contains("- Per item (Ann) [0:02]"))
+        #expect(out.contains("- Per recording [0:21]"))
+        let outcomeText = "Per item for now"
+        #expect(out.contains("- " + String(localized: "Outcome: \(outcomeText)") + " [0:44]"))
+        // Unknown status has no status parentheses.
+        #expect(out.contains("### Unknown status debate?\n"))
+        #expect(!out.contains("### Unknown status debate? ("))
+    }
+
+    /// Adding disagreements never alters MeetingAfterSummary's counts (contract: no new count).
+    @Test func meetingAfterSummaryCountsUnchangedWithDisagreements() {
+        let before = MeetingAfterSummary.make(rich)
+        var withDebates = rich
+        withDebates.debates = [
+            .init(question: "Q?", status: .open, at: 2, positions: [
+                .init(stance: "A", at: 2), .init(stance: "B", at: 21),
+            ]),
+        ]
+        let after = MeetingAfterSummary.make(withDebates)
+        #expect(before == after)
+    }
 }

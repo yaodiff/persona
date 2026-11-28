@@ -51,7 +51,8 @@ export function AgentStatusLine({ session, source, assistant, items, onCompact, 
   const accounts = useUsageWindows();
   const now = useNow(30_000, !isAssistant && accounts.length > 0);
   const quota = isAssistant ? null : sessionQuota(accounts, session, now);
-  if (!place && !hasContext && !quota && !source) return null;
+  const externalTrigger = Boolean(session.botmux_external_trigger);
+  if (!place && !hasContext && !quota && !source && !externalTrigger) return null;
 
   const placeLabel = place && [place.folder || place.name, place.branch].filter(Boolean).join(" · ");
   const placeContent = place && (
@@ -102,6 +103,11 @@ export function AgentStatusLine({ session, source, assistant, items, onCompact, 
           </a>
         )}
       </div>
+      {externalTrigger && (
+        <div role="status" data-testid="botmux-external-trigger-note" className="truncate pt-0.5 text-submeta text-ink-3">
+          {t(session.botmux_external_trigger_reason === "owner_unset" ? "chat-botmux.owner_unset_notice" : "chat-botmux.external_trigger_notice")}
+        </div>
+      )}
     </div>
   );
 }

@@ -7,6 +7,8 @@ import { tr } from '../design/Strings';
 import { Tokens } from '../design/Tokens';
 import { PhoneStyle } from '../design/PhoneStyle';
 import { Colors } from '../design/Colors';
+import { Motion } from '../design/Motion';
+import { Haptics } from '../platform/Haptics';
 import { nativeEnvironment } from '../platform/NativeEnvironment';
 import { relativeActivityDate } from '../core/PhoneDate';
 
@@ -39,11 +41,14 @@ export struct PhoneTodoDetailForm {
   private moment(field:string):number { return field==='due' ? this.editor.plan.due : this.editor.plan.reminder; }
   private timed(field:string):boolean { return field==='remind' || !this.editor.plan.allDay; }
   private toggle(field: string, value: boolean): void {
+    Haptics.selection();
     const plan=this.editor.plan.copy();
     if (field==='due') plan.hasDue=value;
     if (field==='allDay') plan.allDay=value;
     if (field==='remind') plan.hasReminder=value;
-    this.editor.change(this.workspace,plan,field==='allDay' ? 'due' : field);
+    Motion.run(this.getUIContext(), Motion.layout(nativeEnvironment.reduceMotion), () => {
+      this.editor.change(this.workspace,plan,field==='allDay' ? 'due' : field);
+    });
   }
   private dateLabel(value: number): string {
     return new Date(value).toLocaleDateString(this.locale || undefined,{year:'numeric',month:'short',day:'numeric'});
@@ -53,6 +58,7 @@ export struct PhoneTodoDetailForm {
   }
   private pick(field: string, time: boolean): void {
     if (!this.canChange(field)) return;
+    Haptics.tap();
     const selected=this.workspace.selected;
     const current=new Date(field==='due' ? this.editor.plan.due : this.editor.plan.reminder);
     const apply=(choice:Date):void => {
@@ -82,6 +88,7 @@ export struct PhoneTodoDetailForm {
     return id ? row?.title || id : tr('todo_detail_none');
   }
   private choose(field: string, value: string): void {
+    Haptics.selection();
     const plan=this.editor.plan.copy(); if (field==='project') plan.project=value; else plan.priority=value;
     this.editor.change(this.workspace,plan,field);
   }
@@ -108,7 +115,9 @@ export struct PhoneTodoDetailForm {
       if (this.statusLine) Text(this.statusLine).fontSize(14).maxFontScale(Tokens.interfaceScaleFor(14)).fontColor(Colors.secondary)
       if (this.workspace.selected.doneReason) Text(this.workspace.selected.doneReason).fontSize(14).maxFontScale(Tokens.interfaceScaleFor(14)).fontColor(Colors.secondary)
     }.alignItems(HorizontalAlign.Start).width('100%').constraintSize({minHeight:this.metric(94.3,109)}).padding({left:20,right:20,top:19,bottom:15})
-      .backgroundColor(Colors.surface).borderRadius(13).id('todo.detail')
+      .backgroundColor(Colors.surface).borderRadius(PhoneStyle.cardRadius)
+      .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(nativeEnvironment.dark),radius:PhoneStyle.cardRadius})
+      .shadow(PhoneStyle.cardElevation(nativeEnvironment.dark)).id('todo.detail')
   }
   @Builder words(value: string) {
     Text(value).fontSize(17).maxFontScale(Tokens.interfaceFontMaxScale).fontColor(Colors.ink).layoutWeight(1)
@@ -194,7 +203,10 @@ export struct PhoneTodoDetailForm {
         }
         this.rule(60);this.choiceRow('priority')
         this.rule(60);this.choiceRow('project')
-      }.width('100%').backgroundColor(Colors.surface).borderRadius(13).clip(true)
+      }.width('100%').backgroundColor(Colors.surface).borderRadius(PhoneStyle.cardRadius)
+        .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(nativeEnvironment.dark),radius:PhoneStyle.cardRadius})
+        .shadow(PhoneStyle.cardElevation(nativeEnvironment.dark)).clip(true)
+        .animation(Motion.layout(nativeEnvironment.reduceMotion))
       if (this.workspace.selected.startError || this.workspace.selected.origin && !this.workspace.selected.agents.length)
         PhoneTodoStartSection({workspace:this.workspace})
     }.width('100%').alignItems(HorizontalAlign.Start).padding({top:23})

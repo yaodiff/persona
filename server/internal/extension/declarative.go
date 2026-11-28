@@ -21,6 +21,7 @@ import (
 // (docs/extensions/extensions.md "Assistant content from the data directory").
 type SkillItem struct {
 	ID     string `json:"id"`
+	Title  string `json:"title,omitempty"` // display-only, for the contribution switch
 	Dir    string `json:"dir"`
 	Source string `json:"source,omitempty"`
 }
@@ -105,6 +106,9 @@ func init() {
 		}
 		if !idPattern.MatchString(s.ID) {
 			return s.ID, fmt.Errorf("skill id %q: a-z0-9_-", s.ID)
+		}
+		if utf8.RuneCountInString(s.Title) > 40 {
+			return s.ID, fmt.Errorf("skill %s: title: at most 40 characters", s.ID)
 		}
 		if err := checkSource(s.Source); err != nil {
 			return s.ID, fmt.Errorf("skill %s: %v", s.ID, err)

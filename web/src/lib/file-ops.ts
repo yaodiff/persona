@@ -2,7 +2,7 @@ import { CLIENT_HEADERS } from "./compatibility";
 // Changing a machine's files from the Files panel (#4883, the hub / node side is #4858): upload into a folder, rename,
 // move, move to the trash and put back. Only home is writable there, and not ~/.persona, ~/.persona or ~/Library (the
 // node checks, `read_only`); a delete goes to the system's trash and can be undone, there is no permanent one.
-import { ApiError, api, CLIENT_PLATFORM, CLIENT_VERSION, credentialOwner, enc, errorText, getToken, subscribeCredentialOwner } from "./api";
+import { ApiError, api, CLIENT_PLATFORM, CLIENT_VERSION, credentialOwner, enc, errorText, getToken, HubUnreachableError, subscribeCredentialOwner } from "./api";
 import { BASE } from "./base";
 import { currentLanguage, t } from "../i18n";
 
@@ -129,7 +129,8 @@ function uploadWithProgress(
       const msg = typeof body.error === "string" && body.error ? body.error : `HTTP ${xhr.status}`;
       finish(() => reject(new ApiError(xhr.status, msg, body, isJson, xhr.getResponseHeader("X-Request-Id") ?? undefined)));
     };
-    xhr.onerror = () => { if (current()) finish(() => reject(new TypeError("network"))); };
+    // the connection failed: "Can't reach the hub", not a bug in the page (lib/network-failure.ts)
+    xhr.onerror = () => { if (current()) finish(() => reject(new HubUnreachableError("network"))); };
     xhr.onabort = () => finish(() => reject(new DOMException("aborted", "AbortError")));
     opts.signal?.addEventListener("abort", cancel, { once: true });
     try {

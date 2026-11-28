@@ -1,6 +1,7 @@
 package hub
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -8,8 +9,11 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 // The hub hands the node (and through it a runtime) only the paging the app gave: an empty or missing before_seq,
@@ -46,6 +50,63 @@ func TestSessionItemsForwardsOnlyTheGivenPaging(t *testing.T) {
 		if string(g) != string(e) {
 			t.Errorf("?%s: the node got %s, want %s", c.query, g, e)
 		}
+	}
+}
+
+func TestSessionItemsNotifiesManagerOfInlineViewPage(t *testing.T) {
+	const card = "```persona-view\n{\"fallback\":\"Choose\",\"sections\":[]}\n```"
+	at := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	items := []proto.Item{
+		{ID: "card#0", Role: "assistant", Kind: proto.KindText, Text: card, TS: at},
+		{ID: "long#0", Role: "assistant", Kind: proto.KindText, Text: "truncated preview", FullSize: 4096},
+		{ID: "user#0", Role: "user", Kind: proto.KindText, Text: card},
+	}
+	m := wireNode(t, func(json.RawMessage) any {
+		return map[string]any{"items": items, "strict_read": true}
+	})
+	h := newTestHub(t)
+	var notices bytes.Buffer
+	h.bus.current = map[string]*busConn{assistantwire.AssistantID: {peer: rpc.New("manager", &notices)}}
+
+	for _, tt := range []struct {
+		name, query string
+		wantNotice  bool
+	}{
+		{name: "strict export", query: "?strict=1"},
+		{name: "history page", query: "?before_seq=20", wantNotice: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/sessions/m1/s1/items"+tt.query, nil)
+			req.SetPathValue("sid", "s1")
+			w := httptest.NewRecorder()
+			h.sessionItems(w, req, m)
+			if w.Code != http.StatusOK {
+				t.Fatalf("items status %d: %s", w.Code, w.Body)
+			}
+			if !tt.wantNotice {
+				if notices.Len() != 0 {
+					t.Fatalf("strict read notified the manager: %s", &notices)
+				}
+				return
+			}
+			var notice struct {
+				Event  string                     `json:"event"`
+				Params assistantwire.SessionItems `json:"params"`
+			}
+			if err := json.Unmarshal(notices.Bytes(), &notice); err != nil {
+				t.Fatalf("expected one inline view page notification: %v", err)
+			}
+			p := notice.Params
+			if notice.Event != assistantwire.EventInlineViewPage || p.MachineID != m.cfg.ID || p.SessionID != "s1" || len(p.Items) != 2 {
+				t.Fatalf("unexpected inline view notification: %+v", notice)
+			}
+			if inline := p.Items[0]; inline.ID != "card#0" || inline.Role != "assistant" || inline.Kind != proto.KindText || inline.Text != card || !inline.TS.Equal(at) {
+				t.Fatalf("unexpected inline card: %+v", inline)
+			}
+			if full := p.Items[1]; full.ID != "long#0" || full.Role != "assistant" || full.Kind != proto.KindText || full.FullSize != 4096 || full.Text != "" {
+				t.Fatalf("expected full item reference without its preview: %+v", full)
+			}
+		})
 	}
 }
 

@@ -32,7 +32,7 @@
   "preview_invalid": "The deletion preview does not match this workspace. Close and review the current workspace.",
   "previewing": "Reviewing the worktree…",
   "retry_preview": "Review again",
-  "sessions_end": "Running agents and terminals in this workspace will end.",
+  "sessions_end": "Running agents and shells in this workspace will stop.",
   "folder_kept": "Only the folder workspace entry is removed. Its directory and files are kept.",
   "files_deleted": "The checkout directory and its files will be deleted.",
   "dirty_one": "{count} file has uncommitted changes. Those changes will be lost.",

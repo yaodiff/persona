@@ -468,7 +468,9 @@ def repair_merge_conflict(repo, pr, worktree, base, config):
                 raise WatchError("conflict resolution changed the file mode unexpectedly")
         if checked(["git", "write-tree"], cwd=isolated).strip() != checked(["git", "write-tree"], cwd=worktree).strip():
             raise WatchError("the original merge and isolated conflict resolution have different trees")
-        if checked(["git", "diff", "--cached", "--check"], cwd=worktree).strip():
+        # Only the resolved paths are this worker's work: the index also holds everything main brought in, and a blank
+        # line at the end of a file main carries would otherwise fail every conflict repair (#16701).
+        if checked(["git", "diff", "--cached", "--check", "--", *paths], cwd=worktree).strip():
             raise WatchError("conflict resolution has whitespace errors")
         identity = ["-c", "user.name=" + checked(["git", "config", "user.name"], cwd=worktree).strip(),
                     "-c", "user.email=" + checked(["git", "config", "user.email"], cwd=worktree).strip()]
@@ -735,7 +737,8 @@ def find_continuation(repo, fork):
     return None
 
 
-def commit_and_push_repair(repo, pr, worktree, base, failure, verify_config=None, allow_merge_only=False, original_pr=None):
+def commit_and_push_repair(repo, pr, worktree, base, failure, verify_config=None, allow_merge_only=False,
+                           original_pr=None, require_issue_link=True):
     """Run relevant checks and privacy before pushing an ordinary repair commit.
 
     A merge of main into a fork (`allow_merge_only` with `original_pr`) follows main (#7840): main may move on from
@@ -813,7 +816,7 @@ def commit_and_push_repair(repo, pr, worktree, base, failure, verify_config=None
                 raise WatchError("continuation PR has an older or different head; repair it in a fresh branch")
             return existing[0]["number"], None
         issues = linked_issue(pr.get("body", ""), repo)
-        if not issues:
+        if not issues and require_issue_link:
             raise WatchError("cannot open a continuation PR without an issue link")
         result = run(["git", "ls-remote", "origin", "refs/heads/" + branch], cwd=worktree, timeout=60)
         if result.returncode == 0 and not result.stdout.strip():
@@ -834,8 +837,11 @@ def commit_and_push_repair(repo, pr, worktree, base, failure, verify_config=None
             raise WatchError("PR head moved before the repair push; nothing was pushed")
         checked(["git", "push", "origin", "HEAD:refs/heads/" + branch], cwd=worktree, timeout=180)
     if pr.get("isCrossRepository"):
-        body = "Refs #%d\n\nContinuation of #%s with an automated verification repair.\n\nOriginal failure:\n```text\n%s\n```" % (
-            issues[0], pr["number"], bounded(failure, 4000))
+        # The link line is part of this repository's own contribution rules; a repository that requires none opens the
+        # continuation without it, since there is no issue to name.
+        body = "".join("Refs #%d\n\n" % issue for issue in issues[:1])
+        body += "Continuation of #%s with an automated verification repair.\n\nOriginal failure:\n```text\n%s\n```" % (
+            pr["number"], bounded(failure, 4000))
         owner = repo.split("/", 1)[0]
         created = gh_json(["api", "repos/%s/pulls" % repo, "--method", "POST", "--input", "-"],
                           input_text=json.dumps({"title": continuation_title(pr["number"]),

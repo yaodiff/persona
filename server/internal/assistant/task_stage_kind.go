@@ -5,6 +5,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/closeout"
 	"github.com/nwverse/persona/server/internal/lazyre"
 )
@@ -15,10 +16,8 @@ import (
 // Evidence outranks words, and a doubt reads general: a strip drawn for work that changes no code stays on Develop for
 // good, while a code task read as general only goes without a strip until its change shows up.
 
-// taskStageKind is code when a change was seen (changed: a linked PR or MR, a closeout's pr, commit or branch artifact, a
-// delivery held at a PR or a merge), general for a task handed out read-only (plan permission alone is not read-only:
-// code tasks start in plan mode to get a plan approved), and otherwise code only when its goal or one of its criteria
-// asks for a code change outright (codeChangeAsked). No criteria, or none of that, is general.
+// taskStageKind is the legacy classification for a brief without a work mode. A change is code, then a read-only
+// dispatch is general. The remaining briefs use the goal and criteria to recover the original stage kind.
 func taskStageKind(readonly bool, goal string, doneWhen []string, changed bool) string {
 	switch {
 	case changed:
@@ -161,32 +160,29 @@ func changeSeen(text string, d TodoDelivery, marked bool) bool {
 	return false
 }
 
-// stageKindWords is what task t is asked for, as its kind reads it: its brief's goal and the criteria in effect, else its
-// title and its ledger's criteria (an adopted agent, a task from before briefs).
-func (s *Service) stageKindWords(t Todo) (string, []string) {
-	if b, ok := s.briefOfTodo(t.ID); ok {
-		return firstNonEmpty(b.Goal, t.Title), b.Criteria
-	}
-	var criteria []string
-	if t.Supervision != nil {
-		criteria = t.Supervision.DoneWhen
-	}
-	return t.Title, criteria
-}
-
-// restage works task id's stage kind out again (taskStageKind) from what it is asked for now and what its record keeps:
-// whether its latest start handed it out read-only, and whether a change was seen. mark changes the record first (a
-// start says how it hands the task out, a reply that a change was seen); the record and the to-do change only when
-// something did.
+// restage updates the stage kind from the current work mode and delivery evidence. mark supplies a start's
+// read-only flag or a reply's change artifact. A repository binding gives execute work a code stage before it
+// produces an artifact. Actual code delivery evidence also gives research or coordination work a stage.
 func (s *Service) restage(ctx context.Context, id string, mark func(*todoStage)) {
 	t, ok := s.todoNow(id)
 	if !ok {
 		return
 	}
-	goal, criteria := s.stageKindWords(t)
 	b := &s.reports
 	b.stageWriting.Lock()
 	defer b.stageWriting.Unlock()
+	brief, hasBrief := s.committedBriefOfTodo(id)
+	var boundRepository bool
+	var repoErr error
+	if brief.WorkModeNow == assistantwire.WorkModeExecute {
+		if st, ok := s.store().(todoRepositoryStore); ok {
+			set, err := st.TodoRepositories(ctx, id)
+			boundRepository, repoErr = err == nil && len(set.Repositories) > 0, err
+			if err != nil {
+				s.logf("task %s: repositories for stage kind: %v", id, err)
+			}
+		}
+	}
 	b.mu.Lock()
 	if !s.loadStagesLocked(ctx) {
 		b.mu.Unlock()
@@ -198,7 +194,19 @@ func (s *Service) restage(ctx context.Context, id string, mark func(*todoStage))
 	if mark != nil {
 		mark(&cur)
 	}
-	cur.Kind = taskStageKind(cur.Readonly, goal, criteria, cur.PR != "" || cur.Change)
+	changedCode := cur.PR != "" || cur.Change
+	switch {
+	case changedCode, boundRepository:
+		cur.Kind = "code"
+	case brief.WorkModeNow == "":
+		goal, criteria := brief.Goal, brief.Criteria
+		if !hasBrief && t.Supervision != nil {
+			criteria = t.Supervision.DoneWhen
+		}
+		cur.Kind = taskStageKind(cur.Readonly, firstNonEmpty(goal, t.Title), criteria, false)
+	case repoErr == nil:
+		cur.Kind = "general"
+	}
 	if cur.Kind == was.Kind && cur.Readonly == was.Readonly && cur.Change == was.Change {
 		b.mu.Unlock()
 		return

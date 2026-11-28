@@ -27,18 +27,22 @@ type Config struct {
 	Lark lark.Config `json:"lark"`
 	// LarkGate and ConnectorGate: the rules for the assistant's Feishu writes and the connectors' writes
 	// (internal/connector/gate.go).
-	LarkGate      []proto.LarkRule     `json:"lark_gate,omitempty"`
-	ConnectorGate []connector.Rule     `json:"connector_gate,omitempty"`
-	GitHub        *githubwire.Config   `json:"github,omitempty"`
-	IMessage      *imessagewire.Config `json:"imessage,omitempty"`
+	LarkGate      []proto.LarkRule `json:"lark_gate,omitempty"`
+	ConnectorGate []connector.Rule `json:"connector_gate,omitempty"`
+	// ConnectorAutoConfirm: opt-in hub-side policies allowing verified extension installations to participate in
+	// guarded conditional auto-confirm for exact actions (all off by default; internal/connector/auto_confirm.go).
+	ConnectorAutoConfirm []connector.AutoConfirmPolicy `json:"connector_auto_confirm,omitempty"`
+	GitHub               *githubwire.Config            `json:"github,omitempty"`
+	IMessage             *imessagewire.Config          `json:"imessage,omitempty"`
 	// Google and Microsoft: mail's sign-ins (docs/extensions/mail.md).
-	Google                  GoogleConfig      `json:"google"`
-	Microsoft               MicrosoftConfig   `json:"microsoft,omitempty"`
-	Inbox                   InboxConfig       `json:"inbox"`
-	Bots                    BotsConfig        `json:"bots,omitempty"`
-	Extensions              []ExtensionConfig `json:"extensions,omitempty"`
-	LegacyExtensions        []ExtensionConfig `json:"plugins,omitempty"`
-	TrustedExtensionMarkets []string          `json:"trusted_extension_markets,omitempty"`
+	Google           GoogleConfig      `json:"google"`
+	Microsoft        MicrosoftConfig   `json:"microsoft,omitempty"`
+	Inbox            InboxConfig       `json:"inbox"`
+	Bots             BotsConfig        `json:"bots,omitempty"`
+	Extensions       []ExtensionConfig `json:"extensions,omitempty"`
+	LegacyExtensions []ExtensionConfig `json:"plugins,omitempty"`
+	// TrustedExtensionMarkets is deprecated (#2656): retained for decoding during the warning window only, grants no sandbox exemption.
+	TrustedExtensionMarkets []string `json:"trusted_extension_markets,omitempty"`
 	// ExtensionMarket configures outbound marketplace reads and package downloads.
 	ExtensionMarket ExtensionMarketConfig `json:"extension_market,omitempty"`
 	// ExtensionRuntime pins the shared engine; missing/unsupported enforcement blocks source activation.
@@ -134,6 +138,14 @@ func loadConfig(dir, file string) (*Config, error) {
 		}
 		return cfg, fmt.Errorf("%s: connector_gate: %w", where, err)
 	}
+	if err := connector.ValidateAutoConfirmPolicies(cfg.ConnectorAutoConfirm); err != nil {
+		cfg.ConnectorAutoConfirm = nil
+		where := "hub.json"
+		if file != "" {
+			where = file
+		}
+		return cfg, fmt.Errorf("%s: connector_auto_confirm: %w", where, err)
+	}
 	if err := cfg.Lark.Validate(); err != nil { // was the hub's check at start; now the manager's, which uses it
 		cfg.warnings = append(cfg.warnings, err.Error()+": lark is not read")
 		cfg.Lark = lark.Config{}
@@ -145,6 +157,12 @@ func loadConfig(dir, file string) (*Config, error) {
 	if cfg.Lark.LegacyGatewayConfigured() {
 		cfg.warnings = append(cfg.warnings, "lark.container / token / base_url are not read any more: Feishu through a Lark "+
 			"gateway is an extension's now; set them in its settings (docs/extensions/feishu.md)")
+	}
+	if len(cfg.TrustedExtensionMarkets) > 0 {
+		cfg.warnings = append(cfg.warnings, "trusted_extension_markets is deprecated and grants no sandbox exemptions; "+
+			"remove it and use explicit per-extension sandbox settings instead "+
+			"(trusted_extension_markets will stop being decoded after the one-release warning window; "+
+			"docs/extensions/extensions.md \"Sandbox\" and \"Naming and compatibility\")")
 	}
 	return cfg, nil
 }

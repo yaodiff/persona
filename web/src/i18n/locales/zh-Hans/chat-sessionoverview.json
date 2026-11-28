@@ -1,9 +1,9 @@
 {
   "environment": "运行环境",
-  "worktree": "工作树",
-  "subagents": "子智能体",
+  "worktree": "Worktree",
+  "subagents": "子 Agent",
   "swarm": "Swarm",
-  "swarm_workers": "{count} 个工作智能体",
+  "swarm_workers": "{count} 个工作 Agent",
   "swarm_waiting": "等待中",
   "swarm_stopped": "已停止",
   "swarm_unknown": "状态未知",
@@ -12,10 +12,10 @@
   "running_count": "{count} 个运行中",
   "ended": "已结束",
   "ended_count": "{count} 个已结束",
-  "status_needs_you": "等你确认",
+  "status_needs_you": "待你确认",
   "status_failed": "失败",
   "finished_count": "{count} 个已结束",
   "show_in_chat": "定位到调用处",
-  "open_as_page": "在独立页面打开",
+  "open_as_page": "在独立页面中打开",
   "stop": "停止"
 }

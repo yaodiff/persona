@@ -52,7 +52,7 @@ afterEach(() => {
 
 describe("MachineDetail launchers", () => {
   it("names a provider by its display name with its ID beside it, an rc alias by its ID", async () => {
-    act(() => root.render(<MachineDetail mid="mac" onToggleSidebar={() => {}} />));
+    act(() => root.render(<MachineDetail subview="management" mid="mac" onToggleSidebar={() => {}} />));
     await flush();
     const row = (key: string) => [...host.querySelectorAll<HTMLElement>(".divide-y > div")].find((r) => r.textContent?.includes(key))!;
     const [title, id, model] = [...row("我的中转 站").querySelectorAll("span")].filter((s) => s.textContent);

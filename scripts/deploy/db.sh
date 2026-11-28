@@ -28,11 +28,27 @@ try:
 except ValueError:
     print("")' "$1" "$2"; }
 # The user a container's Postgres was made with (its POSTGRES_USER), "postgres" when it was not given.
+# Capture docker output instead of piping into early-exiting readers (`head -1`, `grep -q`): under
+# `set -o pipefail`, closing the pipe early can send SIGPIPE (141) to docker and hide a real match (#14644).
 container_user() {
-  docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$1" 2>/dev/null |
-    sed -n 's/^POSTGRES_USER=//p' | head -1 | grep . || echo postgres
+  local env line user=""
+  env=$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$1" 2>/dev/null) || true
+  while IFS= read -r line; do
+    case "$line" in
+      POSTGRES_USER=*) user=${line#POSTGRES_USER=}; break ;;
+    esac
+  done <<< "$env"
+  printf '%s\n' "${user:-postgres}"
 }
-has_container() { docker ps -a --format '{{.Names}}' | grep -qx "$1"; }
+has_container() {
+  local names line
+  [ -n "$1" ] || return 1
+  names=$(docker ps -a --format '{{.Names}}') || return 1
+  while IFS= read -r line; do
+    [ "$line" = "$1" ] && return 0
+  done <<< "$names"
+  return 1
+}
 has_volume() { docker volume inspect "$1" >/dev/null 2>&1; }
 
 # No docker on the hub machine: the database is one set up by hand (the distribution's own Postgres, docs/server/server.md
@@ -137,7 +153,7 @@ done
 ready=$(in_db pg_isready -U "$DB_USER" -d "$DB_NAME" 2>&1) ||
   { echo "postgres in $NAME is not ready on port $INNER inside the container after 30s: $ready" >&2; exit 1; }
 # Throwaway database for scripts/test/test-server.sh: <database>_test (scripts/test/server_test_env.py).
-in_db psql -U "$DB_USER" -d "$DB_NAME" -tAc "SELECT 1 FROM pg_database WHERE datname='${DB_NAME}_test'" | grep -q 1 ||
+in_db psql -U "$DB_USER" -d "$DB_NAME" -tAc "SELECT 1 FROM pg_database WHERE datname='${DB_NAME}_test'" | grep -F 1 >/dev/null ||
   in_db createdb -U "$DB_USER" "${DB_NAME}_test"
 [ -n "$(url)" ] || { echo "hub.json has no database_url" >&2; exit 1; }
 echo "postgres ready on 127.0.0.1:$PORT ($NAME)"

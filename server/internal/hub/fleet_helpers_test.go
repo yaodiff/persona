@@ -43,6 +43,12 @@ func reportResolved(t *testing.T, h *Hub, id, by string) {
 	busEvents[assistantwire.EventFleetResolved](h, nil, b)
 }
 
+func reportResolvedAt(t *testing.T, h *Hub, id string, at time.Time) {
+	t.Helper()
+	b, _ := json.Marshal(assistantwire.FleetResolved{ID: id, CreatedAt: at})
+	busEvents[assistantwire.EventFleetResolved](h, nil, b)
+}
+
 // reportLive is the manager's fleet.live.
 func reportLive(t *testing.T, h *Hub, st FleetState, stats FleetStats) {
 	t.Helper()

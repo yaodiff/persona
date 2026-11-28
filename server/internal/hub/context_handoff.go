@@ -61,7 +61,7 @@ func (h *Hub) continueInNewChat(w http.ResponseWriter, r *http.Request, m *Machi
 		h.startSessionWith(w, r, sessionStartRequest{
 			MachineID: m.cfg.ID, Cwd: source.Cwd, Launcher: source.Launcher,
 			AgentType: source.Agent, Host: source.SpaceKind, Prompt: prompt, TabName: source.Title,
-		}, true)
+		}, true, true)
 		return
 	}
 	// Use the same conversation start on the source's manager, with generated context excluded from human input.

@@ -1,4 +1,4 @@
-import { bundleManager } from '@kit.AbilityKit';
+import { bundleManager, common } from '@kit.AbilityKit';
 import { storageStatistics } from '@kit.CoreFileKit';
 import { Colors } from '../design/Colors';
 import { PhoneStyle } from '../design/PhoneStyle';
@@ -6,7 +6,7 @@ import { Tokens } from '../design/Tokens';
 import { tr } from '../design/Strings';
 import { ClientModel } from '../models/ClientModel';
 import { HubProfile } from '../models/Wire';
-import { workoutAccess } from '../platform/PhoneWorkoutAccess';
+import { workoutAccess, WorkoutAccessResult } from '../platform/PhoneWorkoutAccess';
 import { screenScrollPreference, ScreenScrollPreference } from '../platform/ScreenScrollPreference';
 import { screenScrollChoices } from '../core/ScreenWheel';
 import { LicenseNotices } from './LicenseNotices';
@@ -29,19 +29,28 @@ export struct PhoneSettingsDevicePages {
   private healthRevision:number=0;
   @Local workoutState:string='';
   @Local workoutCode:number=0;
-  aboutToAppear():void { this.active=true;this.load(); }
+  aboutToAppear():void { this.active=true;this.load().catch(() => {}); }
   aboutToDisappear():void {this.active=false;this.healthRevision++;}
-  @Monitor('page') changed():void { this.load(); }
+  @Monitor('page') changed():void { this.load().catch(() => {}); }
+  private hostContext():common.Context | undefined {
+    try { return this.getUIContext().getHostContext(); }
+    catch (_) { return undefined; }
+  }
   private async load():Promise<void> {
     const healthRevision=++this.healthRevision;
     if (this.page==='phone_health_reports') {
       this.workoutState='';this.workoutCode=0;
-      const answer=await workoutAccess();
+      let answer:WorkoutAccessResult=new WorkoutAccessResult('unknown');
+      try {
+        answer=await workoutAccess(this.hostContext());
+      } catch (_) {
+        answer=new WorkoutAccessResult('unknown');
+      }
       if (this.active && this.page==='phone_health_reports' && healthRevision===this.healthRevision) {
         this.workoutState=answer.state;this.workoutCode=answer.code;
       }
     }
-    if (this.page==='phone_live_screen') this.screenScroll.load(this.getUIContext().getHostContext());
+    if (this.page==='phone_live_screen') this.screenScroll.load(this.hostContext());
     if (this.page==='about') {
       try {
         const info=bundleManager.getBundleInfoForSelfSync(bundleManager.BundleFlag.GET_BUNDLE_INFO_DEFAULT);
@@ -90,7 +99,7 @@ export struct PhoneSettingsDevicePages {
             .fontSize(15).fontColor(Colors.secondary).width('100%').padding(16) }
           }.width('100%').id('settings.health.access.'+(this.workoutState || 'checking'))
           Text(tr('phone_workout_access_note')).fontSize(13).fontColor(Colors.secondary).padding(16)
-          this.action(tr('phone_workout_check'),'settings.health.check',()=>{this.load();})
+          this.action(tr('phone_workout_check'),'settings.health.check',()=>{this.load().catch(() => {});})
         } else if (this.page==='phone_live_screen') {
           Text(tr('phone_screen_scroll_speed')).fontSize(15).fontWeight(FontWeight.Medium).fontColor(Colors.secondary).padding(12)
           ForEach(screenScrollChoices,(choice:string)=>{
@@ -106,7 +115,7 @@ export struct PhoneSettingsDevicePages {
         } else if (this.page==='storage') {
           this.info(tr('phone_settings_data_size'),this.bytes(this.dataBytes))
           this.info(tr('phone_settings_cache_size'),this.bytes(this.cacheBytes))
-          if (this.storageError) this.action(tr('retry'),'settings.storage.retry',()=>{this.load();})
+          if (this.storageError) this.action(tr('retry'),'settings.storage.retry',()=>{this.load().catch(() => {});})
         } else if (this.page==='phone_hubs') {
           ForEach(this.model.profiles,(profile:HubProfile)=>{
             Button({type:ButtonType.Normal}) {

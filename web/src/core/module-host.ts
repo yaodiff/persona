@@ -39,6 +39,9 @@ import { useSyncExternalStore } from "react";
 import { addCatalogs, type CatalogLoaders } from "../i18n";
 import type { IconName } from "../ui/icons";
 import type { UIColor } from "../lib/extension-ui-v6";
+import type { InboxItem } from "../lib/inbox";
+import type { MailAccount } from "../lib/agent-settings";
+import type { FileContent } from "../lib/files";
 import type { Route } from "../lib/router";
 import type { KBDetail, KBEntry } from "../lib/kb";
 import type { State } from "../lib/store";
@@ -226,8 +229,38 @@ export interface ModuleKBDetailProps {
   children: (parts: ModuleKBDetailParts) => ReactNode;
 }
 
+/** File kinds offered to optional previews. The viewer keeps the file and its download action. */
+export type ModuleFileKind = "office" | "workbook";
+
+export interface ModuleFilePreviewProps {
+  mid: string;
+  cwd?: string;
+  file: FileContent;
+  onDownload: () => void;
+}
+
+export interface ModuleMailboxSettingsProps {
+  manager?: string;
+  hideInboxSwitch?: boolean;
+  reloadKey?: number;
+  onHasAccounts?: (hasAccounts: boolean) => void;
+}
+
+export interface ModuleMailboxInboxSwitchProps {
+  manager?: string;
+  grouped?: boolean;
+}
+
 /** A module's code, loaded on first use. */
 export interface ModuleCode {
+  mailbox?: {
+    Body: ComponentType<{ item: InboxItem; onLatest?: () => void }>;
+    Compose: ComponentType<{ accounts: MailAccount[]; onClose: () => void }>;
+    Settings: ComponentType<ModuleMailboxSettingsProps>;
+    InboxSwitch: ComponentType<ModuleMailboxInboxSwitchProps>;
+    accounts: (manager?: string) => Promise<MailAccount[]>;
+  };
+  FilePreview?: ComponentType<ModuleFilePreviewProps>;
   /** The page its routes open. */
   Page?: ComponentType<ModulePageProps>;
   /** The page its `extensionPages` ids open. */
@@ -280,6 +313,10 @@ export interface ModuleDescriptor {
   /** Knowledge entry kinds whose page it adds parts to (`kb.detail`, #13430 `shell_places`): `ModuleCode.KBDetail`.
    *  One module per kind. */
   kbKinds?: readonly string[];
+  /** Supplies live mailbox actions alongside archived Inbox items. Only one provider may own them. */
+  mailbox?: true;
+  /** File kinds drawn by this module's FilePreview. Each kind has one owner. */
+  filePreviews?: readonly ModuleFileKind[];
   /** Its Settings categories; its code's `settings` draws each. */
   settingsTabs?: readonly ModuleSettingsTab[];
   /** Places in core Settings pages it adds rows to (SETTINGS_ROW_PLACES); its code's `settingsRows` draws each. */
@@ -288,7 +325,7 @@ export interface ModuleDescriptor {
   chatSlots?: readonly ChatSlot[];
   /** The pending-card kinds it renders, none the core has a card for; its code's `cards` draws each. */
   cardRenderers?: readonly string[];
-  /** Its namespaces under src/i18n/locales (`<id>` or `<id>-…`): kept out of the client catalog and loaded with its code. */
+  /** Its namespaces (`<id>` or `<id>-…`), loaded with its code from the shared or module-local locale directory. */
   i18nNamespaces?: readonly string[];
   /** Those namespaces' catalog, one loader per language (`?catalog=module-<id>`, web/i18n-catalogs.ts). */
   locales?: CatalogLoaders;
@@ -412,6 +449,8 @@ export function registerModule(d: ModuleDescriptor): void {
   }
   checkUnique(d.extensionPages, "claims the extension page id", (m) => m.extensionPages);
   checkUnique(d.kbKinds, "claims the knowledge kind", (m) => m.kbKinds);
+  checkUnique(d.filePreviews, "previews the file kind", (m) => m.filePreviews);
+  if (d.mailbox && registeredModules().some((m) => m.mailbox)) fail("the mailbox already has a provider");
   registry.set(d.id, d);
   changed();
 }
@@ -562,7 +601,9 @@ function checkCode(d: ModuleDescriptor, code: ModuleCode): ModuleCode {
   const miss = (keys: readonly string[] | undefined, have: Readonly<Record<string, unknown>> | undefined, what: string) =>
     (keys ?? []).filter((x) => !have?.[x]).map((x) => `the ${what} "${x}"`);
   const missing = [
+    ...(d.mailbox && !code.mailbox ? ["the mailbox"] : []),
     ...miss(d.chatSlots, code.chat as Readonly<Record<string, unknown>> | undefined, "chat slot"),
+    ...(d.filePreviews?.length && !code.FilePreview ? ["the file preview"] : []),
     ...miss(d.settingsTabs?.map((x) => x.key), code.settings, "Settings category"),
     ...miss(d.settingsRows, code.settingsRows, "Settings rows"),
     ...miss(d.cardRenderers, code.cards, "card kind"),
@@ -583,7 +624,11 @@ export function loadModule(id: string): Promise<ModuleCode> {
   if (!p) {
     // strings first: a module's code may read them as it loads (module-scope t() calls)
     p = (d.locales ? addCatalogs(d.locales) : Promise.resolve())
-      .then(() => d.load())
+      .then(() => {
+        // The switch or hub flags may have changed while the catalog was in flight.
+        if (moduleState(d) !== "on") throw new Error(`module "${id}" is not enabled`);
+        return d.load();
+      })
       .then((code) => checkCode(d, code));
     p.then(
       (code) => {

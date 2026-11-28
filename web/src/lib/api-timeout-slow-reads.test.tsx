@@ -21,7 +21,8 @@ import type { Machine } from "./types";
 import { LauncherQuota } from "../views/settings/LauncherQuota";
 import { BrowserSection } from "../views/machines/BrowserSection";
 import { NodeHealth } from "../views/machines/NodeHealth";
-import { OfficeView } from "../views/session/files/OfficeView";
+import { loadModule } from "../core/module-host";
+import "../modules";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -129,9 +130,11 @@ describe("pages that read what the hub gives 45 s", () => {
     expect(host.textContent).toContain("浏览器没有打开");
   });
 
-  it("a document being converted to PDF waits for the hub's answer", async () => {
+  it.skipIf(process.env.PERSONA_WEB_MODULES === "none")("a document being converted to PDF waits for the hub's answer", async () => {
+    const { FilePreview } = await loadModule("office");
+    if (!FilePreview) throw new Error("missing file preview");
     const file = { path: "/work/report.odt", name: "report.odt", size: 1000, truncated: false, is_dir: false } as FileContent;
-    act(() => root.render(<OfficeView mid="m1" file={file} onDownload={() => {}} />));
+    act(() => root.render(<FilePreview mid="m1" file={file} onDownload={() => {}} />));
     await waitFor(READ_TIMEOUT_MS + 30_000);
     expect(host.textContent).not.toContain("hub 太久没有回应");
     pending.find((p) => p.path.endsWith("/file/convert"))!.answer(500, { error: "LibreOffice 没有转出来" });

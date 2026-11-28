@@ -23,8 +23,9 @@ export interface CompareStart {
   branch: string;
   count: number;
   spec: RunSpec & { nameHint?: string };
-  /** The start goes into the workspace Paseo makes for each worktree (New agent's picked Paseo workspace, #8856). */
-  paseo: boolean;
+  /** The start goes into the workspace the engine makes for each worktree (New agent's picked Paseo or Orca workspace,
+   *  #8856, #17050). */
+  intoWorkspace: boolean;
   text: string;
   attachments: LocalAttachment[];
 }
@@ -34,7 +35,7 @@ interface Held {
   text: string;
   attachments: LocalAttachment[];
   nameHint: string;
-  paseo: boolean;
+  intoWorkspace: boolean;
   /** The credential the runs were started with: a sign-out or another pairing stops the rest. */
   token: string;
   owner: string;
@@ -63,7 +64,7 @@ export function startCompare(input: CompareStart): string {
     attachments: input.attachments.length > 0,
     runs: runBranches(input.branch, input.count).map((branch, i) => ({ n: i + 1, branch, phase: "waiting" })),
   });
-  held.set(id, { sessionNameHint, text: input.text, attachments: input.attachments, nameHint: input.nameHint, paseo: input.paseo, token: getToken(), owner: credentialOwner() });
+  held.set(id, { sessionNameHint, text: input.text, attachments: input.attachments, nameHint: input.nameHint, intoWorkspace: input.intoWorkspace, token: getToken(), owner: credentialOwner() });
   void work(id);
   return id;
 }
@@ -102,7 +103,7 @@ async function runOne(id: string, n: number) {
     try {
       const wt = await addAgentWorktree(g.mid, g.cwd, h.nameHint, run.branch, { token: h.token, tokenOwner: h.owner }, g.spec.host);
       path = wt.path;
-      workspaceId = h.paseo ? wt.workspace_id || undefined : undefined;
+      workspaceId = h.intoWorkspace ? wt.workspace_id || undefined : undefined;
       updateRun(id, n, { path, workspaceId });
     } catch (e) {
       return fail(errorText(e));

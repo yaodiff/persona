@@ -89,7 +89,7 @@ func (h *Manager) extensionLogoRoutes(api *http.ServeMux) {
 		selected := *pkg
 		data, err := h.catalogLogo(r.Context(), rec, id, selected)
 		current, currentEntry, currentErr := h.marketEntry(mid, id)
-		if err != nil || currentErr != nil || current.Spec != rec.Spec || current.TokenSealed != rec.TokenSealed || current.SigningKey != rec.SigningKey || currentEntry.Parsed.ID != id || currentEntry.Icon != entry.Icon {
+		if err != nil || currentErr != nil || !sameMarketTrust(current, rec) || currentEntry.Parsed.ID != id || currentEntry.Icon != entry.Icon {
 			missing(w, r)
 			return
 		}

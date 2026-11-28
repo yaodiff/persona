@@ -198,9 +198,12 @@ func (e *Engine) Compress(ctx context.Context, c *Chat) error {
 	if err := e.modelFor("kb.compress").JSONMax(cctx, prompts.RenderKBCompress(owner), in, 4000, &d); err != nil {
 		return e.compressFailed(ctx, c, err)
 	}
-	if _, ok := e.Store.Chat(c.ID); !ok { // forgotten while the model wrote (ForgetSource): not written back
+	fresh, ok := e.Store.Chat(c.ID)
+	if !ok { // forgotten while the model wrote (ForgetSource): not written back
 		return nil
 	}
+	// Whether compression links the chat goes by the chat as it is now: a lock made while the model wrote counts.
+	link := !heldOffProjects(fresh)
 	started := *c // the chat as the model read it; c gets what compression decides, and only that is written back
 	now := time.Now().UTC()
 	if strings.TrimSpace(d.Summary) != "" {
@@ -212,7 +215,7 @@ func (e *Engine) Compress(ctx context.Context, c *Chat) error {
 	applyTags(&c.Tagging, d.Importance, int(d.Relevance), d.Tags, now)
 	if HasPeople(c) {
 		for _, p := range d.Projects {
-			slug := e.evolveProject(p.Name, p.Kind, p.Aliases, p.MyRole, c, p.Update, now)
+			slug := e.evolveProject(p.Name, p.Kind, p.Aliases, p.MyRole, c, link, p.Update, now)
 			c.Projects = addUnique(c.Projects, slug)
 		}
 	}

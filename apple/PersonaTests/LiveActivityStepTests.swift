@@ -85,4 +85,49 @@ struct LiveActivityStepTests {
         #expect(LiveActivityController.kept([ended]) == nil)
         #expect(LiveActivityController.kept([]) == nil)
     }
+
+    /// #16756: the hub confirming it has no push route for this phone (its token list names none for this credential)
+    /// is an outage like a `none` route: nothing could update or end the activity, so it ends as the app goes to the
+    /// background (#12982) and starts again in front.
+    @Test func leavingEndsTheActivityWhenTheHubConfirmsNoRoute() {
+        var h = PushHealth(notificationsAllowed: true, relay: .registered)
+        h.read(nil, group: "g")
+        #expect(LiveActivityController.endsOnLeaving(h, group: "g"))
+        // A read that fails afterwards keeps the last answer, as it does for a `none` route.
+        h.readFailed("The request timed out.", group: "g")
+        #expect(LiveActivityController.endsOnLeaving(h, group: "g"))
+        // Only that hub's group: another hub's outage says nothing about the one the activity follows.
+        #expect(!LiveActivityController.endsOnLeaving(h, group: "other"))
+
+        var none = PushHealth(notificationsAllowed: true)
+        none.read(APIClient.PushRoute(route: "none", reason: "no_token"), group: "g")
+        #expect(LiveActivityController.endsOnLeaving(none, group: "g"))
+    }
+
+    /// A route that reaches the phone keeps the activity: the hub's pushes update and end it. A registration that
+    /// brings a route back after a confirmed missing one does too.
+    @Test func leavingKeepsTheActivityWhenTheHubPushesHere() {
+        var h = PushHealth(notificationsAllowed: true, relay: .registered)
+        h.read(APIClient.PushRoute(route: "relay"), group: "g")
+        #expect(!LiveActivityController.endsOnLeaving(h, group: "g"))
+        h.read(APIClient.PushRoute(route: "direct", reason: "push_failed", detail: "503"), group: "g")
+        #expect(!LiveActivityController.endsOnLeaving(h, group: "g"))
+
+        h.read(nil, group: "g")
+        h.readRegistration(APIClient.PushRoute(route: "direct"), group: "g")
+        #expect(!LiveActivityController.endsOnLeaving(h, group: "g"))
+    }
+
+    /// An unknown route keeps the activity: an older hub reports no routes, a registration's missing route says nothing
+    /// (#9612), and a hub not read yet or no paired hub may well push.
+    @Test func leavingKeepsTheActivityWhenTheRouteIsUnknown() {
+        var h = PushHealth(notificationsAllowed: true, relay: .registered)
+        #expect(!LiveActivityController.endsOnLeaving(h, group: "g"))
+        h.readRegistration(nil, group: "g")
+        #expect(!LiveActivityController.endsOnLeaving(h, group: "g"))
+        h.readFailed("offline", group: "g")
+        #expect(!LiveActivityController.endsOnLeaving(h, group: "g"))
+        h.read(nil, group: "g")
+        #expect(!LiveActivityController.endsOnLeaving(h, group: nil))
+    }
 }

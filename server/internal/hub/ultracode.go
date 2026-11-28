@@ -272,7 +272,7 @@ func (m *Machine) oldEngineRefusal(sid string, p map[string]any, err error) bool
 		return true
 	case proto.CodeSwitchUnsupported:
 		s, ok := m.session(sid)
-		return ok && s.Agent == "codex"
+		return ok && (s.Agent == "codex" || s.Agent == "agy")
 	}
 	return false
 }

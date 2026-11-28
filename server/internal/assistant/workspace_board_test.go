@@ -122,6 +122,7 @@ func (d *boardDevs) Summary(id string) (devices.Summary, bool) {
 func (d *boardDevs) MachineResources(string) (*proto.Machine, *proto.MetricSample, *bool) {
 	return nil, nil, nil
 }
+func (d *boardDevs) ConnectedAt(string) time.Time { return time.Time{} }
 
 func (d *boardDevs) AppendSessions(dst []proto.Session, id string) ([]proto.Session, bool) {
 	list, ok := d.Sessions(id)

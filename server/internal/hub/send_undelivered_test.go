@@ -24,6 +24,7 @@ type keepManager struct {
 	kept           []assistantwire.KeepUndeliveredParams
 	ahead          bool
 	noKeep         bool
+	keepReply      json.RawMessage
 	approvalTarget string
 }
 
@@ -74,6 +75,9 @@ func undeliveredHub(t *testing.T, send func(context.Context) error) (*Hub, *Mach
 			var p assistantwire.KeepUndeliveredParams
 			_ = json.Unmarshal(raw, &p)
 			k.kept = append(k.kept, p)
+			if k.keepReply != nil {
+				return k.keepReply, nil
+			}
 			id, _ := p.Params["client_msg_id"].(string)
 			text, _ := p.Params["text"].(string)
 			return map[string]any{"undelivered": proto.UndeliveredMessage{ID: id, Text: text, State: proto.UndeliveredWaiting, At: time.Now()}}, nil
@@ -230,17 +234,29 @@ func TestKeepUndeliveredCarriesAuthenticatedDeviceCredential(t *testing.T) {
 	}
 }
 
-// A manager that cannot keep it (an older one): the app gets the failure as before, and a retry may send it.
+// When the manager keeps no message, the app gets the failure and a retry may send it.
 func TestSendNotKeptFailsAsBefore(t *testing.T) {
-	h, m, k := undeliveredHub(t, func(context.Context) error { return errors.New("did not start") })
-	k.mu.Lock()
-	k.noKeep = true
-	k.mu.Unlock()
-	if w := sendAs(h, m, `{"text":"hi","client_msg_id":"keep-3"}`); w.Code < 500 {
-		t.Fatalf("answer: %d %s", w.Code, w.Body)
-	}
-	if st, _ := h.store.ClaimSend(context.Background(), "keep-3", "box", "s1"); st != "" {
-		t.Fatalf("send record %q: a retry could not send it", st)
+	for _, tc := range []struct{ name, reply string }{
+		{name: "unsupported method"},
+		{name: "null message", reply: `{"undelivered":null}`},
+		{name: "missing message", reply: `{}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, m, k := undeliveredHub(t, func(context.Context) error { return errors.New("did not start") })
+			k.mu.Lock()
+			k.noKeep = tc.reply == ""
+			k.keepReply = json.RawMessage(tc.reply)
+			k.mu.Unlock()
+			if w := sendAs(h, m, `{"text":"hi","client_msg_id":"keep-3"}`); w.Code < 500 {
+				t.Fatalf("answer: %d %s", w.Code, w.Body)
+			}
+			if tc.reply != "" && len(k.keeps()) != 1 {
+				t.Fatal("the manager did not receive the keep request")
+			}
+			if st, _ := h.store.ClaimSend(t.Context(), "keep-3", "box", "s1"); st != "" {
+				t.Fatalf("send record %q: a retry could not send it", st)
+			}
+		})
 	}
 }
 

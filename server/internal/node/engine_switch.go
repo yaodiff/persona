@@ -66,36 +66,61 @@ func engineHistoryOf(ctx context.Context) ([]proto.EngineLeg, bool) {
 	return slices.Clone(legs), ok
 }
 
-// agentEngine is the engine a live agent runs: "claude" or "codex", "" for any other.
+// isSwitchEngine reports whether engine participates in terminal Agent cross-engine switching.
+func isSwitchEngine(engine string) bool {
+	return engine == "claude" || engine == "codex" || engine == agyAgent
+}
+
+// agentEngine is the engine a live agent runs: "claude", "codex", or "agy"; "" for any other.
 func agentEngine(a host.Agent) string {
 	switch a.Agent {
 	case "", "claude":
 		return "claude"
 	case "codex":
 		return "codex"
+	case agyAgent:
+		return agyAgent
 	}
 	return ""
 }
 
 // engineOwnLauncher is the launcher session id runs on with engine, and whether that is known: a Claude Code
-// session's as ownLauncher says, a Codex session's from its record (Persona started or resumed it); else plain codex,
-// not known.
+// session's as ownLauncher says, a Codex or Antigravity session's from its record (Persona started or resumed it);
+// else the engine's own name, not known.
 func (n *Node) engineOwnLauncher(id, engine string) (string, bool) {
-	if engine != "codex" {
+	if engine == "claude" {
 		return n.ownLauncher(id)
 	}
 	if st, ok := n.state.get(id); ok && st.Launcher != "" {
 		return st.Launcher, true
+	}
+	if engine == agyAgent {
+		return agyAgent, false
 	}
 	return "codex", false
 }
 
 // engineUnsupported is the refusal of an engine switch for a session that cannot have one, why in the node's words.
 func engineUnsupported(why string) error {
-	return refusal(proto.CodeSwitchUnsupported, "only a Claude Code or Codex Agent running in a terminal Persona drives can switch to the other engine: "+why, nil)
+	return refusal(proto.CodeSwitchUnsupported, "only a Claude Code, Codex, or Antigravity Agent running in a terminal Persona drives can switch to another engine: "+why, nil)
 }
 
-// launcherEngine is the agent launcher runs, for a pick (launcherModes): one this computer has, not a runtime's.
+// hasAgyCLILauncher reports whether launcher can run the Antigravity CLI in a terminal pane on this computer.
+func (n *Node) hasAgyCLILauncher(ctx context.Context, launcher string) bool {
+	if n.agentKindOf(launcher, "") != agyAgent {
+		return false
+	}
+	list, err := n.launchers(ctx)
+	if err != nil {
+		return false
+	}
+	return slices.ContainsFunc(list, func(l proto.Launcher) bool {
+		return l.Name == launcher || (l.Name == agyAgent && l.Agent == agyAgent)
+	})
+}
+
+// launcherEngine is the agent launcher runs, for a pick (launcherModes): one this computer has, not a runtime's
+// (except the Antigravity CLI, which runs in a terminal pane when discovered alongside its companion).
 // Checked in this order so no word that is not a launcher is ever run by a probe.
 func (n *Node) launcherEngine(ctx context.Context, launcher string) (string, error) {
 	if !shellcmd.NameRe.MatchString(launcher) {
@@ -108,7 +133,9 @@ func (n *Node) launcherEngine(ctx context.Context, launcher string) (string, err
 		return "", refusal(proto.CodeSwitchLauncherMissing, fmt.Sprintf("launcher %s is not on this computer", launcher), nil)
 	}
 	if h, _ := n.startRuntime(launcher); h != nil {
-		return "", refusal(proto.CodeSwitchOtherAgent, fmt.Sprintf("launcher %s belongs to a runtime", launcher), nil)
+		if h.id() != agyAgent || !n.hasAgyCLILauncher(ctx, launcher) {
+			return "", refusal(proto.CodeSwitchOtherAgent, fmt.Sprintf("launcher %s belongs to a runtime", launcher), nil)
+		}
 	}
 	return n.launcherModelsAgent(ctx, launcher, ""), nil
 }
@@ -141,7 +168,7 @@ type enginePlan struct {
 // session to resume, when there is one that can be.
 func (n *Node) planEngineSwitch(ctx context.Context, id string, ps proto.PendingSwitch) (*enginePlan, error) {
 	to := ps.Agent
-	if to != "claude" && to != "codex" {
+	if !isSwitchEngine(to) {
 		return nil, fmt.Errorf("unknown engine %q", to)
 	}
 	if ps.Model != "" && !proto.ValidModelID(ps.Model) {
@@ -167,11 +194,17 @@ func (n *Node) planEngineSwitch(ctx context.Context, id string, ps proto.Pending
 			return nil, engineUnsupported(fmt.Sprintf("its launcher %s no longer runs Codex, so it could not be brought back on it", own))
 		}
 	}
+	if p.from == agyAgent && !n.hasAgyCLILauncher(ctx, own) {
+		return nil, engineUnsupported(fmt.Sprintf("its launcher %s no longer runs Antigravity in a terminal, so it could not be brought back on it", own))
+	}
 	p.own = own
-	if p.from == "claude" {
+	switch p.from {
+	case "claude":
 		p.cwd = n.switchCwd(id, a)
-	} else {
+	case "codex":
 		p.cwd = n.codexCwd(id)
+	case agyAgent:
+		p.cwd = n.agyCwd(id, a)
 	}
 	if !dirExists(p.cwd) {
 		return nil, engineUnsupported("Persona cannot tell which folder its conversation belongs to")
@@ -183,8 +216,21 @@ func (n *Node) planEngineSwitch(ctx context.Context, id string, ps proto.Pending
 		p.legs = slices.Clone(st.EngineHistory)
 	}
 	p.fresh = modelExecution{Model: ps.Model}
-	if to == "codex" && ps.Effort != effortAuto {
-		p.fresh.Effort = ps.Effort // -c model_reasoning_effort (control.go): "auto" is the launcher's own
+	switch to {
+	case "codex":
+		if ps.Effort != effortAuto {
+			p.fresh.Effort = ps.Effort // -c model_reasoning_effort (control.go): "auto" is the launcher's own
+		}
+	case agyAgent:
+		effort := ps.Effort
+		if effort == effortAuto {
+			effort = ""
+		}
+		model, err := n.agyPaneStartModel(ctx, ps.Launcher, ps.Model, effort)
+		if err != nil {
+			return nil, refusal(proto.CodeSwitchModelLocked, fmt.Sprintf("launcher %s would not run model %s: %v", ps.Launcher, ps.Model, err), nil)
+		}
+		p.fresh = modelExecution{Model: model, Effort: effort}
 	}
 	p.resume = p.fresh
 	for k := len(p.legs) - 1; k >= 0; k-- {
@@ -193,10 +239,13 @@ func (n *Node) planEngineSwitch(ctx context.Context, id string, ps proto.Pending
 		}
 		parked := p.legs[k].SessionID
 		var why string
-		if to == "claude" {
+		switch to {
+		case "claude":
 			p.parkedCwd, p.resume.Model, why = n.claudeParked(ctx, parked, ps)
-		} else {
+		case "codex":
 			p.parkedCwd, why = n.codexParked(ctx, parked, ps.Launcher)
+		case agyAgent:
+			p.parkedCwd, why = n.agyParked(ctx, parked, p.cwd)
 		}
 		if why != "" {
 			n.logf("session %s: its earlier %s session %s is not resumed (%s): a fresh one takes the conversation", id, engineName(to), parked, why)
@@ -205,7 +254,7 @@ func (n *Node) planEngineSwitch(ctx context.Context, id string, ps proto.Pending
 		}
 		break // only the most recent stretch of that engine
 	}
-	p.model = cmp.Or(ps.Model, n.launcherDefaultModel(ps.Launcher))
+	p.model = cmp.Or(p.fresh.Model, ps.Model, n.launcherDefaultModel(ps.Launcher))
 	return p, nil
 }
 
@@ -214,7 +263,46 @@ func validEngineEffort(to, effort string) error {
 	if to == "codex" && effort != "" && effort != effortAuto && !slices.Contains(codexEffortLevels, effort) {
 		return fmt.Errorf("unknown effort level %q", effort)
 	}
+	if to == agyAgent && effort != "" && effort != effortAuto && !slices.Contains(proto.EffortLevels, effort) {
+		return fmt.Errorf("unknown effort level %q", effort)
+	}
 	return validModes("", effort)
+}
+
+// agyCwd is the directory an Antigravity terminal session runs in.
+func (n *Node) agyCwd(id string, a host.Agent) string {
+	if st, ok := n.state.get(id); ok && st.Cwd != "" {
+		return st.Cwd
+	}
+	return a.Cwd
+}
+
+// agyParked says whether parked Antigravity leg id (agy-<uuid>) can be resumed in a terminal pane: its directory and
+// why not ("" when it can).
+func (n *Node) agyParked(ctx context.Context, id, fallbackCwd string) (cwd, why string) {
+	conv, ok := strings.CutPrefix(id, agyAgent+"-")
+	if !ok || !uuidRe.MatchString(conv) {
+		return "", "not an Antigravity conversation"
+	}
+	root, err := agyBrain(n.agyDataRoot(), conv)
+	if err != nil {
+		return "", "its Antigravity conversation is gone"
+	}
+	root.Close()
+	n.mu.Lock()
+	claimed := n.agyConversationClaimedElsewhereLocked("", conv)
+	n.mu.Unlock()
+	if claimed || agyPresenceHeld(n.agyDataRoot(), conv) {
+		return "", "an Antigravity process has it open"
+	}
+	cwd = fallbackCwd
+	if st, ok := n.state.get(id); ok && st.Cwd != "" && dirExists(st.Cwd) {
+		cwd = st.Cwd
+	}
+	if !dirExists(cwd) {
+		return "", "its folder cannot be told"
+	}
+	return cwd, ""
 }
 
 // codexCwd is the directory Codex session id runs in: its record's, else the one its rollout's session_meta names.
@@ -240,7 +328,8 @@ func (n *Node) checkEngineLauncher(ctx context.Context, launcher, to, model stri
 	if agent != to {
 		return refusal(proto.CodeSwitchOtherAgent, fmt.Sprintf("launcher %s runs %s, not %s", launcher, agent, engineName(to)), nil)
 	}
-	if to == "codex" {
+	switch to {
+	case "codex":
 		if _, ok := n.codexLauncher(ctx, launcher); !ok {
 			// a shell function that runs Codex: codex-start cannot run it without a shell (codex_start.go)
 			if err := n.codexFunctionLauncher(ctx, launcher, true); err != nil {
@@ -248,8 +337,15 @@ func (n *Node) checkEngineLauncher(ctx context.Context, launcher, to, model stri
 			}
 			return refusal(proto.CodeSwitchOtherAgent, fmt.Sprintf("launcher %s does not run Codex", launcher), nil)
 		}
-	} else if err := n.codexFunctionLauncher(ctx, launcher, true); err != nil {
-		return refusal(proto.CodeSwitchOtherAgent, err.Error(), nil)
+	case agyAgent:
+		if isDesktopLauncher(launcher) {
+			return refusal(proto.CodeSwitchOtherAgent, fmt.Sprintf("launcher %s does not run Antigravity in a terminal", launcher), nil)
+		}
+		return nil
+	default:
+		if err := n.codexFunctionLauncher(ctx, launcher, true); err != nil {
+			return refusal(proto.CodeSwitchOtherAgent, err.Error(), nil)
+		}
 	}
 	if model != "" {
 		if _, err := n.launcherModelCheck(ctx, launcher, model); err != nil {
@@ -340,14 +436,24 @@ func (n *Node) codexParked(ctx context.Context, id, launcher string) (cwd, why s
 
 // engineBusy says why a switch of session id (on engine from) waits for a later message, "" when it can go now: a
 // Claude Code agent as switchBusy says; a Codex one that works (and not only by herdr's stale word, codexTurnOver),
-// waits for the user, runs a turn on its app-server, or still starts.
+// waits for the user, runs a turn on its app-server, or still starts; an Antigravity pane that works, waits for the
+// user, just received a message (workSent), or still starts.
 func (n *Node) engineBusy(ctx context.Context, id, from string) string {
-	if from != "codex" {
+	if from == "claude" {
 		return n.switchBusy(ctx, id)
 	}
 	_ = n.refreshHosts(ctx)
 	a, ok := n.agent(id)
 	if !ok {
+		return ""
+	}
+	if from == agyAgent {
+		if a.AgentStatus == proto.StatusBlocked || a.AgentStatus == proto.StatusWorking || n.workSent.recent(a.PaneID, time.Now()) {
+			return "the agent is " + cmp.Or(a.AgentStatus, proto.StatusWorking)
+		}
+		if r := n.starts.get(id); r != nil && r.ended.IsZero() || n.switches().inFlight(id) {
+			return "the agent is starting"
+		}
 		return ""
 	}
 	if a.AgentStatus == proto.StatusBlocked || a.AgentStatus == proto.StatusWorking && !n.codexTurnOver(id, time.Now()) {
@@ -376,9 +482,20 @@ func handoffSpans(legs []proto.EngineLeg, after int, cur, from string) []handoff
 	return append(out, handoffSpan{SessionID: cur, Agent: from, After: prev})
 }
 
-// engineMode is the permission mode engine to starts in, from mode, the one the session runs in now: plan stays plan,
-// bypassPermissions goes to Codex as its bypass flags, the rest is the launcher's own.
+// engineMode is the permission mode engine to starts in, from mode, the one the session runs in now: plan stays plan
+// on Claude Code and Codex (and becomes interactive "default" on Antigravity so a read-only session never silently
+// escalates to bypassPermissions); bypassPermissions goes to Codex and Antigravity; acceptEdits/auto go to Antigravity;
+// the rest is the launcher's own.
 func engineMode(to, mode string) string {
+	if to == agyAgent {
+		switch mode {
+		case proto.ModeBypass, "acceptEdits", "auto":
+			return mode
+		case "plan", "default":
+			return "default"
+		}
+		return ""
+	}
 	switch mode {
 	case "plan":
 		return mode
@@ -514,6 +631,9 @@ type engineCarry struct {
 	had                        bool
 	// legs are the history the new session carries: the plan's, then this session's stretch until the switch began.
 	legs []proto.EngineLeg
+	// agyConv is the native Antigravity conversation UUID of the outgoing Antigravity pane, captured before quitting
+	// so EngineHistory names the durable agy-<uuid> transcript and comeBack can resume it.
+	agyConv string
 }
 
 // carryOutEngine quits session id's agent and starts the other engine in the same shell, as c says: the parked
@@ -525,7 +645,14 @@ type engineCarry struct {
 func (n *Node) carryOutEngine(ctx context.Context, c *engineCarry) (string, error) {
 	p := c.plan
 	a, h, ref := p.a, p.h, p.ref
-	c.legs = append(slices.Clone(p.legs), proto.EngineLeg{SessionID: c.id, Agent: p.from, Until: time.Now().UTC()})
+	legID := c.id
+	if p.from == agyAgent {
+		if conv := n.agyConversation(c.id, a.PaneID); conv != "" {
+			c.agyConv = conv
+			legID = agyAgent + "-" + conv
+		}
+	}
+	c.legs = append(slices.Clone(p.legs), proto.EngineLeg{SessionID: legID, Agent: p.from, Until: time.Now().UTC()})
 	n.logf("session %s: switching from %s (launcher %s) to %s (launcher %s, model %q) in %s", c.id, engineName(p.from), p.own,
 		engineName(p.to), c.ps.Launcher, p.model, a.PaneID)
 	if quit, err := n.quitAgent(ctx, c.id, a.PaneID); err != nil || !quit {
@@ -599,6 +726,22 @@ func (n *Node) startEngine(ctx context.Context, c *engineCarry, h *pendingHandof
 	fresh := p.fresh
 	fresh.TaskInstructions = c.prev.TaskInstructions
 	switch {
+	case p.to == agyAgent:
+		launch, lerr := n.launcherFor(n.startKind(sctx))
+		if lerr != nil {
+			return "", lerr
+		}
+		resumeConv := ""
+		exec := fresh
+		if h.Resumed {
+			resumeConv = strings.TrimPrefix(p.parked, agyAgent+"-")
+			exec = p.resume
+		}
+		var s *proto.Session
+		if s, err = n.startWorkAgentWithResume(sctx, launch, cwd, ps.Launcher, agyAgent, exec.Model, exec.Effort, c.mode, prompt, p.a.WorkspaceID, "", resumeConv); err != nil {
+			return "", err
+		}
+		return s.SessionID, nil
 	case h.Resumed:
 		err = n.resumeParked(sctx, c, cwd, prompt)
 	case p.to == "codex":
@@ -690,10 +833,13 @@ func (n *Node) parkedNow(ctx context.Context, plan *enginePlan, ps proto.Pending
 		return "it runs again"
 	}
 	var why string
-	if plan.to == "claude" {
+	switch plan.to {
+	case "claude":
 		_, _, why = n.claudeParked(ctx, plan.parked, ps)
-	} else {
+	case "codex":
 		_, why = n.codexParked(ctx, plan.parked, ps.Launcher)
+	case agyAgent:
+		_, why = n.agyParked(ctx, plan.parked, plan.cwd)
 	}
 	return why
 }
@@ -835,6 +981,15 @@ func (n *Node) comeBack(ctx context.Context, c *engineCarry, shells []string, di
 		n.state.restoreLaunch(c.id, c.prev, c.had, p.own) // the start wrote a new record, whether it came up or not
 		return err
 	}
+	if p.from == agyAgent {
+		launch, err := n.launcherFor(n.startKind(sctx))
+		if err != nil {
+			return err
+		}
+		_, err = n.startWorkAgentWithResume(sctx, launch, p.cwd, p.own, agyAgent, c.prev.Model, c.prev.ModelEffort, c.prev.AppMode, "", p.a.WorkspaceID, "", c.agyConv)
+		n.state.restoreLaunch(c.id, c.prev, c.had, p.own)
+		return err
+	}
 	launch, argv, err := n.codexResumeArgv(sctx, p.own, c.prev.AppMode, p.cwd, modelExecution{Model: c.prev.Model, Effort: c.prev.ModelEffort})
 	if err != nil {
 		return err
@@ -932,13 +1087,29 @@ func (n *Node) engineSwitchedTo(ctx context.Context, c *engineCarry, newID strin
 		if p.from == "codex" {
 			n.forgetCodexJoin(c.id)
 		}
+		if p.from == agyAgent && c.agyConv != "" {
+			legID := agyAgent + "-" + c.agyConv
+			if _, exists := n.state.get(legID); !exists {
+				n.state.put(legID, sessionState{
+					Launcher:    p.own,
+					Cwd:         p.cwd,
+					Model:       c.prev.Model,
+					ModelEffort: c.prev.ModelEffort,
+					AppMode:     c.prev.AppMode,
+					StartedAt:   c.prev.StartedAt,
+				})
+			}
+		}
 	}
 	if p.to == "claude" {
 		n.noteSwitchedModel(newID, c.ps)
 	}
-	if p.a.Tokens[personaTabToken] == c.id {
+	n.mu.Lock()
+	mark := n.personaTabLocked(p.a)
+	n.mu.Unlock()
+	if mark == c.id {
 		if launch, ok := p.h.(host.Launcher); ok {
-			markPersonaTab(ctx, launch, p.ref, newID)
+			n.markPersonaTab(ctx, launch, p.ref, newID)
 		}
 	}
 	n.notifySessions()

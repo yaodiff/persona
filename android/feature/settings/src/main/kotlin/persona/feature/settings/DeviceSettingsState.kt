@@ -2,9 +2,48 @@ package persona.feature.settings
 
 import androidx.annotation.StringRes
 import persona.core.contracts.api.*
+import persona.core.contracts.parseTime
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+
+/** Grouping for Settings › Devices, aligned with web and Apple. */
+enum class DeviceGroupKind { Devices, Browsers, Links, Integrations }
+
+data class DeviceGroup(val kind: DeviceGroupKind, val devices: List<PairedDevice>)
+
+fun deviceGroupOf(device: PairedDevice): DeviceGroupKind = when {
+    device.role == "scoped" -> DeviceGroupKind.Integrations
+    device.kind == "web" -> DeviceGroupKind.Browsers
+    device.kind == "link" -> DeviceGroupKind.Links
+    device.kind == "phone" || device.kind == "watch" || (device.kind == "other" && device.role == "full") -> DeviceGroupKind.Devices
+    else -> DeviceGroupKind.Integrations
+}
+
+fun groupPairedDevices(devices: PairedDevices): List<DeviceGroup> {
+    val buckets = DeviceGroupKind.entries.associateWith { mutableListOf<PairedDevice>() }
+    for (device in devices.devices) {
+        buckets.getValue(deviceGroupOf(device)).add(device)
+    }
+    val currentId = devices.currentId
+    val onlineIds = devices.onlineIds
+    val order = Comparator<PairedDevice> { a, b ->
+        when {
+            a.id == currentId && b.id != currentId -> -1
+            b.id == currentId && a.id != currentId -> 1
+            (a.id in onlineIds) != (b.id in onlineIds) -> if (a.id in onlineIds) -1 else 1
+            else -> {
+                val ta = (a.lastSeen?.takeIf(String::isNotBlank) ?: a.createdAt)?.let(::parseTime)?.toEpochMilli() ?: Long.MIN_VALUE
+                val tb = (b.lastSeen?.takeIf(String::isNotBlank) ?: b.createdAt)?.let(::parseTime)?.toEpochMilli() ?: Long.MIN_VALUE
+                tb.compareTo(ta).takeIf { it != 0 } ?: a.id.compareTo(b.id)
+            }
+        }
+    }
+    return DeviceGroupKind.entries.mapNotNull { kind ->
+        val items = buckets.getValue(kind)
+        if (items.isEmpty()) null else DeviceGroup(kind, items.sortedWith(order))
+    }
+}
 
 data class DeviceSettingsUiState(
     val devices: PairedDevices? = null,

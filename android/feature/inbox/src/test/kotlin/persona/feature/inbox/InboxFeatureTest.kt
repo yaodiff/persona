@@ -5,6 +5,7 @@ import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
 import persona.core.contracts.api.InboxEntry
 import persona.core.contracts.api.InboxActionsTransport
+import persona.core.contracts.api.InboxItemContext
 import persona.core.contracts.api.ConnectionState
 import persona.core.domain.inbox.InboxItem
 import kotlinx.coroutines.CompletableDeferred
@@ -66,7 +67,7 @@ class InboxFeatureTest {
         val owner = CoroutineScope(backgroundScope.coroutineContext + SupervisorJob(backgroundScope.coroutineContext[Job]))
         val actions = object : InboxActionsTransport {
             override suspend fun collectNow() = Unit
-            override suspend fun context(itemId: String) = "事项上下文"
+            override suspend fun context(itemId: String) = InboxItemContext("事项上下文")
         }
         val first = InboxExperienceRepository(repository, storage, actions, connection, owner, { _, _, _ -> }, resources = res)
         repository.snapshot.value = InboxSnapshot(records = listOf(InboxRecord(InboxItem("item", title = "事项"), feedId = "feed")))
@@ -120,7 +121,7 @@ class InboxFeatureTest {
         val owner = CoroutineScope(backgroundScope.coroutineContext + SupervisorJob(backgroundScope.coroutineContext[Job]))
         val actions = object : InboxActionsTransport {
             override suspend fun collectNow() = Unit
-            override suspend fun context(itemId: String) = ""
+            override suspend fun context(itemId: String) = InboxItemContext("")
         }
         val experience = InboxExperienceRepository(repository, MemoryInboxStorage(), actions,
             MutableStateFlow(ConnectionState.Connecting), owner, { _, _, _ -> }, resources = res)

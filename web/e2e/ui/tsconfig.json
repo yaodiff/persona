@@ -1,0 +1,8 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "types": ["node"],
+    "tsBuildInfoFile": "../../node_modules/.cache/tsc/web-e2e.tsbuildinfo"
+  },
+  "include": ["../../playwright.config.ts", "./**/*.ts"]
+}

@@ -1,9 +1,9 @@
 /// <reference types="vitest/config" />
 import { fileURLToPath } from "node:url";
-import { defineConfig, type Logger, type Plugin } from "vite";
+import { defineConfig, normalizePath, transformWithEsbuild, type Logger, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
-import { brotliCopies, firstScreenBytes, firstScreenOverBudget, firstScreenRoom, gzipBytes, IDLE_TIER_BUDGET, idleImports, localeDirs, preloadScript, standalonePages, startupGaps } from "./src/startup-preload";
+import { brotliCopies, firstScreenBytes, firstScreenOverBudget, firstScreenRoom, fontStartupScript, gzipBytes, IDLE_TIER_BUDGET, idleImports, localeDirs, preloadScript, standalonePages, startupGaps } from "./src/startup-preload";
 import { textScale } from "./src/lib/text-scale";
 import { classicWorkerProblem } from "./src/sw-entry-check";
 import { clientKeys, i18nCatalogs, moduleIds, namespaceModule, startupEntries } from "./i18n-catalogs";
@@ -90,6 +90,9 @@ const showcaseImages: Plugin = {
 // what they import beyond those files (src/lib/lazy-page.ts): the build fails if they send more than IDLE_TIER_BUDGET.
 function startupPreload(): Plugin {
   let enforceBudgets = true;
+  let building = false;
+  const appHTML = normalizePath(fileURLToPath(new URL("./index.html", import.meta.url)));
+  const compact = async (script: string) => (await transformWithEsbuild(script, "startup-inline.js", { minify: true, target: "es2022" })).code.trim();
   let startup: string[] | undefined; // the first screen's files, set by transformIndexHtml for the client page
   let screens: [string, string[]][] = []; // each language's first screen of the App (not the live screen)
   const idle = new Set<string>(); // the modules lazyPage loads at idle, found by transform
@@ -97,13 +100,13 @@ function startupPreload(): Plugin {
   let logger: Logger | undefined;
   return {
     name: "startup-preload",
-    apply: "build",
     configResolved(config) {
+      building = config.command === "build";
       enforceBudgets = config.mode !== "development-update";
       logger = config.logger;
     },
     async transform(code, id) {
-      if (!id.includes("/src/") || !code.includes("lazyPage(")) return;
+      if (!building || !id.includes("/src/") || !code.includes("lazyPage(")) return;
       let specs: string[];
       try {
         specs = idleImports(code);
@@ -135,8 +138,10 @@ function startupPreload(): Plugin {
     },
     transformIndexHtml: {
       order: "post",
-      handler(html, ctx) {
-        if (!ctx.bundle || ctx.chunk?.name !== "main") return html; // not admin/index.html
+      async handler(html, ctx) {
+        const fontTag = (script: string) => ({ tag: "script", children: script, injectTo: "body" as const });
+        if (!ctx.bundle) return normalizePath(ctx.filename) === appHTML ? [fontTag(fontStartupScript("src/ui/font-startup.ts"))] : html;
+        if (ctx.chunk?.name !== "main") return html; // not admin/index.html
         const chunks = Object.values(ctx.bundle).filter((c) => c.type === "chunk");
         // react-dom/client shares a chunk with other modules (no facade): look a module up by the chunk holding it.
         const byModule = (path: string) => chunks.find((c) => c.moduleIds.some((id) => id.endsWith(path)));
@@ -179,6 +184,8 @@ function startupPreload(): Plugin {
         // What runs before the rest of the catalog is in: the groups, and main.tsx's other imports (not preloaded).
         const own = Object.values(files.standalone).flatMap((p) => p.files);
         const first = new Set([...entry, ...shared, ...files.app, ...own, ...group(["/src/lib/back-close.ts", "/src/lib/error-reports-start.ts"].map(find), new Set())]);
+        const fonts = find("/src/ui/font-startup.ts");
+        if (first.has(fonts.fileName)) this.error("startup-preload: web fonts must load after the first screen");
         // a module's own strings load with its code (core/module-host.ts loadModule), before a page of its own draws
         const modules = moduleIds(meta("en"));
         const keys = clientKeys(meta("en")).filter((key) => !namespaceModule(key.slice(0, key.indexOf(".")), modules));
@@ -190,7 +197,15 @@ function startupPreload(): Plugin {
         if (!idle.size) throw new Error("startup-preload: no lazyPage(…, { idle: true }) was found, so the idle tier's budget would check nothing");
         idleFiles = group([...idle].map(find), new Set([...first, ...startup]));
         screens = Object.entries(files.catalogs).map(([lang, catalog]) => [lang, [...new Set([...entry, ...shared, ...files.app, catalog])]]);
-        return { html, tags: [{ tag: "script", children: script, injectTo: "head" }] };
+        // Keep the shell small as the deferred startup adds an inline loader. Compile the adjacent before-paint
+        // scripts too, since the HTML entry's classic scripts do not go through the normal JS minifier.
+        for (const [tag, source] of html.matchAll(/<script>([\s\S]*?)<\/script>/g)) {
+          html = html.replace(tag, `<script>${await compact(source)}</script>`);
+        }
+        return { html, tags: [
+          { tag: "script", children: await compact(script), injectTo: "head" },
+          fontTag(await compact(fontStartupScript(fonts.fileName))),
+        ] };
       },
     },
   };
@@ -280,7 +295,7 @@ export default defineConfig({
     globalSetup: ["scripts/installed-deps.mjs"],
     setupFiles: ["src/i18n/test-setup.ts"],
     execArgv: ["--no-experimental-webstorage"],
-    ...(CORE_ONLY ? { exclude: [...configDefaults.exclude, "src/modules/**"] } : {}),
+    exclude: [...configDefaults.exclude, "e2e/ui/**", ...(CORE_ONLY ? ["src/modules/**"] : [])],
   },
   build: {
     target: "es2022",
@@ -288,7 +303,7 @@ export default defineConfig({
     chunkSizeWarningLimit: 900,
     rollupOptions: {
       // The service worker (src/sw.ts) is its own entry at a fixed /sw.js: its scope is the folder it's served from.
-      input: { main: "index.html", admin: "admin/index.html", sw: "src/sw.ts" },
+      input: { main: "index.html", admin: "admin/index.html", sw: "src/sw.ts", fonts: "src/ui/font-startup.ts" },
       output: {
         entryFileNames: (chunk) => (chunk.name === "sw" ? "sw.js" : chunk.name === "admin" ? "admin/assets/[name]-[hash].js" : "assets/[name]-[hash].js"),
         chunkFileNames: (chunk) => (adminOnly(chunk.moduleIds) ? "admin/assets/[name]-[hash].js" : "assets/[name]-[hash].js"),

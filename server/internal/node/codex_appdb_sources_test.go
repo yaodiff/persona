@@ -12,7 +12,7 @@ import (
 
 // Desktop origin alone is insufficient: background runs retain it. The raw catalog also keeps subagent metadata
 // for parent folding and guardian suppression; those rows never become independently writable conversations.
-func TestCodexAppMigratedDiscoveryKeepsOnlyDesktopSources(t *testing.T) {
+func TestCodexAppMigratedDiscoveryKeepsDesktopAndTerminalSources(t *testing.T) {
 	cases := []struct {
 		name, origin, source string
 		archived             int
@@ -25,8 +25,10 @@ func TestCodexAppMigratedDiscoveryKeepsOnlyDesktopSources(t *testing.T) {
 		{name: "subagent source", origin: "Codex Desktop", source: "subagent", inferred: true},
 		{name: "spawned subagent", origin: "Codex Desktop", source: `{"subagent":{"thread_spawn":{"parent_thread_id":"parent","depth":1}}}`, inferred: true},
 		{name: "work guardian", origin: "codex_work_desktop", source: `{"subagent":{"other":"guardian"}}`, inferred: true},
-		{name: "CLI conversation", origin: "codex-tui", source: "cli", explicit: true},
-		{name: "CLI vscode source", origin: "codex-tui", source: "vscode"},
+		{name: "CLI conversation", origin: "codex-tui", source: "cli", inferred: true, explicit: true},
+		{name: "CLI vscode source", origin: "codex-tui", source: "vscode", inferred: true},
+		{name: "desktop CLI source", origin: "Codex Desktop", source: "cli", inferred: true},
+		{name: "trimmed CLI source", origin: "Codex Desktop", source: " cli ", inferred: true},
 		{name: "SDK vscode source", origin: "codex_sdk_test", source: "vscode"},
 		{name: "unknown source", origin: "Codex Desktop", source: "unknown"},
 		{name: "unrelated object source", origin: "Codex Desktop", source: `{"kind":"job"}`},
@@ -69,7 +71,10 @@ func TestCodexAppMigratedDiscoveryKeepsOnlyDesktopSources(t *testing.T) {
 				if want {
 					wantCount++
 				}
-				_, found := got[ids[i]]
+				row, found := got[ids[i]]
+				if found && (row.Originator != tc.origin || row.includeRunning != (tc.origin == "codex-tui" || strings.TrimSpace(tc.source) == "cli")) {
+					t.Errorf("%s origin/running = %q/%v", tc.name, row.Originator, row.includeRunning)
+				}
 				if found != want {
 					t.Errorf("%s discovered = %v, want %v", tc.name, found, want)
 				}
@@ -78,5 +83,16 @@ func TestCodexAppMigratedDiscoveryKeepsOnlyDesktopSources(t *testing.T) {
 				t.Fatalf("discovered %d rows, want %d", len(got), wantCount)
 			}
 		})
+	}
+}
+
+func TestCodexAppDatabaseWithoutOriginatorKeepsSidebar(t *testing.T) {
+	sqlite := sqlite3WithJSON(t)
+	db := filepath.Join(t.TempDir(), "state_5.sqlite")
+	if out, err := exec.Command(sqlite, db, codexAppSchema+codexAppRow(appChat, "", "/w", "Old schema", time.Now(), 0)+"ALTER TABLE threads DROP COLUMN originator;").CombinedOutput(); err != nil {
+		t.Fatalf("sqlite3: %v: %s", err, out)
+	}
+	if rows, err := readCodexAppThreads(context.Background(), db, []string{appChat}); err != nil || rows[appChat].Title != "Old schema" {
+		t.Fatalf("legacy sidebar = %+v, %v", rows, err)
 	}
 }

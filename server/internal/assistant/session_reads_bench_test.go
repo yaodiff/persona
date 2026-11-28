@@ -113,7 +113,7 @@ func BenchmarkSessionReadIdleMinute(b *testing.B) {
 			b.ReportAllocs()
 			for b.Loop() {
 				s.closeDoneTaskAgents(ctx, refused, done)
-				s.closeIdleAgents(ctx, refused, seen)
+				s.closeIdleAgents(ctx, refused, done, seen)
 				s.backfillWork(ctx, s.newWorkView(ctx), time.Now())
 			}
 			if len(refused) != 0 {

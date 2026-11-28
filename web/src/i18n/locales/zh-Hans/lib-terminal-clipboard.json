@@ -1,11 +1,11 @@
 {
   "file": "文件",
-  "empty_file": "「{name}」是空的",
-  "too_large": "「{name}」超过 {mb} MB，没有上传",
+  "empty_file": "「{name}」为空文件",
+  "too_large": "「{name}」超过 {mb} MB，未上传",
   "uploading_many_other": "正在上传 {name} 等 {count} 个文件…",
   "copied": "已复制",
-  "copied_legacy": "已复制（这个页面不是 HTTPS，浏览器没开放剪贴板接口，用了兼容方式）",
-  "copy_denied": "没复制上：浏览器没有允许写入剪贴板",
-  "copy_insecure": "没复制上：这个页面不是 HTTPS，浏览器不开放剪贴板",
+  "copied_legacy": "已复制（当前页面未使用 HTTPS，浏览器未开放剪贴板接口，已通过兼容方式复制）",
+  "copy_denied": "复制失败：浏览器未允许写入剪贴板",
+  "copy_insecure": "复制失败：当前页面未使用 HTTPS，浏览器限制访问剪贴板",
   "uploading_single": "正在上传 {name}…"
 }

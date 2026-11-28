@@ -1,6 +1,10 @@
 package assistantwire
 
-import "time"
+import (
+	"time"
+
+	"github.com/nwverse/persona/server/internal/buswire"
+)
 
 // Outside-decision node requests. A local script reaches these through its
 // node's same-user socket; the manager authenticates the connected machine.
@@ -9,6 +13,27 @@ const (
 	MethodDecisionGet      = "decision.get"
 	MethodDecisionWithdraw = "decision.withdraw"
 )
+
+var (
+	DecisionRaiseMethod    = buswire.Method[OutsideDecisionRaiseParams, OutsideDecisionReply]{Name: MethodDecisionRaise}
+	DecisionGetMethod      = buswire.Method[OutsideDecisionIDParams, OutsideDecisionReply]{Name: MethodDecisionGet}
+	DecisionWithdrawMethod = buswire.Method[OutsideDecisionIDParams, OutsideDecisionReply]{Name: MethodDecisionWithdraw}
+)
+
+// OutsideDecisionID identifies a durable outside decision on the node bus.
+type OutsideDecisionID string
+
+// OutsideDecisionRaiseParams carries a node's request and its display source.
+type OutsideDecisionRaiseParams struct {
+	Decision OutsideDecisionRequest `json:"decision"`
+	Cwd      string                 `json:"cwd,omitempty"`
+	Source   string                 `json:"source"`
+}
+
+// OutsideDecisionIDParams identifies the decision to fetch or withdraw.
+type OutsideDecisionIDParams struct {
+	ID OutsideDecisionID `json:"id"`
+}
 
 // The states and answer provenance of an outside decision.
 const (
@@ -19,10 +44,15 @@ const (
 	OutsideAnswerDefault     = "default"
 )
 
-// OutsideDecisionOption is one choice and what choosing it leads to.
+// OutsideDecisionOptionID is an option's stable protocol identifier, independent of its localized label.
+type OutsideDecisionOptionID string
+
+// OutsideDecisionOption is one choice and what choosing it leads to. ID is an
+// optional stable protocol value; Label remains the localizable display text.
 type OutsideDecisionOption struct {
-	Label   string `json:"label"`
-	LeadsTo string `json:"leads_to"`
+	ID      OutsideDecisionOptionID `json:"id,omitempty"`
+	Label   string                  `json:"label"`
+	LeadsTo string                  `json:"leads_to"`
 }
 
 // OutsideDecisionRequest raises a rich owner decision without waiting for its
@@ -52,11 +82,12 @@ type OutsideDecisionSource struct {
 // OutsideDecisionAnswer is what the owner (or the permitted deadline default)
 // supplied. ExplainFirst can be present while the decision remains pending.
 type OutsideDecisionAnswer struct {
-	Option     string    `json:"option,omitempty"`
-	Response   string    `json:"response,omitempty"`
-	Text       string    `json:"text,omitempty"`
-	AnsweredBy string    `json:"answered_by"`
-	AnsweredAt time.Time `json:"answered_at"`
+	Option     string                  `json:"option,omitempty"`
+	OptionID   OutsideDecisionOptionID `json:"option_id,omitempty"`
+	Response   string                  `json:"response,omitempty"`
+	Text       string                  `json:"text,omitempty"`
+	AnsweredBy string                  `json:"answered_by"`
+	AnsweredAt time.Time               `json:"answered_at"`
 }
 
 // OutsideDecision is the caller's durable polling view. TodoID is the caller's

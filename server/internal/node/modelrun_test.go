@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/aiwire"
+	"github.com/nwverse/persona/server/internal/osproc"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -246,7 +247,8 @@ printf '{"type":"turn.completed","usage":{"input_tokens":1000,"cached_input_toke
 // hooks/MCP and zero session persistence into the real ~/.gemini/antigravity-cli), and NDJSON stdin/stdout streaming.
 func TestModelRunAnswersWithIsolatedAgy(t *testing.T) {
 	out := t.TempDir()
-	home := fakeModelRunCLIHome(t, "agy", "agy", `printf '%s\n' "$@" > `+shellQuote(filepath.Join(out, "args"))+`
+	home := fakeModelRunCLIHome(t, "agy", "agy", `[ "$1" = acp ] && exit 2
+printf '%s\n' "$@" > `+shellQuote(filepath.Join(out, "args"))+`
 cat > `+shellQuote(filepath.Join(out, "stdin"))+`
 pwd > `+shellQuote(filepath.Join(out, "cwd"))+`
 printf '%s\n' "$HOME" > `+shellQuote(filepath.Join(out, "home"))+`
@@ -408,6 +410,96 @@ sleep 5
 `)
 	if _, err := runModel(t, proto.ModelRunParams{Launcher: "agy", Prompt: "ping", TimeoutMS: 200}); runCode(err) != proto.CodeModelRunTimeout {
 		t.Fatalf("expected timeout after SUCCESS+sleep, got: %v", err)
+	}
+}
+
+func TestModelRunAgyFirstCancellationDeterminesOutcome(t *testing.T) {
+	sh, err := exec.LookPath(loginShellProgram())
+	if err != nil {
+		t.Skip("no supported launcher shell")
+	}
+	for _, tc := range []struct {
+		name        string
+		parentFirst bool
+		success     bool
+		wantCode    string
+	}{
+		{"auth before deadline preserves answer", false, true, ""},
+		{"auth before deadline reports logged out", false, false, proto.CodeModelRunLoggedOut},
+		{"deadline before auth rejects answer", true, true, proto.CodeModelRunTimeout},
+		{"deadline before auth reports timeout", true, false, proto.CodeModelRunTimeout},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			parent, cancelParent := context.WithCancelCause(t.Context())
+			defer cancelParent(nil)
+			ctx, cancel := context.WithCancelCause(parent)
+			defer cancel(nil)
+			script := "echo 'Authentication required'"
+			if tc.success {
+				script = `echo '{"event":"result","result":{"status":"SUCCESS","response":"ok"}}'` + "\n" + script
+			}
+			cmd := exec.CommandContext(ctx, sh, "-c", script)
+			killGroupOnCancel(cmd)
+			msysCmdLine(cmd)
+			// Deliver both causes at the auth prompt, before Wait and the process-group sweep.
+			onAuth := func(cause error) {
+				if tc.parentFirst {
+					cancelParent(context.DeadlineExceeded)
+				}
+				cancel(cause)
+				cancelParent(context.DeadlineExceeded)
+			}
+			timeout := &rpc.Error{Code: proto.CodeModelRunTimeout}
+			answer, err := runAgyModelCommand(ctx, onAuth, cmd, proto.ModelRunParams{Launcher: "agy"}, timeout)
+			if context.Cause(parent) != context.DeadlineExceeded || runCode(err) != tc.wantCode ||
+				(tc.wantCode == "" && (err != nil || answer.Text != "ok")) {
+				t.Fatalf("parent=%v answer=%q code=%q (want %q) err=%v", context.Cause(parent), answer.Text, runCode(err), tc.wantCode, err)
+			}
+		})
+	}
+}
+
+func TestModelRunAgyDeadlineReleasesInheritedOutput(t *testing.T) {
+	sh, err := exec.LookPath(loginShellProgram())
+	if err != nil {
+		t.Skip("no supported launcher shell")
+	}
+	gate, release, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer gate.Close()
+	defer release.Close()
+	ctx, cancel := context.WithCancelCause(t.Context())
+	defer cancel(nil)
+	setupGuard := time.AfterFunc(15*time.Second, func() {
+		cancel(context.DeadlineExceeded)
+		_ = release.Close()
+	})
+	defer setupGuard.Stop()
+	// Cancel just the launcher to deterministically leave the child holding stdout through the deadline.
+	// Save stdin on fd 3 before backgrounding so the child waits on the test's pipe.
+	cmd := exec.CommandContext(ctx, sh, "-c", `exec 3<&0; { echo holding; read -r line <&3; } & wait`)
+	cmd.SysProcAttr = osproc.SessionGroupAttr()
+	cmd.Stdin = gate
+	var watchdog *time.Timer
+	out, _ := runWithEarlyAuthDetect(ctx, cancel, cmd, func(line string) bool {
+		if line == "holding" && setupGuard.Stop() {
+			// Start the cancellation and the regression guard only once the child owns stdout.
+			timer := time.AfterFunc(20*time.Millisecond, func() { cancel(context.DeadlineExceeded) })
+			t.Cleanup(func() { timer.Stop() })
+			watchdog = time.AfterFunc(3*time.Second, func() { _ = release.Close() })
+		}
+		return false
+	})
+	if watchdog == nil {
+		t.Fatalf("child did not report holding stdout: %q", out)
+	}
+	if !watchdog.Stop() {
+		t.Fatal("output scanner waited for the child to close its inherited stdout")
+	}
+	if context.Cause(ctx) != context.DeadlineExceeded {
+		t.Fatalf("deadline with live output writer: cause=%v", context.Cause(ctx))
 	}
 }
 

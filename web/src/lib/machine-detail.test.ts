@@ -210,7 +210,7 @@ describe("agents by space", () => {
       sess("gone", { space_id: "w1", space_name: "weather", space_index: 1, state: "offline" }),
       sess("helper", { assistant: true, space_id: "w1", space_index: 1 }),
     ]);
-    expect(groups.map((g) => g.name)).toEqual(["weather", "blog", "不在空间里"]);
+    expect(groups.map((g) => g.name)).toEqual(["weather", "blog", "未加入空间"]);
     expect(groups[1].sessions.map((s) => s.session_id)).toEqual(["b1", "b2"]);
     expect(groups[0].sessions.map((s) => s.session_id)).toEqual(["a1"]);
     expect(groups[0].counts).toEqual({ needs: 1, working: 0, unread: 0 });
@@ -241,11 +241,11 @@ describe("system", () => {
     expect(get("系统")).toBe("macOS 26.1（25B78）");
     expect(get("型号")).toBe("MacBook Pro");
     expect(get("核心")).toBe("14 核");
-    expect(get("开机于")).toContain("已运行 3 天 4 小时");
+    expect(get("开机时间")).toContain("已运行 3 天 4 小时");
     expect(get("Claude Code")).toBe("2.1.320");
-    expect(get("接入")).toBe("hub 通过 ssh macbook 接入");
+    expect(get("连接方式")).toBe("hub 通过 ssh macbook 连接");
     const off = systemFacts(sys, { ...m, online: false }, 1_790_000_000 + 100, 0);
-    expect(off.find((f) => f[0] === "开机于")?.[1]).not.toContain("已运行");
+    expect(off.find((f) => f[0] === "开机时间")?.[1]).not.toContain("已运行");
     expect(connectionText({ ...m, kind: "local" })).toBe("hub 所在的机器，直接运行 node");
   });
 });

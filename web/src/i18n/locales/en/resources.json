@@ -1,4 +1,5 @@
 {
+  "assistant_resources": "Assistant resources",
   "title": "Shared resources",
   "configure": "Configure runners",
   "invalid": "Enter a JSON array.",
@@ -7,7 +8,7 @@
   "registry_help": "Advanced: each runner needs id, capacity, and mirror (machine, target, optional port and identity). Repositories maps project names to Git URLs. Save an empty list to turn off mirroring.",
   "save": "Save",
   "cancel": "Cancel",
-  "capacity": "{used} running / {capacity} slots",
+  "capacity": "{used} of {capacity} running",
   "unknown": "Unknown",
   "never": "No successful mirror yet",
   "stale": "Mirror is stale: {seconds} seconds",

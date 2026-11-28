@@ -179,6 +179,93 @@ EOF`, "other"},
 	}
 }
 
+// zsh precommand modifiers must not hide a gated call, and emulate -c is opaque when its code names a gate.
+func TestLarkGateZshPrecommandModifiersAndCodeBuiltins(t *testing.T) {
+	gates := olGate("")
+	for _, tc := range []struct {
+		name, command string
+		method        string
+		unknown       bool
+	}{
+		{"noglob read", `noglob ex GET /links/open`, "GET", false},
+		{"nocorrect read", `nocorrect ex GET /links/open`, "GET", false},
+		{"dash read", `- ex GET /links/open`, "GET", false},
+		{"noglob write", `noglob ex POST /conversations/7123/messages '{"text":"hi"}'`, "POST", false},
+		{"nocorrect write", `nocorrect ex POST /messages/99/recall`, "POST", false},
+		{"dash write", `- ex POST /conversations/7123/messages '{"text":"hi"}'`, "POST", false},
+		{"emulate read", `emulate zsh -c 'ex GET /links/open'`, "", true},
+		{"emulate write", `emulate sh -c 'ex POST /conversations/7123/messages'`, "", true},
+		{"emulate -- read", `emulate -- zsh -c 'ex GET /links/open'`, "", true},
+		{"emulate -- write", `emulate -- sh -c 'ex POST /messages/99/recall'`, "", true},
+		{"trap read", `trap 'ex GET /links/open' ZERR`, "", true},
+		{"trap write", `trap 'ex POST /messages/99/recall' ZERR`, "", true},
+		{"trap shell action", `trap 'sh -c "ex POST /messages/99/recall"' EXIT`, "", true},
+		{"trap -- action", `trap -- 'ex POST /messages/99/recall' EXIT`, "", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			v := classifyLark(tc.command, gates, "", nil)
+			if tc.unknown {
+				if !v.other || !v.unknown || len(v.calls) != 0 || v.deny != "" {
+					t.Fatalf("%s: got %+v, want an opaque whole command", tc.command, v)
+				}
+				return
+			}
+			if v.other || v.unknown || v.unparsed || v.unsure || v.deny != "" || len(v.calls) != 1 {
+				t.Fatalf("%s: got %+v, want one classified call", tc.command, v)
+			}
+			if v.calls[0].Method != tc.method {
+				t.Fatalf("%s: method %q, want %q", tc.command, v.calls[0].Method, tc.method)
+			}
+			if got := larkDecision(olCfg(), v.calls[0]); got != "confirm" {
+				t.Fatalf("%s: decision %q, want confirm", tc.command, got)
+			}
+			if tc.method == "POST" {
+				if _, write := gateWrite(gates, tc.command); !write {
+					t.Fatalf("%s: write was not classified as a write", tc.command)
+				}
+			}
+		})
+	}
+}
+
+// zsh's `=cmd` expansion names the same command: `=ex` is the gate and `=lark-cli` is the CLI, not ordinary text.
+func TestLarkGateZshEqualsExpansion(t *testing.T) {
+	gates := olGate("")
+	read := classifyLark(`=ex GET /links/open`, gates, "", nil)
+	if len(read.calls) != 1 || read.calls[0].Method != "GET" || read.other || read.unknown || read.deny != "" {
+		t.Fatalf("=ex read: %+v", read)
+	}
+	write := classifyLark(`=ex POST /messages/99/recall`, gates, "", nil)
+	if len(write.calls) != 1 || write.calls[0].Method != "POST" || write.deny != "" {
+		t.Fatalf("=ex write: %+v", write)
+	}
+	if got := larkDecision(olCfg(), write.calls[0]); got != "confirm" {
+		t.Fatalf("=ex write decision %q, want confirm", got)
+	}
+	cli := classifyLark(`=lark-cli im +messages-send --chat-id oc_x --text hi`, gates, "", nil)
+	if !cli.cliWrite && !cli.unknown && !cli.other {
+		t.Fatalf("=lark-cli write was treated as ordinary: %+v", cli)
+	}
+	// The expansion also names the program that runs the carried call: a shell, and a wrapper in front of the gate,
+	// must resolve to the same classification as their plain spelling.
+	for _, command := range []string{`=sh -c "ex POST /messages/99/recall"`, `=zsh -c "ex POST /messages/99/recall"`} {
+		v := classifyLark(command, gates, "", nil)
+		if len(v.calls) != 1 || v.calls[0].Method != "POST" || v.deny != "" || v.unparsed {
+			t.Fatalf("%s: got %+v, want the gated write inside the shell", command, v)
+		}
+		if got := larkDecision(olCfg(), v.calls[0]); got != "confirm" {
+			t.Fatalf("%s: decision %q, want confirm", command, got)
+		}
+	}
+	wrapped := classifyLark(`=env ex POST /messages/99/recall`, gates, "", nil)
+	if len(wrapped.calls) != 1 || wrapped.calls[0].Method != "POST" || wrapped.deny != "" || wrapped.unparsed {
+		t.Fatalf("=env: got %+v, want the gated write behind the wrapper", wrapped)
+	}
+	if got := larkDecision(olCfg(), wrapped.calls[0]); got != "confirm" {
+		t.Fatalf("=env: decision %q, want confirm", got)
+	}
+}
+
 // What the phone shows for a write: what it does, method, path and the body to send; a file body is read.
 func TestLarkSummary(t *testing.T) {
 	cwd := t.TempDir()

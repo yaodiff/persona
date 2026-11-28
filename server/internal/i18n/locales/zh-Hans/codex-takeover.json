@@ -9,5 +9,7 @@
   "shared_unavailable": "无法启动 Codex 共享入口，原进程保持不动。",
   "user_only": "只有已登录的客户端可以确认接管 Codex 会话。",
   "token_required": "需要接管确认凭据。",
-  "not_ready": "Codex 已在新标签页打开，但共享连接尚未就绪。请先检查该终端，再发送消息。"
+  "not_ready": "Codex 已在新标签页打开，但共享连接尚未就绪。请先检查该终端，再发送消息。",
+  "app_running": "Codex App 正在运行，可能仍会加载此对话。请先退出 Codex App，或另开新会话继续。",
+  "app_confirmation_required": "接管前请确认：接管后此对话将由 Persona 终端运行，Codex App 不再拥有该对话。"
 }

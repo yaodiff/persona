@@ -201,7 +201,7 @@ const escapeStack: EscapeEntry[] = [];
 let escapeOrder = 0;
 
 function onEscapeKey(e: KeyboardEvent): void {
-  if (e.key !== "Escape") return;
+  if (e.key !== "Escape" || e.defaultPrevented || e.isComposing || e.keyCode === 229) return;
   let top: EscapeEntry | undefined;
   for (const entry of escapeStack) if (!top || entry.order > top.order) top = entry;
   if (!top) return;

@@ -14,7 +14,7 @@
 // zh-Hans, for a key the language lacks (docs/protocol/i18n.md), so each catalog module also exports `fallbacks`: the entries
 // of those two languages that t() could still reach from this one, computed here at build time. With complete
 // catalogs (src/i18n/catalog.test.ts) that is almost nothing, instead of two more full catalogs on the first load.
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import type { Plugin } from "vite";
 import { flatten } from "./src/i18n/locales/flatten";
@@ -70,7 +70,20 @@ export function catalogFiles(metaPath: string, kind: Kind): string[] {
   const whole = new Set(entries.filter((e) => !e.includes(".")));
   const named = new Set(entries.map((e) => e.split(".")[0]));
   const modules = moduleIds(metaPath);
-  return readdirSync(dir).filter((name) => {
+  const files = readdirSync(dir).map((name) => join(dir, name));
+  // A module can keep its namespace files alongside its implementation. Only catalogs
+  // that include that module read its directory, including the aggregate test catalogs.
+  for (const id of modules) {
+    if (kind !== "client" && kind !== "modules" && kind !== `module-${id}`) continue;
+    const local = join(dir, "../../../modules", id, "locales", basename(dir));
+    if (existsSync(local)) {
+      for (const name of readdirSync(local)) {
+        if (namespaceModule(basename(name, ".json"), modules) === id) files.push(join(local, name));
+      }
+    }
+  }
+  return files.filter((file) => {
+    const name = basename(file);
     if (!name.endsWith(".json") || name.startsWith("_") || name.startsWith("admin-") !== (kind === "admin")) return false;
     const ns = name.slice(0, -".json".length);
     const owner = namespaceModule(ns, modules);
@@ -78,7 +91,7 @@ export function catalogFiles(metaPath: string, kind: Kind): string[] {
     if (kind.startsWith("module-")) return owner === kind.slice("module-".length);
     if (owner && split(kind)) return false;
     return kind === "client-startup" ? named.has(ns) : kind === "client-rest" ? !whole.has(ns) : true;
-  }).sort().map((name) => join(dir, name));
+  }).sort();
 }
 
 function readCatalog(dir: string, kind: Kind): Catalog {
@@ -138,9 +151,9 @@ export function catalogModule(metaPath: string, kind: Kind, inline = false): str
     return [`export default JSON.parse(${JSON.stringify(JSON.stringify(readCatalog(dir, kind)))});`, fallbacks].join("\n");
   }
   const path = (file: string) => JSON.stringify(file.replace(/\\/g, "/"));
-  const namespaces = catalogFiles(metaPath, kind).map((file) => basename(file));
-  const imports = namespaces.map((name, i) => `import ns${i} from ${path(join(dir, name))};`);
-  const entries = namespaces.map((name, i) => `${JSON.stringify(`./${name}`)}: ns${i}`);
+  const namespaces = catalogFiles(metaPath, kind);
+  const imports = namespaces.map((file, i) => `import ns${i} from ${path(file)};`);
+  const entries = namespaces.map((name, i) => `${JSON.stringify(`./${basename(name)}`)}: ns${i}`);
   const whole = `flatten({${entries.join(",")}})`;
   // A part of the client catalog keeps its own keys of the namespaces the startup list splits.
   const part = split(kind)

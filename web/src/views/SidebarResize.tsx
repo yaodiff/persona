@@ -46,7 +46,7 @@ export function SidebarResize({ column }: { column: string }) {
       label={t("sidebar.resize_label")}
       title={t("sidebar.resize_title")}
       controls={column}
-      className="hidden lg:block"
+      className="hidden lg:flex"
     />
   );
 }

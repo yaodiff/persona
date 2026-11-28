@@ -136,6 +136,16 @@ struct SupervisorHeldCardTests {
         #expect(NotificationActions.answerable("unknown", among: cards), "a card the app has not loaded is left to the hub")
     }
 
+    @Test func aNotificationCannotAnswerItsSameIDReplacement() throws {
+        let first = try card("same", session: "a", kind: "permission")
+        let replacement = try card("same", session: "a", kind: "permission", minute: 1)
+        #expect(!NotificationActions.answerable("same", occurrence: first.createdAtWire, among: [replacement]))
+        #expect(NotificationActions.answerable("same", occurrence: replacement.createdAtWire, among: [replacement]))
+        #expect(NotificationActions.answerable("same", among: [replacement]), "legacy ID-only notifications retain their behavior")
+        #expect(NotificationActions.answerable("same", occurrence: first.createdAtWire, among: []),
+                "an unloaded card is left to the hub, which rejects a stale occurrence")
+    }
+
     @Test func voiceBarLeavesOutHeldCardsAndPlanFeedback() throws {
         let heldPlan = try card("held-plan", session: "a", kind: "plan", delegating: true)
         let openPlan = try card("open-plan", session: "a", kind: "plan", minute: 1)

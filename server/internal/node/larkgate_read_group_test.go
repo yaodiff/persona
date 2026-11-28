@@ -80,6 +80,7 @@ func TestLarkReadGroupCommandsBypass(t *testing.T) {
 // Outside bypass, with lark-cli rating the download a write, no Lark card is raised either: the gate lets a lone call
 // through and leaves a command with cd / mkdir to the conversation's own permission mode.
 func TestLarkReadGroupCommandsDefaultMode(t *testing.T) {
+	needsLarkGate(t)
 	for _, tc := range larkReadGroupCommands {
 		t.Run(tc.name, func(t *testing.T) {
 			n := codexTestNode(t)

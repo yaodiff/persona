@@ -190,7 +190,7 @@ it("pins a sibling variant when only an inherited task's effort changes", async 
 
 it.each([
   { agent: "Claude", catalog: claudeModels, name: "Sonnet", value: "high" },
-  { agent: "Codex", catalog: codexModels, name: "5.5", value: "xhigh" },
+  { agent: "Codex", catalog: codexModels, name: "GPT-5.5", value: "xhigh" },
 ])("writes $agent task model and effort independently", async ({ catalog, name, value }) => {
   const body = await editExecution({}, catalog);
   await pickModel(name);

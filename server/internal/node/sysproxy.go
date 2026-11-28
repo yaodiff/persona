@@ -1,10 +1,13 @@
 package node
 
 import (
+	"cmp"
 	"context"
 	"net"
 	"net/netip"
 	"net/url"
+	"os"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -14,14 +17,50 @@ import (
 const (
 	// loopbackNoProxy keeps companion <-> agy acp loopback RPC/HTTP and local gate proxies off any system proxy.
 	loopbackNoProxy = "localhost,127.0.0.1,::1"
+	shellProxyBegin = "\x01persona-shell-proxy-begin\x01"
+	shellProxyEnd   = "\x01persona-shell-proxy-end\x01"
+	// shellProxyMaxOutput bounds stdout retained from the login-shell probe so noisy rc loops cannot balloon memory.
+	shellProxyMaxOutput = 1 << 20
+	// shellProxyScript emits only the eight standard proxy variables exported in the user's login shell, NUL-delimited
+	// and framed by control-byte markers so rc startup banners, exit traps, and arbitrary values cannot spoof fields.
+	// Running `/bin/sh -c` ensures only exported environment variables (never shell-local vars or uncalled helper
+	// functions) are read and no secrets are emitted.
+	shellProxyScript = `/bin/sh -c 'printf "\001persona-shell-proxy-begin\001"
+printf "HTTP_PROXY=%s\000http_proxy=%s\000HTTPS_PROXY=%s\000https_proxy=%s\000ALL_PROXY=%s\000all_proxy=%s\000NO_PROXY=%s\000no_proxy=%s" \
+  "${HTTP_PROXY-}" "${http_proxy-}" "${HTTPS_PROXY-}" "${https_proxy-}" "${ALL_PROXY-}" "${all_proxy-}" "${NO_PROXY-}" "${no_proxy-}"
+printf "\001persona-shell-proxy-end\001"' </dev/null`
 )
 
 var (
 	// systemProxyTimeout caps how long macOS `scutil --proxy` may take when starting a companion.
 	systemProxyTimeout = 2 * time.Second
+	// shellProxyTimeout caps how long probing the login shell for proxy variables may take when starting a companion.
+	shellProxyTimeout = 5 * time.Second
 	// detectSystemProxy reads the OS-level proxy settings; tests replace it to avoid querying the host OS.
 	detectSystemProxy = readSystemProxy
+	// detectShellProxy reads validated proxy variables from the user's login shell; tests replace it to stay shell-free.
+	detectShellProxy = readShellProxy
+	// shellProxyCommand builds the login-shell probe command; tests replace it to exercise timeouts and failures.
+	shellProxyCommand = loginShell
 )
+
+// shellProxyEnvClear lists all proxy/bypass variables stripped before probing the login shell so only variables
+// exported by the user's shell startup files are observed.
+var shellProxyEnvClear = []string{
+	"HTTP_PROXY", "http_proxy",
+	"HTTPS_PROXY", "https_proxy",
+	"ALL_PROXY", "all_proxy",
+	"NO_PROXY", "no_proxy",
+}
+
+// shellProxyGuardEnv disables interactive startup prompts and auto-updates from oh-my-zsh, oh-my-bash, and
+// powerlevel10k while probing the login shell (mirrors startShellEnv's startup guards without setting agentMarkEnv).
+var shellProxyGuardEnv = [][2]string{
+	{"DISABLE_AUTO_UPDATE", "true"},
+	{"DISABLE_UPDATE_PROMPT", "true"},
+	{"ZSH_DISABLE_COMPFIX", "true"},
+	{"POWERLEVEL9K_DISABLE_CONFIGURATION_WIZARD", "true"},
+}
 
 // systemProxy holds validated OS-level proxy URLs and NO_PROXY exceptions.
 type systemProxy struct {
@@ -279,6 +318,13 @@ func formatProxyURL(scheme, rawHost, rawPort string) string {
 // subdomains), and malformed entries. Only wildcard suffixes (`*.domain` / `.domain`), `*`, IP literals/CIDRs, and
 // `localhost` are exported.
 func normalizeNoProxyException(raw string) string {
+	return normalizeNoProxyToken(raw, false)
+}
+
+// normalizeNoProxyToken validates and normalizes one `NO_PROXY` token using a strict allowlist of `*`, IP literals,
+// CIDRs (including macOS shorthand IPv4 CIDRs), optional `:port`, wildcard suffixes (`*.domain` -> `.domain`),
+// `localhost`, and—when allowBareHost is true—bare hostnames/domains (as written in shell `NO_PROXY`).
+func normalizeNoProxyToken(raw string, allowBareHost bool) string {
 	s := strings.Trim(raw, " \t")
 	if s == "" || strings.EqualFold(s, "<local>") {
 		return ""
@@ -303,6 +349,12 @@ func normalizeNoProxyException(raw string) string {
 	}
 	if strings.Contains(s, "*") {
 		return ""
+	}
+	validHost := func(h string) bool {
+		if allowBareHost {
+			return isValidShellNoProxyHost(h)
+		}
+		return isValidNoProxySuffixOrLocalhost(h)
 	}
 	if strings.HasPrefix(s, "[") {
 		if strings.HasSuffix(s, "]") {
@@ -343,15 +395,26 @@ func normalizeNoProxyException(raw string) string {
 		if addr, err := netip.ParseAddr(host); err == nil && addr.Is4() {
 			return net.JoinHostPort(addr.String(), portStr)
 		}
-		if isValidNoProxySuffixOrLocalhost(host) {
+		if validHost(host) {
 			return host + ":" + portStr
 		}
 		return ""
 	}
-	if isValidNoProxySuffixOrLocalhost(s) {
+	if validHost(s) {
 		return s
 	}
 	return ""
+}
+
+// isValidShellNoProxyHost accepts RFC 1123 hostnames and leading-dot domain suffixes (`.domain`).
+func isValidShellNoProxyHost(s string) bool {
+	if s == "" || s == "." {
+		return false
+	}
+	if strings.HasPrefix(s, ".") {
+		return isValidHostname(s[1:])
+	}
+	return isValidHostname(s)
 }
 
 // expandShorthandIPv4CIDR converts macOS shorthand IPv4 CIDRs such as `192.0.2/24` into `192.0.2.0/24`.
@@ -475,4 +538,282 @@ func hasUnsafeASCII(s string) bool {
 		}
 	}
 	return false
+}
+
+// shellProxy holds validated proxy URLs and NO_PROXY lists exported by the user's login shell.
+type shellProxy struct {
+	HTTPProxy  string
+	httpProxy  string
+	HTTPSProxy string
+	httpsProxy string
+	ALLProxy   string
+	allProxy   string
+	NoProxy    string
+	noProxy    string
+}
+
+func (p shellProxy) hasProxy() bool {
+	return p.HTTPProxy != "" || p.httpProxy != "" ||
+		p.HTTPSProxy != "" || p.httpsProxy != "" ||
+		p.ALLProxy != "" || p.allProxy != ""
+}
+
+func (p shellProxy) sanitized() shellProxy {
+	return shellProxy{
+		HTTPProxy:  validateShellProxyURL(p.HTTPProxy),
+		httpProxy:  validateShellProxyURL(p.httpProxy),
+		HTTPSProxy: validateShellProxyURL(p.HTTPSProxy),
+		httpsProxy: validateShellProxyURL(p.httpsProxy),
+		ALLProxy:   validateShellProxyURL(p.ALLProxy),
+		allProxy:   validateShellProxyURL(p.allProxy),
+		NoProxy:    sanitizeShellNoProxy(p.NoProxy),
+		noProxy:    sanitizeShellNoProxy(p.noProxy),
+	}
+}
+
+// withShellProxyEnv falls back to validated proxy variables exported by the user's login shell when base does not
+// explicitly set any proxy variable (including an explicit empty value such as `HTTPS_PROXY=`).
+func withShellProxyEnv(ctx context.Context, base []string) []string {
+	if hasExplicitProxyEnv(base) {
+		return base
+	}
+	return applyShellProxyEnv(base, detectShellProxy(ctx))
+}
+
+// applyShellProxyEnv merges validated login-shell proxy variables into base without mutating base, syncing uppercase
+// and lowercase spellings and keeping loopback addresses excluded via NO_PROXY / no_proxy.
+func applyShellProxyEnv(base []string, p shellProxy) []string {
+	p = p.sanitized()
+	if !p.hasProxy() || hasExplicitProxyEnv(base) {
+		return base
+	}
+	env := slices.Clone(base)
+	if upper, lower := cmp.Or(p.HTTPProxy, p.httpProxy), cmp.Or(p.httpProxy, p.HTTPProxy); upper != "" {
+		env = setEnvVar(env, "HTTP_PROXY", upper)
+		env = setEnvVar(env, "http_proxy", lower)
+	}
+	if upper, lower := cmp.Or(p.HTTPSProxy, p.httpsProxy), cmp.Or(p.httpsProxy, p.HTTPSProxy); upper != "" {
+		env = setEnvVar(env, "HTTPS_PROXY", upper)
+		env = setEnvVar(env, "https_proxy", lower)
+	}
+	if upper, lower := cmp.Or(p.ALLProxy, p.allProxy), cmp.Or(p.allProxy, p.ALLProxy); upper != "" {
+		env = setEnvVar(env, "ALL_PROXY", upper)
+		env = setEnvVar(env, "all_proxy", lower)
+	}
+	noProxy := mergeNoProxy(lastEnvValue(env, "NO_PROXY"), lastEnvValue(env, "no_proxy"))
+	noProxy = mergeNoProxy(noProxy, loopbackNoProxy)
+	if shellNoProxy := mergeNoProxy(p.NoProxy, p.noProxy); shellNoProxy != "" {
+		noProxy = mergeNoProxy(noProxy, shellNoProxy)
+	}
+	env = setEnvVar(env, "NO_PROXY", noProxy)
+	env = setEnvVar(env, "no_proxy", noProxy)
+	return env
+}
+
+// readShellProxy probes the user's login shell for exported proxy environment variables (no-op on Windows).
+// Errors and timeouts fail open so bridge startup is never blocked.
+func readShellProxy(ctx context.Context) shellProxy {
+	if runtime.GOOS == "windows" {
+		return shellProxy{}
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if ctx.Err() != nil {
+		return shellProxy{}
+	}
+	pctx, cancel := context.WithTimeout(ctx, shellProxyTimeout)
+	defer cancel()
+	cmd := shellProxyCommand(pctx, shellProxyScript)
+	if cmd == nil {
+		return shellProxy{}
+	}
+	killGroupOnCancel(cmd)
+	if home := userHome(); home != "" {
+		if st, err := os.Stat(home); err == nil && st.IsDir() {
+			cmd.Dir = home
+		}
+	}
+	env := withoutEnv(os.Environ(), shellProxyEnvClear)
+	for _, kv := range shellProxyGuardEnv {
+		env = setEnvVar(env, kv[0], kv[1])
+	}
+	cmd.Env = env
+	stdout := &shellProxyTailBuffer{max: shellProxyMaxOutput}
+	cmd.Stdout = stdout
+	_ = cmd.Run()
+	if ctx.Err() != nil {
+		return shellProxy{}
+	}
+	return parseShellProxyOutput(stdout.String())
+}
+
+// shellProxyTailBuffer retains at most max bytes from the end of a stream without allocating past max, so noisy rc
+// startup output cannot balloon memory while still preserving the trailing framed proxy markers.
+type shellProxyTailBuffer struct {
+	max  int
+	buf  []byte
+	pos  int
+	full bool
+}
+
+func (b *shellProxyTailBuffer) Write(p []byte) (int, error) {
+	n := len(p)
+	if b.max <= 0 || n == 0 {
+		return n, nil
+	}
+	if n >= b.max {
+		if len(b.buf) != b.max {
+			b.buf = make([]byte, b.max)
+		}
+		copy(b.buf, p[n-b.max:])
+		b.pos, b.full = 0, true
+		return n, nil
+	}
+	if !b.full {
+		rem := b.max - len(b.buf)
+		if n <= rem {
+			b.buf = append(b.buf, p...)
+			if len(b.buf) == b.max {
+				b.pos, b.full = 0, true
+			}
+			return n, nil
+		}
+		b.buf = append(b.buf, p[:rem]...)
+		b.full = true
+		b.pos = 0
+		p = p[rem:]
+	}
+	first := copy(b.buf[b.pos:], p)
+	b.pos = (b.pos + first) % b.max
+	if first < len(p) {
+		second := copy(b.buf[b.pos:], p[first:])
+		b.pos = (b.pos + second) % b.max
+	}
+	return n, nil
+}
+
+func (b *shellProxyTailBuffer) String() string {
+	if !b.full {
+		return string(b.buf)
+	}
+	out := make([]byte, b.max)
+	first := copy(out, b.buf[b.pos:])
+	copy(out[first:], b.buf[:b.pos])
+	return string(out)
+}
+
+// parseShellProxyOutput extracts and validates only the eight allowlisted proxy variables from shellProxyScript's
+// framed output. Incomplete frames and unknown variable names are ignored.
+func parseShellProxyOutput(out string) shellProxy {
+	i := strings.LastIndex(out, shellProxyBegin)
+	if i < 0 {
+		return shellProxy{}
+	}
+	body, _, complete := strings.Cut(out[i+len(shellProxyBegin):], shellProxyEnd)
+	if !complete {
+		return shellProxy{}
+	}
+	var p shellProxy
+	for _, entry := range strings.Split(body, "\x00") {
+		k, v, ok := strings.Cut(entry, "=")
+		if !ok {
+			continue
+		}
+		switch k {
+		case "HTTP_PROXY":
+			p.HTTPProxy = validateShellProxyURL(v)
+		case "http_proxy":
+			p.httpProxy = validateShellProxyURL(v)
+		case "HTTPS_PROXY":
+			p.HTTPSProxy = validateShellProxyURL(v)
+		case "https_proxy":
+			p.httpsProxy = validateShellProxyURL(v)
+		case "ALL_PROXY":
+			p.ALLProxy = validateShellProxyURL(v)
+		case "all_proxy":
+			p.allProxy = validateShellProxyURL(v)
+		case "NO_PROXY":
+			p.NoProxy = sanitizeShellNoProxy(v)
+		case "no_proxy":
+			p.noProxy = sanitizeShellNoProxy(v)
+		}
+	}
+	return p
+}
+
+// validateShellProxyURL validates a proxy URL (or bare `host:port`) exported by a shell profile, allowing standard
+// HTTP/HTTPS/SOCKS proxy schemes and optional userinfo while rejecting control/whitespace bytes, unsupported schemes,
+// invalid hosts/ports, paths (other than `/`), queries, and fragments.
+func validateShellProxyURL(raw string) string {
+	s := strings.Trim(raw, " \t")
+	if s == "" || hasUnsafeASCII(s) {
+		return ""
+	}
+	parseTarget := s
+	if !strings.Contains(s, "://") {
+		host, port, err := net.SplitHostPort(s)
+		if err != nil || host == "" || strings.Contains(host, "@") {
+			return ""
+		}
+		if _, ok := parseValidPort(port); !ok {
+			return ""
+		}
+		parseTarget = "http://" + s
+	}
+	u, err := url.Parse(parseTarget)
+	if err != nil || u.Host == "" || strings.HasSuffix(u.Host, ":") {
+		return ""
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "http", "https", "socks", "socks4", "socks4a", "socks5", "socks5h":
+	default:
+		return ""
+	}
+	if (u.Path != "" && u.Path != "/") || u.ForceQuery || u.RawQuery != "" || u.Fragment != "" || strings.Contains(s, "#") {
+		return ""
+	}
+	if port := u.Port(); port != "" {
+		if _, ok := parseValidPort(port); !ok {
+			return ""
+		}
+	}
+	host := u.Hostname()
+	if host == "" {
+		return ""
+	}
+	bracketed := strings.HasPrefix(u.Host, "[")
+	if addr, err := netip.ParseAddr(host); err == nil {
+		if bracketed && !addr.Is6() {
+			return ""
+		}
+		if addr.Is6() && addr.Zone() != "" && !isValidIPv6Zone(addr.Zone()) {
+			return ""
+		}
+	} else if bracketed || !isValidHostname(host) {
+		return ""
+	}
+	return s
+}
+
+// sanitizeShellNoProxy filters a login-shell NO_PROXY / no_proxy list to validated comma-separated host, suffix, IP,
+// CIDR, port, or `*` tokens, dropping empty entries and any shell metacharacters, control characters, or malformed items.
+func sanitizeShellNoProxy(raw string) string {
+	var out []string
+	seen := map[string]bool{}
+	for _, part := range strings.FieldsFunc(raw, func(r rune) bool { return r == ',' || r == ' ' || r == '\t' }) {
+		norm := normalizeNoProxyToken(part, true)
+		if norm == "" {
+			continue
+		}
+		if norm == "*" {
+			return "*"
+		}
+		low := strings.ToLower(norm)
+		if !seen[low] {
+			seen[low] = true
+			out = append(out, norm)
+		}
+	}
+	return strings.Join(out, ",")
 }

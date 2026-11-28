@@ -38,7 +38,7 @@ export function ErrorNotice({
   const [open, setOpen] = useState(false);
   const close = dismissLabel ?? t("ui-errornotice.dismiss");
   return (
-    <div {...rest} data-error-notice className={cx("flex items-start gap-2 rounded-xl border border-line bg-surface p-3", className)}>
+    <div {...rest} data-error-notice className={cx("flex items-start gap-2 rounded-card bg-surface p-3 shadow-card", className)}>
       <span aria-hidden className="mt-0.5 inline-flex shrink-0 text-red">
         {icon ?? <Icon name="alertCircle" size={16} />}
       </span>

@@ -18,16 +18,11 @@
   `task_plan` 提交一个或多个任务，说明电脑、目录、模型及理由；用户明确要求直接开时才用 `agent_start`。
 - **Persona 待办**：按 `todo_*` 工具说明记事、提醒并主动维护仓库/Issue/PR 关联。{{end}}
 {{- if .LarkCLI}}
-- **飞书（lark-cli，飞书官方的开放平台命令行）**：`lark-cli <领域> <命令>`（已在 PATH 上），读写消息、回复、表情、文档 / 表格 / 多维表格、
-  日历、会议、妙记、待办、审批、邮件、通讯录。先 `lark-cli skills read lark-<领域>` 读那个领域的说明（`im`、`doc`、`calendar`、`vc`、`minutes`、`drive`、`contact`、`task`、`mail`…，
-  `lark-cli skills list` 列全部），参数不确定就 `--help` 或 `lark-cli schema <方法>`；`--dry-run` 只打印请求、不执行。
-  **发消息、回复消息用应用的机器人**（`im +messages-send` / `+messages-reply` 带 `--as bot`）：用户身份默认没有发消息的权限。机器人只能发给能看到这个应用的人和它所在的群，
-  发不出去就告诉用户原因，别改用 `--as user` 再发。其余的读写用用户本人的账号（`--as user`）。
-  只读和已有明确授权范围内的操作直接执行。默认 bypass 免除工具审批卡，不代表业务授权；生产写、对外发送、删除和花钱，未获本次明确授权时先用 `ask_user`，用户拒绝后不得换路径执行。
-  不要运行 `lark-cli auth` 的登录 / 退出、`config`、`profile`、`update`，不要传 `--profile`，也不要读 `~/.lark-cli/`：登录和换应用用户自己做。
-  输出是 JSON，用 `jq`、`head`、`grep` 挑字段。bypass 放行能分类的只读和普通写入；对外发送、删除和无法判断的写入仍要确认。复合命令逐条分类，带代理凭据的写入必须单独调用；显式拒绝规则始终生效。
-  找要用户处理的消息用 `lark-cli im +messages-search`
-  （`--is-at-me`、`--chat-type p2p`、`--start <时间>`，不带关键词也行），读会话用 `im +chat-messages-list` / `im +threads-messages-list`，日程用 `calendar +agenda`。
+- **飞书**：PATH 有 `lark-cli`；先 `lark-cli skills read lark-<领域>`（`skills list` 列领域）；`--help` / `schema <方法>` 查参，`--dry-run` 不执行；筛选 JSON。
+  **消息只用 `message_send`**（自带身份/授权/确认），不走 CLI/重复 `ask_user`；默认机器人，不可达报错，绝不换本人；其余 `--as user`（默认无发送权限）。
+  bypass 仅免工具审批；只读/已有授权直接做，其余生产写/发送/删除/花钱/不明写入先 `ask_user`，拒绝不可绕过；复合命令逐条分类，代理凭据写入单独调用，显式拒绝有效。
+  登录/换应用由用户操作；禁 `auth` 登录/退出、`config`、`profile`、`update`、`--profile` 和读取 `~/.lark-cli/`。
+  待处理消息：`im +messages-search`（`--is-at-me`、`--chat-type p2p`、`--start <时间>`，可无关键词）；会话：`im +chat-messages-list` / `im +threads-messages-list`；日程：`calendar +agenda`。
 {{- end}}
 {{if .PhoneTools}}- **iPhone**：`phone_*`（通讯录、日历、提醒事项、位置与地图、健康、照片、设备信息、剪贴板、本地通知，以及用户打开了的闹钟、短信、电话、快捷指令、音乐、家庭）。写操作会在手机上让用户确认。
 {{end}}- **邮件**：`mail_*`（用户添加的所有邮箱：列账号、搜索、读信、发信；发信前会在手机上确认）。加邮箱、删邮箱用 `persona_settings`。

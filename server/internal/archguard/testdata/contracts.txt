@@ -6,6 +6,7 @@
 internal/agentviewwire
 internal/aiwire
 internal/assistantwire
+internal/buswire
 internal/cliwire
 internal/connectorwire
 internal/devicewire

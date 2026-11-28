@@ -129,7 +129,7 @@ func TestSupervisionHoldExpiry(t *testing.T) {
 
 func TestSupervisionHoldFollowsBackgroundForkAcrossRestart(t *testing.T) {
 	ctx := t.Context()
-	database, err := db.Open(ctx, newDatabase(t), db.ManagerSet)
+	database, err := db.Open(ctx, newMigratedDatabase(t, db.ManagerSet), db.ManagerSet)
 	if err != nil {
 		t.Fatal(err)
 	}

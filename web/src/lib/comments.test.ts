@@ -10,6 +10,7 @@ import {
   lineRange,
   MAX_CODE_LINES,
   MAX_COMMENT_CHARS,
+  openSpot,
   parseCommentBlock,
   rangeLabel,
   relativeTo,
@@ -19,6 +20,9 @@ import {
 import { addQuote, cancelNote, getQuotes, parseQuotes, removeQuote, setNote, setQuotes, splitQuotes, storedQuotes, withQuoteBlock, type DraftQuote } from "./drafts";
 import { markedLines } from "./comment-target";
 import { parseDiff } from "./files";
+
+const panelCalls = vi.hoisted(() => [] as unknown[]);
+vi.mock("./panel", () => ({ openPanel: (p: unknown) => panelCalls.push(p) }));
 
 const lines = (n: number, from = 1) => Array.from({ length: n }, (_, i) => `line ${from + i}`);
 
@@ -56,9 +60,27 @@ describe("line ranges", () => {
     expect(diffLabel({ kind: "staged" })).toBe("staged");
     expect(diffLabel({ kind: "unstaged" })).toBe("unstaged");
     expect(diffLabel({ kind: "commit", sha: "0123456789abcdef" })).toBe("commit 01234567");
+    expect(diffLabel({ kind: "review", scope: "turn", base: "", emptyBase: true, live: true })).toBe("turn ..live");
     expect(relativeTo("/work/app/", "/work/app/src/a.ts")).toBe("src/a.ts");
     expect(relativeTo("/work/app", "/etc/hosts")).toBe("/etc/hosts");
     expect(relativeTo(undefined, "/etc/hosts")).toBe("/etc/hosts");
+  });
+
+  it("opens a review comment at its exact base and target", () => {
+    panelCalls.length = 0;
+    const spot = (diff: NonNullable<Parameters<typeof openSpot>[0]["diff"]>) => openSpot({
+      file: "src/a.ts", path: "src/a.ts", from: 4, to: 4, omitted: 0, mid: "m", sid: "s", cwd: "/w", diff,
+    });
+    expect(spot({ kind: "review", scope: "commit", base: "1234567", baseHash: "1234567890abcdef" })).toBe(true);
+    expect(panelCalls.at(-1)).toMatchObject({ kind: "review", scope: "commit", base: "1234567890abcdef" });
+    expect(spot({ kind: "review", scope: "branch", base: "1234567", ref: "origin/main" })).toBe(true);
+    expect(panelCalls.at(-1)).toMatchObject({ kind: "review", scope: "branch", base: "origin/main" });
+    expect(spot({ kind: "review", scope: "turn", base: "1234567", baseHash: "1234567890abcdef", target: "76543210fedcba" })).toBe(true);
+    expect(panelCalls.at(-1)).toMatchObject({ kind: "review", scope: "turn", base: "1234567890abcdef", target: "76543210fedcba" });
+    expect(spot({ kind: "review", scope: "turn", base: "1234567", baseHash: "1234567890abcdef", live: true })).toBe(true);
+    expect(panelCalls.at(-1)).toMatchObject({ kind: "review", scope: "turn", base: "1234567890abcdef", live: true });
+    expect(spot({ kind: "review", scope: "turn", base: "1234567", emptyBase: true, target: "76543210fedcba" })).toBe(true);
+    expect(panelCalls.at(-1)).toMatchObject({ kind: "review", scope: "turn", target: "76543210fedcba" });
   });
 
   it("picks diff rows by position: numbers from the new file, removed lines on their own count as old", () => {

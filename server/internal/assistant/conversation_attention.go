@@ -2,6 +2,8 @@ package assistant
 
 import (
 	"context"
+	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -32,9 +34,128 @@ type conversationAttentionBook struct {
 	routeOnce    sync.Once
 	routeMain    string
 	routeMachine string
+
+	// scans are the classifications refreshMainConversationAttention runs off the node's read loop. They have a lock
+	// of their own: the list handler takes it on that loop, and mu is held across a store write.
+	scans attentionScans
 }
 
-func conversationAttentionCacheKey(machine, session string) string { return machine + "\x00" + session }
+// attentionScan is one revision of a conversation to classify.
+type attentionScan struct {
+	machine, session string
+	rev              int64
+}
+
+// attentionScans runs at most one classification of each conversation at a time, for the newest revision asked for: a
+// list that arrives while one runs only moves its target, and the running one takes it up when it is done. settled
+// is the newest revision whose verdict is cached, so a list that changes nothing starts nothing.
+type attentionScans struct {
+	mu      sync.Mutex
+	next    map[string]attentionScan // by conversation (conversationAttentionCacheKey)
+	running map[string]bool
+	settled map[string]int64
+}
+
+// want asks for scan; true: no classification of its conversation runs, so the caller starts one (run).
+func (a *attentionScans) want(key string, scan attentionScan) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.settled[key] == scan.rev {
+		return false
+	}
+	if a.next == nil {
+		a.next, a.running, a.settled = map[string]attentionScan{}, map[string]bool{}, map[string]int64{}
+	}
+	a.next[key] = scan
+	if a.running[key] {
+		return false
+	}
+	a.running[key] = true
+	return true
+}
+
+// take is the revision to classify next; false: none, and the conversation's run ends.
+func (a *attentionScans) take(key string) (attentionScan, bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	scan, ok := a.next[key]
+	if !ok {
+		delete(a.running, key)
+		return attentionScan{}, false
+	}
+	delete(a.next, key)
+	return scan, true
+}
+
+// settle records that rev's verdict is cached.
+func (a *attentionScans) settle(key string, rev int64) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.settled == nil {
+		a.settled = map[string]int64{}
+	}
+	a.settled[key] = rev
+}
+
+// conversationAttentionCacheKey is safe as a Postgres JSONB object key and collision-free even if a legacy
+// machine or session ID contains '|': each side is percent-escaped and joined with '|' (matching
+// supervise_background.go's '|' convention). The former NUL separator caused Postgres JSONB writes to fail
+// with SQLSTATE 22P05; reads and saves still accept and migrate that legacy encoding.
+func conversationAttentionCacheKey(machine, session string) string {
+	return url.PathEscape(machine) + "|" + url.PathEscape(session)
+}
+
+func conversationAttentionLegacyKey(machine, session string) string {
+	return machine + "\x00" + session
+}
+
+func conversationAttentionHasNULKey(entries map[string]conversationAttentionEntry) bool {
+	for k := range entries {
+		if strings.ContainsRune(k, '\x00') {
+			return true
+		}
+	}
+	return false
+}
+
+// normalizeConversationAttentionEntries rewrites any legacy NUL-delimited keys to the JSONB-safe form so
+// loaded state remains readable and subsequent PutSetting writes never emit \u0000.
+func normalizeConversationAttentionEntries(raw map[string]conversationAttentionEntry) map[string]conversationAttentionEntry {
+	out := make(map[string]conversationAttentionEntry, len(raw))
+	for k, v := range raw {
+		if !strings.ContainsRune(k, '\x00') {
+			out[k] = v
+		}
+	}
+	for k, v := range raw {
+		machine, session, ok := strings.Cut(k, "\x00")
+		if !ok {
+			continue
+		}
+		migrated := conversationAttentionCacheKey(machine, session)
+		if existing, exists := out[migrated]; !exists || v.Rev > existing.Rev {
+			out[migrated] = v
+		}
+	}
+	return out
+}
+
+func (s *Service) loadConversationAttentionLocked(ctx context.Context) bool {
+	b := &s.convAttention
+	if b.loaded {
+		return true
+	}
+	var loaded map[string]conversationAttentionEntry
+	if st := s.store(); st != nil {
+		if _, err := st.Setting(ctx, conversationAttentionKey, &loaded); err != nil {
+			s.logf("load conversation attention: %v", err)
+			return false
+		}
+	}
+	b.entries = normalizeConversationAttentionEntries(loaded)
+	b.loaded = true
+	return true
+}
 
 // mainConversationRoute reads the settings only before the first cached profile.
 // Once a profile exists, the caller uses that fresher snapshot instead.
@@ -54,17 +175,15 @@ func (s *Service) conversationAttentionCached(machine, session string, rev int64
 	b := &s.convAttention
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if !b.loaded {
-		b.entries = map[string]conversationAttentionEntry{}
-		if st := s.store(); st != nil {
-			if _, err := st.Setting(context.Background(), conversationAttentionKey, &b.entries); err != nil {
-				s.logf("load conversation attention: %v", err)
-				return conversationAttentionEntry{}, false
-			}
-		}
-		b.loaded = true
+	if !s.loadConversationAttentionLocked(context.Background()) {
+		return conversationAttentionEntry{}, false
 	}
 	e, ok := b.entries[conversationAttentionCacheKey(machine, session)]
+	if !ok || e.Rev != rev {
+		if legacy, legacyOK := b.entries[conversationAttentionLegacyKey(machine, session)]; legacyOK && legacy.Rev == rev {
+			return legacy, true
+		}
+	}
 	return e, ok && e.Rev == rev
 }
 
@@ -75,15 +194,11 @@ func (s *Service) putConversationAttention(ctx context.Context, machine, session
 	b := &s.convAttention
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if !b.loaded {
-		b.entries = map[string]conversationAttentionEntry{}
-		if st := s.store(); st != nil {
-			if _, err := st.Setting(ctx, conversationAttentionKey, &b.entries); err != nil {
-				s.logf("load conversation attention: %v", err)
-				return
-			}
-		}
-		b.loaded = true
+	if !s.loadConversationAttentionLocked(ctx) {
+		return
+	}
+	if b.entries == nil || conversationAttentionHasNULKey(b.entries) {
+		b.entries = normalizeConversationAttentionEntries(b.entries)
 	}
 	b.entries[conversationAttentionCacheKey(machine, session)] = entry
 	if st := s.store(); st != nil {
@@ -206,19 +321,50 @@ func (s *Service) mainConversationAttention(ctx context.Context, machine, sessio
 }
 
 // refreshMainConversationAttention computes one newly seen revision once, not
-// once per inventory decoration. It is called from setSessions after a list
-// arrives, so the inventory only reads the resulting classification.
+// once per inventory decoration, so the inventory only reads the resulting
+// classification. setSessions calls it after a list arrives, on the read loop
+// of the node connection the list came in on, and the scan reads the
+// conversation from that same node: only that loop reads the answer. Waited for
+// there, the read ran into its 15 s deadline after every finished main-chat
+// turn and held every reply and event of the node meanwhile (#16214). So the
+// scan runs on a goroutine of its own, and the machine's list is published
+// again once its verdict is in.
+func compactionRunning(c *proto.Compaction) bool {
+	return c != nil && c.State == proto.CompactionRunning
+}
+
 func (s *Service) refreshMainConversationAttention(sess proto.Session, mainSession, mainMachine string) {
-	if sess.Rev == 0 || sess.Starting || (sess.Status != proto.StatusDone && sess.Status != proto.StatusIdle) {
+	if sess.Rev == 0 || sess.Starting || compactionRunning(sess.Compaction) || (sess.Status != proto.StatusDone && sess.Status != proto.StatusIdle) {
 		return
 	}
 	if sess.SessionID != mainSession || sess.MachineID != mainMachine {
 		return
 	}
-	if _, ok := s.conversationAttentionCached(sess.MachineID, sess.SessionID, sess.Rev); ok {
-		return
+	key := conversationAttentionCacheKey(sess.MachineID, sess.SessionID)
+	if s.convAttention.scans.want(key, attentionScan{machine: sess.MachineID, session: sess.SessionID, rev: sess.Rev}) {
+		go s.runConversationAttention(key)
 	}
-	_, _ = s.mainConversationAttention(context.Background(), sess.MachineID, sess.SessionID, sess.Rev)
+}
+
+// runConversationAttention classifies the revisions refreshMainConversationAttention asks for, the newest each time,
+// until none is left. A cached verdict settles its revision; an open round does not, so the next list reads it again.
+// The scan bounds itself (15 s) as it did on the read loop; one still in flight when the manager's run ends can reach
+// the closed store once, within those 15 s.
+func (s *Service) runConversationAttention(key string) {
+	for {
+		scan, ok := s.convAttention.scans.take(key)
+		if !ok {
+			return
+		}
+		if _, cached := s.conversationAttentionCached(scan.machine, scan.session, scan.rev); !cached {
+			if _, ok := s.mainConversationAttention(context.Background(), scan.machine, scan.session, scan.rev); ok {
+				s.publishSessions(scan.machine) // the row reads the verdict (applyMainConversationAttention)
+			}
+		}
+		if _, cached := s.conversationAttentionCached(scan.machine, scan.session, scan.rev); cached {
+			s.convAttention.scans.settle(key, scan.rev)
+		}
+	}
 }
 
 func mainConversationAttentionCandidate(assistant bool, status, state string, starting bool, pending int) bool {
@@ -252,7 +398,7 @@ func (s *Service) decorateMainConversationAttention(row *proto.Session, cfg Sett
 }
 
 func (s *Service) decorateMainConversationAttentionForRoute(row *proto.Session, mainSession, mainMachine string) {
-	if !mainConversationAttentionCandidate(row.Assistant, row.Status, row.State, row.Starting, row.PendingInteractions) || row.SessionID != mainSession || row.MachineID != mainMachine {
+	if compactionRunning(row.Compaction) || !mainConversationAttentionCandidate(row.Assistant, row.Status, row.State, row.Starting, row.PendingInteractions) || row.SessionID != mainSession || row.MachineID != mainMachine {
 		return
 	}
 	row.State = s.mainConversationAttentionState(row.MachineID, row.SessionID, row.State, row.Rev, row.SeenAt)

@@ -19,6 +19,16 @@ class ModelPanelTest {
     private fun sections(view: PanelView = PanelView.All, query: String = "", prefs: PanelPrefs = PanelPrefs(), s: PanelState = state) =
         ModelPanel.sections(listOf(claude, work, codex), s, view, query, prefs)
 
+    @Test fun desktopEffortHasNoEditDestination() {
+        val row = sections().first().rows.first()
+        assertEquals(PanelRow.EffortEdit.Live, row.effortEdit(live = true))
+        assertEquals(PanelRow.EffortEdit.Preference, row.effortEdit(live = false))
+
+        val desktop = row.copy(model = row.model.copy(sessionEffortOnly = true))
+        assertEquals(PanelRow.EffortEdit.ReadOnly, desktop.effortEdit(live = true))
+        assertEquals(PanelRow.EffortEdit.ReadOnly, desktop.effortEdit(live = false))
+    }
+
     @Test fun allStartsWithRecommendedThenEachProvider() {
         val all = sections()
         assertEquals(listOf("recommended", "provider:work", "provider:cx"), all.map { it.key })

@@ -78,9 +78,10 @@ extension InboxPolicy {
         var show: ([InboxItem]) -> Void
         var toast: (Toast) -> Void
         var roster: () -> ManagerRoster? = { nil }
+        var currentVisit: () -> UInt64 = { 0 }
         static var live: Deps {
             .init(api: { AppModel.shared.api }, items: { InboxStore.shared.items }, show: { InboxStore.shared.showRuleChange($0) },
-                  toast: { AppModel.shared.toast = $0 }, roster: { AppModel.shared.managerRoster })
+                  toast: { AppModel.shared.toast = $0 }, roster: { AppModel.shared.managerRoster }, currentVisit: { InboxStore.shared.hubVisit })
         }
     }
 
@@ -92,7 +93,10 @@ extension InboxPolicy {
     var twin: InboxPolicy.Twin
     @ObservationIgnored private let deps: Deps
 
+    private let visit: UInt64
+
     init(target: InboxPolicyTarget, deps: Deps = .live) {
+        visit = deps.currentVisit()
         self.target = target
         self.deps = deps
         policy = target.policy
@@ -102,16 +106,17 @@ extension InboxPolicy {
     }
 
     /// Save is off until the rules are read, and for a new rule that sets neither part.
-    var canSave: Bool { loaded && !busy && (policy != nil || tier != .unset || twin != .unset) }
+    var canSave: Bool { visit == deps.currentVisit() && loaded && !busy && (policy != nil || tier != .unset || twin != .unset) }
 
     /// The manager the sheet's requests name (`ManagerRoster.naming`).
     private var named: String? { deps.roster().map { $0.naming(target.manager) } ?? target.manager }
 
     /// Reads the rule this target already has; none from an older hub (no list): start from nothing.
     func load() async {
-        guard !loaded else { return }
-        defer { loaded = true }
+        guard visit == deps.currentVisit(), !loaded else { return }
+        defer { if visit == deps.currentVisit() { loaded = true } }
         guard let list = try? await deps.api()?.manager(named).inboxPolicies() else { return }
+        guard visit == deps.currentVisit() else { return }
         let same = list.first { $0.source == target.source && $0.tag == target.option.tag && $0.value == target.option.value }
         policy = same
         tier = same?.tier ?? .unset
@@ -123,7 +128,7 @@ extension InboxPolicy {
     func save(remove: Bool = false) async -> Bool {
         let (tier, twin) = remove ? (InboxPolicy.Tier.unset, InboxPolicy.Twin.unset) : (self.tier, self.twin)
         let stamped = target.item == nil && tier == .unset && twin == .unset
-        guard let api = deps.api()?.manager(stamped ? target.manager : named), !busy else { return false }
+        guard visit == deps.currentVisit(), let api = deps.api()?.manager(stamped ? target.manager : named), !busy else { return false }
         guard policy != nil || target.item != nil else { return false }
         busy = true
         defer { busy = false }
@@ -139,10 +144,12 @@ extension InboxPolicy {
             } else if let item = target.item {
                 try await api.setInboxPolicy(itemID: item.id, tag: target.option.tag, tier: tier, twin: twin)
             }
+            guard visit == deps.currentVisit() else { return false }
             let removed = tier == .unset && twin == .unset
             deps.toast(Toast(removed ? String(localized: "Rule removed for “\(name)”.") : String(localized: "Rule saved for “\(name)”."), style: .success))
             return true
         } catch {
+            guard visit == deps.currentVisit() else { return false }
             deps.show(moved.compactMap { before[$0.key] })
             if !error.isCancellation {
                 deps.toast(Toast(String(localized: "Couldn't save the rule: \(InboxPolicy.said(error))"), style: .error))

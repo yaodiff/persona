@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// The Toolchain view follows Machines view persistence: localStorage restores it and selecting it stores the choice.
+// The route takes precedence over older saved tool preferences.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -71,7 +71,7 @@ afterEach(() => {
 });
 
 describe("Machines toolchain view persistence", () => {
-  it("restores toolchain from storage and persists it when selected", async () => {
+  it("restores the bookmarked tool independently of the last fleet choice", async () => {
     const requested: string[] = [];
     vi.stubGlobal(
       "fetch",
@@ -99,8 +99,8 @@ describe("Machines toolchain view persistence", () => {
       }),
     );
 
-    // Pre-seed storage with "toolchain": Machines restores it and probes the toolchain.
-    storage.set("persona.machines.view", "toolchain");
+    storage.set("persona.machines.view", "files");
+    history.replaceState(null, "", "/machines/dev-box/toolchain");
 
     act(() => root.render(<Machines onToggleSidebar={() => {}} />));
     await act(async () => { await vi.dynamicImportSettled(); });
@@ -109,22 +109,6 @@ describe("Machines toolchain view persistence", () => {
     expect(requested.some((u) => u.includes("/toolchain"))).toBe(true);
     expect(host.querySelector('[data-testid="toolchain-panel"]')).not.toBeNull();
 
-    // Selecting Capabilities persists "capabilities".
-    const capBtn = [...host.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Capabilities");
-    expect(capBtn).toBeTruthy();
-    act(() => capBtn!.click());
-    await waitUntil(() => storage.get("persona.machines.view") === "capabilities");
-    expect(storage.get("persona.machines.view")).toBe("capabilities");
-
-    // Clicking Toolchain triggers a fresh probe and persists the selection.
-    requested.length = 0;
-    const tcBtn = [...host.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Toolchain");
-    expect(tcBtn).toBeTruthy();
-    act(() => tcBtn!.click());
-    await act(async () => { await vi.dynamicImportSettled(); });
-    await waitUntil(() => requested.some((u) => u.includes("/api/v1/machines/dev-box/toolchain")));
-
-    expect(requested.some((u) => u.includes("/api/v1/machines/dev-box/toolchain"))).toBe(true);
-    expect(storage.get("persona.machines.view")).toBe("toolchain");
+    expect(storage.get("persona.machines.view")).toBe("files");
   });
 });

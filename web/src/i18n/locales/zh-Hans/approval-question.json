@@ -1,7 +1,7 @@
 {
   "send": "提问",
-  "placeholder": "先问清楚，不会允许或拒绝…",
-  "pending_note": "助手回答期间，原审批继续等待。",
-  "sent_pending": "问题已发送，原审批仍在等待。",
+  "placeholder": "先提问，不会批准或拒绝…",
+  "pending_note": "助手回答期间，原审批会保持待处理。",
+  "sent_pending": "问题已发送，原审批仍在等待处理。",
   "too_long": "问题不能超过 1,000 个字符。"
 }

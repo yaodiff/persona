@@ -96,10 +96,39 @@ const PLAIN_MENU_BAR = 30;
 export const NOTCH_WIDTH = 200;
 /** Each side's room: a symbol and up to four digits. */
 export const ISLAND_SIDE = 64;
-/** The open list's width and one row's height (island.css: a row is 3rem, the list's padding 14 px). */
-export const LIST_WIDTH = 400;
+/** The open list's width: the pill's around the notch, so opening only grows the island downward and covers no more of
+ *  the menu bar than the closed pill (#16301: at 400 pt it reached the menu bar items beside the pill). The same width
+ *  on a display without a notch, where the closed pill is only its two sides. */
+export const LIST_WIDTH = NOTCH_WIDTH + 2 * ISLAND_SIDE;
+/** One row's height (island.css: a row is 3rem, the list's padding 14 px). */
 export const ROW_HEIGHT = 48;
 const LIST_PAD = 14;
+
+/** The island's window apart from where it goes and its page's preferences (island.ts): frameless, transparent, always
+ *  on top, a panel that takes no focus. `roundedCorners: false` takes the title bar style away: Electron keeps every
+ *  frameless window titled unless told otherwise, and macOS rounds all four corners of a titled window (16 pt on macOS
+ *  27), which pulled the island's top corners away from the top of the screen (#16301). The page draws the bottom
+ *  ones. */
+export const ISLAND_WINDOW = {
+  show: false,
+  frame: false,
+  roundedCorners: false,
+  transparent: true,
+  backgroundColor: "#00000000",
+  resizable: false,
+  movable: false,
+  minimizable: false,
+  maximizable: false,
+  fullscreenable: false,
+  focusable: false,
+  skipTaskbar: true,
+  hasShadow: false,
+  type: "panel",
+  acceptFirstMouse: true,
+  enableLargerThanScreen: true,
+  alwaysOnTop: true,
+  title: "Persona",
+} as const;
 
 /** Electron does not say where a notch is. The built-in display whose menu bar is taller than a plain one is taken to
  *  have one, at the top center. */
@@ -118,7 +147,7 @@ export function menuBar(d: IslandDisplay): number {
 }
 
 /** Where the island's window goes: closed, the menu bar's height around the notch (or the same pill without one) at
- *  the top center; open, wide enough for the list and tall enough for its rows. */
+ *  the top center; open, the list's width (the pill's around the notch) and tall enough for its rows. */
 export function islandRect(d: IslandDisplay, open: boolean, rows: number): IslandRect {
   const bar = menuBar(d);
   const width = open ? LIST_WIDTH : (hasNotch(d) ? NOTCH_WIDTH : 0) + 2 * ISLAND_SIDE;

@@ -1,5 +1,6 @@
 {
   "auto_done": "Auto-completed",
+  "supervisor_processing": "Supervisor handling",
   "model_request_failed": "Model request failed",
   "unassigned": "Not on a to-do",
   "unassigned_hint": "On no to-do: opened yourself in a terminal, or started from Lark, the phone or elsewhere. Right-click a row (or its ⋯) › Link to to-do… to file one.",

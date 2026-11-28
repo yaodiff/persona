@@ -70,16 +70,16 @@ describe("a Persona conversation's sidebar menu (iOS AssistantSidebar)", () => {
   it("makes a chat a lead (常驻) and ends one through the hub, says so, then reads the list again", async () => {
     const { d, calls } = deps();
     await conversationMenuItems(conv(), { main: false }, d).find((i) => i.key === "leader")!.onSelect();
-    expect(calls).toEqual(["make:c1", "ok:已设为常驻「周报」", "refresh"]);
+    expect(calls).toEqual(["make:c1", "ok:已将「周报」设为常驻", "refresh"]);
     calls.length = 0;
     await leaderItem(conv(), true, d).onSelect();
-    expect(calls).toEqual(["end:c1", "ok:已取消常驻「周报」，还在办的任务已交还主对话督办", "refresh"]);
+    expect(calls).toEqual(["end:c1", "ok:已取消「周报」的常驻状态，进行中的任务已交回主对话督办", "refresh"]);
   });
 
   it("says so when the hub refuses", async () => {
     const { d, calls } = deps({ lead: async () => { throw new Error("at most 20 directions: end one first"); } });
     await leaderItem(conv(), false, d).onSelect();
-    expect(calls).toEqual(["error:没能改常驻：at most 20 directions: end one first", "refresh"]);
+    expect(calls).toEqual(["error:更改常驻状态失败：at most 20 directions: end one first", "refresh"]);
   });
 
   it("renames, archives, copies the id and ends through the hub, then reads the list again", async () => {
@@ -90,7 +90,7 @@ describe("a Persona conversation's sidebar menu (iOS AssistantSidebar)", () => {
     await items.find((i) => i.key === "archive")!.onSelect();
     await items.find((i) => i.key === "copy")!.onSelect();
     await items.find((i) => i.key === "end")!.onSelect();
-    expect(calls).toEqual(["rename:新标题", "ok:已重命名", "refresh", "archive:c1", "ok:已归档「周报」", "refresh", "copy:c1", "end:c1", "ok:已结束对话，记录仍保留", "refresh"]);
+    expect(calls).toEqual(["rename:新标题", "ok:已重命名", "refresh", "archive:c1", "ok:已归档「周报」", "refresh", "copy:c1", "end:c1", "ok:对话已结束，历史记录仍会保留", "refresh"]);
   });
 
   it("offers 撤销 after archiving, which unarchives it and reads the list again", async () => {
@@ -107,7 +107,7 @@ describe("a Persona conversation's sidebar menu (iOS AssistantSidebar)", () => {
     await conversationMenuItems(conv(), { main: false }, d).find((i) => i.key === "archive")!.onSelect();
     calls.length = 0;
     actions[0].run();
-    await vi.waitFor(() => expect(calls).toEqual(["error:没能撤销：offline", "refresh"]));
+    await vi.waitFor(() => expect(calls).toEqual(["error:撤销失败：offline", "refresh"]));
     const failed = deps({ archive: async () => Promise.reject(new Error("offline")) });
     await conversationMenuItems(conv(), { main: false }, failed.d).find((i) => i.key === "archive")!.onSelect();
     expect(failed.actions).toEqual([]);
@@ -126,7 +126,7 @@ describe("a Persona conversation's sidebar menu (iOS AssistantSidebar)", () => {
   it("keeps the menu open with the reason when ending fails", async () => {
     const { d, calls } = deps({ end: async () => Promise.reject(new Error("offline")) });
     const end = conversationMenuItems(conv(), { main: false }, d).find((i) => i.key === "end")!;
-    await expect(end.onSelect()).rejects.toThrow("没能结束对话：offline");
+    await expect(end.onSelect()).rejects.toThrow("无法结束对话：offline");
     expect(calls).toEqual([]);
   });
 });

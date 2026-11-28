@@ -18,6 +18,7 @@ import (
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/rpc"
 	"github.com/nwverse/persona/server/internal/wireids"
 )
 
@@ -48,7 +49,7 @@ const (
 	placementMaxCapabilities = 16
 	placementMaxCandidates   = 32
 	placementMaxTagRunes     = 64
-	placementMaxReasonRunes  = 300
+	placementMaxReasonRunes  = 480
 )
 
 var (
@@ -207,9 +208,19 @@ func (s *Service) normalizePlacementConstraints(ctx context.Context, t *PlanTask
 	return nil
 }
 
-// machineMatchesPlacementConstraints checks kernel-enforced hard placement constraints for candidate device d.
+func (s *Service) isHubDevice(ctx context.Context, d Device) bool {
+	var m *proto.Machine
+	if s.devs != nil {
+		m, _, _ = s.devs.MachineResources(d.ID)
+	}
+	return s.isHubMachine(ctx, d, m)
+}
+
+// machineMatchesPlacementConstraintsWith checks kernel-enforced hard placement constraints for candidate device d.
 // Unknown capability tags are passed through because custom inventory belongs to the extension layer.
-func (s *Service) machineMatchesPlacementConstraints(ctx context.Context, t PlanTask, d Device) (hitKey string, err error) {
+// When allowHubFallback is true, the default hub exclusion is relaxed because no online non-hub computer satisfies
+// the task's hard constraints (require_hub=true, candidate_machines, os, capabilities, and hub admission still apply).
+func (s *Service) machineMatchesPlacementConstraintsWith(ctx context.Context, t PlanTask, d Device, allowHubFallback bool) (hitKey string, hitArgs i18n.Args, err error) {
 	var m *proto.Machine
 	if s.devs != nil {
 		m, _, _ = s.devs.MachineResources(d.ID)
@@ -217,11 +228,11 @@ func (s *Service) machineMatchesPlacementConstraints(ctx context.Context, t Plan
 	isHub := s.isHubMachine(ctx, d, m)
 	c := t.PlacementConstraints
 	requireHub := c != nil && c.RequireHub
-	if !requireHub && isHub {
-		return "hub_excluded", errors.New("automatic placement excludes the hub computer unless require_hub is true")
+	if !requireHub && isHub && !allowHubFallback {
+		return "hub_excluded", nil, errors.New("automatic placement excludes the hub computer unless require_hub is true")
 	}
 	if requireHub && !isHub {
-		return "hub_required", errors.New("placement_constraints.require_hub requires the hub computer")
+		return "hub_required", nil, errors.New("placement_constraints.require_hub requires the hub computer")
 	}
 	if c != nil && len(c.CandidateMachines) > 0 {
 		canon := s.canonical(d.ID)
@@ -233,45 +244,288 @@ func (s *Service) machineMatchesPlacementConstraints(ctx context.Context, t Plan
 			}
 		}
 		if !matched {
-			return "not_candidate", fmt.Errorf("computer %q is not in placement_constraints.candidate_machines", firstNonEmpty(d.Name, d.ID))
+			return "not_candidate", nil, fmt.Errorf("computer %q is not in placement_constraints.candidate_machines", firstNonEmpty(d.Name, d.ID))
 		}
 	}
 	osName := machinePlatformOS(m)
 	arch := machinePlatformArch(m)
 	if c != nil && c.OS != "" && osName != c.OS {
-		return "os_mismatch", fmt.Errorf("computer %q does not match required os %q", firstNonEmpty(d.Name, d.ID), c.OS)
+		return "os_mismatch", i18n.Args{"required": c.OS, "actual": cmp.Or(osName, "unknown")},
+			fmt.Errorf("computer %q does not match required os %q", firstNonEmpty(d.Name, d.ID), c.OS)
 	}
 	if c != nil {
 		for _, capTag := range c.Capabilities {
 			switch capTag {
 			case "darwin", "macos", "xcode":
 				if osName != "darwin" {
-					return "capability_mismatch", fmt.Errorf("computer %q lacks capability %q (requires darwin)", firstNonEmpty(d.Name, d.ID), capTag)
+					return "capability_mismatch", i18n.Args{"capability": capTag},
+						fmt.Errorf("computer %q lacks capability %q (requires darwin)", firstNonEmpty(d.Name, d.ID), capTag)
 				}
 			case "linux":
 				if osName != "linux" {
-					return "capability_mismatch", fmt.Errorf("computer %q lacks capability %q (requires linux)", firstNonEmpty(d.Name, d.ID), capTag)
+					return "capability_mismatch", i18n.Args{"capability": capTag},
+						fmt.Errorf("computer %q lacks capability %q (requires linux)", firstNonEmpty(d.Name, d.ID), capTag)
 				}
 			case "windows":
 				if osName != "windows" {
-					return "capability_mismatch", fmt.Errorf("computer %q lacks capability %q (requires windows)", firstNonEmpty(d.Name, d.ID), capTag)
+					return "capability_mismatch", i18n.Args{"capability": capTag},
+						fmt.Errorf("computer %q lacks capability %q (requires windows)", firstNonEmpty(d.Name, d.ID), capTag)
 				}
 			case "arm64", "aarch64":
 				if arch != "arm64" {
-					return "capability_mismatch", fmt.Errorf("computer %q lacks capability %q (requires arm64)", firstNonEmpty(d.Name, d.ID), capTag)
+					return "capability_mismatch", i18n.Args{"capability": capTag},
+						fmt.Errorf("computer %q lacks capability %q (requires arm64)", firstNonEmpty(d.Name, d.ID), capTag)
 				}
 			case "amd64", "x86_64":
 				if arch != "amd64" {
-					return "capability_mismatch", fmt.Errorf("computer %q lacks capability %q (requires amd64)", firstNonEmpty(d.Name, d.ID), capTag)
+					return "capability_mismatch", i18n.Args{"capability": capTag},
+						fmt.Errorf("computer %q lacks capability %q (requires amd64)", firstNonEmpty(d.Name, d.ID), capTag)
 				}
 			case "hub":
 				if !isHub {
-					return "capability_mismatch", fmt.Errorf("computer %q lacks capability %q", firstNonEmpty(d.Name, d.ID), capTag)
+					return "capability_mismatch", i18n.Args{"capability": capTag},
+						fmt.Errorf("computer %q lacks capability %q", firstNonEmpty(d.Name, d.ID), capTag)
 				}
 			}
 		}
 	}
-	return "", nil
+	return "", nil, nil
+}
+
+func (s *Service) devicePassesPlacementHardConstraints(ctx context.Context, pt PlanTask, d Device, allowHubFallback, checkPresence bool, pl *placement) (eligible, structurallyEligible bool) {
+	checkCtx := ctx
+	if pl == nil {
+		checkCtx = context.WithValue(ctx, placementKey{}, (*placement)(nil))
+	} else if placementOf(ctx) != pl {
+		checkCtx = context.WithValue(ctx, placementKey{}, pl)
+	}
+	if err := s.leaderOnWorkMachine(&pt, d); err != nil {
+		pl.hit(d.ID, "leader_work_machine", nil)
+		return false, false
+	}
+	if hitKey, hitArgs, err := s.machineMatchesPlacementConstraintsWith(checkCtx, pt, d, allowHubFallback); err != nil {
+		pl.hit(d.ID, hitKey, hitArgs)
+		return false, false
+	}
+	var dir string
+	if pt.scratchWorkspace() {
+		if !d.ScratchWorkspace {
+			pl.hit(d.ID, "scratch_unsupported", nil)
+			return false, false
+		}
+	} else {
+		if strings.HasPrefix(pt.Cwd, "~") && d.Home == "" {
+			pl.hit(d.ID, "directory_missing", nil)
+			return false, false
+		}
+		dir = proto.ExpandHome(pt.Cwd, d.Home)
+		if assistantWorkspace(d, dir) {
+			pl.hit(d.ID, "assistant_workspace", nil)
+			return false, false
+		}
+	}
+	// Resolve the effective launcher on this computer even when the task names no launcher: a default- or
+	// tier-launcher task otherwise skips both checks here and gets rejected by assignPendingPlacement on every
+	// retry, livelocking until the 30m deadline (#15953).
+	resolved, err := s.fallbackTaskLauncher(checkCtx, pt, d.ID)
+	if err != nil {
+		var line *i18n.Message
+		if errors.As(err, &line) {
+			pl.violation(d.ID, line)
+		} else {
+			pl.hit(d.ID, "tier_unavailable", i18n.Args{"tier": pt.Tier})
+		}
+		return false, false
+	}
+	if checkPresence && !s.launcherOn(checkCtx, d.ID, resolved) {
+		pl.hit(d.ID, "launcher_missing", i18n.Args{"launcher": resolved})
+		return false, false
+	}
+	if dir != "" && !pt.backendWorkspace() && !pt.scratchWorkspace() && !s.taskDirectoryExists(checkCtx, d.ID, dir) {
+		return false, false
+	}
+	// The same on-the-spot probe assignPendingPlacement runs: a stale failing record clears here too instead
+	// of requeuing a task a healthy computer could start. A transient launcher failure leaves the computer
+	// structurally eligible so online non-hub workers still protect the hub from unintended fallback.
+	if h, bad := s.launcherUnusableNow(checkCtx, d.ID, resolved); bad {
+		pl.hit(d.ID, "launcher_unhealthy", i18n.Args{"launcher": resolved, "kind": cmp.Or(h.Kind, "unhealthy")})
+		return false, true
+	}
+	return true, true
+}
+
+// hasOnlineNonHubEligibleForHardConstraints reports whether at least one reachable non-hub computer satisfies
+// pt's non-capacity hard constraints. When false, automatic placement may fall back to the hub computer.
+func (s *Service) hasOnlineNonHubEligibleForHardConstraints(ctx context.Context, pt PlanTask) bool {
+	checkPresence := pt.Launcher != "" || pt.Tier != ""
+	for _, d := range s.devices(ctx) {
+		if !d.Reachable || s.isHubDevice(ctx, d) {
+			continue
+		}
+		if _, structural := s.devicePassesPlacementHardConstraints(ctx, pt, d, false, checkPresence, nil); structural {
+			return true
+		}
+	}
+	return false
+}
+
+func replacePlacementCandidate(dst *placement, src placementCandidate) {
+	if dst == nil {
+		return
+	}
+	cp := src
+	cp.Hits = slices.Clone(src.Hits)
+	for i := range dst.Candidates {
+		if dst.Candidates[i].Machine == src.Machine {
+			dst.Candidates[i] = cp
+			return
+		}
+	}
+	dst.Candidates = append(dst.Candidates, cp)
+}
+
+func placementArg(args i18n.Args, key, fallback string) string {
+	if args == nil {
+		return fallback
+	}
+	v, ok := args[key]
+	if !ok || v == nil {
+		return fallback
+	}
+	if s := strings.TrimSpace(fmt.Sprint(v)); s != "" {
+		return s
+	}
+	return fallback
+}
+
+func placementHitText(lang i18n.Lang, h placementHit) string {
+	if strings.HasPrefix(h.Key, "assistant-tasks.") {
+		return strings.TrimRightFunc(i18n.T(lang, h.Key, h.Args), func(r rune) bool {
+			return r == '.' || r == '\u3002'
+		})
+	}
+	switch h.Key {
+	case "offline":
+		return i18n.T(lang, "assistant-tasks.placement_hit_offline")
+	case "hub_excluded":
+		return i18n.T(lang, "assistant-tasks.placement_hit_hub_excluded")
+	case "hub_required":
+		return i18n.T(lang, "assistant-tasks.placement_hit_hub_required")
+	case "not_candidate":
+		return i18n.T(lang, "assistant-tasks.placement_hit_not_candidate")
+	case "os_mismatch":
+		return i18n.T(lang, "assistant-tasks.placement_hit_os_mismatch", i18n.Args{
+			"actual":   placementArg(h.Args, "actual", "unknown"),
+			"required": placementArg(h.Args, "required", "unknown"),
+		})
+	case "capability_mismatch":
+		return i18n.T(lang, "assistant-tasks.placement_hit_capability_mismatch", i18n.Args{
+			"capability": placementArg(h.Args, "capability", "unknown"),
+		})
+	case "leader_work_machine":
+		return i18n.T(lang, "assistant-tasks.placement_hit_leader_work_machine")
+	case "assistant_workspace":
+		return i18n.T(lang, "assistant-tasks.placement_hit_assistant_workspace")
+	case "directory_missing":
+		return i18n.T(lang, "assistant-tasks.placement_hit_directory_missing")
+	case "directory_unknown":
+		return i18n.T(lang, "assistant-tasks.placement_hit_directory_unknown")
+	case "scratch_unsupported":
+		return i18n.T(lang, "assistant-tasks.placement_hit_scratch_unsupported")
+	case "launcher_missing":
+		return i18n.T(lang, "assistant-tasks.placement_hit_launcher_missing", i18n.Args{
+			"launcher": placementArg(h.Args, "launcher", "unknown"),
+		})
+	case "launcher_unhealthy":
+		return i18n.T(lang, "assistant-tasks.placement_hit_launcher_unhealthy", i18n.Args{
+			"launcher": placementArg(h.Args, "launcher", "unknown"),
+			"kind":     placementArg(h.Args, "kind", "unhealthy"),
+		})
+	case "no_resources":
+		return i18n.T(lang, "assistant-tasks.placement_hit_no_resources")
+	default:
+		return h.Key
+	}
+}
+
+func (s *Service) placementLocalizedErr(ctx context.Context, err error) string {
+	var msg *i18n.Message
+	if errors.As(err, &msg) {
+		return msg.Text(s.lang(ctx))
+	}
+	return err.Error()
+}
+
+func (s *Service) placementNoMatchReason(ctx context.Context, pl *placement) string {
+	lang := s.lang(ctx)
+	if pl == nil || len(pl.Candidates) == 0 {
+		return i18n.T(lang, "assistant-tasks.placement_no_match")
+	}
+	var onlineParts, offlineParts []string
+	for _, c := range pl.Candidates {
+		if len(c.Hits) == 0 {
+			continue
+		}
+		name := c.Machine
+		if d, ok := s.device(ctx, c.Machine); ok {
+			name = firstNonEmpty(d.Name, c.Machine)
+		}
+		hits := make([]string, 0, len(c.Hits))
+		onlyOffline := true
+		for _, h := range c.Hits {
+			if h.Key != "offline" {
+				onlyOffline = false
+			}
+			hits = append(hits, placementHitText(lang, h))
+		}
+		entry := fmt.Sprintf("%s: %s", name, strings.Join(hits, ", "))
+		if onlyOffline {
+			offlineParts = append(offlineParts, entry)
+		} else {
+			onlineParts = append(onlineParts, entry)
+		}
+	}
+	parts := append(onlineParts, offlineParts...)
+	if len(parts) == 0 {
+		return i18n.T(lang, "assistant-tasks.placement_no_match")
+	}
+	return clip(oneLine(i18n.T(lang, "assistant-tasks.placement_no_match_detail", i18n.Args{
+		"details": strings.Join(parts, "; "),
+	})), placementMaxReasonRunes)
+}
+
+func placementDiagnosticLog(pl *placement) string {
+	if pl == nil || len(pl.Candidates) == 0 {
+		return "no_candidates"
+	}
+	parts := make([]string, 0, len(pl.Candidates))
+	for _, c := range pl.Candidates {
+		if len(c.Hits) == 0 {
+			continue
+		}
+		hits := make([]string, 0, len(c.Hits))
+		for _, h := range c.Hits {
+			if len(h.Args) == 0 {
+				hits = append(hits, h.Key)
+				continue
+			}
+			keys := make([]string, 0, len(h.Args))
+			for k := range h.Args {
+				keys = append(keys, k)
+			}
+			slices.Sort(keys)
+			kvs := make([]string, 0, len(keys))
+			for _, k := range keys {
+				kvs = append(kvs, fmt.Sprintf("%s=%v", k, h.Args[k]))
+			}
+			hits = append(hits, fmt.Sprintf("%s(%s)", h.Key, strings.Join(kvs, ",")))
+		}
+		parts = append(parts, fmt.Sprintf("%s[%s]", c.Machine, strings.Join(hits, ",")))
+	}
+	if len(parts) == 0 {
+		return "no_hits"
+	}
+	return strings.Join(parts, " ")
 }
 
 func (s *Service) pendingPlacementQueueEntry(ctx context.Context, planID string, batchSize, batchIdx int, now time.Time) TaskQueue {
@@ -346,10 +600,12 @@ func (s *Service) emitPlacementPending(planID, todoID string, batchSize int) {
 func (s *Service) onPendingPlacementEnqueued(ctx context.Context, planID, todoID string, batchSize int) {
 	now := s.placementNow()
 	visible := s.placementVisibleToExtensions(ctx, todoID)
+	activeLease := s.hasActivePlacementLease(now)
+	s.logf("task %s: placement queue: enqueued (plan %s, visible=%t, active_lease=%t)", todoID, planID, visible, activeLease)
 	if visible {
 		s.emitPlacementPending(planID, todoID, batchSize)
 	}
-	needsImmediate := !visible || !s.hasActivePlacementLease(now)
+	needsImmediate := !visible || !activeLease
 	if s.placementSched.loopRunning.Load() {
 		s.wakePendingPlacement()
 		return
@@ -453,16 +709,40 @@ func (s *Service) sweepPendingPlacement(ctx context.Context) time.Duration {
 					}
 				})
 			}
-			fallbackDue := !visible || !activeLease || !pw.FallbackAt.After(now)
+			// On the initial attempt (Attempt == 0), run immediately when hidden from extensions or no scheduler lease is
+			// active. On subsequent retries (Attempt > 0), honor FallbackAt so unrelated wakes do not hammer retries faster
+			// than pendingPlacementRetryInterval.
+			fallbackDue := !pw.FallbackAt.After(now) || (q.Attempt == 0 && (!visible || !activeLease))
 			if !fallbackDue {
 				updateWake(pw.FallbackAt.Sub(now))
+				updateWake(admissionQueueMaxWait - now.Sub(q.QueuedAt))
 				continue
 			}
 			s.runPlacementFallback(cctx, p, i, pt, pw.Version, now)
 			updateWake(pendingPlacementRetryInterval)
+			updateWake(admissionQueueMaxWait - now.Sub(q.QueuedAt))
 		}
 	}
 	return nextWake
+}
+
+// fallbackTaskLauncher is the launcher a deferred task would start on machine: the task's own launcher when it names
+// one, else the candidate its tier picks on that machine (the same per-machine pick applyStartTier runs at dispatch),
+// else the configured default (model settings' agent.new, then claude). The fallback's candidate filter must judge
+// this launcher so a task without an explicit launcher never gets recommended a computer whose resolved launcher is
+// missing or unhealthy, which would reject the assignment every 30s until the 30m queue deadline.
+func (s *Service) fallbackTaskLauncher(ctx context.Context, pt PlanTask, machine string) (string, error) {
+	if pt.Launcher != "" {
+		return s.startLauncher(ctx, pt.Launcher), nil
+	}
+	if pt.Tier != "" {
+		pick, err := s.pickTierCandidate(ctx, pt.Tier, tierFacts{Machine: machine})
+		if err != nil {
+			return "", err
+		}
+		return s.startLauncher(ctx, pick.Tier.Launcher), nil
+	}
+	return s.startLauncher(ctx, ""), nil
 }
 
 func (s *Service) runPlacementFallback(ctx context.Context, p *TaskPlan, idx int, pt PlanTask, version int, now time.Time) {
@@ -486,54 +766,79 @@ func (s *Service) runPlacementFallback(ctx context.Context, p *TaskPlan, idx int
 	pl.TaskID = pt.TodoID
 	pctx := context.WithValue(ctx, placementKey{}, pl)
 
-	alt, ok := s.recommendMachine(pctx, "", func(d Device) bool {
-		if err := s.leaderOnWorkMachine(&pt, d); err != nil {
-			pl.hit(d.ID, "leader_work_machine", nil)
-			return false
-		}
-		if hitKey, err := s.machineMatchesPlacementConstraints(pctx, pt, d); err != nil {
-			pl.hit(d.ID, hitKey, nil)
-			return false
-		}
-		if strings.HasPrefix(pt.Cwd, "~") && d.Home == "" {
-			pl.hit(d.ID, "directory_missing", nil)
-			return false
-		}
-		dir := proto.ExpandHome(pt.Cwd, d.Home)
-		if assistantWorkspace(d, dir) {
-			pl.hit(d.ID, "assistant_workspace", nil)
-			return false
-		}
-		if pt.Launcher != "" {
-			resolved := s.startLauncher(pctx, pt.Launcher)
-			if !s.launcherOn(pctx, d.ID, resolved) {
-				pl.hit(d.ID, "launcher_missing", nil)
-				return false
+	nonHubEligible := false
+	// Candidate filtering must match what assignPendingPlacement enforces. checkPresence is only relaxed on a second
+	// pass for tasks without any launcher or tier: fitLauncher swaps a default launcher a computer lacks instead of
+	// refusing, so a missing default alone must not starve the task when no computer offers it. A failing launcher is
+	// always a refusal there and stays one here.
+	suitable := func(checkPresence bool) func(Device) bool {
+		return func(d Device) bool {
+			eligible, structural := s.devicePassesPlacementHardConstraints(pctx, pt, d, false, checkPresence, pl)
+			if structural && !s.isHubDevice(pctx, d) {
+				nonHubEligible = true
 			}
-			if h, bad := s.launcherUnusable(pctx, d.ID, resolved); bad {
-				pl.hit(d.ID, "launcher_unhealthy", i18n.Args{"launcher": resolved, "kind": h.Kind})
-				return false
+			return eligible
+		}
+	}
+	alt, ok := s.recommendMachine(pctx, "", suitable(true))
+	if !ok && pt.Launcher == "" && pt.Tier == "" {
+		// No computer offers the resolved default: keep the pre-#15953 behavior and let the assignment swap to a
+		// launcher the chosen computer has rather than failing at the queue deadline. Health stays enforced.
+		alt, ok = s.recommendMachine(pctx, "", suitable(false))
+	}
+
+	hubFallback := false
+	requireHub := pt.PlacementConstraints != nil && pt.PlacementConstraints.RequireHub
+	if !ok && !nonHubEligible && !requireHub {
+		tryHub := func(checkPresence bool) (*placement, Device, bool) {
+			hubPl := newPlacement("auto", "enforce")
+			hubPl.TaskID = pt.TodoID
+			hubCtx := context.WithValue(ctx, placementKey{}, hubPl)
+			hubAlt, hubOK := s.recommendMachine(hubCtx, "", func(d Device) bool {
+				if !s.isHubDevice(hubCtx, d) {
+					return false
+				}
+				eligible, _ := s.devicePassesPlacementHardConstraints(hubCtx, pt, d, true, checkPresence, hubPl)
+				return eligible
+			})
+			return hubPl, hubAlt, hubOK
+		}
+		hubPl, hubAlt, hubOK := tryHub(true)
+		if !hubOK && pt.Launcher == "" && pt.Tier == "" {
+			if swapPl, swapAlt, swapOK := tryHub(false); swapOK {
+				hubPl, hubAlt, hubOK = swapPl, swapAlt, true
 			}
 		}
-		if dir != "" && !pt.backendWorkspace() && !s.taskDirectoryExists(pctx, d.ID, dir) {
-			return false
+		for _, c := range hubPl.Candidates {
+			if d, found := s.device(ctx, c.Machine); found && s.isHubDevice(ctx, d) {
+				replacePlacementCandidate(pl, c)
+			}
 		}
-		return true
-	})
+		if hubOK {
+			alt, ok, hubFallback = hubAlt, true, true
+		}
+	}
 
 	var failReason string
+	var assignErr error
 	if ok {
 		reason := "kernel fallback: lowest load"
-		if _, err := s.assignPendingPlacement(pctx, p.ID, p.Conversation, idx, pt, alt.ID, version, placementReasonFallback, reason, pl); err == nil {
+		if hubFallback {
+			reason = "kernel fallback: hub computer (no eligible non-hub computer online)"
+		}
+		if _, err := s.assignPendingPlacementWith(pctx, p.ID, p.Conversation, idx, pt, alt.ID, version, placementReasonFallback, reason, pl, hubFallback); err == nil {
 			return
 		} else {
-			failReason = clip(oneLine(err.Error()), placementMaxReasonRunes)
+			assignErr = err
+			failReason = clip(oneLine(s.placementLocalizedErr(ctx, err)), placementMaxReasonRunes)
 		}
 	} else {
-		failReason = i18n.T(s.lang(ctx), "assistant-tasks.placement_no_match")
+		failReason = s.placementNoMatchReason(ctx, pl)
 	}
 
 	retryAt := now.Add(pendingPlacementRetryInterval)
+	attempt := 0
+	updated := false
 	if err := s.patchPlanTask(ctx, p.ID, idx, func(t *PlanTask) {
 		if t.TodoID != pt.TodoID || t.Queue == nil || t.Queue.Key != pendingPlacementQueueKey {
 			return
@@ -545,6 +850,7 @@ func (s *Service) runPlacementFallback(ctx context.Context, p *TaskPlan, idx int
 			return
 		}
 		t.Queue.Attempt++
+		attempt = t.Queue.Attempt
 		t.Queue.Reason = failReason
 		t.Queue.NextAt = retryAt
 		t.Queue.Placement.Version++
@@ -556,8 +862,17 @@ func (s *Service) runPlacementFallback(ctx context.Context, p *TaskPlan, idx int
 		pl.Reason = failReason
 		pl.WaitAt = retryAt
 		t.Placement = pl
+		updated = true
 	}); err != nil {
 		s.logf("task %s: placement fallback requeue: %v", pt.TodoID, err)
+		return
+	}
+	if updated {
+		if assignErr != nil {
+			s.logf("task %s: placement queue (attempt %d): assign %s failed: %s", pt.TodoID, attempt, alt.ID, failReason)
+		} else {
+			s.logf("task %s: placement queue (attempt %d): %s [%s]", pt.TodoID, attempt, failReason, placementDiagnosticLog(pl))
+		}
 	}
 }
 
@@ -591,6 +906,24 @@ func (s *Service) assignPendingPlacement(
 	reasonKey, reason string,
 	audit *placement,
 ) (*placementAssignResult, error) {
+	allowHubFallback := false
+	if m, ok := s.machineByName(ctx, targetMachine); ok && s.isHubDevice(ctx, m) && (pt.PlacementConstraints == nil || !pt.PlacementConstraints.RequireHub) {
+		allowHubFallback = !s.hasOnlineNonHubEligibleForHardConstraints(ctx, pt)
+	}
+	return s.assignPendingPlacementWith(ctx, planID, conversation, idx, pt, targetMachine, expectedVersion, reasonKey, reason, audit, allowHubFallback)
+}
+
+func (s *Service) assignPendingPlacementWith(
+	ctx context.Context,
+	planID, conversation string,
+	idx int,
+	pt PlanTask,
+	targetMachine string,
+	expectedVersion int,
+	reasonKey, reason string,
+	audit *placement,
+	allowHubFallback bool,
+) (*placementAssignResult, error) {
 	m, ok := s.machineByName(ctx, targetMachine)
 	if !ok {
 		return nil, &placementHTTPError{status: http.StatusUnprocessableEntity, code: "unknown_machine",
@@ -603,25 +936,32 @@ func (s *Service) assignPendingPlacement(
 	if err := s.leaderOnWorkMachine(&pt, m); err != nil {
 		return nil, &placementHTTPError{status: http.StatusUnprocessableEntity, code: "leader_work_machine", err: err}
 	}
-	if hitKey, err := s.machineMatchesPlacementConstraints(ctx, pt, m); err != nil {
+	if hitKey, _, err := s.machineMatchesPlacementConstraintsWith(ctx, pt, m, allowHubFallback); err != nil {
 		return nil, &placementHTTPError{status: http.StatusUnprocessableEntity, code: "constraint_violated", err: err,
 			extra: map[string]any{"constraint": hitKey}}
 	}
 
 	candidate := pt
 	candidate.Machine = m.ID
-	if strings.HasPrefix(candidate.Cwd, "~") && m.Home == "" {
-		return nil, &placementHTTPError{status: http.StatusUnprocessableEntity, code: "directory_missing",
-			err: fmt.Errorf("computer %q has not reported a home directory to expand %q", firstNonEmpty(m.Name, m.ID), candidate.Cwd)}
-	}
-	candidate.Cwd = proto.ExpandHome(candidate.Cwd, m.Home)
-	if assistantWorkspace(m, candidate.Cwd) {
-		return nil, &placementHTTPError{status: http.StatusUnprocessableEntity, code: "agent_assistant_workspace",
-			err: i18n.Err("rpc-errors.agent_assistant_workspace")}
-	}
-	if candidate.Cwd != "" && !candidate.backendWorkspace() && !s.taskDirectoryExists(ctx, m.ID, candidate.Cwd) {
-		return nil, &placementHTTPError{status: http.StatusUnprocessableEntity, code: "directory_missing",
-			err: fmt.Errorf("directory %q does not exist on %s", candidate.Cwd, firstNonEmpty(m.Name, m.ID))}
+	if candidate.scratchWorkspace() {
+		if !m.ScratchWorkspace {
+			return nil, &placementHTTPError{status: http.StatusUnprocessableEntity, code: "scratch_unsupported",
+				err: scratchUnsupportedError(ctx, s.lang(ctx), firstNonEmpty(m.Name, m.ID))}
+		}
+	} else {
+		if strings.HasPrefix(candidate.Cwd, "~") && m.Home == "" {
+			return nil, &placementHTTPError{status: http.StatusUnprocessableEntity, code: "directory_missing",
+				err: fmt.Errorf("computer %q has not reported a home directory to expand %q", firstNonEmpty(m.Name, m.ID), candidate.Cwd)}
+		}
+		candidate.Cwd = proto.ExpandHome(candidate.Cwd, m.Home)
+		if assistantWorkspace(m, candidate.Cwd) {
+			return nil, &placementHTTPError{status: http.StatusUnprocessableEntity, code: "agent_assistant_workspace",
+				err: i18n.Err("rpc-errors.agent_assistant_workspace")}
+		}
+		if candidate.Cwd != "" && !candidate.backendWorkspace() && !s.taskDirectoryExists(ctx, m.ID, candidate.Cwd) {
+			return nil, &placementHTTPError{status: http.StatusUnprocessableEntity, code: "directory_missing",
+				err: fmt.Errorf("directory %q does not exist on %s", candidate.Cwd, firstNonEmpty(m.Name, m.ID))}
+		}
 	}
 
 	// Launcher fitting, speed/readonly/mode checks, and launcher health verification on the chosen computer.
@@ -671,23 +1011,33 @@ func (s *Service) assignPendingPlacement(
 			if err := startModesRefused(cmp.Or(candidate.Launcher, resolvedLauncher), fit.agent, asked, own.effort); err != nil {
 				return nil, &placementHTTPError{status: http.StatusUnprocessableEntity, code: "launcher_unavailable", err: err}
 			}
-			candidate.Effort = ""
 			if asked != "" {
 				candidate.Permission = ""
 			}
+		}
+		if !startTakesEffort(fit.agent) {
+			candidate.Effort = ""
 		}
 	}
 	if candidate.Permission == "" && takesModes {
 		candidate.Permission = s.taskPermission(ctx, m.ID, nil)
 	}
-	if r, bad := s.launcherUnusableNow(ctx, m.ID, s.startLauncher(ctx, cmp.Or(candidate.Launcher, resolvedLauncher))); bad {
+	// Name the resolved launcher, not the task's possibly empty field: a default-launcher task must never format a
+	// blank launcher in fixed_launcher_unhealthy.
+	checkedLauncher := s.startLauncher(ctx, cmp.Or(candidate.Launcher, resolvedLauncher))
+	if r, bad := s.launcherUnusableNow(ctx, m.ID, checkedLauncher); bad {
 		return nil, &placementHTTPError{status: http.StatusUnprocessableEntity, code: "launcher_unavailable",
 			err: i18n.Err("assistant-tasks.fixed_launcher_unhealthy", i18n.Args{
-				"machine": m.ID, "launcher": cmp.Or(candidate.Launcher, resolvedLauncher), "reason": r.Error,
+				"machine": m.ID, "launcher": checkedLauncher, "reason": r.Error,
 			})}
 	}
 	if err := s.resolveTaskWorkspace(ctx, &candidate); err != nil {
-		return nil, &placementHTTPError{status: http.StatusUnprocessableEntity, code: "workspace_unavailable", err: err}
+		code := "workspace_unavailable"
+		var re *rpc.Error
+		if errors.As(err, &re) && re.Code == "scratch_unsupported" {
+			code = "scratch_unsupported"
+		}
+		return nil, &placementHTTPError{status: http.StatusUnprocessableEntity, code: code, err: err}
 	}
 	s.resolveTaskRepo(ctx, &candidate)
 
@@ -737,6 +1087,13 @@ func (s *Service) assignPendingPlacement(
 	}
 	candidate.Placement = pl
 
+	todo, _ := s.todoNow(pt.TodoID)
+	readiness, readinessErr := s.taskTodoReadiness(ctx, todo, pt)
+	if readinessErr != nil {
+		s.logf("task %s: placement queue: read prerequisites: %v", pt.TodoID, readinessErr)
+	}
+	blocked := readinessErr != nil || !readiness.ready()
+
 	wasRetry := false
 	casResult := "not_pending"
 	currentVersion := 0
@@ -775,7 +1132,15 @@ func (s *Service) assignPendingPlacement(
 		live.Permission = candidate.Permission
 		live.Why = candidate.Why
 		live.Placement = pl
-		live.Queue = nil
+		if blocked {
+			q := s.blockerWaitQueue(ctx, readiness.refs())
+			q.Retry = wasRetry
+			live.Queue = q
+			live.Placement = queuedPlacement(*live, q)
+			pl = live.Placement
+		} else {
+			live.Queue = nil
+		}
 		casResult = "ok"
 	}); err != nil {
 		return nil, err
@@ -796,17 +1161,36 @@ func (s *Service) assignPendingPlacement(
 	}
 
 	s.savePlacement(ctx, pl)
+	if blocked {
+		s.logf("task %s: placed on %s and waiting for prerequisites", pt.TodoID, m.ID)
+		assignedCwd := candidate.Cwd
+		if assignedCwd == "" && candidate.WorkspaceResolved != nil {
+			assignedCwd = candidate.WorkspaceResolved.Path
+		}
+		return &placementAssignResult{
+			PlanID:      planID,
+			TodoID:      pt.TodoID,
+			Machine:     m.ID,
+			Cwd:         assignedCwd,
+			PlacementID: pl.ID,
+		}, nil
+	}
+	s.logf("task %s: placement queue: assigned to %s (%s)", pt.TodoID, m.ID, pl.Reason)
 	candidate.Queue = nil
 	candidate.admissionRelease = release
 	candidate.admissionClaimMachine = m.ID
 	releaseTransferred = true
 	s.startPlanTaskAsync(planID, conversation, idx, candidate, wasRetry, nil)
 
+	assignedCwd := candidate.Cwd
+	if assignedCwd == "" && candidate.WorkspaceResolved != nil {
+		assignedCwd = candidate.WorkspaceResolved.Path
+	}
 	return &placementAssignResult{
 		PlanID:      planID,
 		TodoID:      pt.TodoID,
 		Machine:     m.ID,
-		Cwd:         candidate.Cwd,
+		Cwd:         assignedCwd,
 		PlacementID: pl.ID,
 	}, nil
 }

@@ -2,6 +2,8 @@ package node
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log"
@@ -47,57 +49,105 @@ type agyBridge struct {
 	cancel     context.CancelFunc
 	done       chan struct{}
 	instance   string
+	draining   string // instance currently draining before a binary/companion upgrade
 	bin        string
 	wakeCh     chan struct{}
 	yieldGrace time.Duration
 	takeover   sync.Mutex
-	// providerEnv is the Gemini API key provider a Persona-managed agy launcher gives the companion (#13762): the
-	// launcher's GOOGLE_GEMINI_BASE_URL / GEMINI_API_KEY plus PERSONA_AGY_MODEL_PROVIDER=gemini, nil without one. It
-	// only ever goes into the companion's environment, never into its arguments, logs or a file.
-	providerEnv []string
 }
 
-// agyProviderEnv is what the managed agy launchers say about the provider: the first one (by name) that carries a key
-// is the machine's, since one companion serves every agy session here. None when agy runs on its own sign-in.
-func (n *Node) agyProviderEnv() []string {
-	n.managed.mu.Lock()
-	names := make([]string, 0, len(n.managed.byID))
-	for name, l := range n.managed.byID {
-		if l.AgentType() == "agy" {
-			names = append(names, name)
+// agyChannelSpec carries per-session / per-probe channel routing and credentials to the Antigravity companion over
+// the local runtime socket so each (channel_id, auth_mode, channel_rev) runs in its own isolated ACP process pool.
+// Credentials stay in memory and are never placed in companion process env, arguments, files, or logs.
+type agyChannelSpec struct {
+	ID       string            `json:"id"`
+	AuthMode string            `json:"auth_mode"`
+	Rev      string            `json:"rev,omitempty"`
+	Env      map[string]string `json:"env,omitempty"`
+}
+
+// agyChannelFor resolves the isolated channel pool spec for an Antigravity launcher on demand. Native `agy` (or a
+// managed agy launcher without API-key provider settings) returns nil so the companion routes it to the native OAuth pool.
+func (n *Node) agyChannelFor(ctx context.Context, launcher string) (*agyChannelSpec, error) {
+	if n == nil || launcher == "" || shellLauncherNames()[launcher] {
+		return nil, nil
+	}
+	cat, ok := n.managedCatalog(launcher)
+	if !ok || cat.AgentType() != agyAgent {
+		return nil, nil
+	}
+	if err := n.ensureManaged(ctx, launcher); err != nil {
+		return nil, err
+	}
+	l, ok := n.managedLauncher(launcher)
+	if !ok || l.AgentType() != agyAgent {
+		return nil, nil
+	}
+	rawEnv := managedEnv(l)
+	if len(rawEnv) == 0 && l.APIKey == "" {
+		return nil, nil
+	}
+	envMap := make(map[string]string, len(rawEnv)+1)
+	for _, kv := range rawEnv {
+		if k, v, ok := strings.Cut(kv, "="); ok && k != "" {
+			envMap[k] = v
 		}
 	}
-	n.managed.mu.Unlock()
-	sort.Strings(names)
-	for _, name := range names {
-		if l, ok := n.managedLauncher(name); ok && l.APIKey != "" {
-			return append(managedEnv(l), "PERSONA_AGY_MODEL_PROVIDER=gemini")
-		}
+	hasKey := strings.TrimSpace(envMap["GEMINI_API_KEY"]) != ""
+	provider := strings.TrimSpace(envMap["PERSONA_AGY_MODEL_PROVIDER"])
+	if hasKey && provider == "" {
+		envMap["PERSONA_AGY_MODEL_PROVIDER"] = "gemini"
+		provider = "gemini"
 	}
-	return nil
+	authMode := "oauth"
+	if strings.EqualFold(provider, "gemini") || hasKey {
+		authMode = "gemini-api-key"
+	}
+	if authMode == "oauth" && len(envMap) == 0 {
+		return nil, nil
+	}
+	rev := strings.TrimSpace(l.Rev)
+	if rev == "" {
+		rev = agyChannelEnvHash(envMap)
+	}
+	return &agyChannelSpec{
+		ID:       l.Name,
+		AuthMode: authMode,
+		Rev:      rev,
+		Env:      envMap,
+	}, nil
 }
 
-// syncAgyProvider hands the companion the provider the managed launchers name now; it restarts when that changed.
-func (n *Node) syncAgyProvider() {
-	if n.runtimeHost != nil {
-		n.runtimeHost.setAgyProviderEnv(n.agyProviderEnv())
+func agyChannelEnvHash(env map[string]string) string {
+	keys := make([]string, 0, len(env))
+	for k := range env {
+		keys = append(keys, k)
 	}
+	sort.Strings(keys)
+	h := sha256.New()
+	for _, k := range keys {
+		_, _ = h.Write([]byte(k))
+		_, _ = h.Write([]byte{0})
+		_, _ = h.Write([]byte(env[k]))
+		_, _ = h.Write([]byte{0})
+	}
+	return hex.EncodeToString(h.Sum(nil))[:12]
 }
 
-func (rh *RuntimeHost) setAgyProviderEnv(env []string) {
-	rh.agy.mu.Lock()
-	changed := !slices.Equal(rh.agy.providerEnv, env)
-	rh.agy.providerEnv = env
-	rh.agy.mu.Unlock()
-	if changed {
-		rh.wakeAgyBridge()
-	}
-}
-
-func (rh *RuntimeHost) agyProviderEnv() []string {
+func (rh *RuntimeHost) setAgyDraining(instance string, on bool) {
 	rh.agy.mu.Lock()
 	defer rh.agy.mu.Unlock()
-	return slices.Clone(rh.agy.providerEnv)
+	if on {
+		rh.agy.draining = instance
+	} else if rh.agy.draining == instance || instance == "" {
+		rh.agy.draining = ""
+	}
+}
+
+func (rh *RuntimeHost) agyDraining(instance string) bool {
+	rh.agy.mu.Lock()
+	defer rh.agy.mu.Unlock()
+	return instance != "" && rh.agy.draining == instance
 }
 
 func (rh *RuntimeHost) builtinAgyInstance() string {
@@ -258,26 +308,27 @@ var agyBridgeCommand = func(ctx context.Context, rh *RuntimeHost, agyBin, instan
 	if instance != "" {
 		args = append(args, "--instance", instance)
 	}
+	// The companion attaches `<this program> mcp` to its chats for Persona's tools, and is told which program that is:
+	// a Persona Link install calls it persona-node, which a lookup for personad does not find (#14582).
+	if bin := ownProgram(); bin != "" {
+		args = append(args, "--personad-bin", bin)
+	}
 	cmd := exec.Command(js.Path, args...)
 	cmd.Env = js.env(agyBridgeEnv(ctx, rh, os.Environ()))
 	cmd.Dir = dir
 	return cmd, nil
 }
 
-// agyBridgeEnv constructs the companion environment from base, applying the runtime socket and any managed agy
-// provider environment, and falling back to OS system proxy settings (macOS `scutil --proxy`) when neither base nor
-// the provider explicitly names any proxy variable (including an explicit empty value such as `HTTPS_PROXY=`).
+// agyBridgeEnv constructs the companion control-plane environment from base, applying only the runtime socket and
+// OS/login-shell proxy settings. Channel credentials are never injected into the companion process environment; they
+// are delivered per session/probe to isolated ACP pools over the local runtime socket.
 func agyBridgeEnv(ctx context.Context, rh *RuntimeHost, base []string) []string {
 	env := slices.Clone(base)
 	if rh != nil {
 		env = setEnvVar(env, "PERSONA_RUNTIME_SOCKET", rh.dialPath())
-		for _, kv := range rh.agyProviderEnv() {
-			if k, v, ok := strings.Cut(kv, "="); ok {
-				env = setEnvVar(env, k, v)
-			}
-		}
 	}
-	return withSystemProxyEnv(ctx, env)
+	env = withSystemProxyEnv(ctx, env)
+	return withShellProxyEnv(ctx, env)
 }
 
 func (rh *RuntimeHost) agyConnected() bool {
@@ -342,6 +393,7 @@ func (rh *RuntimeHost) runAgyBridge(ctx context.Context, agyBin string, wake <-c
 	rh.agy.bin = agyBin
 	rh.agy.mu.Unlock()
 	defer func() {
+		rh.setAgyDraining(instance, false)
 		rh.agy.mu.Lock()
 		if rh.agy.instance == instance {
 			rh.agy.instance = ""
@@ -350,8 +402,7 @@ func (rh *RuntimeHost) runAgyBridge(ctx context.Context, agyBin string, wake <-c
 		rh.agy.mu.Unlock()
 	}()
 
-	started := rh.agyProviderEnv() // read before the command is made: a change in between restarts it
-	bin := statAgy(agyBin)         // the file the companion runs; a different one later restarts it (agyChange)
+	bin := statAgy(agyBin) // the file the companion runs; a different one later restarts it once idle (agyChange)
 	cmd, err := agyBridgeCommand(ctx, rh, agyBin, instance)
 	if err != nil {
 		return false, err
@@ -396,11 +447,6 @@ func (rh *RuntimeHost) runAgyBridge(ctx context.Context, agyBin string, wake <-c
 	defer probe.Stop()
 	var change agyChange
 	for {
-		if !slices.Equal(started, rh.agyProviderEnv()) {
-			rh.logger.Printf("agy runtime: the agy launcher's model provider changed; restarting")
-			stopChild()
-			return true, nil
-		}
 		if _, external := rh.agyPeers(instance); external {
 			rh.logger.Printf("agy runtime: yielding to external agy runtime")
 			stopChild()
@@ -414,13 +460,26 @@ func (rh *RuntimeHost) runAgyBridge(ctx context.Context, agyBin string, wake <-c
 			if change.see(bin, statAgy(findAgyExecutable())) {
 				builtin, _ := rh.agyPeers(instance)
 				if builtin != nil && builtin.agyBusy() {
+					rh.setAgyDraining(instance, true)
 					change.logWait(rh.logger, bin)
 					continue
 				}
+				if builtin != nil {
+					// Suspend new admissions and re-verify agyBusy so no turn racing in is killed.
+					builtin.peer.SuspendCalls()
+					if builtin.agyBusy() {
+						builtin.peer.ResumeCalls()
+						rh.setAgyDraining(instance, true)
+						change.logWait(rh.logger, bin)
+						continue
+					}
+				}
+				rh.setAgyDraining(instance, false)
 				rh.logger.Printf("agy runtime: %s; restarting", change.describe(bin))
 				stopChild()
 				return true, nil
 			}
+			rh.setAgyDraining(instance, false)
 		case <-ctx.Done():
 			stopChild()
 			return false, ctx.Err()
@@ -486,12 +545,13 @@ func (c *agyChange) describe(bin agyBinary) string {
 	return fmt.Sprintf("agy at %s was replaced", bin.path)
 }
 
-// logWait says once per change that the restart waits for the companion's work: an agy turn in flight, or a call the
-// node is waiting on, would be cut by it. The old file keeps running until then.
+// logWait says once per change that the restart waits for the companion's work: an agy turn in flight, finite
+// background work a session left running, or a call the node is waiting on, would be cut by it. The old file keeps
+// running until then, with no deadline: a background command that never ends holds the restart until it is stopped.
 func (c *agyChange) logWait(logger *log.Logger, bin agyBinary) {
 	if !c.logged {
 		c.logged = true
-		logger.Printf("agy runtime: %s; restarting once no agy session is working", c.describe(bin))
+		logger.Printf("agy runtime: %s; restarting once no agy session is working or running background work", c.describe(bin))
 	}
 }
 
@@ -518,6 +578,9 @@ func (rh *RuntimeHost) agyPeers(instance string) (builtin *runtimeConn, external
 	return builtin, external
 }
 
+// waitAgyIdle waits until no call to the companion is pending and agyWorking is false, the companion's connection
+// ends, or ctx does: the external-runtime handoff bounds it by its yield grace, so background work that runs longer is
+// cut then, as a long turn is.
 func (h *runtimeConn) waitAgyIdle(ctx context.Context) {
 	if h.peer.WaitPending(ctx) != nil {
 		return
@@ -540,13 +603,68 @@ func (h *runtimeConn) agyBusy() bool {
 	return h.peer.Pending() > 0 || h.agyWorking()
 }
 
+// agyWorking: one of the companion's sessions has a turn in flight, or its turn ended while finite background work it
+// started still runs in the companion's `agy acp` (agyFiniteBackground, #17200): stopping the companion now would cut
+// either one.
 func (h *runtimeConn) agyWorking() bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for _, session := range h.sessions {
-		if session.Status == proto.StatusWorking {
+		if session.Status == proto.StatusWorking || agyFiniteBackground(session) {
 			return true
 		}
+	}
+	return false
+}
+
+// agyFiniteBackground: s lists background work the companion identified and that ends by itself, which a companion
+// restart would stop ("All your subagents and background tasks have been stopped due to server restart"): a Background
+// task agyIdentifiedFiniteTask accepts, or a running entry in Subagents or Workflows. Only identified work counts, so a
+// misread row can never hold an upgrade forever: integrations/antigravity/lib/background.js extractBackground calls a
+// task shell both for a matched run_command (with its command line) and for any start notice it could not match to its
+// tool call (none, or two calls claiming the step), and a description cannot tell an unmatched command from an
+// unmatched schedule in either direction (its own fixtures include a one-shot timer described "Check status" and a
+// cron schedule described "Timer: 60s"). Schedules (kind monitor: agy's `schedule`, cron or one-shot, which the row does
+// not tell apart) are left out too, so a one-shot timer, like an unmatched task, is still stopped by a restart, as
+// before #17200; closing that needs the companion to carry what it knows (its computed oneShot, whether a task was
+// matched), the companion-side follow-up.
+// The rows are the companion's runtime.sessions: Background lists only tasks running in a session its `agy acp` has
+// loaded (a terminal's tasks come separately, in agyPaneBackground, and a restart does not stop them), and the
+// hub-derived BackgroundWorking / BackgroundWaiting are not read, as they count a monitor too. Unlike
+// agySessionRowSafeIdle, which keeps idle compaction off every session with any background entry, this only decides
+// whether a restart must wait. The list is not a full inventory: the companion lists only its recent sessions
+// (rt.recent: up to 80 from the last 14 days, besides those with live work, assistants and ones the phone drove lately)
+// and at most 50 running tasks per session, which this node caps at 50 too, so a command in an unlisted idle session or
+// behind 50 schedules is missed. Closing that needs a drain signal the companion computes before those limits (#17200,
+// the companion-side follow-up).
+func agyFiniteBackground(s proto.Session) bool {
+	for _, task := range s.Background {
+		if agyIdentifiedFiniteTask(task) {
+			return true
+		}
+	}
+	for _, sub := range s.Subagents {
+		if sub.Running {
+			return true
+		}
+	}
+	for _, wf := range s.Workflows {
+		if wf.Running {
+			return true
+		}
+	}
+	return false
+}
+
+// agyIdentifiedFiniteTask: task is finite background work the companion matched to its tool call: a run_command (kind
+// shell with its command line; an unmatched notice has none), a run_workflow (kind workflow) or an invoke_subagent
+// (kind agent), the only kinds extractBackground gives a matched call besides schedules.
+func agyIdentifiedFiniteTask(task proto.BackgroundTask) bool {
+	switch task.Kind {
+	case "workflow", "agent":
+		return true
+	case "shell":
+		return task.Command != ""
 	}
 	return false
 }

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  addMarket, agreeLabel, canUninstall, catalogOf, catalogQuery, getCatalog, installPreview, isGitMarket, itemLine, itemState, listMarkets, MARKET_SPEC_HINT, marketView, marketKind, marketLine, marketOf,
+  addMarket, agreeLabel, extensionSignatureLabel, parseKeyList, canUninstall, catalogOf, catalogQuery, getCatalog, installPreview, isGitMarket, itemLine, itemState, listMarkets, MARKET_SPEC_HINT, marketView, marketKind, marketLine, marketOf, newerIncompatibleHint,
   extensionsRoute, previewFromMarket, previewVersion, renameConsent, refreshMarket, removeMarket, routeSub, setMarketToken, specLabel, uninstallExtension, upgradePreview, upgradingFrom, wantsGitHubToken,
   type CatalogItem, type Market, type MarketPreview, type ExtensionsRoute,
 } from "./extension-market";
@@ -20,15 +20,38 @@ afterEach(() => {
 
 const item = (extra: Partial<CatalogItem> = {}): CatalogItem => ({ market: "m1", market_name: "Example 扩展", id: "example-cal", name: "Example 日历", version: "1.1.0", ...extra });
 
+describe("private market keys", () => {
+  it("reads keys typed one per line, with commas or spaces", () => {
+    expect(parseKeyList(" ed25519:a\n\ned25519:b, ed25519:c ")).toEqual(["ed25519:a", "ed25519:b", "ed25519:c"]);
+    expect(parseKeyList("  ")).toEqual([]);
+  });
+  it("labels an installed extension's verification", () => {
+    expect(extensionSignatureLabel(undefined)).toBeNull();
+    expect(extensionSignatureLabel({ state: "signed", key_id: "1111111111111111" })?.tone).toBe("green");
+    expect(extensionSignatureLabel({ state: "official" })?.tone).toBe("accent");
+    expect(extensionSignatureLabel({ state: "unsigned" })?.tone).toBe("gray");
+    expect(extensionSignatureLabel({ state: "key_removed" })?.tone).toBe("orange");
+    expect(extensionSignatureLabel({ state: "market_invalid" })?.tone).toBe("red");
+    expect(extensionSignatureLabel({ state: "something_new" })?.text).toContain("something_new");
+  });
+});
+
 describe("市场的规矩", () => {
   it("says where a catalog extension stands", () => {
     expect(itemState(item())).toEqual({ kind: "install", label: "未安装", tone: "gray" });
-    expect(itemState(item({ problem: "没有这台 hub 能用的包" }))).toMatchObject({ kind: "problem", label: "装不了" });
+    expect(itemState(item({ problem: "没有这台 hub 能用的包" }))).toMatchObject({ kind: "problem", label: "无法安装" });
     expect(itemState(item({ installed: "1.0.0", installed_source: "installed", upgradable: true }))).toMatchObject({ kind: "upgrade", label: "可升级到 1.1.0" });
-    expect(itemState(item({ installed: "1.1.0", installed_source: "installed" }))).toMatchObject({ kind: "installed", label: "已装 1.1.0" });
-    expect(itemState(item({ installed: "1.0.0", installed_source: "builtin" }))).toMatchObject({ kind: "elsewhere", label: "hub 自带" });
+    expect(itemState(item({ installed: "1.1.0", installed_source: "installed" }))).toMatchObject({ kind: "installed", label: "已安装 1.1.0" });
+    expect(itemState(item({ installed: "1.0.0", installed_source: "builtin" }))).toMatchObject({ kind: "elsewhere", label: "hub 内置" });
     expect(itemState(item({ installed: "1.0.0", installed_source: "hub.json" }))).toMatchObject({ kind: "elsewhere" });
     expect(itemState(item({ installed: "1.0.0", installed_source: "installed", upgradable: true, problem: "要更新的 hub" }))).toMatchObject({ kind: "problem" });
+    expect(newerIncompatibleHint(item())).toBeNull();
+    expect(newerIncompatibleHint(item({ latest_incompatible_version: "3.0.0", latest_incompatible_reason: "需要更新版本的 hub" }))).toEqual({
+      version: "3.0.0",
+      reason: "需要更新版本的 hub",
+    });
+    expect(newerIncompatibleHint(item({ latest_incompatible_version: "3.0.0" }))).toEqual({ version: "3.0.0", reason: "" });
+    expect(newerIncompatibleHint(item({ problem: "需要更新版本的 hub", latest_incompatible_version: "3.0.0", latest_incompatible_reason: "需要更新版本的 hub" }))).toBeNull();
   });
   it("uninstalls only what this market installed", () => {
     expect(canUninstall(item({ installed: "1.0.0", from_this_market: true }))).toBe(true);
@@ -54,10 +77,10 @@ describe("市场的规矩", () => {
   });
   it("words a market and a preview", () => {
     const m: Market = { id: "m1", spec: "github:example/x", name: "x", has_token: true, extensions: 3, fetched_at: "2026-11-04T06:00:00Z" };
-    expect(marketLine(m, () => "1 小时前")).toBe("3 个扩展 · 1 小时前读过 · 有 token");
-    expect(marketLine({ ...m, has_token: false, fetched_at: undefined }, () => "")).toBe("3 个扩展 · 还没读过");
-    expect(marketLine({ ...m, signature: { state: "verified", key_id: "32ed46cdbe349656" } }, () => "1 小时前")).toBe("3 个扩展 · 1 小时前读过 · 有 token · 签名已验证");
-    expect(marketLine({ ...m, signature: { state: "key_changed" } }, () => "1 小时前")).toContain("官方签名 key 不匹配，等待验签");
+    expect(marketLine(m, () => "1 小时前")).toBe("3 个扩展 · 1 小时前读取 · 已配置 token");
+    expect(marketLine({ ...m, has_token: false, fetched_at: undefined }, () => "")).toBe("3 个扩展 · 尚未读取");
+    expect(marketLine({ ...m, signature: { state: "verified", key_id: "32ed46cdbe349656" } }, () => "1 小时前")).toBe("3 个扩展 · 1 小时前读取 · 已配置 token · 签名已验证");
+    expect(marketLine({ ...m, signature: { state: "key_changed" } }, () => "1 小时前")).toContain("官方签名密钥不匹配，需要验证");
     expect(specLabel("github:example/x")).toBe("example/x");
     expect(specLabel("https://extensions.example.com/persona/persona-extensions.json")).toBe("extensions.example.com/persona/persona-extensions.json");
     expect(specLabel("https://example.com/")).toBe("example.com");

@@ -61,7 +61,7 @@ describe("TeamPanel", () => {
     expect(pills()[0]!.className).toContain("bg-ink");
     expect(host.querySelector("[role=tablist]")?.getAttribute("aria-label")).toBe("子 Agent");
     expect(shown).toEqual({ sid: "review", embedded: true });
-    expect(host.textContent).toContain("子 Agent 2 个 · 1 个在跑");
+    expect(host.textContent).toContain("共 2 个子 Agent · 1 个运行中");
     // picking a pill shows that worker: the panel remembers it
     act(() => pills()[1]!.click());
     expect(getPanel()).toEqual({ kind: "team", mid: "mac", sid: "lead", worker: "tests" });

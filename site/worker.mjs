@@ -42,7 +42,7 @@ function sameSecret(a, b) {
 const download = /^\/dl\/([A-Za-z0-9][A-Za-z0-9._-]*\.gz)$/;
 // /dl/<version>/<file>: a release kept in the bucket at release/<version>/ (its node builds and manifest.json), where a
 // hub's manager fetches the node build of the hub's own version (docs/operations/node-update.md). Never a slot's.
-const versioned = /^\/dl\/([A-Za-z0-9][A-Za-z0-9._-]*)\/([A-Za-z0-9][A-Za-z0-9._-]*\.gz|manifest\.json)$/;
+const versioned = /^\/dl\/([A-Za-z0-9][A-Za-z0-9._-]*)\/([A-Za-z0-9][A-Za-z0-9._-]*\.gz|(?:core-)?manifest\.json)$/;
 
 async function servedSlot(request, env) {
   const r = await env.ASSETS.fetch(new Request(new URL("/dl/SLOT", request.url)));

@@ -1,6 +1,7 @@
 {
   "waiting_idle": "Update queued",
   "transferring": "Preparing the update",
+  "draining": "Waiting to restart",
   "restarting": "Restarting after the update",
   "confirming": "Checking the connection",
   "updating": "Update in progress",

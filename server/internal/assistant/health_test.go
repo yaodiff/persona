@@ -195,7 +195,11 @@ func answerOutboundIn(t *testing.T, s *Service, self, tool, says, cwd string, al
 		for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
 			if qs := s.pendingQuestions(); len(qs) == 1 {
 				ix := qs[0]
-				if ix.Kind != proto.IxPermission || ix.ToolName != tool || ix.SessionID != self || !strings.Contains(ix.Summary, says) ||
+				summaryMatches := strings.Contains(ix.Summary, says)
+				if s.inputCardSource(ix, false) == cardConfirmOutbound {
+					summaryMatches = summaryMatches || strings.Contains(string(ix.ToolInput), says)
+				}
+				if ix.Kind != proto.IxPermission || ix.ToolName != tool || ix.SessionID != self || !summaryMatches ||
 					ix.Cwd != cwd {
 					t.Errorf("card: %+v", ix)
 				}

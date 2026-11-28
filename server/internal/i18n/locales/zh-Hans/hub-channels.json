@@ -58,7 +58,13 @@
   "feature_answer_new_card": "回复发成新卡片",
   "feature_answer_new_card_description": "一轮结束时，回复作为新卡片发在对话最下面，飞书会提醒你，进度卡原地折叠；关闭时回复写进原来的进度卡",
   "feature_read_group": "在群里用 /read 读群",
-  "feature_read_group_description": "在机器人所在的任意群里，你本人发「@机器人 /read 任务」时，先以你的身份读这个群最近的消息（没说范围就是最近 40 条）和其中的图片、附件，再完成任务，回答回复在你那条消息下。别人的消息不会触发",
+  "feature_read_group_description": "在机器人所在的任意群里，你本人发「@机器人 /read 任务」时，先以你的身份读这个群最近的消息（没说范围就是最近 40 条）和其中的图片、附件，再完成任务。回答先私聊发给你，由你决定是否回复到群里你那条消息下。别人的消息不会触发",
+  "feature_read_group_direct": "/read 直接回复到群里",
+  "feature_read_group_direct_description": "/read 的回答不先发给你，直接回复在群里你那条消息下，全群可见",
   "feature_topic_cot": "话题里显示智能体过程",
-  "feature_topic_cot_description": "在飞书原生的可折叠智能体消息里显示话题这一轮的思考和工具调用，同时保留进度卡；关闭后过程仍放在卡片的折叠面板里"
+  "feature_topic_cot_description": "在飞书原生的可折叠智能体消息里显示话题这一轮的思考和工具调用，同时保留进度卡；关闭后过程仍放在卡片的折叠面板里",
+  "feature_dm_cot": "私聊里显示智能体过程",
+  "feature_dm_cot_description": "在飞书原生的可折叠智能体消息里显示私聊这一轮的思考和工具调用，同时保留进度卡；关闭后过程仍放在卡片的折叠面板里",
+  "feature_cot_answer": "回答写进智能体消息",
+  "feature_cot_answer_description": "这一轮有原生智能体消息时，把回答直接写进去，不再另发进度卡和回答卡；回答较长、被停止或出错、以及没有智能体消息的轮次仍用卡片"
 }

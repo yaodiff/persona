@@ -113,6 +113,7 @@ describe("the sidebar's top-level headings (#10637)", () => {
   ];
   for (const { list, features, titles } of cases) {
     it(`share one heading box, folded and unfolded, with ${list}`, async () => {
+      if (features.includes("sessions_list")) localStorage.setItem("persona.agentGrouping", "machine");
       await render(features);
       expect(Boolean(host.querySelector("[data-paged-sessions]"))).toBe(features.includes("sessions_list"));
       for (const folded of [false, true]) {

@@ -73,7 +73,7 @@ func (s *Service) importHideFacts(ctx context.Context, machine string, rc []zshr
 		return f, err
 	}
 	f.machineKeys = keys
-	ps, _, err := s.readModelProfiles(ctx) // the templates made when none is stored copy the purposes, checked anyway
+	ps, _, err := s.readModelProfiles(ctx)
 	if err != nil {
 		return f, err
 	}

@@ -3,6 +3,9 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -556,5 +559,63 @@ func TestAutomaticCloseoutPassivePRUsesExistingWake(t *testing.T) {
 				t.Fatalf("existing PR observer lost the automatic source wait or accepted it: %+v", current.Supervision)
 			}
 		})
+	}
+}
+
+// The waits a closeout's own text implies (a dated wait, a passive PR wait, a deployment or other external object) need
+// no owner step, so the evidence closeoutPark synthesizes for them says next_actor "external": since #12771, readPark
+// refuses evidence without it, and every automatic closeout park was refused. An explicit `park:` line is the
+// Agent's own account, so it must say next_actor itself; docs/assistant/todos.md's example line has to pass admission.
+func TestAutomaticCloseoutDocumentedParkLineIsAdmitted(t *testing.T) {
+	doc, err := os.ReadFile(filepath.Join("..", "..", "..", "docs", "assistant", "todos.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var waiting, park string
+	for _, line := range strings.Split(string(doc), "\n") {
+		if strings.HasPrefix(line, "park: {") {
+			park = line
+			break
+		}
+		if strings.HasPrefix(line, "waiting: ") {
+			waiting = line
+		}
+	}
+	if waiting == "" || park == "" {
+		t.Fatal("docs/assistant/todos.md has no example closeout `waiting:` + `park:` lines")
+	}
+	closeoutWith := func(park string) string {
+		return "<closeout status=\"blocked\" merged=\"no\" deployed=\"no\">\n" +
+			"did: Prepared the change.\n" +
+			"artifact: pr https://github.com/example/project/pull/42\n" +
+			"verified: Local tests pass.\n" +
+			"missing: The requested review.\n" +
+			waiting + "\n" + park + "\n</closeout>"
+	}
+	now := time.Date(2026, 11, 18, 8, 0, 0, 0, time.UTC)
+	p, ok := closeoutPark(closeoutWith(park), nil, now, time.UTC)
+	if !ok || p.Evidence == nil || p.Evidence.Kind != "merge_review" || p.Evidence.NextActor != "external" {
+		t.Fatalf("the documented park line was not admitted: ok=%v park=%+v evidence=%+v", ok, p, p.Evidence)
+	}
+	// without next_actor the same line is refused, as task_review refuses it
+	bare := strings.Replace(park, `"next_actor":"external",`, "", 1)
+	if bare == park {
+		t.Fatalf("the documented park line has no next_actor: %s", park)
+	}
+	if _, ok := closeoutPark(closeoutWith(bare), nil, now, time.UTC); ok {
+		t.Fatal("a park line without next_actor was admitted")
+	}
+	// the evidence closeoutPark writes for a wait it reads off the text names the external next actor
+	waitingLine := regexp.MustCompile(`(?m)^waiting: .*$`)
+	withWaiting := func(reply, w string) string { return waitingLine.ReplaceAllLiteralString(reply, "waiting: "+w) }
+	for name, reply := range map[string]string{
+		"date": withWaiting(reviewArtifactCloseout, "the release window opens 2026-11-25"),
+		"pr":   reviewArtifactCloseout,
+		"deployment": strings.Replace(withWaiting(reviewArtifactCloseout, "deployment rollout-42"),
+			"artifact: pr "+reviewArtifactURL, "artifact: build https://example.org/deployments/rollout-42", 1),
+	} {
+		if p, ok := closeoutPark(reply, nil, now, time.UTC); !ok || p.Evidence == nil || p.Evidence.NextActor != "external" {
+			t.Errorf("%s: closeout wait not admitted with an external next actor: ok=%v evidence=%+v", name, ok, p.Evidence)
+		}
 	}
 }

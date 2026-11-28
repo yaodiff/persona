@@ -25,6 +25,49 @@ describe("provider names", () => {
     expect(providerTitle({ name: "glm", display_name: " Zhipu GLM " })).toBe("Zhipu GLM");
   });
 
+  it("uses readable product names for built-in launchers without repeating their ID as a note", () => {
+    const cases: [string, string][] = [
+      ["claude", "Claude Code"],
+      ["codex", "Codex"],
+      ["claude-desktop", "Claude Desktop"],
+      ["codex-app", "Codex App"],
+      ["agy", "Antigravity CLI"],
+      ["omp", "Oh My Pi"],
+      ["cursor", "Cursor"],
+      ["gemini", "Gemini CLI"],
+    ];
+    for (const [name, title] of cases) {
+      expect(providerTitle({ name })).toBe(title);
+      expect(providerTitle({ name, display_name: name })).toBe(title);
+      expect(providerTitle({ name, display_name: title })).toBe(title);
+      expect(providerIdNote({ name })).toBe("");
+      expect(providerIdNote({ name, display_name: title })).toBe("");
+      expect(providerLabel({ name })).toBe(title);
+    }
+    // explicit custom display names still win and retain their startup ID note
+    expect(providerTitle({ name: "agy", display_name: "Antigravity" })).toBe("Antigravity");
+    expect(providerIdNote({ name: "agy", display_name: "Antigravity" })).toBe("agy");
+    expect(providerLabel({ name: "agy", display_name: "Antigravity" })).toBe("Antigravity (agy)");
+  });
+
+  it("matches display names case-insensitively with IDs and built-in titles across providerTitle and providerIdNote", () => {
+    for (const l of [
+      { name: "claude", display_name: "CLAUDE" },
+      { name: "claude", display_name: "claude code" },
+      { name: "claude", display_name: "Claude Code" },
+    ]) {
+      expect(providerTitle(l)).toBe("Claude Code");
+      expect(providerIdNote(l)).toBe("");
+      expect(providerLabel(l)).toBe("Claude Code");
+    }
+    expect(providerTitle({ name: "codex", display_name: "CODEX" })).toBe("Codex");
+    expect(providerIdNote({ name: "codex", display_name: "CODEX" })).toBe("");
+    expect(providerLabel({ name: "codex", display_name: "CODEX" })).toBe("Codex");
+    expect(providerTitle({ name: "cc_glm", display_name: "CC_GLM" })).toBe("CC_GLM");
+    expect(providerIdNote({ name: "cc_glm", display_name: "CC_GLM" })).toBe("");
+    expect(providerLabel({ name: "cc_glm", display_name: "CC_GLM" })).toBe("CC_GLM");
+  });
+
   it("uses the TRAE CLI product name for the built-in launcher from older and current hubs", () => {
     for (const display_name of [undefined, "traex", "traecli", "TRAE CLI"]) {
       const launcher = { name: "traex", display_name };

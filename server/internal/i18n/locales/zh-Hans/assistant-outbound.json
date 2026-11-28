@@ -1,0 +1,13 @@
+{
+  "settings_changed": "对外消息设置已变化，本次批准未生效。请刷新设置后重新申请。",
+  "identity_change": "将对外消息默认发送身份改为 {identity}。已有消息授权仍只适用于确认时的身份。机器人发送失败绝不会改用本人身份重试。",
+  "all_chats": "此渠道的所有会话",
+  "scope_confirm": "允许以下范围内自动发送，不再逐条确认吗？\n渠道：{channel}\n会话：{target}\n场景：{scenario}\n发送身份：{identity}\n每次发送尝试都会留审计记录。可随时在「长期授权」撤销；撤销会阻止后续发送，但不能中止已经开始的发送。",
+  "inbox_reply": "收件箱建议回复",
+  "assistant_message": "助手主动编写的消息",
+  "bot": "机器人",
+  "user": "本人",
+  "send_confirm": "发送这条消息吗？\n渠道：{channel}\n会话：{target}\n发送身份：{identity}\n\n{text}",
+  "scope_changed": "授权、接收会话或发送身份已变化，未发送。请刷新设置，确认需要的生效范围。",
+  "already_delivered": "这个发送标识此前已投递过。本次未发送，也不代表本次内容已投递。请先在接收会话核对之前的消息，再决定是否重试。"
+}

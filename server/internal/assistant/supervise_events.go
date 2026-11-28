@@ -156,6 +156,12 @@ func (s *Service) superviseJudged(ctx context.Context, t Todo, work time.Time, c
 		s.signal(superviseSignal{Todo: t.ID, Kind: sigReview, Key: reviewKey(&v), Detail: detail})
 		return
 	}
+	if st == reviewNeedsUser && c.Verdict != verdictNeedsUser {
+		// The owner's decision is still open, but its agent went on and ended another turn: what it found may answer
+		// or replace the question (#14899). An owner wait was told as one above (noteOwnerWait).
+		s.needsUserAgentTurn(ctx, t, c, err)
+		return
+	}
 	if st == reviewNeedsUser || st == reviewParked {
 		return // the supervisor knows it waits: for the user, or parked until its time (parked.go)
 	}
@@ -192,7 +198,10 @@ func (s *Service) superviseJudged(ctx context.Context, t Todo, work time.Time, c
 		detail += "：" + c.Reason
 	}
 	if c.Verdict == verdictUnsure { // no word on it either way: not "stopped short" (#3111)
-		g := superviseSignal{Todo: t.ID, Kind: sigUnjudged, Key: key, Detail: detail}
+		if len(c.unlinked) != 0 {
+			detail = c.Reason
+		}
+		g := superviseSignal{Todo: t.ID, Kind: sigUnjudged, Key: key, Detail: detail, Unlinked: c.unlinked}
 		s.signalOutageAware(ctx, t, g, nil, s.isOutageCausedUnjudged(ctx, t, c, nil))
 		return
 	}
@@ -207,7 +216,7 @@ func (s *Service) superviseJudged(ctx context.Context, t Todo, work time.Time, c
 }
 
 // closedSince: task id is closed now (accepted, cancelled, closed by hand), or a review accepted or cancelled it after
-// the stretch of work begun at work (task_review writes the ledger before it closes the to-do). A judgment of that
+// the stretch of work begun at work (terminal task reviews commit the ledger and closure together). A judgment of that
 // stretch is moot: it neither changes the ledger nor tells the supervisor (#7539). A task opened again is judged
 // again by the work after its reopening, which began after that review.
 func (s *Service) closedSince(id string, work time.Time) bool {
@@ -293,15 +302,35 @@ func (s *Service) supervisedWorking(ctx context.Context, t Todo) {
 	}
 	s.forgetSupervisePending(keys...)
 	b.mu.Unlock()
+	if t.Supervision != nil && t.Supervision.Investigation != nil {
+		// A new working turn needs its own declaration. Older findings remain in the ledger.
+		if _, _, err := s.updateSupervisionGuarded(ctx, t.ID, func(cur Todo) bool { return cur.DoneAt == nil }, func(v *Supervision) bool {
+			if v.Investigation == nil || v.Investigation.Stale || v.Investigation.Version == 0 {
+				return false
+			}
+			v.Investigation.Stale = true
+			return true
+		}); err != nil {
+			s.logf("task %s: invalidate investigation review: %v", t.ID, err)
+		}
+	}
 	if st := t.Supervision.state(t); st != reviewPending && st != reviewParked && st != reviewTimedOut && st != reviewClosing && (t.Supervision == nil || t.Supervision.Waits == nil) {
 		return
 	}
 	ownerWaitEnded := false
+	var endedOwnerWaitKey string
+	var endedPendingReview bool
 	if _, _, err := s.updateSupervision(ctx, t.ID, func(v *Supervision) bool {
 		if v.State != reviewPending && v.State != reviewParked && v.State != reviewTimedOut && v.State != reviewClosing && v.Waits == nil {
 			return false
 		}
 		ownerWaitEnded = v.Waits != nil
+		if v.Waits != nil {
+			endedOwnerWaitKey = ownerWaitCardlessKey(v.Waits)
+		}
+		if v.State == reviewPending {
+			endedPendingReview = true
+		}
 		v.Waits = nil // its agent goes on: the owner's answer reached it, or the work changed (#1277)
 		if v.State != reviewPending && v.State != reviewParked && v.State != reviewTimedOut && v.State != reviewClosing && v.State != reviewNeedsUser {
 			return true
@@ -315,8 +344,25 @@ func (s *Service) supervisedWorking(ctx context.Context, t Todo) {
 		return true
 	}); err != nil {
 		s.logf("task %s: supervision: %v", t.ID, err)
-	} else if ownerWaitEnded {
-		s.todoPushOver(t.ID) // the owner wait is over: the next one may ring
+	} else {
+		// Retire queued cardless claims only after the wait/pending state write succeeds; otherwise a retry stays
+		// needed if the old Waits.CardlessToldAt stamp could not be cleared (#12648).
+		cardlessID := t.ID + "|" + sigCardlessWait
+		b.mu.Lock()
+		if p, ok := b.pending[cardlessID]; ok {
+			matchesEnded := (endedOwnerWaitKey != "" && p.Key == endedOwnerWaitKey) ||
+				(endedPendingReview && !ownerWaitCardlessClaim(p))
+			if matchesEnded {
+				delete(b.pending, cardlessID)
+				s.forgetSupervisePending(cardlessID)
+			}
+		} else if endedOwnerWaitKey != "" || endedPendingReview {
+			s.forgetSupervisePending(cardlessID)
+		}
+		b.mu.Unlock()
+		if ownerWaitEnded {
+			s.todoPushOver(t.ID) // the owner wait is over: the next one may ring
+		}
 	}
 }
 

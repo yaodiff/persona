@@ -6,6 +6,8 @@ import { ClientModel } from '../models/ClientModel';
 import { SessionComposerModes } from '../models/SessionComposerModes';
 import { SessionHeaderPermissions } from '../models/SessionHeaderPermissions';
 import { nativeEnvironment } from '../platform/NativeEnvironment';
+import { Motion } from '../design/Motion';
+import { Haptics } from '../platform/Haptics';
 
 @ComponentV2
 export struct SessionHeaderPermissionChip {
@@ -79,6 +81,7 @@ export struct SessionHeaderPermissionChip {
       Stack() {
         if (['plan','auto','acceptEdits','bypassPermissions'].includes(this.permission.current)) {
           Rect().width('100%').height('100%').radius(28).fill(this.tint()).opacity(0.12)
+            .animation(Motion.state(nativeEnvironment.reduceMotion))
         } else Rect().width('100%').height('100%').radius(28).fill(Colors.control)
         if (this.command.saving) LoadingProgress().width(16).height(16)
         else SymbolGlyph(this.icon(this.permission.current)).fontSize(Tokens.interfaceFontVp(15,nativeEnvironment.fontScale)).fontColor([this.tint()])
@@ -87,6 +90,7 @@ export struct SessionHeaderPermissionChip {
     }.width(Math.max(44,35*Math.min(nativeEnvironment.fontScale,1.32))).height(44).padding(0).backgroundColor(Color.Transparent)
       .accessibilityText(this.label()).accessibilityDescription(this.permission.pending ? tr('header_permission_pending') : '')
       .enabled(!this.command.saving).onClick(() => {
+        Haptics.selection();
         this.owner=this.stamp();this.command.load(this.model,false,false);this.opened=true;
       }).bindMenu(this.opened,this.menu,{placement:Placement.BottomRight,onDisappear:() => {this.opened=false;}})
       .id('chat.permissionMode')

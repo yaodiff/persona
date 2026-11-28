@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { UNREVOKED_KEY } from "./auth";
 import { loginWithPassword, PakeClient, passwordSuite, readNativeLogin, registerPassword } from "./password";
 
 class PakeWorker {
@@ -61,5 +62,63 @@ describe("password protocol transport", () => {
     await vi.advanceTimersByTimeAsync(120_000);
     await result;
     await expect(client.call("login-start")).rejects.toThrow("已结束");
+  });
+
+  it("sends replaces for a previous browser token and clears the unrevoked marker", async () => {
+    vi.stubGlobal("isSecureContext", true);
+    vi.stubGlobal("Worker", PakeWorker);
+    const store = new Map<string, string>([[UNREVOKED_KEY, "dev_old_web"]]);
+    vi.stubGlobal("localStorage", {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => { store.set(k, v); },
+      removeItem: (k: string) => { store.delete(k); },
+    });
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ session: "s", message: "server-proof", identity: "hub", suite: passwordSuite })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ token: "jd_new", id: "dev_new", hub_id: "hub" })));
+    vi.stubGlobal("fetch", fetch);
+
+    await loginWithPassword("secret-pass", null);
+    const startBody = JSON.parse(fetch.mock.calls[0][1].body);
+    expect(startBody.replaces).toBe("dev_old_web");
+    expect(store.has(UNREVOKED_KEY)).toBe(false);
+  });
+
+  it("propagates 400 from /start instead of silently retrying without replaces", async () => {
+    vi.stubGlobal("isSecureContext", true);
+    vi.stubGlobal("Worker", PakeWorker);
+    const store = new Map<string, string>([[UNREVOKED_KEY, "dev_old_web"]]);
+    vi.stubGlobal("localStorage", {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => { store.set(k, v); },
+      removeItem: (k: string) => { store.delete(k); },
+    });
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: "invalid request" }), { status: 400 }));
+    vi.stubGlobal("fetch", fetch);
+
+    await expect(loginWithPassword("secret-pass", null)).rejects.toThrow("invalid request");
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(fetch.mock.calls[0][1].body).replaces).toBe("dev_old_web");
+    expect(store.get(UNREVOKED_KEY)).toBe("dev_old_web");
+  });
+
+  it("omits replaces when replaces option is false for older hubs", async () => {
+    vi.stubGlobal("isSecureContext", true);
+    vi.stubGlobal("Worker", PakeWorker);
+    const store = new Map<string, string>([[UNREVOKED_KEY, "dev_old_web"]]);
+    vi.stubGlobal("localStorage", {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => { store.set(k, v); },
+      removeItem: (k: string) => { store.delete(k); },
+    });
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ session: "s", message: "server-proof", identity: "hub", suite: passwordSuite })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ token: "jd_new", id: "dev_new", hub_id: "hub" })));
+    vi.stubGlobal("fetch", fetch);
+
+    expect(await loginWithPassword("secret-pass", null, { replaces: false })).toMatchObject({ id: "dev_new" });
+    expect(JSON.parse(fetch.mock.calls[0][1].body)).not.toHaveProperty("replaces");
+    expect(store.has(UNREVOKED_KEY)).toBe(false);
   });
 });

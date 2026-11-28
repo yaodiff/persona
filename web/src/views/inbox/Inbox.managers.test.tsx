@@ -3,6 +3,7 @@
 // headings), with its own sections open or closed, a route opens the copy of its manager, the Muted dialog lists the
 // current assistant's, a rule from another manager's item is read and saved with that manager, a new mail is the current
 // assistant's, and an offline current assistant's list says it is offline rather than empty.
+import { installedMailbox, preloadMailbox } from "../../test/installed-mailbox";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -134,7 +135,8 @@ describe("the inbox of several managers", () => {
     expect(calls.list.find((c) => c.path === "/inbox/mutes/u1")).toMatchObject({ method: "DELETE", header: "m-1" });
   });
 
-  it("writes a new mail from the current assistant's accounts, sent through it", async () => {
+  it.skipIf(!installedMailbox)("writes a new mail from the current assistant's accounts, sent through it", async () => {
+    await preloadMailbox("Compose");
     act(() => chooseManager("m-1"));
     act(() => root.render(<Inbox onToggleSidebar={() => {}} />));
     await flush();
@@ -156,10 +158,10 @@ describe("the inbox of several managers", () => {
     await flush();
     const state = host.querySelector<HTMLElement>("[data-assistant-offline]");
     expect(state?.dataset.assistantOffline).toBe("m-2");
-    expect(state?.textContent).toContain("家里 离线");
+    expect(state?.textContent).toContain("家里 已离线");
     expect(state?.textContent).toContain("最后同步于");
-    expect(state?.textContent).toContain("它上线后这里会更新。");
-    expect(host.textContent).not.toContain("都处理完了");
+    expect(state?.textContent).toContain("助手恢复在线后页面将自动更新。");
+    expect(host.textContent).not.toContain("已全部处理完毕");
     expect(host.querySelector("[data-inbox-no-sources]")).toBeNull();
     // an online current assistant with nothing: as before
     act(() => chooseManager("m-1"));

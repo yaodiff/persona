@@ -112,5 +112,6 @@
         <item quantity="other">%d bytes</item>
     </plurals>
     <string name="inbox_mail_module_off">Mail is turned off on the hub machine, so the full message and its attachments can\'t be loaded. This is the text Persona kept.</string>
+    <string name="inbox_mail_module_off_clipped">Mail is turned off on the hub machine, so the full message and its attachments can\'t be loaded. This is the text Persona kept, and it is cut short.</string>
     <string name="inbox_mail_stored_empty">No text was kept for this mail.</string>
 </resources>

@@ -103,6 +103,23 @@ func TestAgyHookAndHerdrReportsMustAgree(t *testing.T) {
 	}
 }
 
+func TestAgyConflictingPaneStillBlocksOtherClaims(t *testing.T) {
+	a := agyRow("w1:p1", hookConvA)
+	b := agyRow("w1:p2", hookConvA)
+	c := agyRow("w1:p3", hookConvB)
+	n := agyNode(t, map[string][]host.Agent{host.Herdr: {a, b, c}})
+	n.hookReport(b.PaneID, "PreInvocation", hookConvB)
+	for _, row := range []host.Agent{a, b, c} {
+		if got := n.rawAgyConversationLocked(otherSession(row), row.PaneID); got != "" {
+			t.Errorf("pane %s read a contested conversation", row.PaneID)
+		}
+	}
+	n.hookReport(b.PaneID, "PreInvocation", hookConvA)
+	if got := n.rawAgyConversationLocked(otherSession(c), c.PaneID); got != hookConvB {
+		t.Error("the unique report should read again")
+	}
+}
+
 func TestAgyHookReportValidation(t *testing.T) {
 	row := agyRow("w1:p1", "")
 	n := agyNode(t, map[string][]host.Agent{host.Herdr: {row}})

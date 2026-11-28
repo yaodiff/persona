@@ -19,7 +19,7 @@ export interface EngineSwitch {
 }
 
 /** The engines a conversation moves between. */
-const ENGINES = ["claude", "codex"];
+const ENGINES = ["claude", "codex", "agy"];
 
 /** The switch a parsed `<persona-context>` block stands for (lib/turns.ts Context, its attributes already unescaped):
  *  only an engine-switch block from one known engine to the other. Any other block, a pasted one naming something else

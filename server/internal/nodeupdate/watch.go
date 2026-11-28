@@ -18,15 +18,19 @@ import (
 )
 
 type pending struct {
-	ID             string `json:"id"`
-	Exe            string `json:"exe"`
-	Backup         string `json:"backup"`
-	Stage          string `json:"stage"`
-	Version        string `json:"version"`
-	From           string `json:"from"`
-	OldHash        string `json:"old_sha256"`
-	NewHash        string `json:"new_sha256"`
-	Adopted        bool   `json:"adopted,omitempty"` // confirmation only; the executable belongs to another deployment
+	ID      string `json:"id"`
+	Exe     string `json:"exe"`
+	Backup  string `json:"backup"`
+	Stage   string `json:"stage"`
+	Version string `json:"version"`
+	From    string `json:"from"`
+	OldHash string `json:"old_sha256"`
+	NewHash string `json:"new_sha256"`
+	Adopted bool   `json:"adopted,omitempty"` // confirmation only; the executable belongs to another deployment
+	// Draining is true after commit reply while the resident process is draining active work before handover/exec.
+	// Watchdogs do not trigger rollback while the draining process is still alive; handover clears Draining and
+	// anchors Deadline to post-exec startup.
+	Draining       bool   `json:"draining,omitempty"`
 	PID            int    `json:"pid"`
 	ProcessStart   string `json:"process_start"`
 	ProcessPrecise string `json:"process_start_precise,omitempty"` // exact instance identity; absent in older markers
@@ -156,6 +160,12 @@ func (m *Manager) recover() error {
 		if sum != p.NewHash {
 			// An external deploy superseded this update; never undo its file.
 			return cleanup(p)
+		}
+		if p.Draining && m.version == p.Version {
+			// The new executable started before ArmHandover cleared Draining (for example after the
+			// draining process exited unexpectedly). Start the post-exec confirmation window now.
+			p.Draining = false
+			p.Deadline = time.Now().Add(m.confirmTimeout())
 		}
 		if !time.Now().Before(p.Deadline) {
 			if err := restore(p); err != nil {
@@ -421,6 +431,19 @@ func Watch(ctx context.Context, path, id string, ready io.Writer) error {
 				return nil
 			}
 			p = current
+			if p.Draining {
+				if aliveIs(p.PID, p.ProcessStart, p.ProcessPrecise) {
+					return nil
+				}
+				// The draining process exited before handover; transition out of draining so the
+				// replacement (or a startup crash loop) is bounded by the confirmation deadline.
+				p.Draining = false
+				if p.Deadline.IsZero() || time.Until(p.Deadline) > ConfirmTimeout {
+					p.Deadline = time.Now().Add(ConfirmTimeout)
+				}
+				_ = savePending(p)
+				return nil
+			}
 			if time.Now().Before(p.Deadline) {
 				return nil
 			}

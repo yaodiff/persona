@@ -192,8 +192,9 @@ func TestMemoryExtensionCacheNoWaitAndGeneration(t *testing.T) {
 	}
 }
 
-// The public query handler applies explicit tags to mapped extension fields. Different terms can match across
-// fields, but every term is required. Category matches still pass through the conversation's visibility checks.
+// The public query handler applies explicit tags to mapped extension fields. Full-term matches come first, and
+// partial multi-term matches backfill remaining budget by hit count and rank. Category matches still pass through
+// the conversation's visibility checks.
 func TestDecisionsQueryMemoryTags(t *testing.T) {
 	s, _, st, _ := memoryAssembleService(t)
 	s.memoryEntries = &memEntrySource{}
@@ -208,7 +209,7 @@ func TestDecisionsQueryMemoryTags(t *testing.T) {
 		{"workflow", "qa-workflow"}, {"WORKFLOW", "qa-workflow"}, {"judgement", "qa-unrelated"},
 		{"release rollback", "qa-workflow"}, {"  ROLLBACK \t RELEASE  ", "qa-workflow"},
 		{"project-al", "qa-workflow"}, {"project-al workflow rollback", "qa-workflow"},
-		{"release absent", ""}, {"nonexistent", ""}, {"finance", ""},
+		{"release absent", "qa-workflow"}, {"nonexistent", ""}, {"finance", ""},
 	} {
 		t.Run(tc.tag, func(t *testing.T) {
 			args, _ := json.Marshal(map[string]string{"tag": tc.tag})
@@ -245,7 +246,7 @@ func TestDecisionsQueryMemoryTags(t *testing.T) {
 	if err := json.Unmarshal([]byte(raw), &out); err != nil {
 		t.Fatal(err)
 	}
-	if len(out.Memory) != 1 || out.Memory[0].ID != memoryExtensionIDPrefix+"qa-finance" {
+	if len(out.Memory) != 2 || out.Memory[0].ID != memoryExtensionIDPrefix+"qa-finance" || out.Memory[1].ID != memoryExtensionIDPrefix+"qa-workflow" {
 		t.Fatalf("category recall: %s", raw)
 	}
 	for _, args := range []string{`{"tag":"workflow","by":"user"}`, `{"tag":"workflow","trust":"user_verbatim"}`, `{"tag":"workflow","status":"superseded"}`} {
@@ -503,5 +504,40 @@ func TestDecisionsQueryMemoryBeyondFirstThousand(t *testing.T) {
 	}
 	if len(out.Memory) != 1 || out.Memory[0].ID != memoryExtensionIDPrefix+"qa-24000" {
 		t.Fatalf("late entry not recalled: %s", raw)
+	}
+}
+
+// decisions_query ranks full-term matches first, backfills remaining budget by multi-term hit count, subject weight
+// and entry rank, skips entries that would exceed memoryRecallMax, and never leaks sensitive entries.
+func TestDecisionsQueryMemoryRankedFallbackAndBudget(t *testing.T) {
+	s, _, st, _ := memoryAssembleService(t)
+	s.memoryEntries = &memEntrySource{}
+	s.setStore(func() Store { return &entriesMemStore{infoCategoryMemStore: st} })
+	page := wire.MemoryEntriesResult{Tagged: true, Entries: []wire.MemoryEntry{
+		{ID: "qa-full", Text: "qa: deploy atlas rollback checklist", Subjects: []string{"atlas"}, Rank: 400, Status: "active"},
+		{ID: "qa-two-high", Text: "qa: deploy atlas notes", Subjects: []string{"atlas"}, Rank: 900, Status: "active"},
+		{ID: "qa-two-low", Text: "qa: deploy atlas legacy", Rank: 200, Status: "active"},
+		{ID: "qa-one-high", Text: "qa: rollback procedure", Rank: 850, Status: "active"},
+		{ID: "qa-huge", Text: "qa: atlas " + strings.Repeat("x", memoryRecallMax), Subjects: []string{"atlas"}, Rank: 999, Status: "active"},
+		{ID: "qa-sensitive", Text: "qa: deploy atlas rollback secret", Subjects: []string{"atlas"}, Categories: []string{categoryFinance}, OriginSpace: "qa-finance", Rank: 999, Status: "active"},
+	}}
+	s.memoryExtension = &memExtensionSource{batch: memoryExtensionBatchOf([]wire.MemoryEntriesResult{page})}
+	raw, err := s.toolEntries(t.Context(), "qa-machine", "qa-main", "decisions_query", json.RawMessage(`{"tag":"atlas deploy rollback"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out struct {
+		Memory []recalledMemory `json:"memory"`
+	}
+	if err := json.Unmarshal([]byte(raw), &out); err != nil {
+		t.Fatal(err)
+	}
+	got := make([]string, len(out.Memory))
+	for i, m := range out.Memory {
+		got[i] = strings.TrimPrefix(m.ID, memoryExtensionIDPrefix)
+	}
+	want := []string{"qa-full", "qa-two-high", "qa-two-low", "qa-one-high"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("order = %v, want %v (raw=%s)", got, want, raw)
 	}
 }

@@ -99,6 +99,35 @@ struct TaskSheetExpandTests {
         #expect(tasks.detailTaskAgent == nil)
     }
 
+    /// The Sidebar layout's page takes a task's detail as a value on its path (#13156): the request is cleared as it is
+    /// taken, so no presenter pushes it by view as well.
+    @Test func takingATaskDetailClearsTheRequest() {
+        let tasks = store()
+        let key = SessionKey(group: "hub", machineID: "computer", sessionID: "agent")
+        tasks.openDispatchedTask("task", agent: key, pushAgent: false)
+        #expect(tasks.takeDetail() == TaskDetailRoute(todo: "task", taskAgent: key))
+        #expect(tasks.detailTask == nil)
+        #expect(tasks.detailTaskAgent == nil)
+        #expect(tasks.takeDetail() == nil)
+    }
+
+    @Test func takingAnAgentDetailClearsTheRequest() {
+        let tasks = store()
+        let key = SessionKey(machineID: "box", sessionID: "agent-4")
+        tasks.detailAgent = key
+        #expect(tasks.takeDetail() == TaskDetailRoute(agent: key))
+        #expect(tasks.detailAgent == nil)
+        #expect(tasks.takeDetail() == nil)
+    }
+
+    @Test func aTaskDetailWinsOverAnAgentDetail() {
+        let tasks = store()
+        tasks.detailAgent = SessionKey(machineID: "box", sessionID: "agent-5")
+        tasks.detailTask = "todo-2"
+        #expect(tasks.takeDetail() == TaskDetailRoute(todo: "todo-2"))
+        #expect(tasks.detailTask == nil && tasks.detailAgent == nil)
+    }
+
     @Test func forgettingDropsAPendingPush() {
         let tasks = store()
         tasks.expand(SessionKey(machineID: "box", sessionID: "agent-3"))

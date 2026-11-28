@@ -3,6 +3,7 @@ package transcript
 
 import (
 	"bytes"
+	"cmp"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -96,7 +97,8 @@ type entry struct {
 		ResetsAt json.RawMessage `json:"resetsAt"` // epoch seconds
 	} `json:"quotaLimits"`
 	// system/scheduled_task_fire: the /loop prompt that is about to run.
-	Prompt string `json:"prompt"`
+	Prompt     string `json:"prompt"`
+	LoopTaskID string `json:"taskId"`
 	// ContextBreakdown is an optional native context category split when an engine writes one into the transcript.
 	ContextBreakdown *proto.ContextBreakdown `json:"context_breakdown"`
 }
@@ -139,6 +141,7 @@ type Meta struct {
 	ModelAt       time.Time
 	ServiceTier   string
 	ServiceTierAt time.Time
+	Speed         SpeedObservation
 	// Ultracode is independent of effort: nil means the transcript has no dated evidence. Since, when set by a
 	// caller, ignores observations from before the current Claude process (resume resets the session-only switch).
 	Ultracode        *bool
@@ -431,9 +434,9 @@ func (m *Meta) observeOutput(id string, tokens int) {
 	}
 }
 
-// botmuxSentinel is the line a botmux session's agent ends a turn with when its answer went to the Feishu topic
+// BotmuxSentinel is the line a botmux session's agent ends a turn with when its answer went to the Feishu topic
 // through `botmux send`: a word for botmux, not the answer.
-const botmuxSentinel = "BOTMUX_NOTHING_TO_SEND"
+const BotmuxSentinel = "BOTMUX_NOTHING_TO_SEND"
 
 // Some Anthropic-compatible proxies have a "thinking as text" mode: the thinking block comes back as a text block whose
 // lines are each wrapped in ANSI dim italic, opening with "💭 Thinking" and closing with "💭 Thought for Ns (N tokens)",
@@ -455,15 +458,18 @@ func thinkingAsText(text string) (thinking string, ok bool) {
 	return strings.TrimSpace(strings.Join(lines, "\n")), true
 }
 
-// withoutBotmuxSentinel is text without its botmux sentinel lines, "" when that is all it says (LastText then stays the
+// WithoutBotmuxSentinel is text without its botmux sentinel lines, "" when that is all it says (LastText then stays the
 // turn's earlier words).
-func withoutBotmuxSentinel(text string) string {
-	if !strings.Contains(text, botmuxSentinel) {
+func WithoutBotmuxSentinel(text string) string {
+	if !strings.Contains(text, BotmuxSentinel) {
 		return text
 	}
 	lines := strings.Split(text, "\n")
-	lines = slices.DeleteFunc(lines, func(l string) bool { return strings.TrimSpace(l) == botmuxSentinel })
-	return strings.TrimSpace(strings.Join(lines, "\n"))
+	kept := slices.DeleteFunc(lines, func(l string) bool { return strings.TrimSpace(l) == BotmuxSentinel })
+	if len(kept) == len(lines) {
+		return text
+	}
+	return strings.TrimSpace(strings.Join(kept, "\n"))
 }
 
 // pastedRe matches the wrapper Claude Code puts around long pasted input (also what herdr's bracketed paste from
@@ -501,7 +507,7 @@ const (
 	CompactSummaryNotice = "已从压缩的上下文继续"
 )
 
-// CompactNotice is the notice a /compact without instructions becomes (no user line): a /compact sent from the phone
+// CompactNotice is the notice a /compact command becomes (no user line): a /compact sent from the phone
 // is tied to it (node/echo.go).
 const CompactNotice = "压缩上下文"
 
@@ -841,6 +847,7 @@ func parseLine(seq int, line []byte, meta *Meta) []proto.Item {
 			}
 			it := mk(0, "system", proto.KindNotice)
 			it.Text, it.Wake = text, true
+			it.NativeLoopID = proto.NativeLoopID(cmp.Or(e.LoopTaskID, "native-loop"))
 			return []proto.Item{it}
 		case "away_summary":
 			recap := strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(rawString(e.Content)), "(disable recaps in /config)"))
@@ -1014,7 +1021,7 @@ func parseLine(seq int, line []byte, meta *Meta) []proto.Item {
 				it := mk(i, "assistant", proto.KindText)
 				it.Text = clip(b.Text)
 				it.Narration = e.Message.StopReason == "tool_use" && !e.IsAPIErrorMessage
-				meta.said(withoutBotmuxSentinel(b.Text), e.Timestamp)
+				meta.said(b.Text, e.Timestamp)
 				out = append(out, it)
 			case "thinking":
 				if strings.TrimSpace(b.Thinking) == "" {
@@ -1062,7 +1069,7 @@ func parseLine(seq int, line []byte, meta *Meta) []proto.Item {
 
 // said notes the agent writing at ts: LastText (when t has words) and what its branch said.
 func (m *Meta) said(t string, ts time.Time) {
-	if t != "" {
+	if t = WithoutBotmuxSentinel(t); t != "" {
 		m.LastText = t
 		m.tree.said = t
 		m.turnSaid(t)

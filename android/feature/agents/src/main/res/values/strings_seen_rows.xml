@@ -1,0 +1,7 @@
+<resources>
+    <string name="agents_seen_rows_notice">Agents you read stay where they were, marked as seen, until you pull down to refresh.</string>
+    <plurals name="agents_clear_seen">
+        <item quantity="one">Clear Seen (%d)</item>
+        <item quantity="other">Clear Seen (%d)</item>
+    </plurals>
+</resources>

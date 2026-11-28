@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/connector"
 )
 
@@ -27,8 +28,8 @@ func (h *Manager) githubMutes(ctx context.Context) {
 	if json.Unmarshal(o.Options(), &opts) != nil || json.Unmarshal(opts[githubMutedRepos], &repos) != nil || len(repos) == 0 {
 		return
 	}
-	if err := h.callAssistant(ctx, assistantwire.MethodInboxRepoMutes, assistantwire.InboxRepoMutes{Source: "github", Set: true, Add: true,
-		Repos: repos}, nil); err != nil {
+	params := assistantwire.InboxRepoMutes{Source: "github", Set: true, Add: true, Repos: repos}
+	if _, err := buswire.Call(ctx, assistantCaller(h.callAssistant), assistantwire.InboxRepoMutesMethod, params); err != nil {
 		h.logf("inbox: github's muted repositories: %v", err)
 		return
 	}
@@ -47,10 +48,9 @@ func (h *Manager) withGitHubMutes(ctx context.Context, raw json.RawMessage) json
 	if json.Unmarshal(raw, &opts) != nil {
 		return raw
 	}
-	var res struct {
-		Repos []string `json:"repos"`
-	}
-	if err := h.callAssistant(ctx, assistantwire.MethodInboxRepoMutes, assistantwire.InboxRepoMutes{Source: "github"}, &res); err != nil {
+	res, err := buswire.Call(ctx, assistantCaller(h.callAssistant), assistantwire.InboxRepoMutesMethod,
+		assistantwire.InboxRepoMutes{Source: "github"})
+	if err != nil {
 		h.logf("inbox: github's muted repositories: %v", err)
 		return nil
 	}
@@ -84,8 +84,8 @@ func (h *Manager) setGitHubMutes(ctx context.Context, raw json.RawMessage) (json
 		out, _ := json.Marshal(opts)
 		return out, nil
 	}
-	if err := h.callAssistant(ctx, assistantwire.MethodInboxRepoMutes, assistantwire.InboxRepoMutes{Source: "github", Set: true,
-		Repos: repos}, nil); err != nil {
+	params := assistantwire.InboxRepoMutes{Source: "github", Set: true, Repos: repos}
+	if _, err := buswire.Call(ctx, assistantCaller(h.callAssistant), assistantwire.InboxRepoMutesMethod, params); err != nil {
 		return nil, err
 	}
 	opts[githubMutedRepos] = json.RawMessage(`[]`)

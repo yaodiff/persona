@@ -70,8 +70,13 @@ func TestAgentToolsAndSupervisionResolveAgyPlaceholderAlias(t *testing.T) {
 		t.Fatalf("agent_read got id=%q out=%q, want id=%q with reply", seenItemsID, readOut, realID)
 	}
 
-	// 2. agent_send with the placeholder id resolves to the real companion session.
+	// 2. The alias preserves both the external-session refusal and the authorized send.
 	sendArgs, _ := json.Marshal(map[string]any{"machine": "box", "session_id": placeholder, "text": "Please also check lint"})
+	if _, err := s.runTool(ctx, "server", "conv1", "agent_send", sendArgs); err == nil || seenSendID != "" {
+		t.Fatalf("unassigned external session: send targeted %q, error %v", seenSendID, err)
+	}
+	realRow.StartedByPersona = true
+	f.setSessions("box", realRow)
 	if _, err := s.runTool(ctx, "server", "conv1", "agent_send", sendArgs); err != nil {
 		t.Fatalf("agent_send by placeholder alias: %v", err)
 	}
@@ -97,12 +102,12 @@ func TestAgentToolsAndSupervisionResolveAgyPlaceholderAlias(t *testing.T) {
 		t.Fatalf("taskAgentsReached = %+v (ok=%v), want [%s]", reached, ok, realID)
 	}
 	seenItemsID = ""
-	replies, _ := s.taskReplies(ctx, todo)
+	replies, _, _ := s.taskReplies(ctx, todo)
 	if seenItemsID != realID || len(replies) != 1 || !strings.Contains(replies[0].Text, "Fixed in PR #999.") {
 		t.Fatalf("taskReplies = %+v (queried %q), want reply from %s", replies, seenItemsID, realID)
 	}
 	seenItemsID = ""
-	outcomes := s.outcomeAgents(ctx, todo)
+	outcomes, _ := s.outcomeAgents(ctx, todo)
 	if seenItemsID != realID || len(outcomes) != 1 || !strings.Contains(outcomes[0].Text, "Fixed in PR #999.") {
 		t.Fatalf("outcomeAgents = %+v (queried %q), want outcome from %s", outcomes, seenItemsID, realID)
 	}

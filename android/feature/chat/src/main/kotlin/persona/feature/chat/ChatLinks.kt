@@ -10,6 +10,8 @@ import persona.core.contracts.JsonCodec
 import persona.core.contracts.contextBody
 import kotlinx.serialization.encodeToString
 import persona.core.contracts.parseTime
+import persona.core.domain.MessageContext
+import persona.core.domain.parseContexts
 import persona.core.navigation.HubLinks
 import persona.core.navigation.HubPage
 import java.net.URI
@@ -248,11 +250,10 @@ data class ChatLinkContext(
         /** The order [extra] is written in (iOS `ContextRef.extraOrder`): a forward's metadata, then any other attribute by name. */
         val EXTRA_ORDER = listOf("role", "author", "chat", "project", "machine", "time")
 
-        private val tags = Regex("<persona-context\\b([^>]*)>([\\s\\S]*?)</persona-context>\\s*")
+        private val tags = ProtocolCompatibility.contextBlock
 
-        private val attributes = Regex("([\\w-]+)=\"([^\"]*)\"")
+        private val attributes = Regex("([\\w-]+)\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)')")
         private fun escape(s: String) = s.replace("&", "&amp;").replace("\"", "&quot;").replace("<", "&lt;").replace(">", "&gt;")
-        private fun unescape(s: String) = s.replace("&quot;", "\"").replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
 
         /**
          * [text] without its forward blocks, everything else as written (a pending start's saved first message, shown
@@ -261,7 +262,9 @@ data class ChatLinkContext(
         internal fun withoutForwards(text: String): String {
             var removed = false
             val out = tags.replace(text) { tag ->
-                if (attributes.findAll(tag.groupValues[1]).any { it.groupValues[1] == "kind" && it.groupValues[2] == FORWARD }) {
+                if (attributes.findAll(tag.groupValues[1]).any {
+                        it.groupValues[1] == "kind" && it.groupValues[2].ifEmpty { it.groupValues[3] } == FORWARD
+                    }) {
                     removed = true
                     ""
                 } else tag.value
@@ -270,13 +273,8 @@ data class ChatLinkContext(
         }
 
         internal fun parse(text: String): Pair<List<ChatLinkContext>, String> {
-            val refs = tags.findAll(text).map { tag ->
-                val attrs = attributes.findAll(tag.groupValues[1]).associate { it.groupValues[1] to unescape(it.groupValues[2]) }
-                ChatLinkContext(attrs["kind"] ?: "context", attrs["title"].orEmpty(), attrs["url"].orEmpty(), unescape(tag.groupValues[2].trim()),
-                    msg = attrs["msg"].orEmpty(), part = attrs["part"].orEmpty(),
-                    extra = attrs.filterKeys { it !in OWN_ATTRIBUTES })
-            }.toList()
-            return refs to tags.replace(text, "").trim()
+            val (contexts, rest) = parseContexts(text)
+            return contexts.map { it.toChatLinkContext() } to rest
         }
 
         /** "AI edit": the selection and what to do with it, one message to the agent (iOS `LinkSheet`). */
@@ -315,7 +313,7 @@ fun forwardMessage(note: String, forwards: List<ChatLinkContext>, resources: Res
  * the extra attributes as JSON and a forward's route the last three); seven after [CONTEXTS_V3], as saved before
  * forwards; six each after [CONTEXTS_V2]; five each, without a mark, as saved before quotes had an id.
  */
-internal val ChatLinkContextsSaver = listSaver<List<ChatLinkContext>, String>(
+val ChatLinkContextsSaver = listSaver<List<ChatLinkContext>, String>(
     save = { refs -> listOf(CONTEXTS_V4) + refs.flatMap {
         listOf(it.kind, it.title, it.url, it.text, it.id, it.msg, it.part, JsonCodec.encodeToString(it.extra), it.route.orEmpty())
     } },
@@ -353,6 +351,16 @@ internal fun withQuote(contexts: List<ChatLinkContext>, quote: ChatLinkContext):
     }
     return if (already) contexts else contexts + quote
 }
+
+internal fun MessageContext.toChatLinkContext(): ChatLinkContext = ChatLinkContext(
+    kind = kind,
+    title = title,
+    url = url.orEmpty(),
+    text = body,
+    msg = attributes["msg"].orEmpty(),
+    part = attributes["part"].orEmpty(),
+    extra = attributes - setOf("msg", "part"),
+)
 
 /**
  * "Quote" on a message of this chat: the user's own is by [ChatLinkContext.QUOTE_ME] in every language, else by [agent]. [part]:

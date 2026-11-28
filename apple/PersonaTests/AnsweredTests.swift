@@ -102,6 +102,14 @@ struct AnsweredTests {
         #expect(res.resolution?.always == true)
     }
 
+    @Test func resolveEscapesAnOpaqueInteractionIDAsOnePathSegment() async throws {
+        let hub = FakeHub()
+        let path = "/api/v1/interactions/task%2F42/resolve"
+        hub.on("POST", path, json: #"{"ok":true}"#)
+        _ = try await hub.client.resolve("task/42", .cancelled)
+        #expect(hub.sent("POST", path).count == 1)
+    }
+
     @Test func replaceInteractionsDoesNotResurrectLocallyEndedCards() {
         let model = AppModel.shared
         let ix = Interaction(id: "ended1", machineID: "m", sessionID: "s", kind: .screen)

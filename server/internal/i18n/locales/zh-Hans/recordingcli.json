@@ -1,0 +1,13 @@
+{
+  "usage": "用法：\n  {command} list --hub <URL> [--token-file <文件>] [--query <关键词>] [--json]\n  {command} export --hub <URL> [--token-file <文件>] [--format markdown|vtt] [--output <新文件>] <录音 ID>\n\n用 --token-file 或 PERSONA_RECORDINGS_TOKEN 提供已配对设备的令牌。搜索会匹配标题和已保留的文本，最多返回 80 条结果。省略 --output 时，导出内容会写到标准输出。",
+  "invalid_id": "请输入列表中的录音 UUID。",
+  "invalid_format": "请将 --format 设为 markdown 或 vtt。",
+  "token": "请用 --token-file 或 PERSONA_RECORDINGS_TOKEN 提供已配对设备的令牌。",
+  "bad_response": "Hub 返回的录音数据格式有误。",
+  "read_failed": "无法连接到 Hub 读取录音。",
+  "http_error": "读取录音时，Hub 返回了 HTTP {status}。",
+  "output_failed": "无法保存录音导出文件。请检查目标文件夹和写入权限。",
+  "empty": "未找到录音。",
+  "untitled": "未命名录音",
+  "saved": "录音已导出到 {path}。"
+}

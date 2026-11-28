@@ -60,6 +60,14 @@ func (h *Hub) withClientOp(kind string, next http.HandlerFunc) http.HandlerFunc 
 			params = object
 			raw, _ = json.Marshal(object)
 		}
+		if kind == "clarify" && object != nil && len(bytes.TrimSpace(raw)) != 0 {
+			if clientMsgID, _ := object["client_msg_id"].(string); strings.TrimSpace(clientMsgID) == "" {
+				// A retry after uncertain delivery must keep the manager's dedupe ID even though its receipt was forgotten.
+				object["client_msg_id"] = "approval-question-" + id
+				params = object
+				raw, _ = json.Marshal(object)
+			}
+		}
 		r.Body = io.NopCloser(bytes.NewReader(raw))
 		r.ContentLength = int64(len(raw))
 		if h.store == nil {
@@ -67,6 +75,11 @@ func (h *Hub) withClientOp(kind string, next http.HandlerFunc) http.HandlerFunc 
 			return
 		}
 		target := devicewire.ClientOpTarget(r.URL.Path, r.URL.Query().Encode())
+		if occurrence := r.Header.Get(assistantwire.InteractionCreatedAtHeader); occurrence != "" {
+			// A mirror retry must keep the occurrence normalized on its first try,
+			// even if the origin has since been replaced under the same ID.
+			target = devicewire.ClientOpTargetWithOccurrence(r.URL.Path, r.URL.Query().Encode(), occurrence)
+		}
 		valid := len(bytes.TrimSpace(raw)) == 0 || json.Valid(raw)
 		digest := devicewire.ClientOpDigest(kind, target, valid, opDigestParams(kind, raw, params))
 		var timing *sendTiming
@@ -154,30 +167,38 @@ type clientOpForgetter interface {
 	ForgetClientOp(ctx context.Context, id string) error
 }
 
-// clientOpRetry: an inbox reply or hand-off the manager never got (assistant_offline) or that was cut off on the way
-// to it (assistant_in_doubt) keeps no receipt: the same request asked again goes to the manager, whose send id has it
-// sent once (extmgr inbox_reply.go sendInboxOnce, a hand-off's session.send_once), instead of the stored refusal
-// coming back for good. A notification choice, a conversation's start and a to-do create release only a definitely offline receipt;
-// uncertain delivery stays recorded.
+// clientOpRetry: an operation of kind answered body keeps no receipt (ForgetClientOp), so the same request asked
+// again runs again instead of the stored refusal coming back for good. Each kind below lets go an answer the manager
+// never got (assistant_offline) — including "message", which fails in assistantSend / todoHandoff or when the devices
+// manager is offline before anything reaches a node. A conversation's start, an approval question and an inbox hand-off also let go the
+// manager's answer that their node got nothing (#13360: delivered "none" and retryable, apierr.Body's for ErrOffline,
+// a start's 503 node_unreachable): nothing was started or sent, and what the manager did before the node's call makes
+// nothing twice. An inbox reply or hand-off and an approval question cut off on the way to the manager
+// (assistant_in_doubt) keep none either: the manager's send id has it sent once (extmgr inbox_reply.go sendInboxOnce,
+// session.send_once). Everything else stays recorded: a refusal that is not retryable (inbox_item_done,
+// conversation_busy), delivery that may have happened ("unknown", "yes"), an inbox reply's refusal by its source
+// (replayed as it is), a choice (the manager claims the card before its node is called), and a meeting's or a to-do's
+// answer, which their apps take as final for that op id (meeting_receipts.go, todo_receipts.go).
 func clientOpRetry(kind string, body []byte) bool {
-	if kind == meetingJustMeOp || kind == meetingFollowupOp || kind == todoAnswerOp || kind == todoRouteOp || kind == todoCreateOp { // never reached the manager: the same call runs again
-		var res struct {
-			Code string `json:"code"`
-		}
-		_ = json.Unmarshal(body, &res)
-		return res.Code == assistantwire.CodeAssistantOffline
-	}
-	if kind != "inbox_reply" && kind != "inbox_handoff" && kind != "choose" && kind != "assistant_start" && kind != "clarify" {
-		return false
-	}
 	var res struct {
-		Code string `json:"code"`
+		Code      string `json:"code"`
+		Delivered string `json:"delivered"`
+		Retryable bool   `json:"retryable"`
 	}
 	_ = json.Unmarshal(body, &res)
-	if kind == "choose" || kind == "assistant_start" || kind == "clarify" { // No request reached the manager; the same op can safely retry.
-		return res.Code == assistantwire.CodeAssistantOffline || kind == "clarify" && res.Code == assistantwire.CodeAssistantInDoubt
+	offline, inDoubt := res.Code == assistantwire.CodeAssistantOffline, res.Code == assistantwire.CodeAssistantInDoubt
+	gotNothing := res.Delivered == "none" && res.Retryable
+	switch kind {
+	case "choose", "message", meetingJustMeOp, meetingFollowupOp, todoAnswerOp, todoRouteOp, todoCreateOp:
+		return offline
+	case "assistant_start":
+		return offline || gotNothing
+	case "clarify", "inbox_handoff":
+		return offline || inDoubt || gotNothing
+	case "inbox_reply":
+		return offline || inDoubt
 	}
-	return res.Code == assistantwire.CodeAssistantOffline || res.Code == assistantwire.CodeAssistantInDoubt
+	return false
 }
 
 // clientOpStoredKey carries a *bool that executeClientOp sets once it has stored the operation's receipt (or let it

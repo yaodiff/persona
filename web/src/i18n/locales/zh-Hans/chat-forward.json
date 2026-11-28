@@ -4,7 +4,7 @@
   "messages": "消息",
   "heading": "转发自 {who}",
   "heading_chat": "转发自 {who} · {chat}",
-  "no_content": "没有内容",
+  "no_content": "无内容",
   "remove": "取消转发",
   "open_original": "打开原消息",
   "show_all": "展开全文",

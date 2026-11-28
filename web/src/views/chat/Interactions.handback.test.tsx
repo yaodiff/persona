@@ -83,4 +83,39 @@ describe("handing a card back", () => {
     expect(receipt.querySelector("[data-answered-about]")?.textContent).toBe("Run the tests");
     expect(getState().answered.p_1).toMatchObject({ handedBack: true });
   });
+
+  it("hides Leave to computer on non-handbackable permission cards while keeping Have a question, Deny, and Allow", async () => {
+    const headless = {
+      ...permission,
+      id: "p_headless",
+      agent: "agy",
+      can_clarify: true,
+      no_hand_back: true,
+    } as Interaction;
+    Object.assign(getState(), { interactions: [headless], answered: {} });
+    act(() => root.render(<Dock />));
+    const card = host.querySelector<HTMLElement>("[data-card]")!;
+    expect(card.querySelector(`button[aria-label="${t("chat-interactions.hand_back")}"]`)).toBeNull();
+    expect(card.querySelector("button[data-card-answer]")).toBeNull();
+    const buttonLabels = [...card.querySelectorAll<HTMLButtonElement>("button")].map((b) => b.textContent);
+    expect(buttonLabels).not.toContain(t("chat-interactions.hand_back"));
+    expect(buttonLabels).toContain(t("chat-interactions.have_question"));
+    expect(buttonLabels).toContain(t("chat-interactions.deny"));
+    expect(buttonLabels).toContain(t("chat-interactions.allow"));
+
+    const deny = [...card.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === t("chat-interactions.deny"))!;
+    act(() => deny.click());
+    await flush();
+    expect(calls).toHaveLength(1);
+    expect(calls[0].path).toBe("/interactions/p_headless/resolve");
+    expect(calls[0].body).toMatchObject({ allow: false });
+    expect(calls[0].body).not.toHaveProperty("dismiss");
+  });
+
+  it("still shows Leave to computer when no_hand_back is explicitly false", () => {
+    Object.assign(getState(), { interactions: [{ ...permission, id: "p_term", no_hand_back: false } as Interaction], answered: {} });
+    act(() => root.render(<Dock />));
+    const button = host.querySelector<HTMLButtonElement>(`button[aria-label="${t("chat-interactions.hand_back")}"]`);
+    expect(button).not.toBeNull();
+  });
 });

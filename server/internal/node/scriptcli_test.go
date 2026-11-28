@@ -30,7 +30,9 @@ type scriptHub struct {
 	created        []proto.Interaction
 	notified       []map[string]any
 	cancelled      []string
+	codexLists     [][]proto.Interaction
 	decisions      []map[string]any
+	decisionNames  []string
 	decisionAnswer assistantwire.OutsideDecisionReply
 	larkSent       []proto.LarkSent // what the node's gate proxy told of (lark.sent)
 	lark           proto.AssistantLark
@@ -85,6 +87,7 @@ func newScriptHub(t *testing.T, create func(ctx context.Context, ix proto.Intera
 			_ = json.Unmarshal(params, &p)
 			h.mu.Lock()
 			h.decisions = append(h.decisions, p)
+			h.decisionNames = append(h.decisionNames, method)
 			answer := h.decisionAnswer
 			h.mu.Unlock()
 			return answer, nil
@@ -104,6 +107,15 @@ func newScriptHub(t *testing.T, create func(ctx context.Context, ix proto.Intera
 		return nil, nil
 	}
 	hub.OnEvent = func(method string, params json.RawMessage) {
+		if method == "codex.interactions" {
+			var p struct {
+				Interactions []proto.Interaction `json:"interactions"`
+			}
+			_ = json.Unmarshal(params, &p)
+			h.mu.Lock()
+			h.codexLists = append(h.codexLists, p.Interactions)
+			h.mu.Unlock()
+		}
 		var p struct {
 			ID string `json:"id"`
 		}
@@ -142,6 +154,70 @@ func newScriptHub(t *testing.T, create func(ctx context.Context, ix proto.Intera
 		}
 	}()
 	return h
+}
+
+func TestDecisionScriptSocketGetAndWithdraw(t *testing.T) {
+	h := newScriptHub(t, answerWith(proto.Resolution{}), notifyOK)
+	const id = "odc_example"
+	h.mu.Lock()
+	h.decisionAnswer = assistantwire.OutsideDecisionReply{Decision: &assistantwire.OutsideDecision{ID: id}}
+	h.mu.Unlock()
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+
+	for _, call := range []struct {
+		method string
+		run    func(context.Context, nodeclient.Dialer, string, string) (assistantwire.OutsideDecisionReply, error)
+	}{
+		{"decision.get", nodeclient.DecisionGetNode},
+		{"decision.withdraw", nodeclient.DecisionWithdrawNode},
+	} {
+		reply, err := call.run(ctx, h.dial, id, "w1:p2")
+		if err != nil || reply.Decision == nil || reply.Decision.ID != id {
+			t.Fatalf("%s: %+v, %v", call.method, reply, err)
+		}
+	}
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if len(h.decisionNames) != 2 || h.decisionNames[0] != "decision.get" || h.decisionNames[1] != "decision.withdraw" {
+		t.Fatalf("manager methods: %v", h.decisionNames)
+	}
+	for i, params := range h.decisions {
+		if len(params) != 1 || params["id"] != id {
+			t.Errorf("%s params: %v", h.decisionNames[i], params)
+		}
+	}
+}
+
+func TestDecisionScriptRejectsBeforeForwarding(t *testing.T) {
+	h := newScriptHub(t, answerWith(proto.Resolution{}), notifyOK)
+	h.n.setBlockedAgentDirs([]string{"/work/blocked"})
+	for _, tc := range []struct {
+		name, method, input, code, message string
+	}{
+		{"malformed raise", "decision.raise", `{"decision":1}`, "invalid_decision", "bad request"},
+		{"empty id", "decision.get", `{"id":""}`, "invalid_decision", "a decision id is required"},
+		{"invalid id", "decision.withdraw", `{"id":1}`, "invalid_decision", "a decision id is required"},
+		{"blocked folder", "decision.raise", `{"decision":{},"cwd":"/work/blocked"}`, "forbidden", "this folder is blocked in Persona"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			want := assistantwire.OutsideDecisionReply{Code: tc.code, Error: tc.message}
+			if got := h.n.handleDecision(t.Context(), sockRequest{Kind: tc.method, Input: json.RawMessage(tc.input)}); got != want {
+				t.Errorf("reply = %+v, want %+v", got, want)
+			}
+		})
+	}
+	h.n.peer.SuspendCalls()
+	want := assistantwire.OutsideDecisionReply{Code: "unavailable", Error: rpc.ErrSuspended.Error()}
+	if got := h.n.handleDecision(t.Context(), sockRequest{Kind: "decision.get", Input: json.RawMessage(`{"id":"odc_example"}`)}); got != want {
+		t.Errorf("suspended peer reply = %+v, want %+v", got, want)
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if len(h.decisions) != 0 {
+		t.Fatalf("rejected requests reached the manager: %v", h.decisions)
+	}
 }
 
 // dial is nodeclient.Dialer over the test's socket.

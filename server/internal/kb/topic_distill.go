@@ -45,6 +45,12 @@ const (
 	distillMaxNewTopics = 4   // new topics one call may open; the rest of its points for new topics are dropped
 	maxTopics           = 150 // no new topic past this many
 	pendingMax          = 200 // candidates a topic holds at most; the oldest go first
+	// topicModelTimeout bounds one kb.topics model call, source distill and topic merge alike. Both call JSONMax with a
+	// 12000 output ceiling that doubles to 24000 for its one truncated-reply retry, and that retry shares this same
+	// context, so the old 3 minutes cut long runs mid-stream ("ai: read stream: context deadline exceeded") and parked
+	// the source/topic in the retry backoff. Topic work runs in background worker lanes, so the longer budget is cheap;
+	// set it back to 3*time.Minute to roll back (the topic timeout test pins the six minute value).
+	topicModelTimeout = 6 * time.Minute
 )
 
 // topicMark is how far a source was distilled.
@@ -314,7 +320,7 @@ func (e *Engine) distill(ctx context.Context, src distillSource, now time.Time, 
 	owner := e.knowledgeOwner()
 	in.Language = owner.Language
 	var d distillDigest
-	cctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
+	cctx, cancel := context.WithTimeout(ctx, topicModelTimeout)
 	defer cancel()
 	system := prompts.RenderKBTopicDistill(prompts.KBTopicDistill{Language: owner.Language, Owner: e.ownerName(), MaxPoints: distillMaxPoints})
 	if err := e.modelFor("kb.topics").JSONMax(cctx, system, prompts.RenderKBTopicDistillInput(in), 12000, &d); err != nil {

@@ -1,7 +1,6 @@
 {
   "title": "Ports & Processes",
   "subtitle": "On-demand inspection of active listening ports and running processes. Sensitive command-line arguments are redacted.",
-  "machine_label": "Machine",
   "no_online_machines": "No online machines available to inspect.",
   "tab_ports": "Listening Ports",
   "tab_processes": "Processes",

@@ -112,7 +112,13 @@ internal object ReceiptMarkdown {
                         if (c == '[' && link.groupValues[2].isNotEmpty()) spans += Span(Mark.Link, start, out.length, link.groupValues[2])
                         i = link.range.last + 1
                     } else {
-                        out.append(c); i++
+                        val clipped = Regex("""\[([^\]\n]+)]\(\S*""").matchAt(s, open)
+                        if (clipped != null && clipped.range.last == s.lastIndex) {
+                            inline(clipped.groupValues[1], out, spans)
+                            i = clipped.range.last + 1
+                        } else {
+                            out.append(c); i++
+                        }
                     }
                 }
                 c == '<' -> {

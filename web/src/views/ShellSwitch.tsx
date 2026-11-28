@@ -11,6 +11,7 @@ import { heldOnlyNeeds } from "../lib/attention";
 import { othersWaiting } from "../lib/sessions";
 import { supervisorHeldOnly } from "../lib/supervisor-held";
 import { useStore } from "../lib/store";
+import { usePhoneNavMode } from "../lib/phone-nav";
 import type { Interaction, Session } from "../lib/types";
 import { cx, IconButton } from "../ui/atoms";
 import { HEADER_SLOT, HEADER_SLOT_END, HEADER_SLOT_START } from "./chat/header";
@@ -67,6 +68,9 @@ function isSessionHeld(session: Session | undefined, interactions: readonly Inte
 }
 
 export function ShellSwitch({ page, deps }: { page: ShellPage; deps?: ShellSwitchDeps }) {
+  // With the phone's tab bar (lib/phone-nav.ts) the bottom carries the places, so the top bar names the page instead.
+  const phoneNav = usePhoneNavMode();
+  if (phoneNav === "tabs" && !deps) return <ShellPageTitle page={page} />;
   if (deps?.waiting !== undefined) return <ShellSwitchView page={page} waiting={deps.waiting} deps={deps} />;
   if (deps?.counts !== undefined) {
     const counts = typeof deps.counts === "function" ? deps.counts() : deps.counts;
@@ -74,6 +78,12 @@ export function ShellSwitch({ page, deps }: { page: ShellPage; deps?: ShellSwitc
   }
   if (deps?.useScopedCounts) return <CustomScopedShellSwitch page={page} deps={deps} readCounts={deps.useScopedCounts} />;
   return <DefaultShellSwitch page={page} deps={deps} />;
+}
+
+/** The page's name where the switch would be, under the phone's tab bar. */
+export function ShellPageTitle({ page }: { page: ShellPage }) {
+  const label = SHELL_PAGES.find((p) => p.page === page)?.label ?? "";
+  return <h1 data-shell-title className="min-w-0 truncate text-card-title font-semibold text-ink">{label}</h1>;
 }
 
 function DefaultShellSwitch({ page, deps }: { page: ShellPage; deps?: ShellSwitchDeps }) {
@@ -84,7 +94,7 @@ function CustomScopedShellSwitch({ page, deps, readCounts }: { page: ShellPage; 
   return <ShellSwitchView page={page} waiting={readCounts().badge} deps={deps} />;
 }
 
-function WaitingBadge({ count, className }: { count: number; className?: string }) {
+export function WaitingBadge({ count, className }: { count: number; className?: string }) {
   return <span aria-hidden className={cx("flex h-4 min-w-4 items-center justify-center rounded-full bg-field px-1 text-[10px] font-semibold text-attention tabular-nums", className)}>{count}</span>;
 }
 

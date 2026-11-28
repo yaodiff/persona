@@ -7,7 +7,7 @@ const failure = (status = 503) => Response.json({ error: "Temporarily unavailabl
 const failureText = (status = 503) => errorText(new ApiError(status, "Temporarily unavailable", {}));
 
 function answerTodos(answer: () => Response | Promise<Response>) {
-  vi.stubGlobal("fetch", vi.fn((url: string) => url.endsWith("/todos") ? answer() : Promise.resolve(Response.json({}))));
+  vi.stubGlobal("fetch", vi.fn((url: string) => new URL(url, "http://hub").pathname.endsWith("/todos") ? answer() : Promise.resolve(Response.json({}))));
 }
 
 function deferredResponse() {
@@ -41,7 +41,7 @@ describe.each([
 
   it("records the existing read-timeout explanation", async () => {
     vi.useFakeTimers();
-    vi.stubGlobal("fetch", vi.fn((url: string, init: RequestInit) => url.endsWith("/todos")
+    vi.stubGlobal("fetch", vi.fn((url: string, init: RequestInit) => new URL(url, "http://hub").pathname.endsWith("/todos")
       ? new Promise<Response>((_resolve, reject) => {
         init.signal!.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true });
       })
@@ -131,7 +131,7 @@ it("shows the to-do failure without waiting for the initial sessions request", a
   const sessions = deferredResponse();
   vi.stubGlobal("fetch", vi.fn((url: string) => {
     if (url.endsWith("/sessions")) return sessions.promise;
-    return Promise.resolve(url.endsWith("/todos") ? failure() : Response.json({}));
+    return Promise.resolve(new URL(url, "http://hub").pathname.endsWith("/todos") ? failure() : Response.json({}));
   }));
   const pending = refresh();
   try {

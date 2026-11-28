@@ -47,33 +47,42 @@ type sessionState struct {
 	Model                   string          `json:"model,omitempty"`
 	ModelFingerprint        string          `json:"model_fingerprint,omitempty"`
 	ModelEffort             string          `json:"model_effort,omitempty"`
-	TaskExecution           bool            `json:"task_execution,omitempty"` // the last Assistant input used strict scheduled execution
-	Origin                  string          `json:"origin,omitempty"`         // manager-recorded conversation source, for model-call authorization
-	OriginKnown             bool            `json:"origin_known,omitempty"`   // manager explicitly decided origin; false on pre-upgrade records
+	CodexStartTier          string          `json:"codex_start_tier,omitempty"`
+	ModelFromRecovery       bool            `json:"model_from_recovery,omitempty"` // Model came from automatic recovery, not an explicit pick (#15622)
+	TaskExecution           bool            `json:"task_execution,omitempty"`      // the last Assistant input used strict scheduled execution
+	RuntimeAssistant        bool            `json:"runtime_assistant,omitempty"`   // the node started or addressed it as an assistant conversation
+	Origin                  string          `json:"origin,omitempty"`              // manager-recorded conversation source, for model-call authorization
+	OriginKnown             bool            `json:"origin_known,omitempty"`        // manager explicitly decided origin; false on pre-upgrade records
 	ConfigDir               string          `json:"config_dir,omitempty"`
 	Cwd                     string          `json:"cwd"`
 	TaskID                  string          `json:"task_id,omitempty"`
 	WorkspaceID             string          `json:"workspace_id,omitempty"`
+	WorkspaceHost           string          `json:"workspace_host,omitempty"`
 	WorkspaceLabel          string          `json:"workspace_label,omitempty"`
 	IsMain                  bool            `json:"is_main,omitempty"`
 	SupervisionInstructions string          `json:"supervision_instructions,omitempty"`
 	StartedAt               time.Time       `json:"started_at"`
 	StopCause               proto.StopCause `json:"stop_cause,omitempty"`
 	StopCauseAt             int64           `json:"stop_cause_at,omitempty"`
+
+	// OrcaTerminal records the original terminal receipt for a Persona-opened Agent tab.
+	OrcaTerminal *orcaTerminalOwner `json:"orca_terminal,omitempty"`
 	// RanAt: when a node last saw the Agent run (unix seconds, written at most every ranAtEvery). A session whose agent
 	// ran until shortly before this node started and is gone now was stopped by the restart (interrupted.go, #11441).
 	RanAt int64 `json:"ran_at,omitempty"`
 	// AwaitingFirstMessage: an empty start reserved this conversation without sending
 	// a model input. Runtime instructions and the idle state wait for actual delivery.
 	AwaitingFirstMessage bool `json:"awaiting_first_message,omitempty"`
-	// MainCompactWindow: the window the main conversation last ran with (modelExecution.MainCompactWindow), kept like
-	// IsMain (the hub's copy keeps neither, so until the node restarts) for a start that carries no execution: a manual
-	// compaction with no process running (assistant_compact.go).
+	// MainCompactWindow: the window the main conversation or a leader conversation last ran with
+	// (modelExecution.MainCompactWindow), kept like IsMain (the hub's copy keeps neither, so until the node restarts) for
+	// a start that carries no execution: a manual compaction with no process running (assistant_compact.go).
 	MainCompactWindow int `json:"main_compact_window,omitempty"`
-	// AppMode / AppEffort: the permission mode and effort on an assistant conversation (modes.go). AppMode
-	// also retains a terminal Codex start constraint for later resumes. AppModeExplicit distinguishes a deliberate
-	// per-conversation mode from a legacy/default value; on Claude Code only an explicit one outranks the manager's
-	// current default, while other agents always retain their legacy AppMode precedence.
+	// AppMode / AppEffort: the permission mode and effort set on an assistant conversation (modes.go). AppMode
+	// also retains a terminal Codex start constraint and an agy start's permission mode for later resumes and restarts.
+	// They win over what its transcript recorded and outlive the node: an old "default" there no longer locks it in.
+	// AppModeExplicit distinguishes a deliberate per-conversation mode from a legacy/default value; on Claude Code only
+	// an explicit one outranks the manager's current default, while other agents always retain their legacy AppMode
+	// precedence.
 	// PlanThen: the mode this session, started in plan mode, goes on in once its plan is approved (planthen.go).
 	PlanThen        string `json:"plan_then,omitempty"`
 	AppMode         string `json:"app_mode,omitempty"`
@@ -468,8 +477,31 @@ func (s *stateFile) setPane(id, pane string) {
 			return false
 		}
 		v.Pane = pane
+		v.OrcaTerminal = nil
 		return true
 	})
+}
+
+// forgetPane takes pane off every record that names it (Node.forgetPane).
+func (s *stateFile) forgetPane(pane string) {
+	s.mu.Lock()
+	var ids []string
+	for id, v := range s.Sessions {
+		if v.Pane == pane {
+			ids = append(ids, id)
+		}
+	}
+	s.mu.Unlock()
+	for _, id := range ids {
+		s.update(id, func(v *sessionState) bool {
+			if v.Pane != pane {
+				return false // bound to another pane since
+			}
+			v.Pane = ""
+			v.OrcaTerminal = nil
+			return true
+		})
+	}
 }
 
 // put reports only whether its persistence callback was invoked, not whether the
@@ -491,11 +523,15 @@ func (s *stateFile) put(id string, v sessionState) bool {
 		// Owned by state.update: older process snapshots cannot replace the
 		// idle clock or the latest compaction result.
 		v.IdleCompaction, v.Compaction = old.IdleCompaction, old.Compaction
+		if v.OrcaTerminal == nil && v.Pane == old.Pane {
+			v.OrcaTerminal = old.OrcaTerminal
+		}
 		if old.CreationID != "" {
 			v.CreationID, v.Incarnation = old.CreationID, old.Incarnation
 		}
-		if v.StopCauseAt == 0 && old.StopCauseAt != 0 {
-			v.StopCauseAt = max(time.Now().UnixNano(), old.StopCauseAt+1)
+		// A send can save its metadata after an interrupt recorded a newer Stop.
+		if v.StopCauseAt < old.StopCauseAt {
+			v.StopCause, v.StopCauseAt = old.StopCause, old.StopCauseAt
 		}
 		if v.RanAt == 0 {
 			v.RanAt = old.RanAt // owned by recordRunning

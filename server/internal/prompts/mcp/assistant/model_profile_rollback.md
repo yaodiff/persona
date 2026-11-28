@@ -1,4 +1,4 @@
-Undo the latest profile switch, restoring touched model settings only. Inspect the preview first; another rollback may redo it.{{template "shared/mcp_language" .}}
+Preview and undo the latest switch's model changes. The last rollback can redo a switch.{{template "shared/mcp_language" .}}
 
 ```json
 {

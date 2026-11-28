@@ -158,6 +158,9 @@ func (r *runner) FactsAt(ctx context.Context, now time.Time, self string) *modap
 	if self == "evening" { // the day's recap was written for it, 30 minutes before (kb_day.go)
 		f.Day = r.Day(ctx, now, loc)
 	}
+	if r.todos != nil && (self == "morning" || self == "evening") {
+		f.DeferredSupervision = r.todos.DeferredSupervision(ctx, now)
+	}
 	f.Captures = r.tasks.Captures(ctx, l, since)
 	return f
 }
@@ -281,6 +284,7 @@ func (r *runner) Start(ctx context.Context, task modapi.BriefTaskInfo, now time.
 		}
 	}
 	run := &modapi.BriefRun{Facts: r.FactsAt(ctx, now, task.ID), Label: task.Label}
+	run.Facts.Contributions = task.Contributions
 	if r.tasks != nil {
 		// What the briefs say since the last briefing, told once: only a real run moves the mark, not a look at the facts.
 		run.Facts.Briefs, run.Facts.BriefsDone = r.tasks.TaskBriefDigest(ctx, now, run.Facts.Loc, true)
@@ -295,13 +299,13 @@ func (r *runner) Start(ctx context.Context, task modapi.BriefTaskInfo, now time.
 // are written into the conversation as a `brief` item at once (feed.go), whether or not a Lark card follows. The retry
 // of a run that failed (retried) adds no item: the conversation has the first one, and the retry's facts are the card's
 // and the model's.
-func (r *runner) Sent(id, session string, retried bool) {
-	run := r.attach(id, session)
+func (r *runner) Sent(scheduled modapi.BriefScheduleRun) {
+	run := r.attach(scheduled.RefID, scheduled.SessionID)
 	if run == nil {
 		return
 	}
-	if !retried && !run.FallbackOnly {
-		r.writeFeed(session, id, run.Label, run.Facts)
+	if !scheduled.Retried && !run.FallbackOnly {
+		r.writeFeed(scheduled, run.Label, run.Facts)
 	}
 }
 
@@ -478,6 +482,12 @@ func (r *runner) ModelText(f *modapi.BriefSnapshot) string {
 	b.Briefs, b.BriefsDone, b.Day = f.Briefs, f.BriefsDone, f.Day
 	b.Setup = f.Setup.Lines()
 	b.Captures = f.Captures
+	if len(f.DeferredSupervision) > 0 {
+		b.DeferredSupervisionHeading = r.prompts.Translate(f.Lang, "assistant-briefing.supervision_deferred", nil)
+		for _, row := range f.DeferredSupervision {
+			b.DeferredSupervision = append(b.DeferredSupervision, row.Title+" — "+row.Reason)
+		}
+	}
 	for _, p := range f.Progress {
 		b.Progress = append(b.Progress, modapi.BriefProgress{Title: clip(oneLine(p.Title), 60), Stage: p.Stage})
 	}

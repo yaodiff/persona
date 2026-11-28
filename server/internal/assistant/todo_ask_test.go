@@ -530,9 +530,11 @@ func TestAskRisk(t *testing.T) {
 			assistantwire.OwnerAskRiskOpen},
 		{"that deadline handled", acceptAsk{Outcome: outcomeDecide, WhyOwner: whyPriority, Deadline: deadline,
 			DueAt: deadline}, assistantwire.OwnerAskRiskOpen},
+		{"outside source can take its own recommendation", acceptAsk{OutsideID: "source", Conclusion: true, Outcome: outcomeDecide,
+			Recommend: legacyTerminalOption, Reversible: true}, assistantwire.OwnerAskRiskSafe},
 		{"a Please verify", acceptAsk{}, assistantwire.OwnerAskRiskSafe},
 	} {
-		if got := askRisk(&tc.a); got != tc.want {
+		if got := askRisk(&tc.a, nil); got != tc.want {
 			t.Errorf("%s: %s, want %s", tc.name, got, tc.want)
 		}
 	}
@@ -606,8 +608,8 @@ func TestTodoFixturesListTheManagersRisk(t *testing.T) {
 		Risk      string     `json:"risk"`
 	}
 	// fixtureAsk is an acceptance ask todoAsks lists as l, and whether l says enough to tell its risk: a listed
-	// deadline taken by default can be undone, one never taken though it recommends an option cannot (todoAsks lists
-	// that only then), and with neither a deadline nor a default it had none. A deadline listed without its default (a
+	// decision with a deadline and a recommendation is open when the manager says its default is never taken.
+	// With neither a deadline nor a default it had none. A deadline listed without its default (a
 	// fixture's shorthand), or a default of never alone (a handled deadline, or no recommendation), could be either.
 	fixtureAsk := func(l listed) (acceptAsk, bool) {
 		a := acceptAsk{Outcome: l.Outcome, WhyOwner: l.WhyOwner}
@@ -662,7 +664,7 @@ func TestTodoFixturesListTheManagersRisk(t *testing.T) {
 				if !told {
 					continue
 				}
-				if want := askRisk(&a); l.Risk != want {
+				if want := askRisk(&a, nil); l.Risk != want {
 					t.Errorf("%s %s: the ask lists risk %q, the manager gives %q", file, c.Name, l.Risk, want)
 				}
 				checked[c.Name]++
@@ -725,5 +727,53 @@ func TestTodoListExposesValidAskLinkAndFiltersSelfAndUnsafeLinks(t *testing.T) {
 				t.Fatalf("link %q: got %v, want %q", tc.raw, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestUserCheckSummaryAndEvidenceOnListAndBrief(t *testing.T) {
+	s, f, todo, _, _ := conclusionService(t, false)
+	waitsForReview(t, s, f, todo.ID, "The itinerary is ready.")
+	const summary = "Both train connections leave time for transfers."
+	const link = "https://docs.example.com/itinerary"
+	reviewTask(t, s, todo.ID, map[string]any{
+		"verdict": "accepted", "user_check": true, "reason": "  " + summary + "  ",
+		"note": "Reviewed the final itinerary.", "link": link, "checks": completeReviewChecks(todoNow(s, todo.ID)),
+	})
+	ask := listedAsk(t, s, todo.ID)
+	if ask["summary"] != summary || ask["link"] != link || ask["outcome"] != nil {
+		t.Fatalf("verification ask = %+v", ask)
+	}
+	needsBriefingModule(t)
+	rows := s.briefBodyOf(s.briefFactsAt(t.Context(), time.Now(), ""), "Review").Accept
+	if len(rows) != 1 || rows[0].Detail != summary || rows[0].EvidenceLink != link || rows[0].Verdict != ask["verdict"] {
+		t.Fatalf("briefing acceptance = %+v", rows)
+	}
+}
+
+func TestVerificationDetailsFromOlderAsks(t *testing.T) {
+	const web = "https://hub.example.com"
+	const verdict = "Done: please verify the result"
+	w := awaitingAccept{todo: "trip", machine: "node", session: "worker",
+		review: &TaskReview{Verdict: reviewAccepted, Note: "  The route is ready. "}}
+	for _, tc := range []struct {
+		reason, link, wantSummary, wantLink string
+	}{
+		{"", web + "/s/node/worker?tab=chat", "The route is ready.", ""},
+		{" Checked both routes. ", web + "/todos/trip", "Checked both routes.", ""},
+		{verdict, "https://example.com/team/trips/pull/7", "", "https://example.com/team/trips/pull/7"},
+	} {
+		w.ask = acceptAsk{Reason: tc.reason, Link: tc.link}
+		if summary, link := w.verificationDetails(web, verdict); summary != tc.wantSummary || link != tc.wantLink {
+			t.Errorf("details = %q, %q; want %q, %q", summary, link, tc.wantSummary, tc.wantLink)
+		}
+	}
+	s, _, todo := acceptedForUserCheck(t)
+	before := listedAsk(t, s, todo.ID)
+	s.accept.mu.Lock()
+	s.accept.asks[todo.ID].Reason = before["verdict"].(string)
+	s.accept.mu.Unlock()
+	ask := listedAsk(t, s, todo.ID)
+	if ask["summary"] != nil || ask["link"] != nil || ask["asked_at"] != before["asked_at"] {
+		t.Errorf("legacy ask with duplicate verdict: %+v", ask)
 	}
 }

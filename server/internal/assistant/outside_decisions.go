@@ -110,7 +110,7 @@ func outsideView(rec *outsideDecision) assistantwire.OutsideDecision {
 		CostOfWaiting: a.CostOfWaiting, Reversible: a.Reversible, Default: defaultNever, CreatedAt: a.AskedAt,
 	}
 	for _, o := range a.Options {
-		out.Options = append(out.Options, assistantwire.OutsideDecisionOption{Label: o.Label, LeadsTo: o.LeadsTo})
+		out.Options = append(out.Options, assistantwire.OutsideDecisionOption{ID: assistantwire.OutsideDecisionOptionID(o.ID), Label: o.Label, LeadsTo: o.LeadsTo})
 	}
 	if a.DefaultAllowed && a.Reversible && !neverDefault(a.WhyOwner) && !a.Deadline.IsZero() && (a.DueAt.IsZero() || a.ByDefault) {
 		out.Default = defaultTaken
@@ -158,13 +158,42 @@ func normalizeOutsideDecision(in assistantwire.OutsideDecisionRequest) (reviewDe
 	in.WhyOwner = textfmt.StripTerminalEscapes(in.WhyOwner)
 	in.Recommend = textfmt.StripTerminalEscapes(in.Recommend)
 	in.CostOfWaiting = textfmt.StripTerminalEscapes(in.CostOfWaiting)
+	seenIDs := make(map[string]bool, len(in.Options))
 	for i := range in.Options {
 		in.Options[i].Label = textfmt.StripTerminalEscapes(in.Options[i].Label)
 		in.Options[i].LeadsTo = textfmt.StripTerminalEscapes(in.Options[i].LeadsTo)
+		id := string(in.Options[i].ID)
+		if id == "" {
+			continue
+		}
+		if strings.TrimSpace(id) != id || len(id) > 64 || seenIDs[id] {
+			return reviewDecision{}, "", false, "", outsideErr(http.StatusBadRequest, "invalid_decision", errors.New("option ids must be unique, trimmed and at most 64 characters"))
+		}
+		for _, r := range id {
+			if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' || r == '-' || r == '.' {
+				continue
+			}
+			return reviewDecision{}, "", false, "", outsideErr(http.StatusBadRequest, "invalid_decision", errors.New("option ids use only ASCII letters, digits, '.', '_' and '-'"))
+		}
+		seenIDs[id] = true
+	}
+	// An existing exact label keeps its legacy meaning. Otherwise recommend may
+	// name the stable id while the owner sees and answers the localized label.
+	labelRecommended := false
+	for _, option := range in.Options {
+		labelRecommended = labelRecommended || option.Label == in.Recommend
+	}
+	if !labelRecommended {
+		for _, option := range in.Options {
+			if option.ID != "" && string(option.ID) == in.Recommend {
+				in.Recommend = option.Label
+				break
+			}
+		}
 	}
 	options := make([]DecisionOption, 0, len(in.Options))
 	for _, o := range in.Options {
-		options = append(options, DecisionOption{Label: o.Label, LeadsTo: o.LeadsTo})
+		options = append(options, DecisionOption{ID: string(o.ID), Label: o.Label, LeadsTo: o.LeadsTo})
 	}
 	d, err := readDecision(in.WhyOwner, in.Title, in.Recommend, in.CostOfWaiting, options)
 	if err != nil {
@@ -200,7 +229,7 @@ func normalizeOutsideDecision(in assistantwire.OutsideDecisionRequest) (reviewDe
 	in.Title, in.Background, in.WhyOwner = d.Reason, background, d.WhyOwner
 	in.Recommend, in.CostOfWaiting, in.Options = d.Recommend, d.CostOfWaiting, nil
 	for _, o := range d.Options {
-		in.Options = append(in.Options, assistantwire.OutsideDecisionOption{Label: o.Label, LeadsTo: o.LeadsTo})
+		in.Options = append(in.Options, assistantwire.OutsideDecisionOption{ID: assistantwire.OutsideDecisionOptionID(o.ID), Label: o.Label, LeadsTo: o.LeadsTo})
 	}
 	in.AllowDefault = &allowDefault
 	in.Reversible = &reversible
@@ -423,6 +452,12 @@ func (s *Service) answerOutside(ctx context.Context, id, asked string, answer ou
 		return acceptResult{}, nil
 	}
 	previous := copyAcceptAsk(cur)
+	for _, option := range cur.Options {
+		if option.Label == answer.Option {
+			answer.OptionID = assistantwire.OutsideDecisionOptionID(option.ID)
+			break
+		}
+	}
 	cur.OutsideAnswer = &answer
 	stays := answer.Response == respondExplainFirst
 	if stays {
@@ -446,6 +481,10 @@ func (s *Service) answerOutside(ctx context.Context, id, asked string, answer ou
 		return acceptResult{}, fmt.Errorf("%w: %w", errAcceptStore, err)
 	}
 	cp := copyAcceptAsk(cur)
+	caller, ref := "", ""
+	if rec := b.outside[cp.OutsideID]; rec != nil {
+		caller, ref = rec.Caller, rec.Ref
+	}
 	b.mu.Unlock()
 	s.askChanged(ctx)
 	s.updateAskCards(ctx, id, cp)
@@ -453,6 +492,11 @@ func (s *Service) answerOutside(ctx context.Context, id, asked string, answer ou
 		s.todoPushOver(id)
 		s.recordOutsideDecision(ctx, id, &cp)
 		s.closeOutsideBacking(ctx, id)
+		option := ""
+		if cp.OutsideAnswer != nil {
+			option = cp.OutsideAnswer.Option
+		}
+		s.handoffDecided(ctx, caller, ref, option)
 	}
 	return acceptSucceeded(), nil
 }

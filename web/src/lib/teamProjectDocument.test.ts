@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { loadApprovedProjectDocument } from "./teamProjectDocument";
+import { listProjectDocumentApprovals, listProjectDocuments, loadApprovedProjectDocument } from "./teamProjectDocument";
 
 const digest = (content: string) => createHash("sha256").update(content, "utf8").digest("hex");
 const content = "设计稿 📚\r\nCafe\u0301\n";
@@ -77,5 +77,61 @@ describe("reading an approved project revision", () => {
     fetcher.mockRejectedValueOnce(Error("fixture-reader")).mockResolvedValueOnce(new Response("fixture-reader"));
     await expect(read()).rejects.toMatchObject({ code: "unavailable", message: "unavailable" });
     await expect(read()).rejects.toMatchObject({ code: "invalid", message: "invalid" });
+  });
+});
+
+describe("browsing approved project documents", () => {
+  const summary = {
+    project: doc.project, document: doc.document, revision: doc.revision, author: doc.author,
+    approved_by: doc.approved_by, sha256: doc.sha256, approved_at: "2026-05-10T12:00:00Z",
+  };
+  const signal = new AbortController().signal;
+  const catalog = (after?: string) => listProjectDocuments("studio", "fixture-reader", signal, after);
+  const history = (before?: string) => listProjectDocumentApprovals("studio", doc.document, "fixture-reader", signal, before);
+  const pinned = () => loadApprovedProjectDocument("studio", doc.document, "fixture-reader", signal, summary);
+
+  it("loads metadata only until a particular revision is requested", async () => {
+    fetcher.mockResolvedValueOnce(Response.json({ items: [summary], next: doc.document }))
+      .mockResolvedValueOnce(Response.json({ items: [summary], next: String(doc.revision) }))
+      .mockResolvedValueOnce(Response.json(doc));
+    expect(await catalog("a")).toEqual({ items: [summary], next: doc.document });
+    expect(await history("5")).toEqual({ items: [summary], next: String(doc.revision) });
+    expect(await pinned()).toEqual(doc);
+    expect(fetcher.mock.calls.map(([url]) => String(url))).toEqual([
+      "https://teams.example/v1/projects/studio/documents?after=a",
+      "https://teams.example/v1/projects/studio/documents/design_2/approvals?before=5",
+      "https://teams.example/v1/projects/studio/documents/design_2/revisions/3",
+    ]);
+  });
+  it.each([
+    { items: [summary, summary] }, { items: [{ ...summary, project: "other" }] },
+    { items: [{ ...summary, content: doc.content }] }, { items: [{ ...summary, approved_at: "" }] },
+    { items: [{ ...summary, approved_by: "" }] }, { items: [summary], next: "elsewhere" },
+    { items: [], next: doc.document },
+  ])("rejects inconsistent catalog pages", async page => {
+    fetcher.mockResolvedValueOnce(Response.json(page));
+    await expect(catalog()).rejects.toMatchObject({ code: "invalid" });
+  });
+  it("checks that history stays within the document and moves to older approvals", async () => {
+    for (const row of [{ ...summary, document: "other" }, { ...summary, revision: 5 }]) {
+      fetcher.mockResolvedValueOnce(Response.json({ items: [row] }));
+      await expect(history("5")).rejects.toMatchObject({ code: "invalid" });
+    }
+    fetcher.mockResolvedValueOnce(Response.json({ items: [summary] }));
+    await expect(catalog(doc.document)).rejects.toMatchObject({ code: "invalid" });
+    fetcher.mockResolvedValueOnce(Response.json({ items: [] }));
+    await expect(history("1")).resolves.toEqual({ items: [] });
+  });
+  it("rejects invalid cursors before sending the credential", async () => {
+    await expect(catalog("../elsewhere")).rejects.toMatchObject({ code: "invalid" });
+    await expect(history("1&limit=100")).rejects.toMatchObject({ code: "invalid" });
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+  it.each([
+    { revision: doc.revision + 1 }, { author: "another-author" }, { approved_by: "another-approver" },
+    { content: "changed", sha256: digest("changed") },
+  ])("refuses a verified body that differs from the chosen approval", async patch => {
+    fetcher.mockResolvedValueOnce(Response.json({ ...doc, ...patch }));
+    await expect(pinned()).rejects.toMatchObject({ code: "invalid" });
   });
 });

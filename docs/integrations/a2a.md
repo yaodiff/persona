@@ -50,7 +50,7 @@ themselves, and nodes with no verified absolute executable keep the plain
 
 | Tool | Purpose |
 | --- | --- |
-| `a2a_sessions` | Discover eligible session addresses, harnesses and states |
+| `a2a_sessions` | Discover eligible session addresses, harnesses and states; with `presets`, also the computers a subagent can start on and their Agent presets |
 | `a2a_read` | Read a session's recent conversation: the user's messages, its replies and one line per tool call |
 | `a2a_send` | Send a request to a session, start an Agent, or answer its request for input |
 | `a2a_get` | Get a task and its delivery receipts, or list the caller's incoming and outgoing tasks |
@@ -87,6 +87,17 @@ JSON-RPC metadata uses `personaWaitingSince`, `personaWaitingSeconds`, and
 personad tool a2a_send '{"machine_id":"box","session_id":"runtime.session-1","message_id":"request-001","text":"Run the checks and return the failing cases."}'
 ```
 
+`personad tool` waits up to 30 minutes for a call, because `a2a_send` may
+wait for the owner's answer on the phone. A read (`a2a_sessions`, `a2a_get`,
+`a2a_read`, and `dispatch_read`, which adds its own `wait_seconds`) gets 30
+seconds. Without an answer by then it fails with exit code 3 and kind
+`unavailable`, and its error names the tool and what did not answer. A read
+changes nothing, so it can be tried again; a write that got no answer may still
+have run. On macOS, a call started in a folder that does not answer, such as a
+protected folder while the system service that checks access to it is stuck,
+moves to `/` after 2 seconds instead of waiting for the folder: Go programs
+otherwise wait for their folder before they start (`server/internal/startdir`).
+
 To start a new cross-machine or cross-harness subagent, provide the target
 `machine_id` (which may be the caller's own computer for cross-harness work such
 as Claude launching Codex) and `cwd`, with an optional `launcher` and optional
@@ -96,8 +107,9 @@ source-node permission attestation bound to the calling request (cached session
 snapshots are never trusted, and unmapped modes fail closed): `prompting`
 attestation allows at most `default`, while `bypass` attestation allows any
 supported mode. Launching subagents is enabled by default on the manager's
-confirmed personal computers, using the manager's Agent model and existing
-depth (1) and concurrency (`agents.dispatch.max_active`, default 3) limits. Set
+confirmed personal computers, using the manager's Agent model (or the Agent
+preset named below) and existing depth (1) and concurrency
+(`agents.dispatch.max_active`, default 3) limits. Set
 `agents.a2a.launch` to `false` in `manager.json` to disable launching new
 sessions while keeping peer messaging (queued launches that have not yet called
 `session.start` also recheck this switch and fail cleanly), or set
@@ -111,16 +123,58 @@ while remaining allowed to receive messages, call `a2a_report`, and be observed
 on their own launch task.
 Reuse the same `message_id` when a tool reply is lost. The manager records the
 request and a reserved session ID before attempting the launch.
+A new Agent starts where `agent_start` would start one, since nobody sits at
+its pane either: when its launcher runs the Antigravity CLI (agy) and the
+target computer's Antigravity companion runs that launcher, it starts on the
+companion, which holds `plan` in agy's own plan mode.
+A launch in `plan` whose launcher has no read-only mode on that computer (pi,
+the Cursor CLI, or agy where only a terminal runs it) is refused when
+`a2a_send` is called, before the task is recorded, with `readonly_unsupported`
+naming that computer's Claude Code and Codex launchers. The launch is checked
+again when it goes out, since it can wait for its computer. If the companion
+went away meanwhile, a writable launch starts in the computer's default host
+and a read-only one fails. A launch that did not start fails with the reason,
+such as the node's refusal; only a launch whose outcome is unknown fails with
+`Persona could not confirm the Agent started.`
 
 ```sh
 personad tool a2a_send '{"machine_id":"box","cwd":"~/code/project","message_id":"request-002","text":"Inspect the failing integration test and explain the cause."}'
 ```
 
+Add `tier` to start a subagent on one of the owner's Agent presets: the tiers
+of the model profile in use ([model profiles](../assistant/model-profiles.md)
+"Agent presets (tiers)"), each with a description saying when to use it. The
+tier resolves as it does for the assistant's `agent_start`, before anything is
+recorded or started: an unknown tier is refused (`err_tier_not_found`, naming
+the tiers there are), and so is one whose launcher the target computer lacks
+(`launcher_not_on_machine`, naming the launchers it has). A `launcher` named
+with it that is not the tier's own wins, and the tier then gives nothing. The
+tier's launcher, model, effort and faster speed go to `session.start`, with the
+manager's Agent model filling in what the tier leaves out. Its
+`permission_mode` is not used: the launch keeps the mode described above,
+`plan` unless a higher one is requested and attested. This is deliberate. An
+owner's presets never raise what an Agent-started Agent may do. A retry with
+the same `message_id` must name the same tier; another tier is a conflict.
+
+To see the presets first, call `a2a_sessions` with `"presets": true`. It
+answers `{"sessions": […], "computers": […]}`: each computer a launch can go to,
+the caller's own included, whether it is online, and the presets it can run,
+with what each runs (launcher, model, effort, speed) and its description. The
+list is filtered as New Agent's is: only presets whose launcher that computer
+has, a preset whose launcher failed its latest check marked `unavailable`, and
+`presets_unread` on an online computer whose launcher list could not be read.
+
 When Agent dispatch is enabled, `dispatch_start` uses A2A for new tasks and
 keeps the existing launcher, worktree and supervision options. It returns the
 new session and task IDs. Supply a stable `message_id` when retrying a launch.
-`dispatch_read` accepts either ID for new dispatches and can still read the
-dispatch history created earlier.
+It takes `tier` too, resolved, refused and matched on retries the same way; the
+started Agent keeps the permission rule dispatch gives it.
+It chooses the companion for agy the same way and keeps its own permission
+mode. When Model configuration starts it in `plan`, a launcher that cannot
+start read-only there is refused before the task is recorded.
+`dispatch_read` without arguments lists each computer a task can go to with
+the presets it can run. It accepts either ID for new dispatches and can still
+read the dispatch history created earlier.
 
 When the receiving Agent needs something from the sender, it reports an
 `input_required` event with the question. The sender responds with

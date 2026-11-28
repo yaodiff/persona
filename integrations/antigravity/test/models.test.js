@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process'
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import { fileURLToPath } from 'node:url'
 import { test } from 'node:test'
 import { startFakeNode, until } from '../../runtime-sdk/testing/fake-node.js'
@@ -48,7 +49,9 @@ async function fixture(t, options = {}) {
   t.after(async () => { await runtime.stop(); rmSync(home, { recursive: true, force: true }) })
   runtime.start()
   await n.ready
-  const calls = () => readFileSync(join(home, 'calls.jsonl'), 'utf8').trim().split('\n').map(JSON.parse)
+  const callsPath = join(home, 'calls.jsonl')
+  writeFileSync(callsPath, '')
+  const calls = () => readFileSync(callsPath, 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse)
   const modelsCalls = () => {
     try {
       return readFileSync(join(home, 'models-calls.jsonl'), 'utf8').trim().split('\n').filter(Boolean).map((line) => JSON.parse(line).at)
@@ -254,10 +257,61 @@ test('an explicit caller model overrides the configured default', async (t) => {
   assert.equal(result.session.effort, 'low')
 })
 
-test('resuming a session does not replace its native model with the configured default', async (t) => {
+test('changing permissions alone does not apply the configured model', async (t) => {
   const { n, calls } = await fixture(t, { noStart: true })
   await n.peer.call('session.modes', { session_id: 'agy-11111111-2222-3333-4444-555555555555', permission_mode: 'default' })
   assert.equal(calls().filter((call) => call.method === 'session/set_model').length, 0)
+})
+
+const resumedSession = 'agy-11111111-2222-3333-4444-555555555555'
+
+test('history stays passive and the first resumed prompt applies the native default', async (t) => {
+  const { n, home, calls } = await fixture(t, { noStart: true })
+  mkdirSync(join(home, 'settings', 'brain', resumedSession.slice(4)), { recursive: true })
+  await n.peer.call('session.items', { session_id: resumedSession })
+  assert.deepEqual(calls(), [])
+
+  await n.peer.call('session.send', { session_id: resumedSession, text: 'Continue' })
+  await until('resumed prompt sent', () => calls().some((call) => call.method === 'session/prompt'))
+  const requests = calls().filter((call) => call.method?.startsWith('session/'))
+  assert.deepEqual(requests.map(({ method }) => method), ['session/resume', 'session/set_model', 'session/prompt'])
+  assert.equal(requests[1].params.modelId, entries[1].modelId)
+})
+
+test('a model explicitly picked for a resumed send wins over the default', async (t) => {
+  const { n, calls } = await fixture(t, { noStart: true })
+  await n.peer.call('session.send', { session_id: resumedSession, text: 'Continue', model: entries[2].modelId })
+  await until('resumed prompt sent', () => calls().some((call) => call.method === 'session/prompt'))
+  assert.deepEqual(calls().filter((call) => call.method === 'session/set_model').map((call) => call.params.modelId), [entries[2].modelId])
+})
+
+test('a model selected with session modes survives the next send on the same connection', async (t) => {
+  const { n, calls } = await fixture(t, { noStart: true })
+  await n.peer.call('session.modes', { session_id: resumedSession, model: entries[2].modelId })
+  await n.peer.call('session.send', { session_id: resumedSession, text: 'Continue' })
+  await until('resumed prompt sent', () => calls().some((call) => call.method === 'session/prompt'))
+  assert.deepEqual(calls().filter((call) => call.method === 'session/set_model').map((call) => call.params.modelId), [entries[2].modelId])
+})
+
+test('a resumed prompt with no configured model keeps the ACP model', async (t) => {
+  const { n, calls, settings } = await fixture(t, { noStart: true })
+  settings({})
+  await n.peer.call('session.send', { session_id: resumedSession, text: 'Continue' })
+  await until('resumed prompt sent', () => calls().some((call) => call.method === 'session/prompt'))
+  assert.equal(calls().some((call) => call.method === 'session/set_model'), false)
+})
+
+test('a native turn already in progress does not receive an automatic model change', async (t) => {
+  const { n, home, calls } = await fixture(t, { noStart: true })
+  const db = new DatabaseSync(join(home, 'settings', 'conversation_summaries.db'))
+  db.exec('CREATE TABLE conversation_summaries (conversation_id TEXT, status TEXT, not_fully_idle INTEGER, killed INTEGER, step_count INTEGER, title TEXT, workspace_uris TEXT, last_modified_time TEXT)')
+  db.prepare("INSERT INTO conversation_summaries VALUES (?, ?, 1, 0, 0, '', '[]', '')")
+    .run(resumedSession.slice(4), 'CASCADE_RUN_STATUS_RUNNING')
+  db.close()
+
+  await n.peer.call('session.send', { session_id: resumedSession, text: 'Continue' })
+  await until('resumed prompt sent', () => calls().some((call) => call.method === 'session/prompt'))
+  assert.equal(calls().some((call) => call.method === 'session/set_model'), false)
 })
 
 test('refused auto automatically approves git status, rg and an MCP read without phone cards', async (t) => {
@@ -271,10 +325,11 @@ test('refused auto automatically approves git status, rg and an MCP read without
   }, {
     mode: 'bypassPermissions',
     cards: [],
+    // An Assistant session answers once and never with allow_always (#16220), so no native grant outlives the command gate.
     answers: [
-      { id: 'read-permission-git-status', result: selected('always') },
-      { id: 'read-permission-mcp', result: selected('always') },
-      { id: 'read-permission-rg', result: selected('always') },
+      { id: 'read-permission-git-status', result: selected('allow') },
+      { id: 'read-permission-mcp', result: selected('allow') },
+      { id: 'read-permission-rg', result: selected('allow') },
     ],
   })
 })
@@ -497,6 +552,17 @@ test('default runtime discovers models once at startup and refreshes on demand w
   assert.equal(modelsCalls().length, 2, 'expired TTL refreshes on demand')
 })
 
+test('periodic discovery publishes a changed catalog while idle, before the cached list expires', async (t) => {
+  const { n, catalog, settings } = await fixture(t, { noStart: true, catalogEveryMs: 300, catalogTtlMs: 60_000 })
+  const published = () => n.last('runtime.launchers')?.launchers[0].models
+  await until('startup catalog', () => published()?.length === entries.length)
+  catalog({ models: [{ modelId: 'new-native-model', name: 'New Native Model' }] })
+  settings({ model: 'new-native-model' })
+  await until('refreshed catalog', () => published()?.[0]?.id === 'new-native-model')
+  const { models } = await n.peer.call('launchers.models', {})
+  assert.deepEqual(models.map((model) => [model.id, model.default]), [['new-native-model', true]])
+})
+
 test('on-demand discovery backs off unforced lookups after a sign-in timeout while explicit refresh retries immediately', async (t) => {
   const { n, catalog, modelsCalls } = await fixture(t, { noStart: true, modelsTimeoutMs: 250, catalogTtlMs: 500, catalogMaxMs: 10_000 })
   await until('startup discovery finishes', () => modelsCalls().length === 1 && n.last('runtime.launchers')?.launchers[0].models.length === entries.length)
@@ -606,4 +672,225 @@ test('deferred bypassPermissions start reapplies accept-edits after session/resu
   assert.equal(row()?.permission_mode, 'bypassPermissions')
   assert.equal(calls().filter((call) => call.method === 'session/resume').length, 1)
   assert.equal(calls().filter((call) => call.method === 'session/set_mode' && call.params?.modeId === 'accept-edits').length, 2)
+})
+
+async function restartedBypassFixture(t, afterRestartCatalog = {}) {
+  const home = mkdtempSync(join(tmpdir(), 'agy-bypass-shadow-'))
+  const agyDir = join(home, 'settings')
+  const rawId = '11111111-2222-3333-4444-555555555555'
+  mkdirSync(join(agyDir, 'brain', rawId), { recursive: true })
+  const writeCatalog = (value) => {
+    const file = join(home, 'catalog.json')
+    writeFileSync(`${file}.next`, JSON.stringify(value))
+    renameSync(`${file}.next`, file)
+  }
+  writeCatalog({ models: entries, resetModeOnResume: true })
+  const bin = join(home, 'agy')
+  const fake = fileURLToPath(new URL('./fake-acp-models.mjs', import.meta.url))
+  writeFileSync(bin, `#!/bin/sh\nexec '${process.execPath}' '${fake}' '${home}' "$@"\n`)
+  chmodSync(bin, 0o755)
+  t.after(() => rmSync(home, { recursive: true, force: true }))
+
+  const n1 = await startFakeNode(t)
+  const rt1 = createAgyRuntime({ home, agyDir, agyBin: bin, personadBin: '/missing', socketPath: n1.path, log: () => {} })
+  rt1.start()
+  await n1.ready
+  const { session } = await n1.peer.call('session.start', { cwd: home, permission_mode: 'bypassPermissions' })
+  assert.equal(session.permission_mode, 'bypassPermissions')
+  assert.equal(readFileSync(join(agyDir, 'brain', rawId, '.persona-permission-mode'), 'utf8').trim(), 'bypassPermissions')
+  await rt1.stop()
+
+  writeCatalog({ models: entries, resetModeOnResume: true, ...afterRestartCatalog })
+  const n2 = await startFakeNode(t)
+  const rt2 = createAgyRuntime({ home, agyDir, agyBin: bin, personadBin: '/missing', socketPath: n2.path, log: () => {} })
+  t.after(async () => { await rt2.stop() })
+  rt2.start()
+  await n2.ready
+  await n2.peer.call('launchers.models', {})
+  const calls = () => readFileSync(join(home, 'calls.jsonl'), 'utf8').trim().split('\n').map(JSON.parse)
+  const answers = () => calls().filter((call) => typeof call.id === 'string' && call.id.startsWith('read-permission-') && call.result)
+  const row = () => n2.last('runtime.sessions')?.sessions.find((entry) => entry.session_id === session.session_id)
+  return { n2, sessionId: session.session_id, calls, answers, row }
+}
+
+test('config_option_update with thought_level and mode before resume response does not shadow persisted bypassPermissions (#16290)', async (t) => {
+  const { n2, sessionId, calls, answers, row } = await restartedBypassFixture(t, {
+    configUpdateOnResume: true, askPermissionOnResume: true,
+  })
+  // session.modes loads the session without pre-hydrating sessionModes via listSessions;
+  // fake agy emits config_option_update and requests a permission before session/resume returns.
+  await n2.peer.call('session.modes', { session_id: sessionId })
+  assert.equal(n2.asked.length, 0)
+  assert.deepEqual(answers().map((a) => a.result), [selected('always')])
+
+  await n2.peer.call('session.send', { session_id: sessionId, text: 'ask-read-permissions' })
+  await until('resumed session auto-approves all permissions after config_option_update', () => answers().length === 4)
+  await until('resumed turn finishes', () => row()?.status === 'done')
+  assert.equal(n2.asked.length, 0)
+  assert.deepEqual(answers().map((a) => a.result), [selected('always'), selected('always'), selected('always'), selected('always')])
+  assert.equal(row()?.permission_mode, 'bypassPermissions')
+  assert.equal(row()?.effort, 'medium')
+  assert.equal(calls().filter((call) => call.method === 'session/set_mode' && call.params?.modeId === 'accept-edits').length, 2)
+})
+
+test('config_option_update with thought_level only (no mode) does not shadow persisted bypassPermissions (#16290)', async (t) => {
+  const { n2, sessionId, calls, answers, row } = await restartedBypassFixture(t, {
+    configUpdateOnResume: 'effortOnly', omitResumeModes: true, omitResumeConfig: true, askPermissionOnResume: true,
+  })
+  await n2.peer.call('session.modes', { session_id: sessionId })
+  assert.equal(n2.asked.length, 0)
+  assert.deepEqual(answers().map((a) => a.result), [selected('always')])
+
+  await n2.peer.call('session.send', { session_id: sessionId, text: 'ask-read-permissions' })
+  await until('resumed session auto-approves all permissions after effort-only config update', () => answers().length === 4)
+  await until('resumed turn finishes', () => row()?.status === 'done')
+  assert.equal(n2.asked.length, 0)
+  assert.deepEqual(answers().map((a) => a.result), [selected('always'), selected('always'), selected('always'), selected('always')])
+  assert.equal(row()?.permission_mode, 'bypassPermissions')
+  assert.equal(row()?.effort, 'medium')
+  assert.equal(calls().filter((call) => call.method === 'session/set_mode' && call.params?.modeId === 'accept-edits').length, 2)
+})
+
+test('config_option_update without thought_level or mode does not shadow persisted bypassPermissions (#16290)', async (t) => {
+  const { n2, sessionId, calls, answers, row } = await restartedBypassFixture(t, {
+    configUpdateOnResume: 'modelOnly', omitResumeModes: true, omitResumeConfig: true, askPermissionOnResume: true,
+  })
+  await n2.peer.call('session.modes', { session_id: sessionId })
+  assert.equal(n2.asked.length, 0)
+  assert.deepEqual(answers().map((a) => a.result), [selected('always')])
+
+  await n2.peer.call('session.send', { session_id: sessionId, text: 'ask-read-permissions' })
+  await until('resumed session auto-approves all permissions after model-only config update', () => answers().length === 4)
+  await until('resumed turn finishes', () => row()?.status === 'done')
+  assert.equal(n2.asked.length, 0)
+  assert.equal(row()?.permission_mode, 'bypassPermissions')
+  assert.equal(calls().filter((call) => call.method === 'session/set_mode' && call.params?.modeId === 'accept-edits').length, 2)
+})
+
+test('switching model via session.modes after restart does not shadow persisted bypassPermissions (#16290)', async (t) => {
+  const { n2, sessionId, calls, answers, row } = await restartedBypassFixture(t, {
+    omitResumeModes: true, omitResumeConfig: true, omitSetModelConfigUpdate: true,
+  })
+  await n2.peer.call('session.modes', { session_id: sessionId, model: entries[2].modelId })
+
+  await n2.peer.call('session.send', { session_id: sessionId, text: 'ask-read-permissions' })
+  await until('turn after model switch auto-approves all permissions', () => answers().length === 3)
+  await until('turn after model switch finishes', () => row()?.status === 'done')
+  assert.equal(n2.asked.length, 0)
+  assert.deepEqual(answers().map((a) => a.result), [selected('always'), selected('always'), selected('always')])
+  assert.equal(row()?.permission_mode, 'bypassPermissions')
+  assert.equal(row()?.model, entries[2].modelId)
+  assert.equal(row()?.effort, 'low')
+  assert.equal(calls().filter((call) => call.method === 'session/set_mode' && call.params?.modeId === 'accept-edits').length, 2)
+})
+
+test('switching effort via session.modes after restart does not shadow persisted bypassPermissions (#16290)', async (t) => {
+  const { n2, sessionId, calls, answers, row } = await restartedBypassFixture(t, {
+    omitResumeModes: true, omitResumeConfig: true,
+  })
+  await n2.peer.call('session.modes', { session_id: sessionId, effort: 'xhigh' })
+
+  await n2.peer.call('session.send', { session_id: sessionId, text: 'ask-read-permissions' })
+  await until('turn after effort switch auto-approves all permissions', () => answers().length === 3)
+  await until('turn after effort switch finishes', () => row()?.status === 'done')
+  assert.equal(n2.asked.length, 0)
+  assert.deepEqual(answers().map((a) => a.result), [selected('always'), selected('always'), selected('always')])
+  assert.equal(row()?.permission_mode, 'bypassPermissions')
+  assert.equal(row()?.effort, 'xhigh')
+  assert.equal(row()?.model, 'gemini-future-xhigh')
+  assert.equal(calls().filter((call) => call.method === 'session/set_mode' && call.params?.modeId === 'accept-edits').length, 2)
+})
+
+test('loadSession configOptions without modes during session.modes model switch preserves persisted bypassPermissions (#16290)', async (t) => {
+  const { n2, sessionId, calls, answers, row } = await restartedBypassFixture(t, { omitResumeModes: true })
+  await n2.peer.call('session.modes', { session_id: sessionId, model: entries[0].modelId })
+
+  await n2.peer.call('session.send', { session_id: sessionId, text: 'ask-read-permissions' })
+  await until('turn after resume configOptions + model switch auto-approves all permissions', () => answers().length === 3)
+  await until('turn finishes', () => row()?.status === 'done')
+  assert.equal(n2.asked.length, 0)
+  assert.deepEqual(answers().map((a) => a.result), [selected('always'), selected('always'), selected('always')])
+  assert.equal(row()?.permission_mode, 'bypassPermissions')
+  assert.equal(row()?.model, entries[0].modelId)
+  assert.equal(row()?.effort, 'medium')
+  assert.equal(calls().filter((call) => call.method === 'session/set_mode' && call.params?.modeId === 'accept-edits').length, 2)
+})
+
+const NO_AUTO_MODES = ['default', 'acceptEdits', 'plan', 'bypassPermissions']
+
+test('agy 1.5.18 omitting auto from availableModes and rejecting session/set_mode(auto) degrades cleanly to bypassPermissions (#17239)', async (t) => {
+  const f = await fixture(t, { noStart: true })
+  f.catalog({
+    models: entries,
+    availableModes: [{ id: 'default' }, { id: 'accept-edits' }, { id: 'plan' }],
+    rejectAuto: true,
+  })
+  f.settings({ model: entries[1].name, agentMode: 'default' })
+  const { session } = await f.n.peer.call('session.start', {
+    cwd: f.home,
+    assistant: true,
+    permission_mode: 'auto',
+    prompt: 'ask-read-permissions',
+  })
+  const row = () => f.n.last('runtime.sessions')?.sessions.find((entry) => entry.session_id === session.session_id)
+  const answers = () => f.calls().filter((call) => typeof call.id === 'string' && call.id.startsWith('read-permission-') && call.result)
+  await until('all three read permissions are answered', () => answers().length === 3)
+  await until('the task turn ends', () => row()?.status === 'done')
+  assert.equal(session.permission_mode, 'bypassPermissions')
+  assert.deepEqual(session.capabilities?.permission_modes, NO_AUTO_MODES)
+  assert.equal(row()?.permission_mode, 'bypassPermissions')
+  assert.deepEqual(row()?.capabilities?.permission_modes, NO_AUTO_MODES)
+  assert.deepEqual(f.n.last('runtime.launchers')?.launchers[0]?.permission_modes, NO_AUTO_MODES)
+  assert.equal(f.n.asked.length, 0)
+  // Skipping the doomed session/set_mode("auto") when availableModes omits it prevents spurious -32602 errors.
+  assert.equal(f.calls().some((call) => call.method === 'session/set_mode' && call.params?.modeId === 'auto'), false)
+  const page = await f.n.peer.call('session.items', { session_id: session.session_id })
+  const notices = page.items.filter((item) => item.kind === 'notice').map((item) => item.text)
+  assert.deepEqual(notices, [AUTO_REFUSAL_NOTICE])
+})
+
+test('JSON-RPC -32602 auto mode refusal without availableModes degrades cleanly on session.start and session.modes (#17239)', async (t) => {
+  const f = await fixture(t, { noStart: true })
+  f.catalog({ models: entries, rejectAuto: true })
+  f.settings({ model: entries[1].name, agentMode: 'default' })
+  const { session } = await f.n.peer.call('session.start', {
+    cwd: f.home,
+    assistant: true,
+    permission_mode: 'auto',
+  })
+  assert.equal(session.permission_mode, 'bypassPermissions')
+  assert.deepEqual(session.capabilities?.permission_modes, NO_AUTO_MODES)
+  await until('launcher advertises restricted permission_modes', () =>
+    JSON.stringify(f.n.last('runtime.launchers')?.launchers[0]?.permission_modes) === JSON.stringify(NO_AUTO_MODES))
+  const switched = await f.n.peer.call('session.modes', {
+    session_id: session.session_id,
+    permission_mode: 'auto',
+    assistant: true,
+  })
+  assert.equal(switched?.permission_mode, 'bypassPermissions')
+  const page = await f.n.peer.call('session.items', { session_id: session.session_id })
+  const notices = page.items.filter((item) => item.kind === 'notice').map((item) => item.text)
+  assert.deepEqual(notices, [AUTO_REFUSAL_NOTICE])
+})
+
+test('launchers.check observing availableModes without auto advertises restricted permission_modes (#17239)', async (t) => {
+  const f = await fixture(t, { noStart: true })
+  f.catalog({
+    models: entries,
+    availableModes: [{ id: 'default' }, { id: 'accept-edits' }, { id: 'plan' }],
+  })
+  const checked = await f.n.peer.call('launchers.check', { cwd: f.home, prompt: 'Reply with OK' })
+  assert.equal(checked.ok, true)
+  await until('launcher advertises restricted permission_modes after check', () =>
+    JSON.stringify(f.n.last('runtime.launchers')?.launchers[0]?.permission_modes) === JSON.stringify(NO_AUTO_MODES))
+})
+
+test('older agy without session/set_mode (-32601) still rejects auto instead of swallowing modeUnsupported (#17239)', async (t) => {
+  const f = await fixture(t, { noStart: true })
+  f.catalog({ models: entries, noSetMode: true })
+  f.settings({ model: entries[1].name, agentMode: 'default' })
+  await assert.rejects(
+    f.n.peer.call('session.start', { cwd: f.home, permission_mode: 'auto' }),
+    /too old to switch to the "auto" mode.*Please update agy/,
+  )
 })

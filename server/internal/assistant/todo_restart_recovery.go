@@ -48,9 +48,55 @@ func (s *Service) setBootEpoch(epoch string) {
 	s.todosV2BootEpoch.Store(&v)
 }
 
-// maybeRunStartupRestartRecovery executes RunRestartRecoverySweep at most once per process boot
-// when todos_v2 is enabled and the session snapshots for machines with prior-epoch checkpoints
-// are ready (#16099).
+// startupRecoveryProgress tracks which machines have already been swept for the current boot
+// epoch so offline machines never stall online machines and already-swept machines are never
+// double-processed within the same boot (#16227).
+type startupRecoveryProgress struct {
+	mu            sync.Mutex
+	epoch         string
+	sweptMachines map[string]bool
+	inFlight      map[string]bool
+	lastSweptFlag bool
+}
+
+func (p *startupRecoveryProgress) markSweptFlag(epoch string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.epoch = epoch
+	p.lastSweptFlag = true
+}
+
+// startupRecoveryProgressRegistry attaches per-Service startup sweep state without modifying
+// Service fields and cleans up automatically when Service is garbage-collected.
+var startupRecoveryProgressRegistry = struct {
+	mu    sync.Mutex
+	bySvc map[weak.Pointer[Service]]*startupRecoveryProgress
+}{
+	bySvc: make(map[weak.Pointer[Service]]*startupRecoveryProgress),
+}
+
+func (s *Service) startupRecoveryProgress() *startupRecoveryProgress {
+	wp := weak.Make(s)
+	startupRecoveryProgressRegistry.mu.Lock()
+	defer startupRecoveryProgressRegistry.mu.Unlock()
+	if prog, ok := startupRecoveryProgressRegistry.bySvc[wp]; ok {
+		return prog
+	}
+	prog := &startupRecoveryProgress{
+		sweptMachines: make(map[string]bool),
+		inFlight:      make(map[string]bool),
+	}
+	startupRecoveryProgressRegistry.bySvc[wp] = prog
+	runtime.AddCleanup(s, func(key weak.Pointer[Service]) {
+		startupRecoveryProgressRegistry.mu.Lock()
+		delete(startupRecoveryProgressRegistry.bySvc, key)
+		startupRecoveryProgressRegistry.mu.Unlock()
+	}, wp)
+	return prog
+}
+
+// maybeRunStartupRestartRecovery executes startup restart self-healing per connected machine
+// at most once per process boot when todos_v2 is enabled (#16099, #16227).
 func (s *Service) maybeRunStartupRestartRecovery(ctx context.Context, lists machineSessions) {
 	if s == nil || !s.settings(ctx).todosV2On() || s.todosV2RecoverySwept.Load() {
 		return
@@ -65,6 +111,8 @@ func (s *Service) maybeRunStartupRestartRecovery(ctx context.Context, lists mach
 		return
 	}
 	bootEpoch := s.runtimeBootEpoch()
+	prog := s.startupRecoveryProgress()
+
 	needMachines := make(map[string]struct{})
 	for _, rec := range states {
 		if rec.LastActiveBootEpoch != "" && rec.LastActiveBootEpoch != bootEpoch && rec.MachineID != "" {
@@ -74,30 +122,60 @@ func (s *Service) maybeRunStartupRestartRecovery(ctx context.Context, lists mach
 	if len(needMachines) == 0 {
 		for _, l := range lists {
 			if l.err == nil && len(l.list) > 0 {
-				s.todosV2RecoverySwept.CompareAndSwap(false, true)
+				if s.todosV2RecoverySwept.CompareAndSwap(false, true) {
+					prog.markSweptFlag(bootEpoch)
+				}
 				return
 			}
 		}
 		if s.fleetUp.Load() {
-			s.todosV2RecoverySwept.CompareAndSwap(false, true)
+			if s.todosV2RecoverySwept.CompareAndSwap(false, true) {
+				prog.markSweptFlag(bootEpoch)
+			}
 		}
 		return
 	}
+
+	var toCheck []string
+	hasPending := false
+	prog.mu.Lock()
+	if prog.epoch != bootEpoch || prog.lastSweptFlag {
+		prog.epoch = bootEpoch
+		prog.sweptMachines = make(map[string]bool)
+		prog.inFlight = make(map[string]bool)
+		prog.lastSweptFlag = false
+	}
+	for mid := range needMachines {
+		if prog.sweptMachines[mid] {
+			continue
+		}
+		if prog.inFlight[mid] {
+			hasPending = true
+			continue
+		}
+		toCheck = append(toCheck, mid)
+	}
+	prog.mu.Unlock()
+	slices.Sort(toCheck)
+
 	if lists == nil {
 		lists = machineSessions{}
 	}
+	readyCandidates := make(map[string]struct{})
 	var sessions []proto.Session
 	seen := make(map[[2]string]struct{})
-	for mid := range needMachines {
+	for _, mid := range toCheck {
 		l, ok := lists[mid]
 		if !ok {
 			l.list, l.err = s.sessions(ctx, mid)
 			lists[mid] = l
 		}
 		if l.err != nil {
-			// Node not synced/reachable yet; wait for a later supervision tick before claiming the one-shot sweep.
-			return
+			// Node not synced/reachable yet; skip only this machine and retry on a later tick.
+			hasPending = true
+			continue
 		}
+		readyCandidates[mid] = struct{}{}
 		for _, sess := range l.list {
 			if sess.MachineID == "" {
 				sess.MachineID = mid
@@ -110,14 +188,57 @@ func (s *Service) maybeRunStartupRestartRecovery(ctx context.Context, lists mach
 			sessions = append(sessions, sess)
 		}
 	}
-	if len(sessions) == 0 {
-		return
+
+	if len(readyCandidates) > 0 {
+		readyMachines := make(map[string]struct{}, len(readyCandidates))
+		prog.mu.Lock()
+		if prog.epoch != bootEpoch {
+			prog.mu.Unlock()
+			return
+		}
+		for mid := range readyCandidates {
+			if prog.sweptMachines[mid] || prog.inFlight[mid] {
+				continue
+			}
+			prog.inFlight[mid] = true
+			readyMachines[mid] = struct{}{}
+		}
+		prog.mu.Unlock()
+
+		if len(readyMachines) > 0 {
+			_, sweepErr := s.runRestartRecoverySweepForMachines(ctx, bootEpoch, sessions, readyMachines)
+			prog.mu.Lock()
+			for mid := range readyMachines {
+				delete(prog.inFlight, mid)
+				if sweepErr == nil && prog.epoch == bootEpoch {
+					prog.sweptMachines[mid] = true
+				} else {
+					hasPending = true
+				}
+			}
+			prog.mu.Unlock()
+			if sweepErr != nil {
+				s.logf("todos_v2 startup restart recovery sweep: %v", sweepErr)
+			}
+		}
 	}
-	if !s.todosV2RecoverySwept.CompareAndSwap(false, true) {
-		return
-	}
-	if _, err := s.RunRestartRecoverySweep(ctx, bootEpoch, sessions); err != nil {
-		s.logf("todos_v2 startup restart recovery sweep: %v", err)
+
+	if !hasPending {
+		prog.mu.Lock()
+		if prog.epoch == bootEpoch {
+			allDone := true
+			for mid := range needMachines {
+				if !prog.sweptMachines[mid] || prog.inFlight[mid] {
+					allDone = false
+					break
+				}
+			}
+			if allDone {
+				s.todosV2RecoverySwept.Store(true)
+				prog.lastSweptFlag = true
+			}
+		}
+		prog.mu.Unlock()
 	}
 }
 
@@ -339,6 +460,15 @@ func (s *Service) ResetSupervisedTaskRecovery(ctx context.Context, todoID string
 // automatically resumes restart-interrupted supervised tasks up to maxRestartRecoveryAttempts,
 // escalating cleanly once capped. Strictly bypassed (100% no-op) when todos_v2 is off.
 func (s *Service) RunRestartRecoverySweep(ctx context.Context, currentBootEpoch string, sessions []proto.Session) (restartRecoveryResult, error) {
+	return s.runRestartRecoverySweepForMachines(ctx, currentBootEpoch, sessions, nil)
+}
+
+func (s *Service) runRestartRecoverySweepForMachines(
+	ctx context.Context,
+	currentBootEpoch string,
+	sessions []proto.Session,
+	readyMachines map[string]struct{},
+) (restartRecoveryResult, error) {
 	if s == nil || !s.settings(ctx).todosV2On() {
 		return restartRecoveryResult{}, nil
 	}
@@ -367,6 +497,11 @@ func (s *Service) RunRestartRecoverySweep(ctx context.Context, currentBootEpoch 
 		if rec.LastActiveBootEpoch == currentBootEpoch {
 			continue
 		}
+		if readyMachines != nil {
+			if _, ok := readyMachines[rec.MachineID]; !ok {
+				continue
+			}
+		}
 		if wantCards[rec.MachineID] == nil {
 			wantCards[rec.MachineID] = make(map[string]bool)
 		}
@@ -378,6 +513,11 @@ func (s *Service) RunRestartRecoverySweep(ctx context.Context, currentBootEpoch 
 
 	var result restartRecoveryResult
 	for _, rec := range states {
+		if readyMachines != nil {
+			if _, ok := readyMachines[rec.MachineID]; !ok {
+				continue
+			}
+		}
 		if rec.LastActiveBootEpoch == currentBootEpoch {
 			result.SkippedTodoIDs = append(result.SkippedTodoIDs, rec.TodoID)
 			continue
@@ -406,9 +546,41 @@ func (s *Service) RunRestartRecoverySweep(ctx context.Context, currentBootEpoch 
 			continue
 		}
 
-		// Guard 4: session dropped to idle/done without a completion conclusion (skip still-working).
+		// Guard 4: session dropped to idle/done without a completion conclusion (skip still-working),
+		// or vanished completely on a connected ready machine after restart.
 		sess, found := sessByKey[[2]string{rec.MachineID, rec.SessionID}]
-		if !found || !isRestartInterruptedSession(t, sess) {
+		if !found {
+			if readyMachines == nil || isRestartConcludedTodo(t) {
+				result.SkippedTodoIDs = append(result.SkippedTodoIDs, rec.TodoID)
+				continue
+			}
+			if err := st.RecordTodoActiveCheckpoint(ctx, db.TodoRecoveryState{
+				TodoID:              rec.TodoID,
+				MachineID:           rec.MachineID,
+				SessionID:           rec.SessionID,
+				LastActiveBootEpoch: currentBootEpoch,
+				RecoveryAttempts:    rec.RecoveryAttempts,
+				LastRecoveredAt:     rec.LastRecoveredAt,
+				UpdatedAt:           now,
+			}); err != nil {
+				return result, err
+			}
+			s.signal(superviseSignal{
+				Todo:    t.ID,
+				Kind:    sigRecovered,
+				Key:     fmt.Sprintf("restart_recovery_missing:%s@%s", t.ID, currentBootEpoch),
+				At:      now,
+				Machine: rec.MachineID,
+				Session: rec.SessionID,
+				Detail: fmt.Sprintf(
+					"Pre-restart session %s/%s is no longer active after restart (boot epoch %s -> %s); supervisor review required.",
+					rec.MachineID, rec.SessionID, rec.LastActiveBootEpoch, currentBootEpoch,
+				),
+			})
+			result.EscalatedTodoIDs = append(result.EscalatedTodoIDs, rec.TodoID)
+			continue
+		}
+		if !isRestartInterruptedSession(t, sess) {
 			result.SkippedTodoIDs = append(result.SkippedTodoIDs, rec.TodoID)
 			continue
 		}
@@ -505,6 +677,16 @@ func isManualTodoAgent(a TodoAgent) bool {
 	return strings.EqualFold(strings.TrimSpace(a.Source), "manual")
 }
 
+func isRestartConcludedTodo(t Todo) bool {
+	if t.Check != nil && t.Check.Verdict == verdictDone {
+		return true
+	}
+	if t.Supervision != nil && t.Supervision.Progress != nil && t.Supervision.Progress.Kind == "done" {
+		return true
+	}
+	return false
+}
+
 func isRestartInterruptedSession(t Todo, sess proto.Session) bool {
 	status := strings.ToLower(strings.TrimSpace(sess.Status))
 	if status == proto.StatusWorking {
@@ -513,13 +695,7 @@ func isRestartInterruptedSession(t Todo, sess proto.Session) bool {
 	if status != proto.StatusIdle && status != proto.StatusDone {
 		return false
 	}
-	if t.Check != nil && t.Check.Verdict == verdictDone {
-		return false
-	}
-	if t.Supervision != nil && t.Supervision.Progress != nil && t.Supervision.Progress.Kind == "done" {
-		return false
-	}
-	return true
+	return !isRestartConcludedTodo(t)
 }
 
 func formatRestartRecoveryPrompt(attempt, maxAttempts int) string {

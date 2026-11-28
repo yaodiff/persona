@@ -36,16 +36,19 @@ nonisolated enum NotificationWithdrawal {
         var group: String
         var target: Target
         var date: Date
+        /// The occurrence its alert drew; nil from an older hub.
+        var interactionCreatedAt: String? = nil
         /// A push about one of the assistant's own cards (a plan waiting for Start, a decision, a failed start: the
         /// push's `card_id`), never in the list of pending interactions. Only the hub's withdrawal push takes it back:
         /// the list saying nothing of it does not make it stale.
         var ownerCard = false
 
-        init(identifier: String, group: String, interactionID: String, date: Date, ownerCard: Bool = false) {
+        init(identifier: String, group: String, interactionID: String, date: Date, interactionCreatedAt: String? = nil, ownerCard: Bool = false) {
             self.identifier = identifier
             self.group = group
             self.target = .interaction(interactionID)
             self.date = date
+            self.interactionCreatedAt = interactionCreatedAt
             self.ownerCard = ownerCard
         }
 
@@ -57,11 +60,12 @@ nonisolated enum NotificationWithdrawal {
             self.ownerCard = true
         }
 
-        init(identifier: String, group: String, target: Target, date: Date, ownerCard: Bool = false) {
+        init(identifier: String, group: String, target: Target, date: Date, interactionCreatedAt: String? = nil, ownerCard: Bool = false) {
             self.identifier = identifier
             self.group = group
             self.target = target
             self.date = date
+            self.interactionCreatedAt = interactionCreatedAt
             if case .todo = target {
                 self.ownerCard = true
             } else {
@@ -99,6 +103,21 @@ nonisolated enum NotificationWithdrawal {
         }.map(\.identifier)
     }
 
+    /// Occurrence-aware model removal. A replacement may already have its alert before its model event arrives;
+    /// only the removed occurrence's alert goes. A same-occurrence card put back after a failed answer stays.
+    static func settledOccurrences(gone: [String: Interaction], pending: [String: Interaction], delivered: [Delivered]) -> [String] {
+        delivered.filter { d in
+            guard !d.ownerCard, let uid = d.uid, let old = gone[uid] else { return false }
+            if let current = pending[uid], old.createdAtWire == nil || current.createdAtWire == old.createdAtWire {
+                return false
+            }
+            if let oldAt = old.createdAtWire, let shownAt = d.interactionCreatedAt, oldAt != shownAt {
+                return false
+            }
+            return true
+        }.map(\.identifier)
+    }
+
     /// The notifications a group's whole list says are over: delivered before that list was asked for (a later push
     /// can be ahead of its own event) and not pending now. Groups without such a list (`listedAt`) are left alone:
     /// the cached list of the last run says nothing about what happened since. Never removes assistant cards or to-do
@@ -110,28 +129,44 @@ nonisolated enum NotificationWithdrawal {
         }.map(\.identifier)
     }
 
-    /// The notifications of the cards or to-do asks a hub's withdrawal push or `interaction_resolved` event names
-    /// (#4349, #13916, #14388), in that hub's group (nil: the push did not say whose, so matching ids in any group).
+    struct Resolved: Sendable, Equatable {
+        var interactionID: String
+        var interactionCreatedAt: String?
+    }
+
+    /// The notifications of the cards or to-do asks a hub's withdrawal push names (#4349, #13916, #14388), in that hub's
+    /// group (nil: the push did not say whose, so matching ids in any group). An occurrence-aware interaction entry leaves
+    /// a known same-ID replacement alone; an alert from an older hub has no occurrence and retains the legacy behavior.
     /// Pending or not: the hub knows they are over, and a suspended app's list is the one from before.
-    static func resolved(_ ids: [String], group: String?, delivered: [Delivered]) -> [String] {
-        var overIDs: Set<String> = []
+    static func resolvedOccurrences(_ cards: [Resolved], group: String?, delivered: [Delivered]) -> [String] {
         var overTodos: Set<String> = []
-        for id in ids {
-            if let todo = todoID(fromResolved: id) {
+        var interactionCards: [Resolved] = []
+        for card in cards {
+            if let todo = todoID(fromResolved: card.interactionID) {
                 overTodos.insert(todo)
-                overIDs.insert(id)
-            } else if !id.isEmpty, !id.hasPrefix(todoAskPrefix) {
-                overIDs.insert(id)
+                interactionCards.append(card) // Also collect an older app's interaction-shaped todo-ask alert.
+            } else if !card.interactionID.isEmpty, !card.interactionID.hasPrefix(todoAskPrefix) {
+                interactionCards.append(card)
             }
         }
-        guard !overIDs.isEmpty || !overTodos.isEmpty else { return [] }
+        guard !interactionCards.isEmpty || !overTodos.isEmpty else { return [] }
         return delivered.filter { d in
             guard group == nil || d.group == group else { return false }
             switch d.target {
-            case .interaction(let id): return overIDs.contains(id)
+            case .interaction(let id):
+                return interactionCards.contains(where: {
+                    $0.interactionID == id &&
+                        ($0.interactionCreatedAt == nil || d.interactionCreatedAt == nil ||
+                         $0.interactionCreatedAt == d.interactionCreatedAt)
+                })
             case .todo(let id): return overTodos.contains(id)
             }
         }.map(\.identifier)
+    }
+
+    /// Legacy ID-only withdrawal entries, including cards and to-do asks that are not pending interactions.
+    static func resolved(_ ids: [String], group: String?, delivered: [Delivered]) -> [String] {
+        resolvedOccurrences(ids.map { Resolved(interactionID: $0, interactionCreatedAt: nil) }, group: group, delivered: delivered)
     }
 
     /// What the notification center gave, read where it calls back (off the main thread): the pushes about an
@@ -141,6 +176,8 @@ nonisolated enum NotificationWithdrawal {
         var identifier: String
         var target: Target
         var date: Date
+        /// The occurrence its alert drew; nil from an older hub or for a to-do ask.
+        var interactionCreatedAt: String? = nil
         var ref: PushRef?
         var hubID: String?
         var sealedGroup: String?
@@ -174,7 +211,8 @@ nonisolated enum NotificationWithdrawal {
                                ownerCard: true)
                 }
                 if !card.hasPrefix(todoAskPrefix) {
-                    return Raw(identifier: identifier, target: .interaction(card), date: date, ref: PushRef(info),
+                    return Raw(identifier: identifier, target: .interaction(card), date: date,
+                               interactionCreatedAt: info["interaction_created_at"] as? String, ref: PushRef(info),
                                hubID: info["hub_id"] as? String, sealedGroup: PushCrypto.group(from: info),
                                ownerCard: true)
                 }
@@ -182,7 +220,8 @@ nonisolated enum NotificationWithdrawal {
         }
         if let id = info["interaction_id"] as? String, !id.isEmpty {
             guard let ref = PushRef(info) else { return nil }
-            return Raw(identifier: identifier, target: .interaction(id), date: date, ref: ref,
+            return Raw(identifier: identifier, target: .interaction(id), date: date,
+                       interactionCreatedAt: info["interaction_created_at"] as? String, ref: ref,
                        hubID: info["hub_id"] as? String, sealedGroup: PushCrypto.group(from: info),
                        ownerCard: false)
         }
@@ -210,12 +249,12 @@ nonisolated enum NotificationWithdrawal {
 }
 
 extension AppModel {
-    /// The list lost these interactions (`uid`s): an `interaction_resolved`, an answer in the app, a group's whole
-    /// list replacing it, a group forgotten. Their pushes go too.
-    func withdrawSettled(_ gone: Set<String>) {
+    /// The list lost these interactions: an `interaction_resolved`, an answer in the app, a group's whole list replacing
+    /// it, a group forgotten. Their old values carry the occurrence, so a replacement's already-delivered alert stays.
+    func withdrawSettled(_ gone: [String: Interaction]) {
         guard !gone.isEmpty else { return }
         withdrawDelivered { model, delivered in
-            NotificationWithdrawal.settled(gone: gone, pending: Set(model.interactions.keys), delivered: delivered)
+            NotificationWithdrawal.settledOccurrences(gone: gone, pending: model.interactions, delivered: delivered)
         }
     }
 
@@ -228,8 +267,13 @@ extension AppModel {
         }
     }
 
-    /// A hub's withdrawal push (#4349, #13916): the cards and to-do asks it names are over, answered or withdrawn
+    /// A hub's occurrence-bound withdrawal push (#4349): the cards and to-do asks it names are over, answered or withdrawn
     /// elsewhere while the app was suspended. `done` runs on the main queue once their notifications are gone.
+    func withdrawResolvedOccurrences(_ cards: [NotificationWithdrawal.Resolved], group: String?, done: @escaping @Sendable () -> Void) {
+        withdrawDelivered({ _, delivered in NotificationWithdrawal.resolvedOccurrences(cards, group: group, delivered: delivered) }, done: done)
+    }
+
+    /// The legacy ID-only form from an older hub (#13916 includes to-do asks).
     func withdrawResolved(_ ids: [String], group: String?, done: @escaping @Sendable () -> Void) {
         withdrawDelivered({ _, delivered in NotificationWithdrawal.resolved(ids, group: group, delivered: delivered) }, done: done)
     }
@@ -257,7 +301,8 @@ extension AppModel {
                     let model = self
                     let delivered = raw.map {
                         NotificationWithdrawal.Delivered(identifier: $0.identifier, group: $0.group(model),
-                                                         target: $0.target, date: $0.date, ownerCard: $0.ownerCard)
+                                                         target: $0.target, date: $0.date,
+                                                         interactionCreatedAt: $0.interactionCreatedAt, ownerCard: $0.ownerCard)
                     }
                     let ids = pick(model, delivered)
                     if !ids.isEmpty { UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: ids) }

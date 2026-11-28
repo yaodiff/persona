@@ -33,6 +33,7 @@ runtime errors. Shell launchers, managed launchers and older runtimes keep their
   and a check runs right away to confirm (one network blip should not leave a launcher unavailable; if the check passes, it recovers).
   That follow-up reserves the same single-flight probe used by an immediate detour, including its 30-second throttle, so one failure does not run two checks.
   So are `shell_waiting` and `start_line_rejected` (#2570): the start ended in the new tab's shell before the launcher ran.
+  A coded `codex_not_logged_in` error (the Codex start met its sign-in screen, `docs/integrations/codex.md` "Starting from the phone") is recorded as `auth` from its code (`codedLauncherErrorKind`), not from the node's words, which are in its own language; the same code makes a failed task offer another launcher.
   A coded `agent_start_stalled` error is excluded: the agent opened but its session could not be identified before the deadline. It leaves launcher health unchanged, runs no probe and ends the task without an automatic retry or detour. The node stops the abandoned start before a later retry opens a replacement (see `docs/integrations/codex.md`). An older node that returns only text retains the previous generic-failure handling.
   The App's own starts count as well (#1642, `launcher_health_starts.go`): the hub tells the manager how a start it waited for went (`session.start_ended`: a failure, or a start the node ran before answering that worked),
   and a "New Agent" answered at once (`async`) is followed in the machine's session list, from `starting` to started or to `start_error` (counted once while the node lists it: the starts counted are kept with the records, so one is not counted again after the manager restarts; the failure's `updated_at` is the node's clock and is not compared with the record's).
@@ -124,7 +125,7 @@ Nothing is ever taken away by a failure. "No new information" means the fold cha
 | `usage_limit` | Checked first: Claude Code's own line (`You've hit your session limit · resets 4:20pm (Area/City)`, also after a prefix such as `Error:`; an older `Claude AI usage limit reached`), Codex's (`You've hit your usage limit`, `usage_limit_exceeded`, `usageLimitExceeded`, `usage limit reached`). A gateway's generic 429, `rate limit` or `quota` stays in its own class | None, however many in a row: nothing on the computer is broken. Unavailable until the reset (below) |
 | `upstream` | Explicit upstream account-pool exhaustion (`no eligible upstream`, `no other eligible account`, `upstream attempt budget`, #13372), matched before `model_route` even when the message also names the requested model | None, however many in a row: nothing on the computer is broken |
 | `model_route` | `Bare Claude model name`, `cannot be routed`, `no account match`, model does not exist / not supported | Repair Agent (reconfigure the gateway's model) |
-| `auth` | 401 / 403, `invalid … api key`, `authentication_error`, `Not logged in`, expired token | Repair Agent (reconfigure the gateway's key) |
+| `auth` | 401 / 403, `invalid … api key`, `authentication_error`, `Not logged in`, expired token; a start refused with `codex_not_logged_in` (by its code) | Repair Agent (reconfigure the gateway's key) |
 | `cli_outdated` | `unknown option`, a JSON-RPC `Method not found` (a CLI older than a method its runtime calls), asks to upgrade / version too old / no longer supported | First the node upgrades itself (`claude update`); if that fails, a repair Agent |
 | `timeout` | `context deadline exceeded`, no answer within 150 seconds (twice: a timed-out check is asked again at once) | Counts only after two in a row; handed to a repair Agent |
 | `other` | Everything else | Same: repaired only after two in a row |
@@ -267,6 +268,30 @@ In-flight claims count toward concurrency. Defaults in `assistant.admission` are
 A direction override takes precedence over a project override. A retained computer with missing or stale metrics
 (older than 30 seconds), unknown cores or ambiguous memory fails admission. Missing optional load or process readings
 skip their respective lines. A computer outside the resource layer skips machine checks.
+
+The swap line (#16757) refuses a computer whose swap is at least `max_swap_percent` used (80 by default, settable for
+every computer and in `machines.<id>`; a value outside 0–100 keeps the default) while less than a quarter of its memory
+is available. Past physical memory a computer falls off a cliff rather than slowing down evenly: each new Agent's
+builds swap, and load1 only crosses its line long after. The memory condition keeps a computer whose swap holds stale
+pages but whose memory is free admitting, which is common on long-running Linux machines; on macOS, where swap grows
+in files as it is needed, available memory is usually under a quarter anyway and the swap reading decides. A sample
+with no swap (none configured, or not readable) or a swap reading out of range skips the line; it never refuses. The
+load multiplier stays four for every computer: memory is the swap line's job, and a load line scaled by memory size
+would also hold back CPU-light Agents on a small computer that has room. A computer that needs a tighter load line
+sets `machines.<id>.load_per_core`.
+
+`persona_settings` changes `assistant.admission` behind an approval card. The card lists each line that changes, one per
+row, with the old value and the new one in words: what the number bounds, on which computer, direction, project or
+launcher group, and memory in binary units. A value the setting does not carry is shown as the line it falls back to,
+marked as the default, the line for every computer or the hub computer's line (`admissionChangeCard`,
+`server/internal/assistant/admission_card.go`). A project the setting does not name shows the cap for every direction;
+a direction does too unless the setting carries project caps, where its fallback depends on the task and the row says
+it has no line of its own. Lines are compared by their stored value, so two memory sizes that round to the same text
+both appear with their byte counts, also when one side is the line the value falls back to, and two launcher lists
+that read the same appear as stored, quoted, white space included. Names are
+written on one line, so a line break inside one cannot start a row. The list is not clipped, and rows are in a fixed
+order because the card is built again when it is answered and must match what was shown. The stored JSON stays under
+the card's "Show input".
 
 A refused `machine_policy=fixed` task stays put and gets the reason plus the least-loaded reachable alternative. A `flexible` task is moved to that
 alternative when its launcher runs there and its directory exists (the same `fs.stat` and reroute-trail rules as the launcher detour); no alternative means refusal. The

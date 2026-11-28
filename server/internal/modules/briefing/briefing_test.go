@@ -64,29 +64,33 @@ func TestRules(t *testing.T) {
 // Owner waits come first and are never folded; the others are ordered by age, then key, and bounded by MaxRows.
 func TestFoldKeepsEveryOwnerWait(t *testing.T) {
 	now := time.Now()
-	var rows []modapi.WaitRow
+	var rows []modapi.BriefWait
 	for i := 0; i < 17; i++ {
-		rows = append(rows, modapi.WaitRow{Kind: "stalled", Since: now.Add(time.Duration(i) * time.Minute), Key: fmt.Sprintf("other-%02d", i)})
+		rows = append(rows, modapi.BriefWait{Kind: "stalled", Since: now.Add(time.Duration(i) * time.Minute), TodoID: fmt.Sprintf("other-%02d", i)})
 	}
 	for i := 0; i < 20; i++ {
 		kind := []string{"needs_user", "question", "permission", "private"}[i%4]
-		rows = append(rows, modapi.WaitRow{Kind: kind, Since: now.Add(time.Duration(i) * time.Minute), Key: fmt.Sprintf("owner-%02d", i)})
+		rows = append(rows, modapi.BriefWait{Kind: kind, Since: now.Add(time.Duration(i) * time.Minute), TodoID: fmt.Sprintf("owner-%02d", i)})
 	}
-	keep, more := Defaults().Fold(rows)
+	d := modapi.BriefDirection{Waits: rows}
+	Defaults().FoldDirection(&d)
+	keep, more := d.Waits, d.More
 	if len(keep) != 35 || more != 2 {
 		t.Fatalf("kept %d, more %d; want 35 and 2", len(keep), more)
 	}
-	for n, i := range keep {
-		if owner := OwnerWait(rows[i].Kind); owner != (n < 20) {
-			t.Fatalf("row %d (%+v) out of place", n, rows[i])
+	for n, row := range keep {
+		if owner := OwnerWait(row.Kind); owner != (n < 20) {
+			t.Fatalf("row %d (%+v) out of place", n, row)
 		}
 	}
-	if rows[keep[20]].Key != "other-00" || rows[keep[34]].Key != "other-14" {
-		t.Fatalf("the others are not oldest first: %s … %s", rows[keep[20]].Key, rows[keep[34]].Key)
+	if keep[20].TodoID != "other-00" || keep[34].TodoID != "other-14" {
+		t.Fatalf("the others are not oldest first: %s … %s", keep[20].TodoID, keep[34].TodoID)
 	}
-	same := []modapi.WaitRow{{Kind: "stalled", Since: now, Key: "b"}, {Kind: "stalled", Since: now, Key: "a"}}
-	if keep, _ := Defaults().Fold(same); keep[0] != 1 {
-		t.Fatalf("ties are not broken by key: %v", keep)
+	same := []modapi.BriefWait{{Kind: "stalled", Since: now, TodoID: "b"}, {Kind: "stalled", Since: now, TodoID: "a"}}
+	d.Waits = same
+	Defaults().FoldDirection(&d)
+	if d.Waits[0].TodoID != "a" {
+		t.Fatalf("ties are not broken by key: %v", d.Waits)
 	}
 }
 
@@ -212,6 +216,11 @@ func (f *fakeTodos) StalePRFollowups(context.Context, time.Time, string) []modap
 	return f.followups
 }
 
+func (f *fakeTodos) DeferredSupervision(context.Context, time.Time) []modapi.BriefDeferredSupervision {
+	return nil
+}
+func (f *fakeTodos) SupervisionBriefed(context.Context, []string, time.Time) {}
+
 type fakeInbox struct{ signals []modapi.BriefInboxSignal }
 
 func (f *fakeInbox) FollowingSignals(context.Context) []modapi.BriefInboxSignal { return f.signals }
@@ -221,6 +230,7 @@ type fakeLater struct {
 	total int
 }
 
+func (f *fakeLater) Handle(context.Context, string) (bool, error) { return false, nil }
 func (f *fakeLater) Rows(context.Context, string, string, time.Time, int) ([]modapi.BriefBoardRow, int) {
 	return f.rows, f.total
 }
@@ -301,6 +311,10 @@ func (fakePrompts) BriefDayRunes(d *modapi.BriefDay) int {
 	}
 	return n
 }
+func (fakePrompts) BoardRowMarkdown(_ string, n int, r modapi.BriefBoardRow) string {
+	return fmt.Sprintf("**%d** %s", n, r.Summary)
+}
+func (fakePrompts) OpenStageBar(_, stage string) string { return stage }
 func (fakePrompts) BoardRowPlain(_ string, n int, r modapi.BriefBoardRow) string {
 	return fmt.Sprintf("%d. %s", n, r.Summary)
 }
@@ -355,7 +369,7 @@ func TestRunnerLifecycleAndWireJSON(t *testing.T) {
 	}
 
 	// Sent attaches the run and writes the `brief` feed item once (retried writes none).
-	r.Sent("morning", "sess1", false)
+	r.Sent(modapi.BriefScheduleRun{RefID: "morning", SessionID: "sess1", Due: now})
 	if r.TaskRunCount() != 0 || !r.HasSession("sess1") || len(h.feed.items) != 1 {
 		t.Fatalf("after Sent: tasks=%d has=%v feed=%d", r.TaskRunCount(), r.HasSession("sess1"), len(h.feed.items))
 	}
@@ -453,5 +467,32 @@ func TestDayMergesAndBounds(t *testing.T) {
 		len(day.Parts) != 2 || day.Parts[1].State != "none" || day.Parts[1].Recorded != 30 ||
 		len(day.Timeline) != 1 || !day.Timeline[0].Meeting || len(day.Actions) != 1 || len(day.Gaps) != 1 {
 		t.Fatalf("Day = %+v", day)
+	}
+}
+
+// max_rows bounds only the non-owner tail, in main as well as every leader. Every owner-wait row remains, even when
+// owner rows alone exceed the configured limit; the folded rows become one direction-level "N more" count.
+func TestFoldBriefDirectionKeepsEveryOwnerWait(t *testing.T) {
+	waits := Defaults()
+	now := time.Now().UTC()
+	for _, ownerDirection := range []bool{false, true} {
+		t.Run(fmt.Sprintf("owner_direction_%v", ownerDirection), func(t *testing.T) {
+			d := modapi.BriefDirection{Owner: ownerDirection}
+			for i := 0; i < 20; i++ {
+				d.Waits = append(d.Waits, modapi.BriefWait{TodoID: fmt.Sprintf("owner-%02d", i), Kind: "needs_user", Since: now.Add(time.Duration(i) * time.Minute)})
+			}
+			for i := 0; i < 17; i++ {
+				d.Waits = append(d.Waits, modapi.BriefWait{TodoID: fmt.Sprintf("other-%02d", i), Kind: "stalled", Since: now.Add(time.Duration(i) * time.Minute)})
+			}
+			waits.FoldDirection(&d)
+			if len(d.Waits) != 35 || d.More != 2 {
+				t.Fatalf("kept %d rows, more %d; want 35 and 2", len(d.Waits), d.More)
+			}
+			for i := 0; i < 20; i++ {
+				if d.Waits[i].Kind != "needs_user" {
+					t.Fatalf("owner row %d was folded or sorted behind another wait: %+v", i, d.Waits[i])
+				}
+			}
+		})
 	}
 }

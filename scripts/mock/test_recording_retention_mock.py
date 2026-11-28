@@ -1,6 +1,6 @@
 """The mock hub keeps recordings and meeting minutes as the hub does (#3780, docs/assistant/meeting-minutes.md "Privacy"):
-GET / PUT /api/v1/assistant `recording_days` and `minutes_days` (0 means forever; finite minutes retention is never
-shorter than the recordings'), and a trimmed recording (POST /mock/recording_trim) that keeps its minutes, takes no upload and makes no
+GET / PUT /api/v1/assistant `recording_audio_days` (old name `recording_days`), `recording_text_days` and `minutes_days`
+(0 means forever; finite minutes retention is never shorter than the text's, #16412), and a trimmed recording (POST /mock/recording_trim) that keeps its minutes, takes no upload and makes no
 minutes again."""
 import time
 import unittest
@@ -17,25 +17,33 @@ class RecordingRetentionMockTests(Hub, unittest.TestCase):
 
     def test_retention_settings(self):
         status, state = self.call("GET", "/api/v1/assistant")
-        self.assertEqual((status, state["recording_days"], state["minutes_days"]), (200, 14, 0))
+        self.assertEqual((status, state["recording_days"], state["recording_audio_days"], state["recording_text_days"], state["minutes_days"]),
+                         (200, 14, 14, 0, 0))
         for body in ({"minutes_days": -1}, {"minutes_days": 3651}, {"minutes_days": "30"}, {"minutes_days": True},
-                     {"minutes_days": 1.5}, {"minutes_days": None}, {"recording_days": 366}, {"recording_days": 30, "minutes_days": -1}):
+                     {"minutes_days": 1.5}, {"minutes_days": None}, {"recording_days": 0}, {"recording_days": 3651},
+                     {"recording_text_days": -1}, {"recording_audio_days": 3651}, {"recording_days": 30, "minutes_days": -1}):
             self.assertEqual(self.call("PUT", "/api/v1/assistant", body)[0], 400, body)
         self.assertEqual(self.call("GET", "/api/v1/assistant")[1]["recording_days"], 14)  # a refused request changes nothing
-        self.assertEqual(self.call("PUT", "/api/v1/assistant", {"minutes_days": 30})[1]["minutes_days"], 30)
-        state = self.call("PUT", "/api/v1/assistant", {"recording_days": 60})[1]
-        self.assertEqual((state["recording_days"], state["minutes_days"]), (60, 60))
-        self.assertEqual(self.call("GET", "/api/v1/recordings")[1]["days"], 60)
-        state = self.call("PUT", "/api/v1/assistant", {"recording_days": 14, "minutes_days": 365})[1]
-        self.assertEqual((state["recording_days"], state["minutes_days"]), (14, 365))
-        state = self.call("PUT", "/api/v1/assistant", {"recording_days": 365, "minutes_days": 0})[1]
-        self.assertEqual((state["recording_days"], state["minutes_days"]), (365, 0))
-        self.assertEqual(self.call("GET", "/api/v1/assistant")[1]["minutes_days"], 0)
+        # The text kept forever (the default) keeps the minutes forever too.
+        self.assertEqual(self.call("PUT", "/api/v1/assistant", {"minutes_days": 30})[1]["minutes_days"], 0)
+        state = self.call("PUT", "/api/v1/assistant", {"recording_text_days": 60})[1]
+        self.assertEqual((state["recording_text_days"], state["minutes_days"]), (60, 60))
+        # The old name sets the audio's days: the phone's window.
+        state = self.call("PUT", "/api/v1/assistant", {"recording_days": 1000})[1]
+        self.assertEqual((state["recording_days"], state["recording_audio_days"], state["recording_text_days"]), (1000, 1000, 60))
+        listed = self.call("GET", "/api/v1/recordings")[1]
+        self.assertEqual((listed["days"], listed["audio_days"], listed["text_days"]), (365, 1000, 60))  # phones take 1–365
+        state = self.call("PUT", "/api/v1/assistant", {"recording_audio_days": 0, "recording_text_days": 14, "minutes_days": 365})[1]
+        self.assertEqual((state["recording_audio_days"], state["recording_text_days"], state["minutes_days"]), (0, 14, 365))
+        listed = self.call("GET", "/api/v1/recordings")[1]
+        self.assertEqual((listed["days"], listed["audio_days"]), (365, 0))
+        state = self.call("PUT", "/api/v1/assistant", {"recording_audio_days": 14, "recording_text_days": 0, "minutes_days": 0})[1]
+        self.assertEqual((state["recording_days"], state["recording_text_days"], state["minutes_days"]), (14, 0, 0))
         # Another manager is one from before these settings: no field, so the web shows no Recordings group.
         status, other = self.call("GET", "/api/v1/assistant", headers={"X-Persona-Manager": "m-3fa21c"})
         self.assertEqual((status, other["manager"]), (200, "m-3fa21c"))
-        self.assertNotIn("minutes_days", other)
-        self.assertNotIn("recording_days", other)
+        for key in ("minutes_days", "recording_days", "recording_audio_days", "recording_text_days"):
+            self.assertNotIn(key, other)
 
     def test_trimmed_recording(self):
         rid = str(uuid.uuid4())

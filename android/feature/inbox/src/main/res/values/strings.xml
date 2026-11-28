@@ -91,6 +91,9 @@
     <string name="inbox_empty_search_text">No messages or mail match “%1$s”.</string>
     <string name="inbox_empty_title">Your inbox is empty</string>
     <string name="inbox_empty_text">Once the hub has Lark (a Lark gateway) set up or you add a mail account in Settings, messages and mail that need you show up here.</string>
+    <string name="inbox_empty_text_lark">Once the hub has Lark (a Lark gateway) set up, new Lark messages that need you show up here.</string>
+    <string name="inbox_empty_text_mail">Once you add a mail account in Settings, mail that needs you shows up here.</string>
+    <string name="inbox_empty_text_generic">New items that need you will show up here.</string>
     <string name="inbox_empty_filtered_title">Nothing open matches these filters</string>
     <string name="inbox_empty_filtered_text">Clear the filters to see the whole Inbox.</string>
     <string name="inbox_empty_caught_up_title">All caught up</string>

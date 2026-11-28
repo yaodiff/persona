@@ -70,7 +70,7 @@ func NewWith(cfg Config, transport http.RoundTripper) *Client {
 
 // net/http copies headers from the first request on every redirect, so check the entire chain before retaining
 // provider-specific values. Once a chain leaves its original origin, all later hops use Persona's identity and omit
-// every custom provider header and gateway-scoped session header.
+// API credentials, custom provider headers and gateway-scoped session headers.
 func checkRedirect(req *http.Request, via []*http.Request) error {
 	return checkRedirectHeaders(req, via, nil)
 }
@@ -83,11 +83,19 @@ func checkRedirectHeaders(req *http.Request, via []*http.Request, headers map[st
 	if len(via) >= 10 {
 		return errors.New("stopped after 10 redirects")
 	}
+	if len(via) == 0 || via[0] == nil || req == nil {
+		return nil
+	}
 	origin := via[0].URL
 	clearPrivate := func() {
 		for name := range headers {
 			req.Header.Del(name)
 		}
+		req.Header.Del("Authorization")
+		req.Header.Del("Proxy-Authorization")
+		req.Header.Del("X-Api-Key")
+		req.Header.Del("Cookie")
+		req.Header.Del("Cookie2")
 		req.Header.Set("User-Agent", modelhttp.UserAgent())
 		modelhttp.ClearOpenCodeSession(req.Header)
 		modelhttp.ClearSource(req.Header)
@@ -97,7 +105,7 @@ func checkRedirectHeaders(req *http.Request, via []*http.Request, headers map[st
 		return nil
 	}
 	for _, previous := range via[1:] {
-		if !sameOrigin(origin, previous.URL) {
+		if previous == nil || !sameOrigin(origin, previous.URL) {
 			clearPrivate()
 			break
 		}
@@ -106,6 +114,9 @@ func checkRedirectHeaders(req *http.Request, via []*http.Request, headers map[st
 }
 
 func sameOrigin(a, b *url.URL) bool {
+	if a == nil || b == nil {
+		return false
+	}
 	port := func(u *url.URL) string {
 		if p := u.Port(); p != "" {
 			return p
@@ -121,9 +132,16 @@ func sameOrigin(a, b *url.URL) bool {
 	return strings.EqualFold(a.Scheme, b.Scheme) && strings.EqualFold(a.Hostname(), b.Hostname()) && port(a) == port(b)
 }
 
-// NewRun is a client whose requests run answers instead of an HTTP API: no gate, no key (a launcher's CLI on a
-// computer, cfg.RunLauncher).
+// NewRun sends requests through a launcher callback. Each configured launcher shares a gate
+// with other clients running the same model on the same computer, so consecutive full-budget
+// timeouts back off and cap concurrency instead of piling onto a wedged launcher.
 func NewRun(cfg Config, run func(context.Context, Request) (Reply, error)) *Client {
+	if cfg.RunLauncher != "" && run != nil {
+		g := gateForRun(cfg)
+		return &Client{cfg: cfg, run: func(ctx context.Context, r Request) (Reply, error) {
+			return g.run(ctx, r, run)
+		}}
+	}
 	return &Client{cfg: cfg, run: run}
 }
 
@@ -179,6 +197,23 @@ type Request struct {
 	// BoundOutput also enforces MaxTokens on Responses. Cost-sensitive background calls
 	// fail closed when a relay refuses the bound; legacy callers keep their existing behavior.
 	BoundOutput bool
+	// DisableThinking asks the API to turn extended thinking/reasoning off for this call, through each protocol's
+	// standard "off" encoding (Messages thinking.type=disabled with the model-specific fallback, Chat Completions
+	// reasoning_effort="none", Responses reasoning.effort="none"). Short deterministic tasks such as title naming
+	// set it: a thinking model spends the small output room on reasoning and a relay that surfaces that reasoning
+	// as text can leak cut-off monologue fragments into the answer. It wins over Config.ReasoningEffort for this
+	// request only; protocols and models that cannot express "off" keep ApplyReasoningEffort's compatibility rules.
+	DisableThinking bool
+}
+
+// effortForRequest is the reasoning effort to encode for one call. Request.DisableThinking forces the generic
+// "off" level, which ApplyReasoningEffort maps to each protocol's own encoding; otherwise the connection's
+// configured effort is used ("" leaves the model/provider default).
+func effortForRequest(configured string, r Request) string {
+	if r.DisableThinking {
+		return "off"
+	}
+	return configured
 }
 
 type Usage = aiwire.Usage
@@ -360,7 +395,7 @@ func (c *Client) messages(ctx context.Context, hc *http.Client, key string, r Re
 		turns = append(turns, map[string]any{"role": m.Role, "content": m.Content})
 	}
 	bodyMap := map[string]any{"model": c.cfg.Model, "max_tokens": r.MaxTokens, "system": r.System, "messages": turns, "stream": true}
-	ApplyReasoningEffort(bodyMap, "messages", c.cfg.Model, c.cfg.ReasoningEffort)
+	ApplyReasoningEffort(bodyMap, "messages", c.cfg.Model, effortForRequest(c.cfg.ReasoningEffort, r))
 	body, _ := json.Marshal(bodyMap)
 	req, err := http.NewRequestWithContext(ctx, "POST", apiEndpoint(c.cfg.BaseURL, "messages"), bytes.NewReader(body))
 	if err != nil {
@@ -433,6 +468,24 @@ func (u *messageUsage) into(to *Usage) {
 			*f.to = *f.from
 		}
 	}
+}
+
+// responsesUsage is a Responses API response.usage object. input_tokens counts the cached tokens too, so they are
+// subtracted to match Usage.InputTokens.
+type responsesUsage struct {
+	InputTokens        int `json:"input_tokens"`
+	OutputTokens       int `json:"output_tokens"`
+	InputTokensDetails struct {
+		CachedTokens int `json:"cached_tokens"`
+	} `json:"input_tokens_details"`
+}
+
+func (u *responsesUsage) usage() Usage {
+	if u == nil {
+		return Usage{}
+	}
+	return Usage{InputTokens: u.InputTokens - u.InputTokensDetails.CachedTokens, OutputTokens: u.OutputTokens,
+		CacheReadInputTokens: u.InputTokensDetails.CachedTokens}
 }
 
 // errorOf reads a Messages error: an object with its type, code and message, or only a message string. kind retains
@@ -606,7 +659,9 @@ func readMessageStream(body io.Reader) (Reply, bool, error) {
 		return false
 	})
 	if err != nil {
-		return Reply{}, true, fmt.Errorf("ai: read stream: %w", err)
+		// The stream was cut while reading (deadline, reset, EOF): keep the usage message_start/message_delta already
+		// reported, so a long reply cut off here is not metered as zero tokens. No answer text is returned with the error.
+		return Reply{Model: model, Usage: usage}, true, fmt.Errorf("ai: read stream: %w", err)
 	}
 	if failed != nil {
 		return Reply{}, failedAnswered, failed
@@ -686,7 +741,7 @@ func (c *Client) respond(ctx context.Context, hc *http.Client, key string, r Req
 	if r.BoundOutput && r.MaxTokens > 0 {
 		req["max_output_tokens"] = r.MaxTokens
 	}
-	ApplyReasoningEffort(req, "responses", c.cfg.Model, c.cfg.ReasoningEffort)
+	ApplyReasoningEffort(req, "responses", c.cfg.Model, effortForRequest(c.cfg.ReasoningEffort, r))
 	body, _ := json.Marshal(req)
 	hreq, err := http.NewRequestWithContext(ctx, "POST", apiEndpoint(c.cfg.BaseURL, "responses"), bytes.NewReader(body))
 	if err != nil {
@@ -708,6 +763,8 @@ func (c *Client) respond(ctx context.Context, hc *http.Client, key string, r Req
 	}
 	var b strings.Builder
 	refused := false // a refusal content part came: the model declined, whatever else the stream says
+	// partial keeps the model/usage any event has already reported, for the read-error return below.
+	var partial Reply
 	// event acts on one event's data, and done says it ended the stream, with the reply and error to return. ended
 	// returns them: a limit the stream reported is no answer, so it holds the gate like the HTTP 429 it stands for.
 	ended := func(got Reply, err error) (Reply, bool, error) {
@@ -731,25 +788,22 @@ func (c *Client) respond(ctx context.Context, hc *http.Client, key string, r Req
 				IncompleteDetails *struct {
 					Reason string `json:"reason"`
 				} `json:"incomplete_details"`
-				Usage *struct {
-					InputTokens        int `json:"input_tokens"`
-					OutputTokens       int `json:"output_tokens"`
-					InputTokensDetails struct {
-						CachedTokens int `json:"cached_tokens"`
-					} `json:"input_tokens_details"`
-				} `json:"usage"`
+				Usage *responsesUsage `json:"usage"`
 			} `json:"response"`
 		}
 		if json.Unmarshal([]byte(data), &ev) != nil {
 			return reply, false, nil
 		}
+		// Any event's response object can name the model and report usage (possibly partial, before the terminal
+		// response.completed). Keep the latest so a stream cut by a read error still returns what was metered.
+		if ev.Response.Model != "" {
+			partial.Model = ev.Response.Model
+		}
+		if ev.Response.Usage != nil {
+			partial.Usage = ev.Response.Usage.usage()
+		}
 		finished := func() Reply {
-			r := Reply{Text: b.String(), Model: ev.Response.Model}
-			if u := ev.Response.Usage; u != nil { // input_tokens counts the cached ones too
-				r.Usage = Usage{InputTokens: u.InputTokens - u.InputTokensDetails.CachedTokens, OutputTokens: u.OutputTokens,
-					CacheReadInputTokens: u.InputTokensDetails.CachedTokens}
-			}
-			return r
+			return Reply{Text: b.String(), Model: ev.Response.Model, Usage: ev.Response.Usage.usage()}
 		}
 		failureDetails := func() (code, msg string) {
 			code, msg = decodeErrorCode(ev.Code), decodeErrorString(ev.Message)
@@ -806,7 +860,7 @@ func (c *Client) respond(ctx context.Context, hc *http.Client, key string, r Req
 		got, stopped, gotErr = event(data)
 		return stopped
 	}); err != nil {
-		return reply, true, fmt.Errorf("ai: read stream: %w", err)
+		return partial, true, fmt.Errorf("ai: read stream: %w", err)
 	}
 	if stopped {
 		return ended(got, gotErr)

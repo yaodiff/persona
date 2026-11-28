@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -272,12 +273,13 @@ func (s *Service) todoRunsChanged(machine string) {
 	}
 	b := &s.tview
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	if b.machines == nil {
 		b.machines = map[string]bool{}
 	}
 	b.machines[machine] = true
 	s.todoViewSettleLocked()
+	b.mu.Unlock()
+	s.directionTreeSoon()
 }
 
 // todoRunsOn: an open to-do has an active run on machine (activeBySession, as the direction tree reads it).
@@ -387,17 +389,11 @@ func (s *Service) todoViewsOf(ctx context.Context, ids map[string]bool, now time
 	if err != nil {
 		return todoProjection{}, err
 	}
-	facts := s.todoFactsOf(ctx, list)
-	for i := range list {
-		if list[i].StartError != "" {
-			superseded := s.todoSuperseded()
-			for j := range facts {
-				facts[j].Superseded = superseded[facts[j].ID]
-			}
-			break
-		}
+	var superseded map[string]bool
+	if slices.ContainsFunc(list, func(row listedTodo) bool { return row.StartError != "" }) {
+		superseded = s.todoSuperseded()
 	}
-	return todoProjection{facts: facts, views: projection.Views(facts, now)}, nil
+	return s.projectTodoRows(ctx, list, now, superseded), nil
 }
 
 // todoSuperseded are the failed starts whose work finished in a related to-do anywhere in the list

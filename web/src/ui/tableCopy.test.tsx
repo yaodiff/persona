@@ -135,6 +135,34 @@ describe("Markdown table copy button", () => {
     expect(rendered.querySelector("a")?.getAttribute("href")).toBe("https://example.com/docs");
     expect(rendered.querySelector("code")?.textContent).toBe("ab");
   });
+
+  it("renders only bare break tags in Markdown table cells as line breaks", () => {
+    const text = [
+      "Outside<br>table",
+      "",
+      "| Head<br>er |",
+      "| --- |",
+      "| **a<br>b**<br/>c<br />d |",
+      '| `<br>` &lt;br&gt; <br class="example"> <b>plain</b> |',
+      "",
+      "```",
+      "<br>",
+      "```",
+    ].join("\n");
+    const html = renderToStaticMarkup(createElement(Markdown, { text, lineBreaks: true }));
+    const doc = new DOMParser().parseFromString(html, "text/html");
+    const [lines, literals] = doc.querySelectorAll("td");
+
+    expect(doc.querySelector("th")?.innerHTML).toBe("Head<br>er");
+    expect(lines.innerHTML).toBe("<strong>a<br>b</strong><br>c<br>d");
+    expect(lines.hasAttribute("data-fit")).toBe(false);
+    expect(cellPlainText(lines)).toBe("a\nb\nc\nd");
+    expect(literals.textContent).toBe('<br> <br> <br class="example"> <b>plain</b>');
+    expect(literals.querySelector("code")?.textContent).toBe("<br>");
+    expect(literals.querySelector("br, b")).toBeNull();
+    expect(doc.querySelector("p")?.textContent).toBe("Outside<br>table");
+    expect(doc.querySelector("pre code")?.textContent).toBe("<br>\n");
+  });
 });
 
 describe("writeTableClipboard", () => {

@@ -71,6 +71,13 @@ func routeLinkedInteractions(list []Facts) {
 // Views is the view of every to-do of list at now, in the list's order: each related to the rest of the list (its
 // steps, a superseded failed start), then ranked within its section.
 func Views(list []Facts, now time.Time) []assistantwire.TodoSummary {
+	views, _ := ViewsAndWaits(list, now)
+	return views
+}
+
+// ViewsAndWaits works out both the view (TodoSummary) and the strongly-typed waiting reason (TodoWait, nil unless the
+// row is in Waiting) of every to-do in list in a single pass (#16168).
+func ViewsAndWaits(list []Facts, now time.Time) ([]assistantwire.TodoSummary, []*assistantwire.TodoWait) {
 	related := relate(list)
 	routeLinkedInteractions(related)
 	placed := make([]placement, len(related))
@@ -79,10 +86,12 @@ func Views(list []Facts, now time.Time) []assistantwire.TodoSummary {
 	}
 	rank(related, placed, now)
 	views := make([]assistantwire.TodoSummary, len(placed))
+	waits := make([]*assistantwire.TodoWait, len(placed))
 	for i := range placed {
 		views[i] = placed[i].TodoSummary
+		waits[i] = cloneWait(placed[i].wait)
 	}
-	return views
+	return views, waits
 }
 
 // rank sets each placement's rank: its place among the rows of the same section, 0 first, by its section's rule

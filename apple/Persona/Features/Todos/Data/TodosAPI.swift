@@ -116,9 +116,11 @@ nonisolated extension APIClient {
     // again on its own once it may have reached the hub.
 
     /// The tick (`PATCH …/todos/{id}` with `done`), which also stops the follow-ups of its Agents, or a reopen.
+    /// Closing a to-do with active Agent work may block up to 45 s on the hub's confirmation card (`todoCloseConfirmWait`).
     func setTodoDone(id: String, done: Bool, opID: UUID) async throws -> TodoItem {
         struct Body: Encodable { var done: Bool }
-        let data = try await request("PATCH", "/api/v1/todos/\(Self.todoPath(id))", body: Body(done: done), opID: opID)
+        let timeout: TimeInterval = done ? Self.todoCloseConfirmWait : 30
+        let data = try await request("PATCH", "/api/v1/todos/\(Self.todoPath(id))", body: Body(done: done), timeout: timeout, opID: opID)
         return try JSON.decoder.decode(TodoAnswer.self, from: data).todo
     }
 

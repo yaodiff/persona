@@ -92,7 +92,7 @@ func TestTaskWorkspaceExplicitBranchReuseRefusals(t *testing.T) {
 						}
 					}
 				}
-				f.nodes[DeviceWorktreePrepare] = func(_ string, raw json.RawMessage) (any, error) {
+				f.answerNode(DeviceWorktreePrepare, func(_ string, raw json.RawMessage) (any, error) {
 					var in struct{ Branch string }
 					_ = json.Unmarshal(raw, &in)
 					prep := map[string]any{"root": "/code/app", "path": "/wt/app"}
@@ -103,12 +103,12 @@ func TestTaskWorkspaceExplicitBranchReuseRefusals(t *testing.T) {
 						prep["existing"] = tc.existing
 					}
 					return prep, nil
-				}
+				})
 				creates := 0
-				f.nodes[DeviceWorktreeCreate] = func(string, json.RawMessage) (any, error) {
+				f.answerNode(DeviceWorktreeCreate, func(string, json.RawMessage) (any, error) {
 					creates++
 					return proto.WorktreeCreateResult{Path: "/wt/app/fix-login", Branch: "fix/login"}, nil
-				}
+				})
 				p := workspacePlan(t, s, `{"new":{"branch":"fix/login"}}`)
 				if _, err := s.startPlan(ctx, p.ID, nil, false); err != nil {
 					t.Fatal(err)

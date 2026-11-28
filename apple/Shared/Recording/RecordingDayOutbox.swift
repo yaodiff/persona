@@ -539,7 +539,7 @@ nonisolated extension RecordingDayOutbox {
     static func ageLimit(of entry: RecordingEntry, keepDays: Int) -> Date? {
         let zone = zone(of: entry)
         guard let day = entry.day, var limit = RecordingDayCalendar.end(of: day, in: zone) else { return nil }
-        for _ in 0..<RecordingDayContract.keepDays(recordingDays: keepDays) {
+        for _ in 0..<RecordingDayContract.keepDays(audioDays: keepDays) {
             limit = RecordingDayCalendar.nextMidnight(after: limit, in: zone)
         }
         return limit

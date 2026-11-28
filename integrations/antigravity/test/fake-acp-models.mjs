@@ -27,7 +27,11 @@ let mode = 'default'
 const configuration = () => [
   { id: 'model', category: 'model', currentValue: model.replace(effortSuffix, '') },
   { id: 'thought_level', currentValue: effort },
-  { id: 'mode', currentValue: mode },
+  {
+    id: 'mode',
+    currentValue: mode,
+    ...(settings().availableModes ? { options: settings().availableModes.map((entry) => ({ value: entry.id, name: entry.name || entry.id })) } : {}),
+  },
 ]
 let pendingPrompt
 let pendingPermissions
@@ -84,8 +88,8 @@ const mixedPermissions = [
     ],
   },
 ]
-const askPermissions = (request, permissions) => {
-  pendingPermissions = { promptId: request.id, open: new Set() }
+const askPermissions = (request, permissions, result = { stopReason: 'end_turn' }) => {
+  pendingPermissions = { promptId: request.id, open: new Set(), result }
   for (const permission of permissions) {
     pendingPermissions.open.add(permission.id)
     appendFileSync(`${directory}/calls.jsonl`, `${JSON.stringify({ method: 'fake/permission', id: permission.id })}\n`)
@@ -103,9 +107,9 @@ const askPermissions = (request, permissions) => {
 const answerPermission = (request) => {
   if (!pendingPermissions?.open.delete(request.id)) return false
   if (pendingPermissions.open.size === 0) {
-    const promptId = pendingPermissions.promptId
+    const { promptId, result } = pendingPermissions
     pendingPermissions = undefined
-    send({ jsonrpc: '2.0', id: promptId, result: { stopReason: 'end_turn' } })
+    send({ jsonrpc: '2.0', id: promptId, result })
   }
   return true
 }
@@ -116,7 +120,7 @@ const complete = (request, result, error) => {
     send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: id, update: { sessionUpdate: 'current_mode_update', currentModeId: 'auto' } } })
     setImmediate(() => send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: id, update: { sessionUpdate: 'current_mode_update', currentModeId: 'default' } } }))
   }
-  if (['session/set_model', 'session/set_mode'].includes(method) && !error) process.stdout.write(`${JSON.stringify({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: id, update: { sessionUpdate: 'config_option_update', configOptions: configuration() } } })}\n`)
+  if ((method === 'session/set_mode' || (method === 'session/set_model' && !settings().omitSetModelConfigUpdate)) && !error) process.stdout.write(`${JSON.stringify({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: id, update: { sessionUpdate: 'config_option_update', configOptions: configuration() } } })}\n`)
 }
 
 createInterface({ input: process.stdin }).on('line', (line) => {
@@ -135,13 +139,37 @@ createInterface({ input: process.stdin }).on('line', (line) => {
   if (method === 'initialize') result = { protocolVersion: 1, agentInfo: { version: 'test' } }
   if (method === 'session/new' || method === 'session/resume') {
     loaded = true
+    if (method === 'session/resume' && settings().resumeModel) {
+      model = settings().resumeModel
+      effort = effortSuffix.exec(model)?.[1]
+    }
     if (method === 'session/resume' && settings().resetModeOnResume) mode = 'default'
     reportWindow()
     settingsAgentMode = nativeSettings().agentMode || 'default'
+    if (method === 'session/resume' && settings().configUpdateOnResume) {
+      const configOptions = settings().configUpdateOnResume === 'effortOnly'
+        ? [{ id: 'thought_level', currentValue: effort }]
+        : settings().configUpdateOnResume === 'modelOnly'
+          ? [{ id: 'model', category: 'model', currentValue: model.replace(effortSuffix, '') }]
+          : configuration()
+      send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: id, update: { sessionUpdate: 'config_option_update', configOptions } } })
+    }
     const modes = settings().availableModes ? { currentModeId: mode, availableModes: settings().availableModes } : { currentModeId: mode }
-    result = { sessionId: id, models: { availableModels: settings().models, currentModelId: model }, modes, configOptions: configuration() }
+    result = {
+      sessionId: id,
+      models: { availableModels: settings().models, currentModelId: model },
+      ...(method === 'session/resume' && settings().omitResumeModes ? {} : { modes }),
+      ...(method === 'session/resume' && settings().omitResumeConfig ? {} : { configOptions: configuration() }),
+    }
+    if (method === 'session/resume' && settings().askPermissionOnResume) {
+      askPermissions(request, readPermissions.slice(0, 1), result)
+      return
+    }
   }
   if (method === 'session/prompt') {
+    if (settings().resumeModel) {
+      appendFileSync(`${directory}/calls.jsonl`, `${JSON.stringify({ method: 'fake/prompt_model', model })}\n`)
+    }
     syncSettingsMode()
     if (settings().refuseAutoOnPrompt) {
       mode = 'default'
@@ -190,7 +218,9 @@ createInterface({ input: process.stdin }).on('line', (line) => {
       timer.unref?.()
       return
     }
-    if (params.modeId === 'auto' && settings().autoThenDefault) {
+    if (params.modeId === 'auto' && settings().rejectAuto) {
+      error = { code: -32602, message: 'Auto mode is not available: it needs the OS terminal sandbox and may not be rolled out to you yet' }
+    } else if (params.modeId === 'auto' && settings().autoThenDefault) {
       mode = 'auto'
       result = { modes: { currentModeId: mode }, configOptions: configuration() }
       mode = 'default'
@@ -200,7 +230,7 @@ createInterface({ input: process.stdin }).on('line', (line) => {
     } else mode = params.modeId
   }
   if (method === 'session/set_config_option') {
-    const nextModel = `${model.replace(effortSuffix, '')}-${params.value}`
+    const nextModel = settings().effortFallback?.[params.value] ?? `${model.replace(effortSuffix, '')}-${params.value}`
     if (!settings().models.some((entry) => entry.modelId === nextModel)) error = { code: -32602, message: 'Thinking level unavailable' }
     else { effort = params.value; model = nextModel; result = { configOptions: configuration() } }
   }

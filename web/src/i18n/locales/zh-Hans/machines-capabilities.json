@@ -1,5 +1,5 @@
 {
-  "title": "每台电脑能做什么",
+  "title": "每台电脑的能力",
   "col_computer": "电脑",
   "col_system": "系统",
   "col_resources": "核心与内存",
@@ -10,10 +10,10 @@
   "online": "在线",
   "offline": "离线",
   "pending": "等待确认",
-  "not_connected": "还没连上",
+  "not_connected": "尚未连接",
   "cores_other": "{count} 核",
   "disk_free": "磁盘剩余 {size}",
   "list_separator": "、",
   "none": "无",
-  "loading": "正在读取…"
+  "loading": "正在加载…"
 }

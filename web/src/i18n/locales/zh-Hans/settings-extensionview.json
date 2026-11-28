@@ -1,15 +1,18 @@
 {
-  "not_a_number": "「{field}」要是一个数",
-  "action_failed": "没有完成：{error}",
-  "nothing_here": "这个扩展在这里没有要显示的内容。",
+  "not_a_number": "「{field}」必须为数字",
+  "action_failed": "操作未能完成：{error}",
+  "nothing_here": "该扩展在此暂无可显示的内容。",
   "back": "返回",
   "search": "搜索",
-  "update_failed_inline": "没有更新：{error}",
-  "draw_failed_inline": "扩展没画出来：{error}",
-  "update_failed": "没有更新",
-  "draw_failed": "扩展没画出来",
+  "update_failed_inline": "更新失败：{error}",
+  "draw_failed_inline": "扩展加载失败：{error}",
+  "update_failed": "更新失败",
+  "draw_failed": "扩展加载失败",
   "retry": "重试",
   "confirm_title": "确认",
   "ok": "确定",
-  "updating": "正在更新…"
+  "updating": "正在更新…",
+  "setup_title": "设置 {name}",
+  "missing_settings": "必填设置",
+  "open_settings": "打开扩展设置"
 }

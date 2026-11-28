@@ -17,6 +17,10 @@ import (
 // owner operation, then records the honest terminal outcome. In particular it
 // never treats clarification, a proxy answer or a remembered grant as Allow.
 func (s *Service) resolvePreparedAnswer(ctx context.Context, p *pending, r proto.Resolution, remember bool, authorization *standingResolution) error {
+	return s.resolvePreparedAnswerAt(ctx, p, r, remember, authorization, nil)
+}
+
+func (s *Service) resolvePreparedAnswerAt(ctx context.Context, p *pending, r proto.Resolution, remember bool, authorization *standingResolution, expected *interactionExpectation) error {
 	if authorization != nil || r.Remembered {
 		// Other prepared operations still require a fresh owner decision. A
 		// detachable command is the narrow exception: before release its original
@@ -38,6 +42,10 @@ func (s *Service) resolvePreparedAnswer(ctx context.Context, p *pending, r proto
 	r = honest(p.ix, r)
 
 	s.fleet.mu.Lock()
+	if !expected.matches(p.ix) {
+		s.fleet.mu.Unlock()
+		return fmt.Errorf("interaction %s is %w", p.ix.ID, errNotPending)
+	}
 	if s.fleet.interactions[p.ix.ID] != p || p.prepared.terminal || p.claimed {
 		kept := r
 		if p.resolution != nil {
@@ -51,7 +59,15 @@ func (s *Service) resolvePreparedAnswer(ctx context.Context, p *pending, r proto
 		a := p.prepared.attempt
 		s.fleet.mu.Unlock()
 		<-a.done
-		return s.resolvePreparedAnswer(ctx, p, r, remember, authorization)
+		return s.resolvePreparedAnswerAt(ctx, p, r, remember, authorization, expected)
+	}
+	if detachedWaitElapsedLocked(p) {
+		// The original deadline can elapse while a stored row is being read.
+		// A delayed timer must not extend the owner's execution authority.
+		gen := p.prepared.decisionGen
+		s.fleet.mu.Unlock()
+		s.expirePreparedGen(p, gen)
+		return fmt.Errorf("interaction %s is %w", p.ix.ID, errNotPending)
 	}
 	p.claimed = true
 	p.resolution = &r
@@ -79,6 +95,9 @@ func (s *Service) resolvePreparedAnswer(ctx context.Context, p *pending, r proto
 	case r.UserDenied():
 		a.reportStatus = "denied"
 		text = cmpOr(a.op.Denied, "The user declined the change: nothing changed.")
+		if note := strings.TrimSpace(r.Message); note != "" {
+			text += " Owner note: " + note
+		}
 	case r.UserAllowed():
 		a.reportStatus = "resolved"
 		applyCtx := ctx
@@ -98,7 +117,14 @@ func (s *Service) resolvePreparedAnswer(ctx context.Context, p *pending, r proto
 		}
 		if clarified {
 			if err := s.approvalJournalApplying(ctx, p.ix); err != nil {
-				applyErr = fmt.Errorf("%w: the approval journal could not record execution: %v", approvalops.ErrNotApplied, err)
+				if errors.Is(err, errApprovalExecutionUncertain) {
+					// The earlier apply may already have executed. Preserve its honest
+					// failure and keep applyErr non-nil so no grant or standing rule is
+					// created; the ordinary ErrNotApplied cancellation must not rewrite it.
+					applyErr = err
+				} else {
+					applyErr = fmt.Errorf("%w: the approval journal could not record execution: %v", approvalops.ErrNotApplied, err)
+				}
 			}
 		}
 		if applyErr == nil {
@@ -154,6 +180,10 @@ func (s *Service) resolvePreparedAnswer(ctx context.Context, p *pending, r proto
 // endPreparedByID routes a lifecycle ending through the prepared card's one
 // terminal boundary. False means the card is not prepared and keeps its old path.
 func (s *Service) endPreparedByID(id, status, text string) bool {
+	return s.endPreparedByIDWithBy(id, status, text, "")
+}
+
+func (s *Service) endPreparedByIDWithBy(id, status, text, by string) bool {
 	s.fleet.mu.Lock()
 	p := s.fleet.interactions[id]
 	prepared := p != nil && p.prepared != nil
@@ -161,25 +191,30 @@ func (s *Service) endPreparedByID(id, status, text string) bool {
 	if !prepared {
 		return false
 	}
-	s.endPrepared(p, status, text)
+	s.endPreparedIfBy(p, status, text, nil, by)
 	return true
 }
 
 // endPrepared is expiry/cancellation outside resolve. It loses to a final claim
 // already made, and reports the terminal result only if the card had clarified.
-func (s *Service) endPrepared(p *pending, status, text string) {
-	s.endPreparedIf(p, status, text, nil)
+// The result reports whether this call actually won and finished the card.
+func (s *Service) endPrepared(p *pending, status, text string) bool {
+	return s.endPreparedIf(p, status, text, nil)
 }
 
 // endPreparedIf arbitrates with an in-flight question and rechecks guard after
 // that attempt finishes. A stale decision/pause timer therefore cannot end a
 // card whose state changed while its callback was waiting.
-func (s *Service) endPreparedIf(p *pending, status, text string, guard func(*preparedApproval) bool) {
+func (s *Service) endPreparedIf(p *pending, status, text string, guard func(*preparedApproval) bool) bool {
+	return s.endPreparedIfBy(p, status, text, guard, "")
+}
+
+func (s *Service) endPreparedIfBy(p *pending, status, text string, guard func(*preparedApproval) bool, by string) bool {
 	for {
 		s.fleet.mu.Lock()
 		if p.prepared == nil || p.prepared.terminal || p.claimed || s.fleet.interactions[p.ix.ID] != p {
 			s.fleet.mu.Unlock()
-			return
+			return false
 		}
 		if attempt := p.prepared.attempt; attempt != nil {
 			s.fleet.mu.Unlock()
@@ -189,7 +224,7 @@ func (s *Service) endPreparedIf(p *pending, status, text string, guard func(*pre
 		a := p.prepared
 		if guard != nil && !guard(a) {
 			s.fleet.mu.Unlock()
-			return
+			return false
 		}
 		if text == "" {
 			if status == "expired" {
@@ -197,6 +232,11 @@ func (s *Service) endPreparedIf(p *pending, status, text string, guard func(*pre
 			} else {
 				text = cmpOr(a.op.Unanswered, prompts.RenderSettingUnanswered())
 			}
+		}
+		if by != "" {
+			// Only the lifecycle call that wins the terminal claim may replace an
+			// already-claimed answer's attribution.
+			p.endedBy = by
 		}
 		a.terminal = true
 		p.claimed = true
@@ -216,19 +256,19 @@ func (s *Service) endPreparedIf(p *pending, status, text string, guard func(*pre
 		}
 		s.fleet.mu.Unlock()
 		s.finishPrepared(p, status)
-		return
+		return true
 	}
 }
 
 // finishPrepared publishes one terminal state and hands the original caller its
 // result if it is still waiting. The durable result journal is updated before
 // the card disappears, so a restart cannot silently lose the outcome.
-func (s *Service) finishPrepared(p *pending, status string) {
+func (s *Service) finishPrepared(p *pending, status string) error {
 	s.fleet.mu.Lock()
 	a := p.prepared
 	if a == nil || a.finished {
 		s.fleet.mu.Unlock()
-		return
+		return nil
 	}
 	a.finished = true
 	r := a.result
@@ -258,13 +298,24 @@ func (s *Service) finishPrepared(p *pending, status string) {
 	if status == "expired" || by == "" {
 		by = endedByOf(status, kept)
 	}
-	s.recordEndBy(p.ix.ID, status, by, kept)
+	var historyErr error
 	if clarified {
-		s.approvalJournalFinished(context.Background(), p.ix, journalStatus, text)
+		historyErr = s.recordEndOccurrenceStrictBy(p.ix, status, by, kept)
+		if historyErr != nil {
+			s.logf("record approval occurrence outcome: %v", historyErr)
+		}
+	} else {
+		s.recordEndBy(p.ix.ID, status, by, kept)
+	}
+	if clarified {
+		// The delivery drain retries an unfinalized occurrence before it can hand
+		// off or remove this result. A failed history write therefore cannot leave
+		// a pending row behind without its recovery journal.
+		s.approvalJournalFinished(context.Background(), p.ix, journalStatus, text, historyErr == nil)
 	}
 	if kept != nil {
 		s.channelsEnded(p.ix, kept)
-		go s.InteractionResolved(context.Background(), InteractionResolved{Interaction: p.ix, Resolution: *kept, Status: status})
+		s.interactionResolvedSoon(context.Background(), InteractionResolved{Interaction: p.ix, Resolution: *kept, Status: status})
 	}
 	if p.resolved != nil {
 		close(p.resolved)
@@ -273,5 +324,6 @@ func (s *Service) finishPrepared(p *pending, status string) {
 	case p.done <- r:
 	default:
 	}
-	s.finishInteraction(p.ix.ID)
+	s.finishPending(p)
+	return historyErr
 }

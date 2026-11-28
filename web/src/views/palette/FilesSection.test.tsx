@@ -41,7 +41,7 @@ describe("the files section's notices", () => {
     expect(renderToStaticMarkup(<FilesNotice status="loading" text="" count={0} />)).toBe("");
   });
   it("says so when the directory cannot be read, unless there is something to list", () => {
-    expect(renderToStaticMarkup(<FilesNotice status="error" text="pal" count={0} />)).toContain("读不到这个目录的文件");
+    expect(renderToStaticMarkup(<FilesNotice status="error" text="pal" count={0} />)).toContain("无法读取该文件夹中的文件");
     expect(renderToStaticMarkup(<FilesNotice status="error" text="pal" count={3} />)).toBe("");
   });
   it("is silent when the files are ready or there is nowhere to search", () => {

@@ -244,7 +244,7 @@ func (s *Service) pickedCandidate(ctx context.Context, b ModelBinding, lang i18n
 
 // runCandidates makes c on each of chain in turn until one answers with something (that matches the schema, with
 // one). Each has c's timeout, the whole call at most modelCallTimeoutMost.
-func (s *Service) runCandidates(ctx context.Context, purpose, who string, c checkedCall, chain []modelCandidate) (any, error) {
+func (s *Service) runCandidates(ctx context.Context, purpose, who string, c checkedCall, chain []modelCandidate) (assistantwire.ModelCompleteResult, error) {
 	callCtx, cancel := context.WithTimeout(ctx, modelCallTimeoutMost)
 	defer cancel()
 	deadline, _ := callCtx.Deadline()
@@ -292,7 +292,7 @@ func (s *Service) runCandidates(ctx context.Context, purpose, who string, c chec
 		a.Usage = usageSince(before, usage)
 		attempts = append(attempts, a)
 		if len(chain) == 1 { // one candidate fails as a call without candidates would: its own code and data
-			return nil, err
+			return assistantwire.ModelCompleteResult{}, err
 		}
 	}
 	parts := make([]string, len(attempts))
@@ -303,7 +303,7 @@ func (s *Service) runCandidates(ctx context.Context, purpose, who string, c chec
 		who, labelPart(c.p.Label), time.Since(started).Round(time.Millisecond), usage.Requests, usage.InputTokens, usage.OutputTokens,
 		strings.Join(parts, "; "))
 	data, _ := json.Marshal(assistantwire.ModelCandidatesFailed{Attempts: attempts, Usage: usage})
-	return nil, &rpc.Error{Code: assistantwire.CodeModelCandidatesFailed, Message: "model.complete: every candidate failed: " + strings.Join(parts, "; "), Data: data}
+	return assistantwire.ModelCompleteResult{}, &rpc.Error{Code: assistantwire.CodeModelCandidatesFailed, Message: "model.complete: every candidate failed: " + strings.Join(parts, "; "), Data: data}
 }
 
 // usageSince is what was spent from before to now.

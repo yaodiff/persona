@@ -6,7 +6,6 @@ import { t } from "../../i18n";
 import { bytesBin, percent } from "../../lib/machine-detail";
 import { whatIf, type OffloadInventory, type OffloadProvider, type UsageNode, type UsageReport } from "../../lib/usage-map";
 import type { Machine } from "../../lib/types";
-import { DiskSection } from "./AlertDisk";
 import { UsageMap } from "./UsageMap";
 import { localMenu } from "./UsageMapMenu";
 
@@ -297,13 +296,15 @@ describe("UsageMap", () => {
   });
 
   it("offers Clean cache, not Trash, for a catalog cache, and cleans it with the existing call", async () => {
-    const calls = await mapReady([usage([overview()]), providers([]), folder, (c) => (c.url === "/api/v1/machines/mac/cleanup" ? json({ freed_bytes: 6 * GB, items: [{ id: "go-build", bytes: 6 * GB, status: "cleaned" }] }) : undefined)]);
+    const calls = await mapReady([usage([overview()]), providers([]), folder, (c) => (c.url === "/api/v1/machines/mac/cleanup" ? json({ freed_bytes: 6 * GB, items: [{ id: "go-build", bytes: 6 * GB, status: "in_use" }] }) : undefined)]);
     contextMenu(box("/Users/me/Library/Caches/go-build"));
     expect(menuItem(t("machines-usagemap.menu_trash"))).toBeUndefined();
     click(menuItem(t("machines-usagemap.menu_clean")));
     expect(document.body.textContent).toContain(t("machines-alerts.clean_confirm_title"));
+    expect(calls.filter(c => c.url.endsWith("/cleanup"))).toHaveLength(0);
     click(testId("usage-clean-confirm"));
     await flush();
+    expect(testId("usage-notice")!.textContent).toContain(t("machines-alerts.status_in_use"));
     expect(calls.find((c) => c.url.endsWith("/cleanup"))!.body).toEqual({ ids: ["go-build"] });
   });
 
@@ -437,16 +438,5 @@ describe("the map's menu rules", () => {
     expect(items.some((i) => i.key === "trash")).toBe(false);
     expect(items.find((i) => i.key === "clean")!.disabled).toBe(true);
     expect(items.find((i) => i.key.startsWith("offload"))!.disabled).toBe(true);
-  });
-});
-
-describe("the disk alert", () => {
-  it("opens the map from See what's using space", async () => {
-    hub([(c) => (c.url.includes("/diagnosis") ? json({ machine_id: "mac", at: 1, disk: { volumes: [], folders: [], partial: false, caches: [] } }) : undefined)]);
-    const open = vi.fn();
-    render(<DiskSection machine={mac} onUsageMap={open} />);
-    await flush(3);
-    click(testId("disk-usage-map"));
-    expect(open).toHaveBeenCalledWith("mac");
   });
 });

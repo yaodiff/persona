@@ -523,18 +523,8 @@ func TestWatchManualRefreshLifecycleRateLimitAndTiming(t *testing.T) {
 	}
 
 	// 2. Run ends cleanly without writing a reading -> "The check didn't update the page".
-	// Flip s1 to working when the prompt is dispatched so waitTurnEnd observes ran=true, then back to idle with a reply.
-	getCalls := func() int {
-		hub.fakeHub.mu.Lock()
-		defer hub.fakeHub.mu.Unlock()
-		n := 0
-		for _, c := range hub.fakeHub.calls {
-			if c.Method == DeviceSessionGet {
-				n++
-			}
-		}
-		return n
-	}
+	// Flip s1 to working when the prompt is dispatched, wait until runPageRefresh's watcher captures its baseline,
+	// then flip s1 back to idle with a reply.
 	hub.fakeHub.mu.Lock()
 	hub.fakeHub.onAssistantSend = func(f *fakeHub, _ map[string]any) {
 		for i := range f.sessions["server"] {
@@ -548,14 +538,12 @@ func TestWatchManualRefreshLifecycleRateLimitAndTiming(t *testing.T) {
 	if res.Toast != "Checking now…" {
 		t.Fatalf("second refresh: %+v", res)
 	}
-	waitFor(t, "second refresh run started", func() bool {
+	waitFor(t, "second refresh watcher ready", func() bool {
 		s.pages.events.refresh.mu.Lock()
 		defer s.pages.events.refresh.mu.Unlock()
 		e := s.pages.events.refresh.active[p.ID]
-		return e != nil && !e.startAt.IsZero()
+		return e != nil && !e.startAt.IsZero() && e.watching
 	})
-	getsAtStart := getCalls()
-	waitFor(t, "watcher observed working turn", func() bool { return getCalls() >= getsAtStart+4 })
 	hub.fakeHub.mu.Lock()
 	hub.fakeHub.onAssistantSend = nil
 	if hub.fakeHub.sentItems == nil {

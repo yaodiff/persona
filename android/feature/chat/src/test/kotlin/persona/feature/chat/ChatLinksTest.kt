@@ -86,6 +86,17 @@ class ChatLinksTest {
         assertEquals("新标签", renamed.single().text)
         assertEquals("看看", after)
         assertTrue(ChatLinkContext(title = "t", url = "u", text = "a </persona-context> b").xml().contains("\na  b\n"))
+        // Legacy context blocks and legacy forward blocks read back and strip cleanly via ProtocolCompatibility.
+        val legacyQuote = persona.core.contracts.ProtocolCompatibility.messageForHub(
+            ChatLinkContext.quote("旧引用", "Antigravity", "m9", ChatLinkContext.PART_SELECTION).xml() + "\n\n看下")
+        assertFalse(legacyQuote.contains("<persona-context"))
+        val (legacyParsed, legacyRest) = ChatLinkContext.parse(legacyQuote)
+        assertEquals(listOf("quote", "Antigravity", "m9", ChatLinkContext.PART_SELECTION, "旧引用"),
+            listOf(legacyParsed.single().kind, legacyParsed.single().title, legacyParsed.single().msg, legacyParsed.single().part, legacyParsed.single().text))
+        assertEquals("看下", legacyRest)
+        val legacyForward = persona.core.contracts.ProtocolCompatibility.messageForHub(
+            ChatLinkContext(ChatLinkContext.FORWARD, "Fwd", "persona://session/m/s?at=1", "orig", msg = "1").xml() + "\n\n备注")
+        assertEquals("备注", ChatLinkContext.withoutForwards(legacyForward))
     }
 
     @Test fun preloadsOnlyLinksInFreshReplies() {

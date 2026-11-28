@@ -28,7 +28,7 @@ func TestMachineLaunchersIncludeReportedBuiltinClaude(t *testing.T) {
 		t.Fatal(err)
 	}
 	builtins := slices.DeleteFunc(slices.Clone(got), func(l proto.Launcher) bool { return l.Name != "claude" })
-	if len(builtins) != 1 || builtins[0].Source != "builtin" {
+	if len(builtins) != 1 || builtins[0].Source != "builtin" || builtins[0].DisplayName != "Claude Code" {
 		t.Fatalf("picker with a shell wrapper: %+v", got)
 	}
 	if !slices.ContainsFunc(got, func(l proto.Launcher) bool { return l.Name == "work" }) {

@@ -8,8 +8,10 @@ package extwire
 
 import (
 	"encoding/json"
+	"fmt"
 
 	"github.com/nwverse/persona/sdk/go/wire"
+	"github.com/nwverse/persona/server/internal/buswire"
 )
 
 // Routes are the routes the manager answers (net/http patterns): the hub relays each request on them to the manager
@@ -53,6 +55,8 @@ var Routes = []string{
 	"/api/v1/error-reports",
 	"/api/v1/subscriptions",
 	"/api/v1/subscriptions/",
+	"/api/v1/text-lookup",
+	"/api/v1/text-lookup/",
 	"/api/v1/avatars/", // AvatarsRoute
 }
 
@@ -73,14 +77,14 @@ const (
 	HeaderHub        = "X-Persona-Hub"
 	HeaderDevice     = "X-Persona-Device"      // the device token's id ("" for the master token)
 	HeaderDeviceName = "X-Persona-Device-Name" // its name
-	HeaderRole       = "X-Persona-Role"        // full | answer | extension | …
+	HeaderRole       = wire.HeaderRole         // full | answer | extension | … (the Go SDK has it too)
 	HeaderPaired     = "X-Persona-Paired"      // "1": a pairing token, not one of the user's own signed-in apps
 	HeaderExtension  = "X-Persona-Extension"   // an extension token's extension
 	HeaderScopes     = "X-Persona-Scopes"      // its scopes, comma-separated
 	HeaderOwner      = "X-Persona-Owner"       // "1": the master token over loopback (installing runs code here)
 	HeaderAdmin      = "X-Persona-Admin"       // "1": a signed-in admin session (the admin UI's routes)
 	HeaderRemote     = "X-Persona-Remote"      // the caller's address
-	HeaderLang       = "X-Persona-Lang"        // the language the hub would answer it in
+	HeaderLang       = wire.HeaderLang         // the language the hub would answer it in
 )
 
 // Hub → manager.
@@ -96,6 +100,11 @@ const (
 	EventErrorReports = "extensions.error_reports"
 	// MethodHubCall: HubCall → the answer: what the hub's own features ask of the manager's (Hub*).
 	MethodHubCall = "extensions.hub_call"
+)
+
+var (
+	AuthorizeMethod = buswire.Method[Authorize, Authorized]{Name: MethodAuthorize}
+	HubCallMethod   = buswire.Method[HubCall, HubCallResult]{Name: MethodHubCall}
 )
 
 // What the hub's own features ask of the manager (HubCall.Method).
@@ -140,6 +149,44 @@ type Authorized struct {
 	Name      string   `json:"name,omitempty"`
 	Scopes    []string `json:"scopes,omitempty"`
 	Scope     string   `json:"scope,omitempty"`
+	// Owner is the token's Assistant's current trust verdict, if reported.
+	Owner OwnerVerdict `json:"owner,omitzero"`
+}
+
+// OwnerVerdict retains all three states of the optional JSON owner boolean.
+type OwnerVerdict uint8
+
+const (
+	OwnerUnreported OwnerVerdict = iota // a legacy reply or an unknown token
+	OwnerThirdParty                     // owner: false
+	OwnerConfirmed                      // owner: true
+)
+
+func (v OwnerVerdict) MarshalJSON() ([]byte, error) {
+	switch v {
+	case OwnerUnreported:
+		return []byte("null"), nil
+	case OwnerThirdParty:
+		return []byte("false"), nil
+	case OwnerConfirmed:
+		return []byte("true"), nil
+	default:
+		return nil, fmt.Errorf("invalid extension owner verdict %d", v)
+	}
+}
+
+func (v *OwnerVerdict) UnmarshalJSON(data []byte) error {
+	switch string(data) {
+	case "null":
+		*v = OwnerUnreported
+	case "false":
+		*v = OwnerThirdParty
+	case "true":
+		*v = OwnerConfirmed
+	default:
+		return fmt.Errorf("extension owner verdict must be a boolean")
+	}
+	return nil
 }
 
 // Emit is EventEmit's params.
@@ -157,6 +204,18 @@ type ErrorReports struct {
 type HubCall struct {
 	Method string          `json:"method"`
 	Params json.RawMessage `json:"params,omitempty"`
+}
+
+// HubCallResult is the JSON reply selected by HubCall.Method. Each nested method
+// keeps its own result shape and the bus carries it without an extra envelope.
+type HubCallResult json.RawMessage
+
+func (r HubCallResult) MarshalJSON() ([]byte, error) {
+	return json.RawMessage(r).MarshalJSON()
+}
+
+func (r *HubCallResult) UnmarshalJSON(data []byte) error {
+	return (*json.RawMessage)(r).UnmarshalJSON(data)
 }
 
 // Report is EventReport's params.
@@ -184,6 +243,22 @@ type Report struct {
 	// flag and their layers are left untouched across rolling upgrades.
 	PushGradingDeclared   bool     `json:"push_grading_declared,omitempty"`
 	PushGradingExtensions []string `json:"push_grading_extensions,omitempty"`
+	// Modules are the approved installed extensions that supply a module (modapi.ExtensionModules, #16254), each
+	// with whether it supplies module.<id> now. The hub reads them from the default manager only, while it is connected
+	// and its hello carries the modules marker: On adds module.<id> to the features, !On removes the built-in module's
+	// flag of the same id (the installed provider decides). An older manager sends none, and an older hub ignores them.
+	Modules []ModuleProvider `json:"modules,omitempty"`
+}
+
+// ModuleID is a module's id (module.<id> is its flag).
+type ModuleID string
+
+// ModuleProvider is one approved installed extension's module in Report.Modules.
+type ModuleProvider struct {
+	// ID is the module's id (and the extension's).
+	ID ModuleID `json:"id"`
+	// On: the extension is enabled, every contribution the module needs is on, and the modules setting leaves it on.
+	On bool `json:"on"`
 }
 
 // BotIdentity is a platform's stable identifier, not a display name or an authentication token.
@@ -290,6 +365,16 @@ const (
 
 // MethodAccept: {id} → {}: the hub holds a request for the manager (a relayed route): it dials the relay with the id.
 const MethodAccept = "extensions.accept"
+
+var AcceptMethod = buswire.Method[Accept, buswire.None]{Name: MethodAccept}
+
+// RelayID identifies the pending extension relay.
+type RelayID string
+
+// Accept is the request to take a pending extension relay.
+type Accept struct {
+	ID RelayID `json:"id"`
+}
 
 // LooksGone is EventLooksGone's params: the removed extension's looks' ids.
 type LooksGone struct {

@@ -1,5 +1,6 @@
 import { AgentReadingHeader } from '../models/AgentReadingHeader';
 import { Colors } from '../design/Colors';
+import { Motion } from '../design/Motion';
 import { nativeEnvironment } from '../platform/NativeEnvironment';
 
 @ComponentV2
@@ -16,16 +17,16 @@ export struct AgentReadingBar {
     this.state.attach(owner,this.covered,(value:number):void => {
       if (!this.state.owns(owner)) return;
       if (nativeEnvironment.reduceMotion) this.state.collapse=value;
-      else this.getUIContext().animateTo({duration:350,curve:Curve.EaseOut},() => { this.state.collapse=value; });
+      else this.getUIContext().animateTo(Motion.reveal(false),() => { this.state.collapse=value; });
     });
   }
   aboutToDisappear():void { this.state.detach(this.owner); }
   build() {
     Stack({alignContent:Alignment.Top}) {
-      if (this.state.progress<2/3) Column() { this.full() }
+      if (this.state.progress<0.5) Column() { this.full() }
         .width('100%').constraintSize({minHeight:this.state.collapse>0 ? this.state.height : undefined})
         .onAreaChange((_:Area,area:Area) => this.state.measure(this.owner,Number(area.height)))
-        .translate({y:-this.state.collapse}).opacity(1-Math.min(1,this.state.progress*1.5))
+        .translate({y:-this.state.collapse}).opacity(1-Math.min(1,this.state.progress*2))
         .hitTestBehavior(this.state.progress<0.5 ? HitTestMode.Default : HitTestMode.None)
         .accessibilityLevel(this.state.progress<0.5 ? 'auto' : 'no-hide-descendants')
       if (this.state.progress>=0.5) Column() { this.slim() }.width('100%')

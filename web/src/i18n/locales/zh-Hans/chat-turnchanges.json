@@ -1,6 +1,6 @@
 {
   "title_other": "已更改 {count} 个文件",
   "review": "评审",
-  "show_more_other": "再显示 {count} 个文件",
+  "show_more_other": "显示其余 {count} 个文件",
   "show_less": "收起"
 }

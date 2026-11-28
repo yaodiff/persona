@@ -7,6 +7,7 @@ import persona.core.contracts.DirectionTree
 import persona.core.contracts.Machine
 import persona.core.contracts.SessionKey
 import persona.core.contracts.Todo
+import persona.core.contracts.api.AgentWorkspace
 import persona.core.contracts.state
 
 /** Kept IDs retain membership, not a previous row position. Reselecting a filter replaces kept. */
@@ -46,15 +47,17 @@ data class AgentListSettings(
      * Null: use the saved set.
      */
     val pendingFoldedTabs: Set<String>? = null,
+    /** Where rows seen during this visit stay until the next list refresh. */
+    val heldSeen: Map<String, AgentSeenPlace> = emptyMap(),
 ) {
     private val nativePinnedWorkspaces by lazy {
-        workspaces.filter { it.source == "paseo" && it.nativePinTime != null }
-            .mapTo(mutableSetOf()) { it.machineId to it.sourceId }
+        workspaces.filter { it.inRepositoryCatalog && it.nativePinTime != null }
+            .mapTo(mutableSetOf()) { it.repoWorkspaceKey }
     }
 
-    /** A closed, unarchived chat still belongs to the workspace its user pinned in Paseo. */
+    /** A closed, unarchived chat still belongs to the workspace its user pinned on the host. */
     fun nativePinned(s: persona.core.contracts.Session): Boolean = grouping == AgentGrouping.Repo &&
-        !s.archived && s.paseoWorkspaceKey() in nativePinnedWorkspaces
+        !s.archived && s.repoWorkspaceKey() in nativePinnedWorkspaces
 }
 
 /**
@@ -158,7 +161,14 @@ data class AgentListGroup(
      * apart from Working, with a clock, as iOS's `StateCounts` does.
      */
     val waitingInBackground: Int = 0,
-)
+    /** The exact source target when a Herdr workspace shares its repository heading. */
+    val workspace: AgentWorkspace? = null,
+    /** The local folder for a heading in By project, when its session rows identify one. */
+    val projectFolder: AgentProjectFolder? = null,
+) {
+    val heldSeen: List<String> get() = rows.mapNotNull { row -> row.id.takeIf { row.seenPlace != null } }
+    val sectionCount: Int get() = totalCount ?: rows.count { it.seenPlace == null }
+}
 
 data class AgentListResult(
     val counts: Map<AgentQuickFilter, Int>,
@@ -224,6 +234,18 @@ fun AgentListSettings.admits(s: persona.core.contracts.Session, pins: AgentPrefe
         (query.isEmpty() || s.key.path in queryAncestors ||
             AgentQuery.parse(query).admits(s, s.key.path in pins.sessions, machineNames[s.machineId], now))
 
+/** The list before the query's words: its conditions still scope it, but no word alone moves a project heading. */
+private fun AgentListSettings.scopeAdmits(s: persona.core.contracts.Session, query: AgentQuery?, pins: AgentPreferences,
+                                          machineNames: Map<String, String>, now: java.time.Instant): Boolean =
+    !s.assistant && (machineFilter.isEmpty() || machineFilter == s.machineId) &&
+        (query == null || s.key.path in queryAncestors ||
+            query.admits(s, s.key.path in pins.sessions, machineNames[s.machineId], now, words = false))
+
+private fun AgentListSettings.admitsWords(s: persona.core.contracts.Session, query: AgentQuery?, pins: AgentPreferences,
+                                          machineNames: Map<String, String>, now: java.time.Instant): Boolean =
+    query == null || s.key.path in queryAncestors ||
+        query.admits(s, s.key.path in pins.sessions, machineNames[s.machineId], now)
+
 /**
  * Whether the list of running sessions draws [row], its search, quick filter and botmux switch aside: pinned (under
  * Pinned), live, or a Codex thread of the past while those are included. [buildFlatAgentList] draws these rows, and a
@@ -276,13 +298,22 @@ fun buildFlatAgentList(
     directions: DirectionTree? = null,
 ): AgentListResult {
     val machineNames = machines.associate { it.id to it.name }
-    val base = foldRows(sessions, settings.hierarchy).filter { settings.admits(it.session, pins, machineNames, settings.now) && !(settings.hideBotmux && it.session.isBotmux) }
+    val roots = foldRows(sessions, settings.hierarchy)
+    val query = settings.query.takeIf(String::isNotEmpty)?.let { AgentQuery.parse(it) }
+    val scoped = roots.filter {
+        settings.scopeAdmits(it.session, query, pins, machineNames, settings.now) &&
+            !(settings.hideBotmux && it.session.isBotmux)
+    }
+    val base = scoped.filter { settings.admitsWords(it.session, query, pins, machineNames, settings.now) }
     val counts = AgentQuickFilter.entries.filter { it != AgentQuickFilter.All }
         .associateWith { filter ->
             base.count { row -> !row.isNestedSubtask && filter.matches(row) &&
                 (filter != AgentQuickFilter.Feishu || settings.grouping == AgentGrouping.Recent || settings.draws(row, pins)) }
         }
-    val filtered = base.filter { settings.quick.matches(it) || it.id in settings.kept }
+    val filtered = base.map { it.placingSeenRow(settings.heldSeen[it.id], mutes) }.filter {
+        settings.quick.matches(it) || it.id in settings.kept ||
+            settings.quick == AgentQuickFilter.Unread && it.seenPlace == AgentSeenPlace.Unread
+    }
     val pinned = filtered.filter { it.id in pins.sessions }.sortedBy { pins.sessions.indexOf(it.id) }
     val live = filtered.filter { it.id !in pins.sessions && settings.draws(it, pins) }
     val quick = settings.quick != AgentQuickFilter.All
@@ -305,7 +336,9 @@ fun buildFlatAgentList(
         group("pinned", CoreText.of(Key.AgentsPinned), pinned, pinned)
         else AgentListGroup("pinned", CoreText.of(Key.AgentsPinned), pinned, pinned, waitingInBackground = waiting(pinned))
     var quietTitle: CoreText? = null
-    fun stateCounts(rows: List<AgentSession>) = AgentState.entries.associateWith { state -> rows.count { !it.isNestedSubtask && it.state == state } }
+    fun stateCounts(rows: List<AgentSession>) = AgentState.entries.associateWith { state ->
+        rows.count { !it.isNestedSubtask && it.state == state }
+    }
     // "By direction"'s parts (#4352): a heading holds no rows itself (the to-dos under it do).
     fun leaf(id: String, title: CoreText, members: List<AgentSession>, under: String) {
         val rows = ordered(members)
@@ -341,7 +374,8 @@ fun buildFlatAgentList(
             fun section(id: String, title: CoreText, members: List<AgentSession>, level: RepoLevel, under: String?, machineFolded: Boolean,
                         tree: AgentWorktree? = null, online: Boolean = true): AgentListGroup {
                 val nativePinned = tree?.pinnedAt != null
-                val isQuiet = !nativePinned && quiet(members)
+                val carriesWorkspace = level == RepoLevel.Repository && tree?.workspace?.source == "herdr"
+                val isQuiet = !nativePinned && !carriesWorkspace && quiet(members)
                 val rows = ordered(members)
                 val folded = if (isQuiet) id !in settings.expandedQuiet && settings.query.isEmpty() else id in settings.folded
                 val visible = when {
@@ -352,14 +386,17 @@ fun buildFlatAgentList(
                 // Its idle agents behind one line, as iOS's `agentRows`; a search shows them with no line.
                 val idle = if (isQuiet || nativePinned || quick || settings.query.isNotEmpty()) emptyList() else rows.filterNot(::stays)
                 return AgentListGroup(id, title, rows, visible, folded, if (isQuiet) "quiet" else null, stateCounts(rows), repo = level, under = under,
-                    worktree = tree?.let { worktreeLine(it, isQuiet, rows.count { row -> !row.isNestedSubtask }, online) },
+                    worktree = tree?.let { worktreeLine(it, isQuiet, rows.count { row -> !row.isNestedSubtask && row.seenPlace == null }, online) },
                     idleFold = idle.takeIf { it.isNotEmpty() }?.let { IdleFold(it, open = id in settings.expandedIdle) },
-                    waitingInBackground = waiting(rows))
+                    waitingInBackground = waiting(rows),
+                    workspace = tree?.workspace?.takeIf { carriesWorkspace })
             }
+            val shownWorkspaces = live.mapNotNull { it.session.repoWorkspaceKey() }.toSet()
             val catalog = settings.workspaces.filter { w ->
-                w.source == "paseo" && (settings.machineFilter.isEmpty() || w.machineId == settings.machineFilter) &&
-                    ((!quick && settings.query.isEmpty()) || live.any { it.session.paseoWorkspaceKey() == (w.machineId to w.sourceId) })
+                w.inRepositoryCatalog && (settings.machineFilter.isEmpty() || w.machineId == settings.machineFilter) &&
+                    ((!quick && settings.query.isEmpty()) || w.repoWorkspaceKey in shownWorkspaces)
             }
+            val knownRows = roots.filter { !it.session.assistant && !it.session.archived }.groupBy { it.session.machineId }
             val known = machines + (live.map { it.session.machineId } + catalog.map { it.machineId }).distinct()
                 .filter { id -> machines.none { it.id == id } }.map { Machine(it, "") }
             val machineGroups = known.sortedBy { !it.online }.mapNotNull { machine ->
@@ -368,7 +405,7 @@ fun buildFlatAgentList(
                 if (members.isEmpty() && workspaces.isEmpty()) return@mapNotNull null
                 val machineFolded = "machine/${machine.id}" in settings.folded
                 // "Recently updated": the busy repositories by their latest agent (iOS `RepoTree` under `AgentSort.updated`).
-                val repos = agentRepos(members, workspaces).let { all ->
+                val repos = agentRepos(members, workspaces, mapOf(machine.id to machine.home), knownRows[machine.id].orEmpty()).let { all ->
                     if (latest) all.sortedWith(compareByDescending<AgentRepo> { it.pinnedAt }.thenBy { quiet(it.members) }
                         .thenByDescending { repo -> repo.members.mapNotNull { it.sortDate }.maxOrNull() }.thenBy { it.id })
                     else all.sortedWith(compareByDescending<AgentRepo> { it.pinnedAt }.thenBy { quiet(it.members) })
@@ -378,17 +415,23 @@ fun buildFlatAgentList(
                     // A quiet repository opens to all its sessions in one list, as iOS's "Idle repositories" does. A repository with only
                     // its main checkout is drawn as one level but keeps the checkout's id, so a session opened under a quick
                     // filter stays in the same group when a second working tree appears or goes (retainOpenedRows).
-                    if (repo.flat) listOf(section(repo.worktrees[0].id, repoTitle(repo.name), repo.members, RepoLevel.Repository, null, machineFolded))
-                    else if (repo.pinnedAt == null && quiet(repo.members)) listOf(section(repo.id, repoTitle(repo.name), repo.members, RepoLevel.Repository, null, machineFolded))
-                    else listOf(AgentListGroup(repo.id, repoTitle(repo.name), emptyList(), emptyList(), repo.id in settings.folded,
-                        stateCounts = stateCounts(repo.members), repo = RepoLevel.Repository, waitingInBackground = waiting(repo.members))) +
+                    if (repo.flat) {
+                        val tree = repo.worktrees.single()
+                        listOf(section(tree.id, repoTitle(repo.name), repo.members, RepoLevel.Repository, null, machineFolded,
+                            tree = tree.takeIf { it.workspace?.source == "herdr" }, online = machine.online))
+                    } else if (repo.pinnedAt == null && repo.worktrees.none { it.workspace?.source == "herdr" } && quiet(repo.members)) {
+                        listOf(section(repo.id, repoTitle(repo.name), repo.members, RepoLevel.Repository, null, machineFolded))
+                    } else listOf(AgentListGroup(repo.id, repoTitle(repo.name), emptyList(), emptyList(), repo.id in settings.folded,
+                        stateCounts = stateCounts(repo.members.filter { it.seenPlace == null }),
+                        repo = RepoLevel.Repository, waitingInBackground = waiting(repo.members))) +
                         repo.worktrees.map { tree ->
                             section(tree.id, repoTitle(tree.name), tree.members, if (tree.main) RepoLevel.MainCheckout else RepoLevel.Worktree, repo.id, machineFolded,
                                 tree, online = machine.online || machines.none { it.id == machine.id })
                         }
                 }
                 result += groups
-                AgentMachineGroup(machine, groups.map { it.id }, members.count { !it.isNestedSubtask }, agentSpaces(members).size, stateCounts(members),
+                val counted = members.filter { !it.isNestedSubtask && it.seenPlace == null }
+                AgentMachineGroup(machine, groups.map { it.id }, counted.size, agentSpaces(members).size, stateCounts(counted),
                     machineFolded, repoCount = repos.size, waitingInBackground = members.count { !it.isNestedSubtask && it.waitsInBackground })
             }
             return AgentListResult(counts, result, filtered.filter { it.state == AgentState.Unread }.map { it.id },
@@ -397,21 +440,28 @@ fun buildFlatAgentList(
         AgentGrouping.MachineSpace -> {
             // Keep each session in a single leaf group; machine headers only reference those leaves.
             val treeRows = filtered.filter { it.isLive || settings.includeCodexHistory && it.session.isCodexTask }
+            // Quick filters and search words choose the rows; project metadata still comes from the complete scope so a
+            // minority folder cannot become the New Agent target.
+            val scopeRows = scoped.filter { it.isLive || settings.includeCodexHistory && it.session.isCodexTask }
             val known = machines + treeRows.map { it.session.machineId }.distinct()
                 .filter { id -> machines.none { it.id == id } }.map { Machine(it, "") }
             val machineGroups = known.sortedBy { !it.online }.mapNotNull { machine ->
                 val members = treeRows.filter { it.session.machineId == machine.id }
                 if (members.isEmpty()) return@mapNotNull null
-                val nested = buildFlatAgentList(members, pins = pins, mutes = mutes,
+                val scopeMembers = scopeRows.filter { it.session.machineId == machine.id }
+                val nested = buildFlatAgentList(members, machines = listOf(machine), pins = pins, mutes = mutes,
                     settings = settings.copy(grouping = AgentGrouping.Space))
+                val projectFolders = projectFolders(agentSpaces(scopeMembers, byProject = true), machines)
                 val machineFolded = "machine/${machine.id}" in settings.folded
                 result += nested.groups.filterNot { it.id == "pinned" }.map { group ->
                     val folded = group.folded || group.id in settings.folded
-                    group.copy(folded = folded, visibleRows = if (machineFolded || folded) emptyList() else group.visibleRows)
+                    group.copy(folded = folded, visibleRows = if (machineFolded || folded) emptyList() else group.visibleRows,
+                        projectFolder = projectFolders[group.id] ?: group.projectFolder)
                 }
                 val spaces = agentSpaces(members)
-                AgentMachineGroup(machine, nested.groups.filterNot { it.id == "pinned" }.map { it.id }, members.count { !it.isNestedSubtask }, spaces.size,
-                    AgentState.entries.associateWith { state -> members.count { !it.isNestedSubtask && it.state == state } },
+                val counted = members.filter { !it.isNestedSubtask && it.seenPlace == null }
+                AgentMachineGroup(machine, nested.groups.filterNot { it.id == "pinned" }.map { it.id }, counted.size, spaces.size,
+                    stateCounts(counted),
                     machineFolded, waitingInBackground = members.count { !it.isNestedSubtask && it.waitsInBackground })
             }
             return AgentListResult(counts, result, filtered.filter { it.state == AgentState.Unread }.map { it.id },
@@ -454,11 +504,11 @@ fun buildFlatAgentList(
             }
             linked.forEach { (todo, rows) -> todoSection("todo/${todo.id}", CoreText.plain(todo.title), rows, "todo/${todo.id}" in settings.folded) }
             val unlinked = live.filter { it.session.key !in claimed }
-            // Opened by hand in herdr and on no to-do: a section of its own before "No to-do", open.
-            val manual = unlinked.filter { it.session.isManualHerdr }
+            // Opened by hand in herdr or Orca and on no to-do: a section of its own before "No to-do", open.
+            val manual = unlinked.filter { it.session.isOpenedByHand }
             if (manual.isNotEmpty()) todoSection(TodoManualGroup, CoreText.of(Key.AgentsManual), manual, TodoManualGroup in settings.folded)
             // Folded under the sections above ("Opened by hand" included) unless something in it needs you.
-            noTodo(unlinked.filterNot { it.session.isManualHerdr }, above = linked.isNotEmpty() || manual.isNotEmpty())
+            noTodo(unlinked.filterNot { it.session.isOpenedByHand }, above = linked.isNotEmpty() || manual.isNotEmpty())
         }
         AgentGrouping.Direction -> {
             // Direction › To-do › Agent, as the hub's tree has them (#4352): no regrouping here. Each agent shows once, where
@@ -554,7 +604,10 @@ fun buildFlatAgentList(
             }
         }
         AgentGrouping.Space -> {
-            val spaces = agentSpaces(live)
+            val spaces = agentSpaces(live, byProject = true)
+            // Folder metadata comes from every row the scope admits, before quick filters and pinned presentation:
+            // filtering to one minority folder must not move the heading's qualifier or New Agent target.
+            val projectFolders = projectFolders(agentSpaces(scoped, byProject = true), machines)
             fun pinnedSpace(space: AgentSpace) = space.preferenceKey in pins.spaces
             fun mutedSpace(space: AgentSpace) = space.preferenceKey in mutes.spaces
             fun leading(space: AgentSpace) = pinnedSpace(space) && !mutedSpace(space)
@@ -579,7 +632,7 @@ fun buildFlatAgentList(
                     else -> rows.filter(::stays)
                 }
                 val states = listOf(AgentState.NeedsYou, AgentState.Working, AgentState.Unread, AgentState.Idle, AgentState.Unknown)
-                val stateCounts = states.associateWith { state -> rows.count { !it.isNestedSubtask && it.state == state } }
+                val stateCounts = stateCounts(rows).filterKeys { it in states }
                 val labels = listOf(AgentState.NeedsYou to Key.CountNeedsYou, AgentState.Working to Key.CountWorking, AgentState.Unread to Key.CountUnread)
                 val spoken = labels.mapNotNull { (state, label) -> stateCounts.getValue(state).takeIf { it > 0 }?.let { CoreText.of(label, it) } } +
                     (stateCounts.getValue(AgentState.Idle) + stateCounts.getValue(AgentState.Unknown))
@@ -589,7 +642,7 @@ fun buildFlatAgentList(
                 return AgentListGroup(space.id, CoreText.plain(space.name), rows, visible, folded,
                     if (isQuiet) "quiet" else null, stateCounts, CoreText.joined(CoreText.of(Key.ListSeparator), spoken),
                     idleFold = idle.takeIf { it.isNotEmpty() }?.let { IdleFold(it, open = space.id in settings.expandedIdle) },
-                    waitingInBackground = waiting(rows))
+                    waitingInBackground = waiting(rows), projectFolder = projectFolders[space.id])
             }
             result += active.map { spaceGroup(it, false) }
             result += quiet.map { spaceGroup(it, true) }
@@ -627,5 +680,8 @@ const val TodoNoneOpened = "todo-none"
 /** Recently Used's single section (#9199, iOS `recentSection`). */
 const val RecentGroup = "recent"
 
-/** Opened by hand in herdr: not started by Persona (nor spawned through it), web `isManualHerdr`. */
-val persona.core.contracts.Session.isManualHerdr: Boolean get() = spaceKind == "herdr" && !startedByPersona
+/**
+ * Opened by hand in herdr or Orca (its terminals and its own chats, #17054): not started by Persona (nor spawned through
+ * it), web `isManualHerdr`.
+ */
+val persona.core.contracts.Session.isOpenedByHand: Boolean get() = (spaceKind == "herdr" || spaceKind == "orca") && !startedByPersona

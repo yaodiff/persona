@@ -1,16 +1,16 @@
 {
   "permission_accessibility": "辅助功能",
   "permission_screen_recording": "屏幕录制",
-  "grant_hint": "那台 Mac 上弹出了授权窗口：在它的屏幕上点「允许」",
-  "no_screen_sharing": "在那台 Mac 的「系统设置 › 通用 › 共享」里打开「屏幕共享」，这里就能看它的画面、远程点「允许」。",
+  "grant_hint": "该 Mac 上已弹出授权提示，请在其屏幕上点击「允许」。",
+  "no_screen_sharing": "在该 Mac 的「系统设置 › 通用 › 共享」中开启「屏幕共享」后，即可在此查看其画面并远程点击「允许」。",
   "installing": "正在安装",
-  "install_failed": "没装上：{error}",
-  "installer_error": "安装器出错了",
-  "not_installed": "这台 Mac 上还没有装 Cua Driver",
-  "missing_permissions": "Cua Driver 还没有{permissions}权限",
-  "ready": "现在可以操控",
-  "ready_version": "现在可以操控 · Cua Driver {version}",
-  "unknown": "还不知道能不能操控",
-  "not_installed_lcu": "这台 Mac 上还没有装 LCU",
-  "ready_version_lcu": "现在可以操控 · LCU {version}"
+  "install_failed": "安装失败：{error}",
+  "installer_error": "安装程序执行失败",
+  "not_installed": "该 Mac 尚未安装 Cua Driver",
+  "missing_permissions": "Cua Driver 尚缺少{permissions}权限",
+  "ready": "已就绪，可以操控",
+  "ready_version": "已就绪，可以操控 · Cua Driver {version}",
+  "unknown": "暂无法确认是否可以操控",
+  "not_installed_lcu": "该 Mac 尚未安装 LCU",
+  "ready_version_lcu": "已就绪，可以操控 · LCU {version}"
 }

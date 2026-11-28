@@ -1,7 +1,7 @@
 {
   "name_placeholder": "名前",
-  "close_confirm": "ペインで実行中のプログラムも終了します。",
-  "section_pane": "ペイン · {name}",
+  "close_confirm": "ここで実行中のプログラムも停止します。",
+  "section_pane": "ターミナル · {name}",
   "section_tab": "タブ · {name}",
   "section_space": "スペース · {name}"
 }

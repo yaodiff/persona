@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Settings › Lark bot › Group access (#16848); words shared with the web (settings-feishubot group_access_*). -->
+<resources>
+    <string name="settings_feishu_group_title">Group access</string>
+    <string name="settings_feishu_group_footer">Who besides you may @ the bot in a group, and what they may use. Blocked people and groups are refused in every mode.</string>
+    <string name="settings_feishu_group_mode">Who can ask the bot in groups</string>
+    <string name="settings_feishu_group_mode_owner_only">Only me</string>
+    <string name="settings_feishu_group_mode_allowlist">People I allow</string>
+    <string name="settings_feishu_group_mode_everyone">Everyone in allowed groups</string>
+    <string name="settings_feishu_group_detail_owner_only">Only you can @ the bot in a group. Everyone else is ignored.</string>
+    <string name="settings_feishu_group_detail_allowlist">Only people you add can @ the bot, and only in groups you allow.</string>
+    <string name="settings_feishu_group_detail_everyone">Anyone in a group you allow can @ the bot.</string>
+    <string name="settings_feishu_group_guest_caution">Guests get a separate assistant with none of your data, your tasks or your computers. It can use only the tools you turn on below.</string>
+    <string name="settings_feishu_group_per_hour">Questions per group per hour</string>
+    <string name="settings_feishu_group_per_hour_hint">The most questions one group can put to the bot in an hour, from everyone in it.</string>
+    <string name="settings_feishu_group_groups">Allowed groups</string>
+    <string name="settings_feishu_group_groups_footer">The bot answers guests only in these groups. Add a topic group here to allow it.</string>
+    <string name="settings_feishu_group_people">Allowed people</string>
+    <string name="settings_feishu_group_people_footer">Only these people can @ the bot in an allowed group.</string>
+    <string name="settings_feishu_group_none_groups">No groups yet</string>
+    <string name="settings_feishu_group_none_people">No people yet</string>
+    <string name="settings_feishu_group_requests">Recent requests</string>
+    <string name="settings_feishu_group_requests_footer">People who @ the bot where you have not allowed them. Allow or block them here.</string>
+    <string name="settings_feishu_group_blocked">Blocked</string>
+    <string name="settings_feishu_group_blocked_footer">Blocked always wins, in every mode.</string>
+    <string name="settings_feishu_group_blocked_people">People</string>
+    <string name="settings_feishu_group_blocked_groups">Groups</string>
+    <string name="settings_feishu_group_tools">Guest tools</string>
+    <string name="settings_feishu_group_tools_footer">Read-only connector tools a guest may use to answer. Tools that change anything are never offered.</string>
+    <string name="settings_feishu_group_no_tools">No read-only connector tools are installed</string>
+    <string name="settings_feishu_group_tool_label">%1$s · %2$s</string>
+    <string name="settings_feishu_group_group_id">Group ID</string>
+    <string name="settings_feishu_group_person_id">Open ID</string>
+    <string name="settings_feishu_group_name">Name (optional)</string>
+    <string name="settings_feishu_group_add">Add</string>
+    <string name="settings_feishu_group_add_group">Add group</string>
+    <string name="settings_feishu_group_add_person">Add person</string>
+    <string name="settings_feishu_group_remove">Remove %1$s</string>
+    <string name="settings_feishu_group_request_actions">Actions for %1$s</string>
+    <string name="settings_feishu_group_allow">Allow</string>
+    <string name="settings_feishu_group_block">Block</string>
+    <string name="settings_feishu_group_load_failed">Couldn\'t load group access: %1$s</string>
+    <string name="settings_feishu_group_save_failed">Couldn\'t save group access: %1$s</string>
+    <string name="settings_feishu_group_conflict">Group access was changed somewhere else, so the latest is shown. Make the change again if you still need it.</string>
+    <string name="settings_feishu_group_id_invalid">Use 1–100 characters with no spaces.</string>
+    <string name="settings_feishu_group_id_taken">Already in this list.</string>
+    <string name="settings_feishu_group_list_full">This list is full.</string>
+</resources>

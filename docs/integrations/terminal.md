@@ -58,6 +58,12 @@ herdr pane ──observe(pane size)──▶ node (one observe process per pane,
 - **Compatibility**: old Apps don't send the new subscription and keep polling `/screen`; old node / herdr that don't recognize `terminal.watch` (or can't start observe) make the hub return
   `unsupported`. The App falls back to screen polling (`format=ansi` snapshots retain colors, but no cursor and one refresh per second).
 
+Viewer presence follows the visible page, not the stream transport. Android and iOS send a read-only
+`terminal_subscribe` even when the first hub hello omits `terminal_stream`; screen polling continues without a grid,
+control or takeover request. An unsupported stream keeps that presence. Leaving the page sends `terminal_unsubscribe`,
+and a still-visible page registers again after reconnect. This lets automatic task retirement distinguish reading
+from inactivity without tying the owner's presence to a working stream.
+
 ## 3. iOS emulator choice
 
 | | SwiftTerm | libghostty (GhosttyKit) | Custom VT subset |
@@ -359,7 +365,8 @@ Phone rendering (`dumpsys gfxinfo`) and real-session key/wheel round trips weren
 ## 18. Web clipboard: paste images/files, copy, OSC 52
 
 Web terminal clipboard works both inward (screenshots/files, like Moshi web) and outward (selected text, program OSC 52). Both share `lib/terminal-clipboard.ts` (pure logic) and
-`session/terminal/clipboard.ts` (browser side); hints use page toasts, upload status appears at the terminal top.
+`session/terminal/clipboard.ts` (browser side); hints use page toasts, upload status appears at the terminal top. `escapePastePath` and
+`dragHasFiles` live in the import-free `lib/paste-path.ts` (re-exported by `terminal-clipboard.ts`), because a composer's file drop on the first screen uses them too.
 
 ### Pasting images / files
 
@@ -504,7 +511,7 @@ No new polling: `lookAt` (node's `session.snapshot` on each herdr change) alread
 `panes.list` reads this cache, taking a snapshot only if over 3 seconds old (or host never captured). Response grouped by host:
 `{hosts: [{kind, stream, control, new_tab, workspaces, tabs, panes}]}`; panes include `agent` / `status` (host-reported) / `title` / `cwd` / `session_id` (with Agent session) / `terminal` (address above).
 Hub: `GET /api/v1/machines/{mid}/panes`, feature `terminal_panes`.
-A pane with no Agent carries `foreground`, the program in front as the host names it (`zsh` at its prompt, `vim`, `npm`…; herdr `pane.process_info`, asked for each such pane on every list, at most 1.5 s, nothing on the screen read; #4754). A pane Persona opened for an Agent that has stopped (its `persona_tab` mark, no Agent in it now) carries `agent_session`, the stopped Agent's session (#4754): clients label it as that Agent's terminal, and **Close finished terminals** (`POST /api/v1/machines/{mid}/panes/close_finished`, `docs/protocol/protocol.md`) closes those the user confirms.
+A pane with no Agent carries `foreground`, the program in front as the host names it (`zsh` at its prompt, `vim`, `npm`…; herdr `pane.process_info`, Orca `terminal.inspectProcess` (#17039), asked for each such pane on every list, at most 1.5 s, nothing on the screen read; #4754). A pane Persona opened for a stopped Agent carries `agent_session`, the stopped Agent's session (#4754). Herdr identifies the pane by its `persona_tab` mark. On Orca the node uses its live record or, after a restart, a matching saved terminal identity. Clients label the pane as that Agent's terminal. **Close finished terminals** (`POST /api/v1/machines/{mid}/panes/close_finished`, `docs/protocol/protocol.md`) closes the confirmed panes only after rechecking them; see [Cleanup by hand](engines.md#agents-run-in-a-terminal).
 
 ### New terminal: `panes.new` (optional, explicit action)
 
@@ -513,7 +520,7 @@ named `shell` (`-2` suffix on collision), at **the space's own directory** (host
 
 **No workspace yet**: a computer whose engine opens tabs (`new_tab`) but has no workspace still gets a terminal. Where the hub has the `pane_new_space` feature, clients show "No terminals open on this computer." with **New Terminal** (and a home-folder entry in the computer's menu), which sends `{kind, cwd: "~", new_space: true}`. The node finds no workspace to put the tab in and calls the host's `CreateSpace` in that folder (the home folder for `~`), the way an Agent start does, and names its first tab `shell`; Open Terminal Here on such a computer takes the same path. A node without the `pane_new_space` capability would answer "no workspace", so the hub answers 409 `node_outdated` ("update this computer") to `new_space` instead. With no host that opens tabs, or a hub without `pane_new_space`, clients say terminals appear when an Agent starts there.
 
-**Open Terminal Here** (#5832; hub feature and node capability `pane_cwd`): the request may carry `cwd`, a folder (`~/…` or absolute). The node checks it with the read guard (a key folder or iCloud Drive is refused) and that it is a folder, and gives it to the host as the new tab's starting directory; with `cwd` and no `workspace_id` the tab opens in the first workspace of a host that opens tabs. The folder is never typed into the shell, so a request still cannot run a command (the rule below). The hub answers 409 `node_outdated` for `cwd` to a node without the capability rather than open the terminal elsewhere. The earlier rule that a request could not name a directory is relaxed for this: a full device can `cd` anywhere in the shell it opens, so starting there gives nothing more.
+**Open Terminal Here** (#5832; hub feature and node capability `pane_cwd`): the request may carry `cwd`, a folder (`~/…` or absolute). The node checks it with the read guard (a key folder or iCloud Drive is refused) and that it is a folder, and gives it to the host as the new tab's starting directory; with `cwd` and no `workspace_id` the tab opens in the first workspace of a host that opens tabs. The folder is never typed into the shell, so a request still cannot run a command (the rule below). Orca is the exception in form, not in effect: its `terminal.create` does not honour a starting directory for this kind of create (Orca 1.4.277), so the node asks for the terminal with `command: "cd <folder>"` (the folder checked and quoted, delivered by Orca once the shell is ready), and only when the folder is not the worktree's own. That line is part of the request that makes the terminal and reaches no other shell; the request still names only a folder, and a user's terminal gets no launch grant (`orcaHost.OpenShell`, #17036). With `cwd` and no `workspace_id`, Orca's terminal goes into the worktree that holds the folder, else the one Orca shows. The hub answers 409 `node_outdated` for `cwd` to a node without the capability rather than open the terminal elsewhere. The earlier rule that a request could not name a directory is relaxed for this: a full device can `cd` anywhere in the shell it opens, so starting there gives nothing more.
 
 ### Permissions
 
@@ -605,11 +612,16 @@ Not tested on real herdr: these changes don't touch protocol.
 Computer-changing actions in terminal/sidebar-tree node menus (`docs/web/web.md`, "Node menu"). Hub routes are **`full`-device-only** (`nodeAction` in `hub/panes.go`: `answer` devices and extension tokens 403, `route_scopes.txt` `-`),
 with node methods `panes.close` / `panes.split` / `panes.agent` / `panes.git` / `tabs.close` / `tabs.rename` (`node/panes_actions.go`). Common rules: only host-listed panes/tabs/workspaces (refresh snapshot once if missing), directory comes from the pane, no request field for arbitrary directory or command.
 
-- **Host capability**: `host.SlotCloser` (whole tab), `host.Splitter` (split), implemented only by herdr. Orca, herdr-core, botmux return `unsupported`, and web hides actions. herdr uses `tab close` / `pane split` / `tab rename` / `pane close` (socket `pane.split` etc., CLI fallback `herdr pane split <pane> --direction right --no-focus --cwd …`).
+- **Host capability**: `host.Organizer` (rename a workspace or tab, close a pane), `host.SlotCloser` (whole tab), `host.Splitter` (split); herdr, Rex and Orca (#17043) split and close tabs. A host without one returns `unsupported`.
+  `panes.list` reports what each host does as `abilities` (#17053, `paneAbilities` in `node/panes.go`): `rename` and `close_pane` from `host.Organizer`, `split` and `close_tab` from the other two (an Orca that lacks the call reports false: `canSplit` / `canCloseTab`),
+  `git` for every host whose terminals the node drives (not botmux), and `run_here` for the default engine's host when it can name a pane's foreground programs.
+  The web's menus follow it (`web/src/lib/host-abilities.ts`), so a host that gains an interface gets its items with no client change; for an older node
+  that sends none they keep a table of what it did: herdr everything, Orca rename, close pane and Git, Tern and Rex rename. herdr uses `tab close` / `pane split` / `tab rename` / `pane close` (socket `pane.split` etc., CLI fallback `herdr pane split <pane> --direction right --no-focus --cwd …`).
+- **On Orca** (`node/hostorca_panes.go`, checked on an isolated Orca 1.4.277): a split is `terminal.split` on the pane's terminal, `right` as Orca's `vertical` and `down` as its `horizontal`. The local socket's split takes no folder, so the new shell starts in the worktree and a pane working elsewhere gets `cd <folder>` as the new shell's first command. Close tab is `terminal.closeTab` on one of the tab's terminals. Orca 1.4.277 does not hold `expectedIncarnationId` on either call (it is sent all the same), so the node looks the terminal up afresh just before. An Orca that answers `method_not_found` is refused as `unsupported` with nothing done, and its `abilities` stop offering that action until Orca starts again. Renaming a tab is `terminal.rename`. On a runtime with no window the layouts keep the tab's first title, so the node takes a tab's name from Orca's phone tab model (`session.tabs.list`, its custom name) whenever it reads the layouts (after a rename of its own at once), and the assistant's guarded rename (#15674) checks the name there before renaming; an Orca without that model keeps the layouts' titles.
 - **Close pane**: Agent pane through `session.close` (^C twice to request exit, then close); shell via host `Close`—close tab if last pane, otherwise only pane. **Close tab** directly closes entire tab.
 - **New pane**: `pane split <pane> --direction right|down`, no computer focus stealing, in source pane's directory; returns `pane:<id>`.
 - **Rename tab**: 1–80 characters, whitespace collapsed to single spaces. Agent tabs use existing `session.rename`; others `tabs.rename`.
-- **Run Agent Here…**: only panes at shell prompts (no Agent, no bound session, all foreground programs shells; unreadable foreground also rejected). `panes.agent {pane, launcher}` reuses the full `start` pipeline—
+- **Run Agent Here…**: only panes at shell prompts (no Agent, no bound session, all foreground programs shells; unreadable foreground also rejected). On Orca the start's one command goes in through a single-use grant that Orca's `Run` checks again right before typing: the same terminal process, only its shell in front (`terminal.inspectProcess`; an Orca without it refuses, #17039). `panes.agent {pane, launcher}` reuses the full `start` pipeline—
   same launcher command, trust-dialog handling, readiness wait, pane binding, continuation command—without creating a tab, replacing `newTab` with selected pane in `context` (`withAdoptedPane`). Failure **doesn't** close this pane (new-tab failures do close the new tab).
   It answers `{session_id}`, and the clients open that agent's chat as New Agent opens the one it starts (#3287).
   Web and iOS list Claude Code launchers, and Codex launchers that carry `run_here: true` (#5504; web `launchableHere` in `web/src/lib/node-actions.ts`, iOS `NodeMenu.launchableHere`).
@@ -622,7 +634,9 @@ with node methods `panes.close` / `panes.split` / `panes.agent` / `panes.git` / 
   All timeout after 60 seconds, don't prompt for passwords (`GIT_TERMINAL_PROMPT=0`, askpass `false`), retain only last 2 KB output.
 - **iOS / Mac** (#3098): Agent-row long-press menus add Split, Git, Close Tab; space ⋯ adds Run Agent Here…, Git, same routes (`docs/apple/ios.md`, "Information architecture"). No standalone terminal; shell pane chosen in Run Agent Here… sheet.
 - **Apple errors** (#3586): an uncoded node refusal reaches the hub as 502 `internal`. `APIClient.nodeAction` marks that call so the existing sheet / toast keeps the node's actionable reason; other `internal` 5xx responses stay generic instead of exposing private exceptions.
+- **Coded since #17057**: the node's refusals and failures here are coded (`tab_gone`, `pane_gone`, `tab_close_failed`, `pane_close_failed`, `pane_split_failed`, `tab_name_invalid`, Run Agent Here's `pane_has_agent`, `pane_not_at_prompt`, `pane_foreground_unknown`, `pane_directory_unknown`, a host's `unsupported`), so the hub answers a 409 worded in the client's language with the engine's own words as `detail` (`docs/integrations/engines.md`, "Refusals in the reader's language"); an older node's still reach it as 502 `internal`.
 - **Measured** (herdr 0.9.5, local temporary tab): `go test -tags herdrlive -run TestLiveMenuActions ./internal/herdr/` (`HERDR_LIVE_WORKSPACE=<workspace id>`) creates/renames tab, splits twice, closes pane/tab, matching fake herdr node tests.
+  On Orca, the `orcaiso` tests split a pane and close it, rename a tab and close one whole against an isolated Orca server (`node/hostorca_iso_test.go`, `docs/operations/testing.md`, "Isolated Orca runtime (#17058)").
 - **Tests**: `node/panes_actions_test.go` (fake herdr close/rename/split calls, rejection doesn't touch herdr, run in shell pane, rejection/failure preserves pane; real Git fetch/pull/push, force-push config ineffective, reject nonrepo/dirty/detached HEAD),
   `hub/panes_test.go` (every route denies `answer`/extension tokens before node receives it, forwards only named fields, absent from `answer` allowlist, route scopes `-`).
 
@@ -682,6 +696,8 @@ These suggestions apply only to creation and do not establish ownership for clos
   - **Conflicts Orca does not fail on are stopped by the node**: for a branch checked out in another worktree, or a folder that exists (an empty one too), Orca 1.4 does not fail but quietly makes `<branch>-2` in `<name>-2` (measured on Orca 1.4.250 on 2026-11-05; `branchIntent` does not prevent it).
     So the node reads `git worktree list --porcelain` first (and creates nothing when it cannot), answers "branch … is already checked out at …" for a branch in use, and refuses an existing checkout path (an empty directory git could use, Orca cannot); Orca is not called in either case.
     An answer on another branch all the same (checked out elsewhere meanwhile, or Orca's own folder setting taken) is an error naming what Orca made and where (nothing is deleted), not a success.
+  - **A directory-level workspace is no worktree** (#13363): when the repository's checkout is itself open as an Orca worktree, `worktree.create` answers ok without running `git worktree add` or making a branch: a directory-level workspace in that existing checkout (id `<repo id>::<path>::workspace:<uuid>`, `path` the checkout's, `branch` and `head` empty).
+    The node tells it by the id, or by the source workspace's own checkout coming back as `path` (compared with links resolved), for a named branch and an automatic one alike, and answers `worktree-composer.orca_directory_workspace` in the request's language: what Orca made, where, why, and that a task can start without a worktree of its own (`workspace: "none"`). Nothing falls back to that by itself, and nothing is deleted. Orca's behavior here, and its refusal of a repository selector through a linked path, are left to Orca (the node selects by `id:`).
 - **Delegate to Paseo** (#6295, `node/runtimeworkspaces.go`): on a Paseo Git workspace (web only), the bridge has Paseo make the worktree as a workspace of
   its own (runtime `workspace.create`, Paseo's `workspace.create.request`), after the node's guards below. The folder is Paseo's: prepare's `path` is
   Paseo's worktrees folder for the repository and the checkout path must be in it (only its last element can be chosen, taken as Paseo names a folder:
@@ -698,7 +714,7 @@ These suggestions apply only to creation and do not establish ownership for clos
   Creation shows spinner and disables dismissal; failure inside dialog ("Couldn't create worktree: …"), missing old-hub/node API says "Persona on this computer is too old; update to create worktrees". Success: toast, reload tree, open new workspace terminal.
 - **iOS / Mac** (#3099): space ⋯ in Agents list has New Worktree…, same two routes/form rules (`WorktreeForm`); success opens New Chat prefilled with new workspace instead of terminal (`docs/apple/ios.md`, "Information architecture").
 - **Tests**: `node/worktree_test.go` (real Git + fake herdr: prepare repo name/branch/config directory/linked worktree/detached HEAD/nonrepo; herdr creation with new/existing branches; rejected paths/branches never touch herdr; Git errors; Git fallback/repeated checkout; `panes.list` includes `worktree`),
-  `node/hostorca_worktree_test.go` (real Git + a fake Orca whose `worktree.create` behaves like Orca 1.4: Orca's default folder; a new branch from the source workspace's branch, under it, not activated, to the terminal Orca opened; an existing branch without a base; a detached HEAD's commit; a branch in use and an existing empty folder refused without asking Orca; Orca's own folder taken as it is; a renamed branch is an error; a workspace Orca does not list),
+  `node/hostorca_worktree_test.go` (real Git + a fake Orca whose `worktree.create` behaves like Orca 1.4: Orca's default folder; a new branch from the source workspace's branch, under it, not activated, to the terminal Orca opened; an existing branch without a base; a detached HEAD's commit; a branch in use and an existing empty folder refused without asking Orca; Orca's own folder taken as it is; a renamed branch is an error; a directory-level workspace, by its id or by the source's own path through a link, is an error saying so, named or automatic; a workspace Orca does not list),
   `herdr/worktrees_test.go` (config parsing, slug, folder name, socket args, CLI fallback), `hub/panes_test.go` (permissions, named fields only), `web/src/lib/worktree.test.ts`, `node-actions.test.ts`, `node-palette.test.ts`, `views/NewWorktree.test.tsx`.
 
 ### Advanced Orca worktree actions
@@ -738,6 +754,16 @@ A new agent can start in a Git worktree of its own, so agents on the same reposi
   worktree workspace Paseo made (#6297); `worktree/remove` then archives that workspace through Paseo, which removes the folder, with Delete
   worktree's guards (below): refused while a session in the workspace still runs (the closed agent has stopped by then; the clients try again for
   a few seconds) or an agent of another engine runs in the folder, and for uncommitted changes or an unmerged branch unless `force`; the branch goes after the folder only with `delete_branch`.
+- **Orca** (#17050, `node/hostorca_agentworktree.go`): where the engine is Orca and the folder's checkout is one of Orca's local git worktrees,
+  Orca makes the worktree as a child of that one (`worktree.create` with `parentWorktree`, same branch and folder name, from that worktree's
+  branch), so Orca's sidebar lists it under its parent; `worktree/add` answers its `workspace_id`. A main checkout Orca does not hold yet is
+  registered first (`repo.add`), under the rules a start in it follows (not the home, the root or a temporary folder); a folder Orca can't
+  hold, or an Orca that isn't running, keeps the plain `git worktree add`. The terminal Orca opens in the new worktree is Persona's first shell:
+  it closes once the Agent's tab opens there, whether the start names the workspace or only the folder. `worktree/status` calls a worktree
+  Persona's (`ours`) when it is under the checkouts directory or Orca lists it as one of its own linked worktrees (not the main checkout, not
+  an SSH target's), wherever Orca's workspace folder is; `worktree/remove` then has Orca remove it (`worktree.rm`, Orca's archive hooks run,
+  the branch kept unless `delete_branch`), after the guards above. An Orca without `worktree.remove-branch-policy.v1` leaves it to git, as
+  before. New Agent on the web and Android offers the switch for a picked Orca workspace too, and the start goes into the worktree Orca made.
 - All three are full-device routes like section 23's, and extension tokens never reach them. The body is read field by field, plus the two switches (`flags`, booleans only).
 
 ## 24. Full herdr UI: a PTY client, switchable beside Single pane (#2357)
@@ -1146,3 +1172,68 @@ Hub: when a computer's connection ends (`connectionEnded` → `terminalsEnded`),
 - Hub: `terminal_reconnect_test.go`. The node's connection closes with the takeover's watch on its way: the app is told at once, and subscribing again takes over on the new connection. The hub hears of the reconnect before the old call fails: the next takeover goes through within 3 seconds, not after 20.
 - iOS: `TerminalTakeoverTests` (a `pane:` terminal takes over and takes keys; the 10-second limit, its reason and the fresh subscription; Retry unsubscribes first; back online subscribes at once). `TerminalTakeoverHangTests` is the UI flow with screenshots, against the mock's `/mock/terminal_node?state=stalled|gone|back`.
 - Web: `terminal/feed.test.ts` (the same three cases).
+
+## 31. Orca terminals: scrolling up, and a quicker plain view (#17048)
+
+Orca has no terminal stream Persona can use on its local socket, so an Orca terminal is the plain view: the apps read
+`GET …/screen` themselves. Two things were missing next to herdr: scrolling up found nothing above the screen (the
+iPhone, reading fewer lines than it asked for, said **— Beginning of output —** at once), and the view changed once a
+second.
+
+### What is above the screen
+
+Orca's screen read (`terminal.read {screen:true}`) is the screen alone, so the host's "recent" read is the screen too. Orca
+keeps the output apart from it, in two forms (measured on Orca 1.4.277 against an isolated runtime):
+
+| Read | What it is | Kept |
+| --- | --- | --- |
+| `terminal.read {terminal, limit}` (no screen, no cursor) | The output tail: the newest lines, escapes stripped, rows a program redrew in place as they ended (a spinner shows once, its last state), the line being written last. For a program on the alternate screen Orca answers with the screen (`source: "screen"`) | 2000 lines and 256 KiB; one read sends at most 32 KiB, the newest (`limited`) |
+| `terminal.read {terminal, cursor, limit}` | The log: every completed line from the cursor on, also each redraw of a program's live rows (an agent's spinner and input box, again and again). `oldestCursor` / `latestCursor` say what is kept | 2000 lines and 256 KiB |
+
+So the tail is the scrollback (`host.Scrollbacker`, `node/hostorca_scrollback.go`). When one read sends less than Orca
+keeps, the log reaches further back only where it agrees with the tail line for line (plain output: a build, a shell);
+a log of redraws is never shown. The node puts the screen below that output (`aboveScreen` in `node/panescreen.go`: the
+output is cut where the screen's rows start, passing over blank lines the screen read leaves out) and pages it as it
+pages herdr's scrollback: `session.screen.before` by anchor, and `session.screen` with `source=recent`. The node's own
+checks of a pane (dialogs, readiness, exits) keep reading the screen: the log and the tail can hold rows the pane no
+longer shows.
+
+Where the kept output begins is said, not guessed: `screen/before` answers `dropped: true` when the page reached the
+oldest line kept and Orca let older output go (or holds it only as a log that does not line up), and the web's top line
+says **— Older output isn't kept —**; without `dropped` it says **— Beginning of output —**, which is then true. A node
+that predates `dropped` sends `at_limit` alone, worded as herdr's ~1000-line cap; `at_limit` is set with `dropped` for
+apps that know only it. Orca reads no output by cursor before the version that added it (no cursors in the answer): the
+tail alone is shown then. A program on the alternate screen (vim, a full-screen agent) has nothing above its screen, as
+under herdr.
+
+### A quicker plain view
+
+`GET …/screen` answers `refresh_ms` for a host whose screen read is cheap (`host.QuickScreen`; Orca: 250, one request
+on its local socket that Orca answers from its own emulator's state). The web (`pollDelay` in `web/src/lib/terminal.ts`)
+reads at that pace while the screen changes and for 3 seconds after, then once a second again; a hidden page reads once a
+second. An idle terminal costs what it did; keys still read again at once. The size label's hint says the screen is read
+several times a second while it changes.
+
+Measured on an isolated Orca 1.4.277 runtime on Linux, reading one terminal through the node's `session.screen` path for
+60 s at each pace: Orca's server and terminal-daemon processes, and the node side (in the same process as the reads),
+as a share of one core.
+
+| Terminal | Pace | Orca CPU | Node CPU |
+| --- | --- | --- | --- |
+| Busy (a 4-row live region redrawn ten times a second, a line printed each second) | No reads | 1.67 % (its own output handling) | — |
+| Busy | Once a second (before) | 1.98 % | 0.06 % |
+| Busy | Four times a second (now, while it changes) | 2.03 % | 0.31 % |
+| Idle shell | Once a second | 0.22 % | 0.07 % |
+| Idle shell | Four times a second | 0.65 % | 0.33 % |
+
+A read costs Orca about a millisecond and the node under one. The quicker pace is used only while the screen changes
+and for 3 seconds after, so an idle terminal stays on the once-a-second row; while it changes, a watching page costs
+under 1 % of one core more (Orca and the node together). Each read is also one request through the hub, as before.
+
+### Tests
+
+- Node: `hostorca_scrollback_test.go` (a short shell paged to where its output began; a long build log reaching back
+  through the log to the oldest kept line, `dropped`; a log of redraws left out, also on an Orca without cursor reads;
+  the alternate screen as before; `refresh_ms` for Orca and not herdr; where the screen begins in the output). The fake
+  runtime (`orcarttest`) answers tail and cursor reads as Orca 1.4.277 does, its 32 KiB cut included.
+- `orcart`: `TestReadTailAndLog`. Web: `lib/terminal.test.ts` ("history anchor", "poll pace").

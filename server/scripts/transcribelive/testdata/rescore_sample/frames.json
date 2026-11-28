@@ -1,0 +1,42 @@
+[
+ {
+  "recv": 12.2,
+  "frame": {
+   "type": "line",
+   "n": 1,
+   "start": 0,
+   "end": 12,
+   "text": "今天我们先看发布计划。"
+  }
+ },
+ {
+  "recv": 24.3,
+  "frame": {
+   "type": "line",
+   "n": 2,
+   "start": 12,
+   "end": 24,
+   "text": "The backend API is ready for beta."
+  }
+ },
+ {
+  "recv": 37.2,
+  "frame": {
+   "type": "line",
+   "n": 3,
+   "start": 25,
+   "end": 37,
+   "text": "好的，Bo 负责把 dashboard 搭起来。"
+  }
+ },
+ {
+  "recv": 49.4,
+  "frame": {
+   "type": "line",
+   "n": 4,
+   "start": 37,
+   "end": 49,
+   "text": "Agreed, beta on Wednesday."
+  }
+ }
+]

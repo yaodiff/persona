@@ -176,7 +176,8 @@ internal class CapsuleSessions(
     private val acknowledged = MutableStateFlow<Set<String>>(emptySet())
     private val agents = combine(session.sessions.sessions, session.assistant.assistant, session.interactions.pending,
         session.preferences.snapshots) { list, assistant, pending, preferences ->
-        CapsuleAgents((list + assistant.conversations).distinctBy { it.key }, assistant.mainSession, pending, preferences)
+        CapsuleAgents((list + assistant.conversations).distinctBy { it.key }, assistant.mainSession,
+            pending.filterNot { it.isDisplayMirror }, preferences)
     }
     // Session lists change several times a second while agents run; the capsule's catalog (every session's dates
     // parsed, sorted and grouped) is built from the latest of them only, never once per queued change.

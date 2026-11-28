@@ -4,11 +4,22 @@ import type { UIAction, UIPush } from "./extension-ui";
 
 export const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 
-/** Only https links open (the hub checks too). */
+function hasCtrlOrSpace(url: string): boolean {
+  for (let i = 0; i < url.length; i++) {
+    const c = url.charCodeAt(i);
+    if (c <= 0x20 || c === 0x7f) return true;
+  }
+  return /\s/.test(url);
+}
+
+/** Only credential-free https links with an explicit authority and host open (the hub checks too). */
 export function isHttps(url?: string): boolean {
-  if (!url) return false;
+  if (!url || hasCtrlOrSpace(url) || !/^https:\/\//i.test(url)) return false;
+  const auth = url.slice(8).split(/[/?#]/, 1)[0];
+  if (!auth || auth.includes("@") || auth.includes("\\")) return false;
   try {
-    return new URL(url).protocol === "https:";
+    const u = new URL(url);
+    return u.protocol === "https:" && u.hostname !== "" && u.username === "" && u.password === "";
   } catch {
     return false;
   }
@@ -20,6 +31,7 @@ export function readAction(raw: unknown): UIAction | undefined {
   const a: UIAction = { id: raw.id };
   if (typeof raw.confirm === "string") a.confirm = raw.confirm;
   if (raw.submit === true) a.submit = true;
+  if (typeof raw.open === "string" && raw.open) a.open = raw.open;
   const p = readPush(raw.push);
   if (p) a.push = p;
   if (isObject(raw.values)) {

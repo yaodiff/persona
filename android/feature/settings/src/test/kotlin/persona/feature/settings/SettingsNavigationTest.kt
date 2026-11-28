@@ -50,6 +50,7 @@ class SettingsNavigationTest {
             SettingsPage.NotificationBackground to "notification-background",
             SettingsPage.KnowledgeSelection to "knowledge-selection",
             SettingsPage.StandingAuthorizations to "standing-authorizations",
+            SettingsPage.DigitalAssistant to "digital-assistant",
         )
         assertEquals(SettingsPage.entries.toSet(), pages.keys)
         assertEquals(pages.size, pages.values.toSet().size)

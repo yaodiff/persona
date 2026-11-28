@@ -137,25 +137,9 @@ func (s *Service) briefDirections(ctx context.Context, now time.Time, l i18n.Lan
 		dirs[i].Waits = append(dirs[i].Waits, w)
 	}
 	for i := range dirs {
-		foldBriefDirection(&dirs[i], waits)
+		waits.FoldDirection(&dirs[i])
 	}
 	return dirs, s.briefDisabledRoutines(ctx, now, l, names)
-}
-
-// foldBriefDirection orders and bounds d's rows as the briefing module's wait rules say (owner waits first and never
-// folded; the others bounded, the rest counted in More).
-func foldBriefDirection(d *prompts.BriefDirection, waits modapi.WaitRules) {
-	rows := make([]modapi.WaitRow, len(d.Waits))
-	for i, w := range d.Waits {
-		rows[i] = modapi.WaitRow{Kind: w.Kind, Since: w.Since, Key: w.TodoID + w.InteractionID}
-	}
-	keep, more := waits.Fold(rows)
-	kept := make([]prompts.BriefWait, 0, len(keep))
-	for _, i := range keep {
-		kept = append(kept, d.Waits[i])
-	}
-	d.More = more
-	d.Waits = kept
 }
 
 func (s *Service) briefTaskWait(ctx context.Context, t Todo, agents []proto.Session, cards []proto.Interaction, queue *TaskQueue,

@@ -84,10 +84,14 @@ nonisolated enum NotificationActions {
         }
     }
 
-    /// Whether a button may settle the card `id`: not one its task's supervisor holds (`Interaction.supervisorHeld`), as
-    /// far as the app knows its pending cards; a card it has not loaded is left to the hub, as before.
-    static func answerable(_ id: String, among cards: some Sequence<Interaction>) -> Bool {
-        !cards.contains { $0.id == id && !$0.answerableHere }
+    /// Whether a button may settle the displayed occurrence: not one its task's supervisor holds, and not a same-ID
+    /// replacement the app already knows about. An unknown card is left to the hub, with the occurrence header when present.
+    static func answerable(_ id: String, occurrence: String? = nil, among cards: some Sequence<Interaction>) -> Bool {
+        for card in cards where card.id == id {
+            if let occurrence, card.createdAtWire != occurrence { return false }
+            if !card.answerableHere { return false }
+        }
+        return true
     }
 
     /// What Take Recommendation on a decision's push answers: the to-do, the round it was asked in (sent back exactly as

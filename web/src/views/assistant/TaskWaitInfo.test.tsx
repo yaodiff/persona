@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+import fixtures from "../../../../spec/fixtures/todo-wait/todo_wait.json";
+import type { TodoWait } from "../../lib/todo-wait-wire";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -206,7 +208,7 @@ describe("task wait information", () => {
 
   it.each([
     ["en", "Comment on #912"],
-    ["zh-Hans", "#912 \u4e0b\u7684\u7559\u8a00"],
+    ["zh-Hans", "#912 \u4e0b\u7684\u8bc4\u8bba"],
     ["ja", "#912 \u306e\u30b3\u30e1\u30f3\u30c8"],
   ])("localizes a GitHub comment source in %s", async (locale, label) => {
     await initI18n(locale);
@@ -390,5 +392,65 @@ describe("task wait information", () => {
     await act(async () => [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find((button) => button.textContent === "Cancel")!.click());
     expect(select).toHaveBeenCalledTimes(1);
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("server-computed wait", () => {
+  it("renders a waiting run even without parked evidence, with distinct wake and deadline", async () => {
+    const wake_at = "2026-11-18T12:00:00Z", until = "2026-11-19T16:00:00Z";
+    await render(makeTodo(undefined, { supervision: undefined, wait: {
+      kind: "agent", waiting_on: "Verification", reason: "Checking the export", wake_condition: "The checks finish", wake_at, until,
+    } }));
+    expect(text("[data-wait-target]")).toContain("Verification");
+    expect(text("[data-wait-reason]")).toBe("Checking the export");
+    expect(text("[data-wait-wake]")).toContain("The checks finish");
+    for (const time of [wake_at, until]) {
+      expect(host.textContent).toContain(formatDate(time, { dateStyle: "medium", timeStyle: "short" }));
+    }
+  });
+});
+
+describe("TodoWait wire fixtures", () => {
+  it.each(fixtures.cases.filter((c) => c.expected.wait))("$name renders only the projected evidence", async ({ expected }) => {
+    const wait = expected.wait as TodoWait;
+    // Supply conflicting old evidence and omit the sessions. Each field must stand on its own.
+    await render(makeTodo({ kind: "date", target: "Old target", wake: "Old condition" }, { wait }));
+    const body = host.textContent!;
+    expect(host.querySelector("[data-wait-kind]")?.getAttribute("data-wait-kind")).toBe(wait.kind);
+    for (const value of [wait.waiting_on, wait.reason, wait.wake_condition, wait.step, wait.contact?.request,
+      wait.contact?.sender, wait.contact?.channel].filter(Boolean)) expect(body).toContain(value);
+    for (const at of [wait.wake_at, wait.until, wait.contact?.sent_at]) {
+      if (at) expect(body).toContain(formatDate(at, { dateStyle: "medium", timeStyle: "short" }));
+    }
+    if (wait.since) expect(text("[data-wait-age]")).not.toBe(t("task-wait.age_unknown"));
+    if (wait.url) expect([...host.querySelectorAll("a")].map((a) => a.href)).toContain(wait.url);
+    if (wait.contact?.url) expect(host.querySelector("[data-wait-contact]")?.getAttribute("href")).toBe(wait.contact.url);
+    if (wait.handoff_todo_id) expect(host.querySelector("[data-wait-target]")?.getAttribute("href")).toBe(`/todos?id=${wait.handoff_todo_id}`);
+    for (const blocker of wait.pr_blockers ?? []) {
+      expect(body).toContain(t(`assistant-tasks.pr_blocker_${blocker === "checks_failing" ? "checks_failed" : blocker}`));
+    }
+    expect(body).not.toMatch(/Old target|Old condition|Waiting on the external team/);
+  });
+
+  it("keeps future wait kinds neutral and preserves their provided fields", async () => {
+    await render(makeTodo({ kind: "date", target: "Earlier target" }, { wait: {
+      kind: "future_kind", waiting_on: "Upstream event", pr_blockers: ["future_blocker"],
+    } }));
+    expect(text("[data-wait-target]")).toBe("Waiting: Upstream event");
+    expect(host.textContent).not.toMatch(/future_kind|future_blocker|Earlier target/);
+  });
+
+  it("shows an incomplete receipt as text and never links an unsafe source", async () => {
+    await render(makeTodo(undefined, { wait: {
+      kind: "person_reply", contact: { channel: "Email", url: "javascript:alert(1)" },
+    } }));
+    expect(text("[data-wait-contact]")).toBe("Email");
+    expect(host.querySelector("a")).toBeNull();
+    expect(host.querySelector("[data-wait-request]")).toBeNull();
+  });
+
+  it.each([undefined, null])("keeps recorded evidence when wait is %s", async (wait) => {
+    await render(makeTodo({ kind: "external_event", target: "Earlier target" }, { wait }));
+    expect(text("[data-wait-target]")).toContain("Earlier target");
   });
 });

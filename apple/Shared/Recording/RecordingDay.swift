@@ -74,10 +74,11 @@ nonisolated enum RecordingDayContract {
     /// The watch remembers the erases the phone asked for this long, to answer a repeated request the same way.
     static let eraseMemoryDays = 7.0
 
-    /// `recordingDayKeepDays` for a hub keeping transcripts `recordingDays` (nil while the phone doesn't know):
-    /// `min(7, recording_days)`, never below one day.
-    static func keepDays(recordingDays: Int?) -> Int {
-        min(maxKeepDays, max(1, recordingDays ?? maxKeepDays))
+    /// `recordingDayKeepDays` for a hub keeping audio `audioDays` (nil while the phone doesn't know): `min(7, audio
+    /// days)`, and the 7-day maximum when audio is forever (`0`) or the value isn't positive.
+    static func keepDays(audioDays: Int?) -> Int {
+        guard let audioDays, audioDays > 0 else { return maxKeepDays }
+        return min(maxKeepDays, audioDays)
     }
 
     /// The phone's commands to the watch [ext].
@@ -734,14 +735,14 @@ nonisolated struct RecordingDayCapabilities: Sendable, Equatable {
     var consent: Bool
     /// The phone's hub lists `recording_day`.
     var hub: Bool
-    /// `RecordingDayContract.keepDays(recordingDays:)`.
+    /// `RecordingDayContract.keepDays(audioDays:)`.
     var keepDays: Int
 
     /// The application context keys and values.
     var context: [String: Any] {
         [RecordingDayContract.phoneKey: consent ? RecordingDayContract.version : 0,
          RecordingDayContract.phoneHubKey: hub,
-         RecordingDayContract.phoneKeepDaysKey: RecordingDayContract.keepDays(recordingDays: keepDays)]
+         RecordingDayContract.phoneKeepDaysKey: RecordingDayContract.keepDays(audioDays: keepDays)]
     }
 
     /// Whether a context already says exactly this.

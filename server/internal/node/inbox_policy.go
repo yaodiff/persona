@@ -231,7 +231,7 @@ func inboxReadDenyRule(path string, directory bool) string {
 // before configured allows, bypass-safe bot send/reply, and phone confirmation: none of those is an Inbox confirmation.
 func inboxLarkOutbound(cfg proto.AssistantLark, v larkVerdict, command string) bool {
 	for _, c := range v.calls {
-		if !larkRead(c) {
+		if !larkCallRead(cfg.Gates, c) {
 			return true
 		}
 	}

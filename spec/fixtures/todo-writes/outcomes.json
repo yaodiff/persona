@@ -407,9 +407,10 @@
     },
     {
       "name": "answer_option_not_sent",
-      "description": "An option whose send never left the manager: nothing taken.",
+      "description": "An option whose send never left the manager: no Agent took it, so it is recorded and handed to the supervisor (a 200 that says delivered none, #17431).",
       "source": [
-        "server/internal/assistant/todo_asks_routes.go writeAnswerError (accept_not_taken)"
+        "server/internal/assistant/todo_accept_route.go decisionWaitsForSupervisor",
+        "server/internal/assistant/acceptance_reply.go decisionNotDelivered"
       ],
       "input": {
         "route": "answer",
@@ -419,11 +420,10 @@
         }
       },
       "expected": {
-        "status": 502,
-        "code": "accept_not_taken",
+        "status": 200,
         "delivered": "none",
-        "state": "failed",
-        "receipt": "failed"
+        "state": "delivered",
+        "receipt": "done"
       }
     },
     {

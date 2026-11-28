@@ -37,7 +37,13 @@ const (
 	peerCloseSlow      websocket.StatusCode = 4013 // the link could not keep up
 )
 
-var errDuplicateLink = errors.New("the two hubs already have a link")
+// The links registerLink refuses: the mesh is stopping, the other hub is no longer paired (or its credential was
+// revoked or rotated during hello), or the two hubs already have a link that stays.
+var (
+	errLinkStopping  = errors.New("hub stopping")
+	errLinkUnpaired  = errors.New("peer unpaired or credential revoked")
+	errDuplicateLink = errors.New("the two hubs already have a link")
+)
 
 type peerLink struct {
 	h       *Hub
@@ -190,9 +196,19 @@ func (h *Hub) runPeerLink(parent context.Context, conn *websocket.Conn, hubID, d
 		return fmt.Errorf("hello: %w", err)
 	}
 	h.setupPeerHTTP(l) // before anyone can find the link
-	if !h.registerLink(l) {
-		_ = conn.Close(peerCloseDuplicate, "the two hubs already have a link")
-		return errDuplicateLink
+	if err := h.registerLink(l); err != nil {
+		if l.transport != nil {
+			l.transport.CloseIdleConnections()
+		}
+		switch {
+		case errors.Is(err, errLinkStopping):
+			_ = conn.Close(websocket.StatusGoingAway, "hub stopping")
+		case errors.Is(err, errLinkUnpaired):
+			_ = conn.Close(peerCloseUnpaired, "credential revoked")
+		default:
+			_ = conn.Close(peerCloseDuplicate, "the two hubs already have a link")
+		}
+		return err
 	}
 	defer h.unregisterLink(l)
 	go l.writeLoop()
@@ -219,28 +235,38 @@ func (h *Hub) runPeerLink(parent context.Context, conn *websocket.Conn, hubID, d
 	return err
 }
 
-// registerLink makes l the link to its hub, unless the two hubs already have one that stays: the one dialed by the
-// smaller hub_id stays; a newer link dialed by the same hub replaces the older (it went away unnoticed).
-func (h *Hub) registerLink(l *peerLink) bool {
+// registerLink makes l the link to its hub, unless the mesh is stopping (errLinkStopping), the peer was unpaired or its
+// credential rotated/revoked during hello (errLinkUnpaired), or the two hubs already have another link that stays
+// (errDuplicateLink): the one dialed by the smaller hub_id stays; a newer link dialed by the same hub replaces the
+// older (it went away unnoticed).
+func (h *Hub) registerLink(l *peerLink) error {
 	self := h.hubID()
 	preferred := min(self, l.hubID)
 	ms := &h.mesh
 	ms.mu.Lock()
 	if !ms.running {
 		ms.mu.Unlock()
-		return false
+		return errLinkStopping
+	}
+	peer, paired := ms.peers[l.hubID]
+	if !paired || (peer.CredentialID != "" && h.isDeviceRevoked(peer.CredentialID)) || (l.tokenID != "" && ((peer.CredentialID != "" && peer.CredentialID != l.tokenID) || h.isDeviceRevoked(l.tokenID))) {
+		ms.mu.Unlock()
+		return errLinkUnpaired
 	}
 	old := ms.links[l.hubID]
 	if old != nil && old.ctx.Err() == nil && old.dialer != l.dialer && l.dialer != preferred {
 		ms.mu.Unlock()
-		return false
+		return errDuplicateLink
+	}
+	if ms.links == nil {
+		ms.links = map[string]*peerLink{}
 	}
 	ms.links[l.hubID] = l
 	ms.mu.Unlock()
 	if old != nil {
 		old.close(peerCloseDuplicate, "replaced by another link between the two hubs")
 	}
-	return true
+	return nil
 }
 
 func (h *Hub) unregisterLink(l *peerLink) {

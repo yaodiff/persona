@@ -3,7 +3,7 @@
 // its own (a path, an id) may break inside it. Chrome's line breaking itself is checked by web/e2e/shell-connection.mjs.
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import { Empty } from "./parts";
+import { Empty, FileGlyph } from "./parts";
 
 describe("Empty", () => {
   it("wraps its detail between words and breaks only an unbroken string that can't fit", () => {
@@ -12,5 +12,17 @@ describe("Empty", () => {
     expect(detail).toContain("[overflow-wrap:anywhere]");
     expect(detail).not.toContain("break-all");
     expect(detail).not.toContain("break-words");
+  });
+});
+
+describe("FileGlyph", () => {
+  it("renders restrained neutral text-ink-3 glyphs for both folders and files", () => {
+    const folder = renderToStaticMarkup(<FileGlyph name="src" dir size={14} />);
+    expect(folder).toContain("text-ink-3");
+    expect(folder).not.toContain("text-accent");
+
+    const file = renderToStaticMarkup(<FileGlyph name="app.ts" size={14} />);
+    expect(file).toContain("text-ink-3");
+    expect(file).not.toContain("text-accent");
   });
 });

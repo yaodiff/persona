@@ -2,7 +2,6 @@ package assistant
 
 import (
 	"cmp"
-	"context"
 	"math"
 	"slices"
 	"strings"
@@ -19,21 +18,27 @@ import (
 // internal/archguard domain layer baselines.
 
 const (
-	boardSectionNeedsYou      = "needs_you"
+	boardSectionNeedsYou      = assistantwire.TodoListSectionNeedsYou
+	boardSectionCanWait       = assistantwire.TodoListSectionCanWait
 	boardSectionInProgress    = "in_progress"
 	boardSectionPendingReview = "pending_review"
-	boardSectionWaiting       = "waiting"
-	boardSectionSomeday       = "someday"
-	boardSectionDone          = "done"
+	boardSectionWaiting       = assistantwire.TodoListSectionWaiting
+	boardSectionTodo          = assistantwire.TodoListSectionTodo
+	boardSectionSomeday       = assistantwire.TodoListSectionSomeday
+	boardSectionDone          = assistantwire.TodoListSectionDone
+	boardSectionCancelled     = "cancelled"
 )
 
 var boardSectionOrder = [...]string{
 	boardSectionNeedsYou,
+	boardSectionCanWait,
 	boardSectionInProgress,
 	boardSectionPendingReview,
 	boardSectionWaiting,
+	boardSectionTodo,
 	boardSectionSomeday,
 	boardSectionDone,
+	boardSectionCancelled,
 }
 
 type todoBoardProjection struct {
@@ -87,11 +92,14 @@ type todoBoardSidebarNode struct {
 
 type todoBoardCounts struct {
 	NeedsYou      int `json:"needs_you"`
+	CanWait       int `json:"can_wait"`
 	InProgress    int `json:"in_progress"`
 	PendingReview int `json:"pending_review"`
 	Waiting       int `json:"waiting"`
+	Todo          int `json:"todo"`
 	Someday       int `json:"someday"`
 	Done          int `json:"done"`
+	Cancelled     int `json:"cancelled"`
 	OpenTotal     int `json:"open_total"`
 }
 
@@ -102,47 +110,15 @@ type todoBoardItemMeta struct {
 	viewRank    int
 	rootGoalID  string
 	surfaced    bool
+	needsYou    bool
+	carried     bool
 	directionID string
 	itemType    string
 }
 
-// todoBoardDirectionLabels resolves display names for all known directions once per GET /api/v1/todos read.
-func (s *Service) todoBoardDirectionLabels(ctx context.Context) map[string]string {
-	cfg := s.settings(ctx)
-	titles, _ := s.conversationTitles()
-	names := s.directionSessionNames(ctx, cfg, titles)
-	if names == nil {
-		names = map[string]string{}
-	}
-	b := &s.directions
-	b.mu.Lock()
-	if s.directionsLocked(ctx) {
-		for id, d := range b.m {
-			if id == "" || id == cfg.Main || d == nil {
-				continue
-			}
-			if _, exists := names[id]; exists {
-				continue
-			}
-			if label := strings.TrimSpace(d.Name); label != "" {
-				names[id] = label
-			}
-		}
-	}
-	b.mu.Unlock()
-	return names
-}
-
-// buildTodoBoardProjection deterministically computes the complete server-owned board projection tree
-// for GET /api/v1/todos under todos_v2=true with default top-level goal folding enabled.
-func buildTodoBoardProjection(items []listedTodo, directions map[string]string) *todoBoardProjection {
-	return buildTodoBoardProjectionWithOptions(items, directions, true)
-}
-
 // buildTodoBoardProjectionWithOptions deterministically computes the complete server-owned board projection tree
-// for GET /api/v1/todos under todos_v2=true. When foldChildren is false, child tasks are not folded under top-level
-// parent goals and every open to-do appears flat in status_groups and sidebar_tree.
-func buildTodoBoardProjectionWithOptions(items []listedTodo, directions map[string]string, foldChildren bool) *todoBoardProjection {
+// for GET /api/v1/todos under todos_v2=true from the projected rows and their list counts.
+func buildTodoBoardProjectionWithOptions(items []listedTodo, directions map[string]string, foldChildren bool, listCounts assistantwire.TodoCounts) *todoBoardProjection {
 	metaByID := make(map[string]*todoBoardItemMeta, len(items))
 	orderedIDs := make([]string, 0, len(items))
 
@@ -155,8 +131,10 @@ func buildTodoBoardProjectionWithOptions(items []listedTodo, directions map[stri
 		}
 		sec, sub := classifyBoardSection(item)
 		rank := math.MaxInt
+		needsYou := sec == boardSectionNeedsYou && !item.Quiet
 		if item.View != nil {
 			rank = item.View.Rank
+			needsYou = projectionViewNeedsYou(*item.View, item.Quiet)
 		}
 		itemType := strings.TrimSpace(item.ItemType)
 		if itemType == "" {
@@ -167,10 +145,23 @@ func buildTodoBoardProjectionWithOptions(items []listedTodo, directions map[stri
 			section:     sec,
 			subOrder:    sub,
 			viewRank:    rank,
-			directionID: resolveBoardDirectionID(item, directions),
+			directionID: item.EffectiveDirectionID,
 			itemType:    itemType,
+			needsYou:    needsYou,
 		}
 		orderedIDs = append(orderedIDs, item.ID)
+	}
+
+	// Board section totals for display include folded rows. Summary counts follow the list's direct-parent rollup,
+	// independently of whether the user folds children on the board.
+	countedBySection := make(map[string]int, len(boardSectionOrder))
+	for _, id := range orderedIDs {
+		m := metaByID[id]
+		parent := metaByID[m.item.PartOf]
+		m.carried = todoCarriedByParent(m.item.Todo, parent != nil && !isBoardClosedSection(parent.section))
+		if !m.carried {
+			countedBySection[m.section]++
+		}
 	}
 
 	// Sort all items deterministically before resolving folding so output never depends on input order.
@@ -189,17 +180,12 @@ func buildTodoBoardProjectionWithOptions(items []listedTodo, directions map[stri
 				continue
 			}
 			// Never fold an open child under a closed parent; open work must stay visible.
-			if metaByID[rootID].section == boardSectionDone && m.section != boardSectionDone {
+			if isBoardClosedSection(metaByID[rootID].section) && !isBoardClosedSection(m.section) {
 				continue
 			}
 			m.rootGoalID = rootID
-			if isBoardChildSurfaced(m) {
+			if m.section == boardSectionNeedsYou {
 				m.surfaced = true
-				// A surfaced child with an active ask/needs_user always surfaces into needs_you.
-				if m.section != boardSectionNeedsYou {
-					m.section = boardSectionNeedsYou
-					m.subOrder = 0
-				}
 				surfacedChildren[rootID] = append(surfacedChildren[rootID], id)
 			} else {
 				foldedChildren[rootID] = append(foldedChildren[rootID], id)
@@ -207,24 +193,7 @@ func buildTodoBoardProjectionWithOptions(items []listedTodo, directions map[stri
 		}
 	}
 
-	// Re-sort after any surfaced child promotion so intra-section ranks remain strictly deterministic.
-	slices.SortFunc(orderedIDs, func(a, b string) int {
-		return compareBoardMeta(metaByID[a], metaByID[b])
-	})
-
-	// Re-sort per-parent child lists deterministically.
-	for rootID := range foldedChildren {
-		slices.SortFunc(foldedChildren[rootID], func(a, b string) int {
-			return compareBoardMeta(metaByID[a], metaByID[b])
-		})
-	}
-	for rootID := range surfacedChildren {
-		slices.SortFunc(surfacedChildren[rootID], func(a, b string) int {
-			return compareBoardMeta(metaByID[a], metaByID[b])
-		})
-	}
-
-	// 1. Build status_groups and global counts.
+	// 1. Build status_groups.
 	rawBySection := make(map[string]int, len(boardSectionOrder))
 	entriesBySection := make(map[string][]todoBoardEntry, len(boardSectionOrder))
 	for _, key := range boardSectionOrder {
@@ -263,14 +232,17 @@ func buildTodoBoardProjectionWithOptions(items []listedTodo, directions map[stri
 	}
 
 	counts := todoBoardCounts{
-		NeedsYou:      rawBySection[boardSectionNeedsYou],
-		InProgress:    rawBySection[boardSectionInProgress],
-		PendingReview: rawBySection[boardSectionPendingReview],
-		Waiting:       rawBySection[boardSectionWaiting],
-		Someday:       rawBySection[boardSectionSomeday],
-		Done:          rawBySection[boardSectionDone],
+		NeedsYou:      listCounts.NeedsYou,
+		CanWait:       countedBySection[boardSectionCanWait],
+		InProgress:    countedBySection[boardSectionInProgress],
+		PendingReview: countedBySection[boardSectionPendingReview],
+		Waiting:       countedBySection[boardSectionWaiting],
+		Todo:          countedBySection[boardSectionTodo],
+		Someday:       countedBySection[boardSectionSomeday],
+		Done:          countedBySection[boardSectionDone],
+		Cancelled:     countedBySection[boardSectionCancelled],
+		OpenTotal:     listCounts.Open,
 	}
-	counts.OpenTotal = counts.NeedsYou + counts.InProgress + counts.PendingReview + counts.Waiting
 
 	// 2. Build direction_groups.
 	dirBuckets := make(map[string][]*todoBoardItemMeta)
@@ -287,9 +259,10 @@ func buildTodoBoardProjectionWithOptions(items []listedTodo, directions map[stri
 		for _, m := range bucket {
 			todoIDs = append(todoIDs, m.item.ID)
 			dc.Total++
-			switch m.section {
-			case boardSectionNeedsYou:
+			if m.needsYou && !m.carried {
 				dc.NeedsYou++
+			}
+			switch m.section {
 			case boardSectionInProgress:
 				dc.InProgress++
 			case boardSectionPendingReview:
@@ -328,7 +301,7 @@ func buildTodoBoardProjectionWithOptions(items []listedTodo, directions map[stri
 		sc := surfacedChildren[id]
 		needsYouCount := 0
 		activeCount := 0
-		if m.section == boardSectionNeedsYou {
+		if m.needsYou {
 			needsYouCount++
 		}
 		if m.section == boardSectionInProgress || m.section == boardSectionPendingReview {
@@ -336,7 +309,7 @@ func buildTodoBoardProjectionWithOptions(items []listedTodo, directions map[stri
 		}
 		for _, cid := range fc {
 			cm := metaByID[cid]
-			if cm.section == boardSectionNeedsYou {
+			if cm.needsYou && !(cm.carried && m.needsYou) {
 				needsYouCount++
 			}
 			if cm.section == boardSectionInProgress || cm.section == boardSectionPendingReview {
@@ -345,7 +318,7 @@ func buildTodoBoardProjectionWithOptions(items []listedTodo, directions map[stri
 		}
 		for _, cid := range sc {
 			cm := metaByID[cid]
-			if cm.section == boardSectionNeedsYou {
+			if cm.needsYou && !(cm.carried && m.needsYou) {
 				needsYouCount++
 			}
 			if cm.section == boardSectionInProgress || cm.section == boardSectionPendingReview {
@@ -379,43 +352,37 @@ func buildTodoBoardProjectionWithOptions(items []listedTodo, directions map[stri
 }
 
 func boardSectionPriority(section string) int {
-	switch section {
-	case boardSectionNeedsYou:
-		return 0
-	case boardSectionInProgress:
-		return 1
-	case boardSectionPendingReview:
-		return 2
-	case boardSectionWaiting:
-		return 3
-	case boardSectionSomeday:
-		return 4
-	case boardSectionDone:
-		return 5
-	default:
-		return 6
+	if i := slices.Index(boardSectionOrder[:], section); i >= 0 {
+		return i
 	}
+	return len(boardSectionOrder)
+}
+
+func isBoardClosedSection(section string) bool {
+	return section == boardSectionDone || section == boardSectionCancelled
 }
 
 func isBoardOpenSection(section string) bool {
 	switch section {
-	case boardSectionNeedsYou, boardSectionInProgress, boardSectionPendingReview, boardSectionWaiting:
+	case boardSectionNeedsYou, boardSectionCanWait, boardSectionInProgress, boardSectionPendingReview, boardSectionWaiting, boardSectionTodo:
 		return true
 	default:
 		return false
 	}
 }
 
-// classifyBoardSection maps a listedTodo to one of the 6 board sections and a deterministic
+// classifyBoardSection maps a listedTodo to a board section and a deterministic
 // sub-section priority, respecting the server-computed todo_view when present.
 func classifyBoardSection(t listedTodo) (section string, subOrder int) {
 	if v := t.View; v != nil {
 		switch {
+		case v.Reason == assistantwire.TodoReasonCanceled || projectionViewIsClosed(*v) && t.Cancelled():
+			return boardSectionCancelled, 0
+		case v.Section == assistantwire.TodoListSectionCanWait:
+			return boardSectionCanWait, 0
 		case v.Section == assistantwire.TodoListSectionNeedsYou || v.Phase == assistantwire.TodoPhaseNeedsYou:
 			return boardSectionNeedsYou, 0
-		case v.Section == assistantwire.TodoListSectionCanWait:
-			return boardSectionNeedsYou, 1
-		case v.Phase == assistantwire.TodoPhaseDone || v.Section == assistantwire.TodoListSectionDone:
+		case projectionViewIsClosed(*v):
 			if v.Section == assistantwire.TodoListSectionJustFinished {
 				return boardSectionDone, 0
 			}
@@ -431,13 +398,15 @@ func classifyBoardSection(t listedTodo) (section string, subOrder int) {
 		case v.Section == assistantwire.TodoListSectionWaiting || v.Phase == assistantwire.TodoPhaseWaiting:
 			return boardSectionWaiting, 0
 		default:
-			return boardSectionWaiting, 1
+			return boardSectionTodo, 0
 		}
 	}
 
 	// Fallback for direct unit-test inputs without precomputed View.
 	switch {
-	case t.DoneAt != nil && t.StartError == "":
+	case t.Cancelled():
+		return boardSectionCancelled, 0
+	case t.closedForGood():
 		return boardSectionDone, 1
 	case t.SomedayUntil != nil:
 		return boardSectionSomeday, 0
@@ -445,7 +414,9 @@ func classifyBoardSection(t listedTodo) (section string, subOrder int) {
 		return boardSectionNeedsYou, 0
 	case t.Supervision != nil && t.Supervision.State == reviewPending:
 		return boardSectionPendingReview, 0
-	case t.Supervision != nil && t.Supervision.State == reviewParked:
+	case t.Supervision != nil && t.Supervision.State == reviewParked,
+		t.Wait != nil,
+		repoGateOpenNonDraftPR(t.RepoGate):
 		return boardSectionWaiting, 0
 	default:
 		for _, a := range t.Agents {
@@ -453,7 +424,7 @@ func classifyBoardSection(t listedTodo) (section string, subOrder int) {
 				return boardSectionInProgress, 0
 			}
 		}
-		return boardSectionWaiting, 1
+		return boardSectionTodo, 0
 	}
 }
 
@@ -488,49 +459,170 @@ func resolveBoardRootGoalID(id string, metaByID map[string]*todoBoardItemMeta) s
 	return ""
 }
 
-// isBoardChildSurfaced reports whether a child task needs user decision or human intervention
-// and must surface out of its parent goal fold.
-func isBoardChildSurfaced(m *todoBoardItemMeta) bool {
-	if m.section == boardSectionNeedsYou {
-		return true
-	}
-	if m.section == boardSectionDone {
-		return false
-	}
-	if m.item.Ask != nil {
-		return true
-	}
-	if m.item.Supervision != nil && m.item.Supervision.State == reviewNeedsUser {
-		return true
-	}
-	if m.item.StartError != "" {
-		return true
-	}
-	return false
-}
-
-// resolveBoardDirectionID prefers explicit direction_id, falling back to origin or supervisor
-// when it matches a known direction; everything else is ungrouped ("").
-func resolveBoardDirectionID(t listedTodo, directions map[string]string) string {
+// resolveDirectDirectionID resolves a to-do's own direction without traversing part_of links:
+//  1. Explicit direction_id (trimmed; never overridden).
+//  2. The supervisor's direction, including the owner of a task-leader Agent, when present in directions.
+//  3. origin when present in directions.
+func (tb *treeBuild) resolveDirectDirectionID(t listedTodo, directions map[string]string) string {
 	if dirID := strings.TrimSpace(t.DirectionID); dirID != "" {
 		return dirID
 	}
 	if len(directions) == 0 {
 		return ""
 	}
+	if sup := strings.TrimSpace(tb.taskOwner(t.Todo)); sup != "" {
+		if _, ok := directions[sup]; ok {
+			return sup
+		}
+	}
 	if origin := strings.TrimSpace(t.Origin); origin != "" {
 		if _, ok := directions[origin]; ok {
 			return origin
 		}
 	}
-	if t.Supervision != nil {
-		if sup := strings.TrimSpace(t.Supervision.Supervisor); sup != "" {
-			if _, ok := directions[sup]; ok {
-				return sup
+	return ""
+}
+
+// resolveEffectiveDirections computes the server-authoritative effective direction_id for every
+// to-do in items with strict precedence and cycle-safe part_of inheritance:
+//  1. Explicit direction_id (trimmed; never overridden).
+//  2. The supervisor's direction (when present in directions).
+//  3. origin (when present in directions).
+//  4. part_of ancestor chain inheritance (nearest ancestor with a resolved direction).
+//  5. Unanimous subtree child fallback for undirected umbrella parents: if all directed descendants
+//     agree on one single direction in directions, inherit it for the parent and propagate to any
+//     undirected siblings under that parent.
+func (tb *treeBuild) resolveEffectiveDirections(items []listedTodo, directions map[string]string) map[string]string {
+	byID := make(map[string]listedTodo, len(items))
+	direct := make(map[string]string, len(items))
+	orderedIDs := make([]string, 0, len(items))
+
+	for _, item := range items {
+		if item.ID == "" {
+			continue
+		}
+		if _, dup := byID[item.ID]; dup {
+			continue
+		}
+		byID[item.ID] = item
+		direct[item.ID] = tb.resolveDirectDirectionID(item, directions)
+		orderedIDs = append(orderedIDs, item.ID)
+	}
+
+	children := make(map[string][]string)
+	for _, id := range orderedIDs {
+		parentID := strings.TrimSpace(byID[id].PartOf)
+		if parentID == "" || parentID == id {
+			continue
+		}
+		if _, ok := byID[parentID]; !ok {
+			continue
+		}
+		children[parentID] = append(children[parentID], id)
+	}
+
+	// Pass 2: cycle-safe ancestor chain inheritance from direct directions.
+	resolved := make(map[string]string, len(orderedIDs))
+	for _, id := range orderedIDs {
+		if d := direct[id]; d != "" {
+			resolved[id] = d
+			continue
+		}
+		visited := map[string]bool{id: true}
+		cur := strings.TrimSpace(byID[id].PartOf)
+		for cur != "" && !visited[cur] {
+			visited[cur] = true
+			parent, ok := byID[cur]
+			if !ok {
+				break
+			}
+			if d := direct[cur]; d != "" {
+				resolved[id] = d
+				break
+			}
+			cur = strings.TrimSpace(parent.PartOf)
+		}
+	}
+
+	// Pass 3: unanimous subtree child fallback for undirected umbrella parents.
+	if len(directions) > 0 {
+		umbrella := make(map[string]string)
+		for _, id := range orderedIDs {
+			if resolved[id] != "" || len(children[id]) == 0 {
+				continue
+			}
+			visited := map[string]bool{id: true}
+			queue := append([]string(nil), children[id]...)
+			sole := ""
+			conflict := false
+			for len(queue) > 0 && !conflict {
+				descID := queue[0]
+				queue = queue[1:]
+				if visited[descID] {
+					continue
+				}
+				visited[descID] = true
+				if d := resolved[descID]; d != "" {
+					if sole == "" {
+						sole = d
+					} else if sole != d {
+						conflict = true
+						break
+					}
+				}
+				if kids := children[descID]; len(kids) > 0 {
+					queue = append(queue, kids...)
+				}
+			}
+			if !conflict && sole != "" {
+				if _, known := directions[sole]; known {
+					umbrella[id] = sole
+				}
+			}
+		}
+		if len(umbrella) > 0 {
+			for id, dirID := range umbrella {
+				resolved[id] = dirID
+			}
+			// Pass 4: propagate newly resolved umbrella parent directions to undirected descendants.
+			for _, id := range orderedIDs {
+				if resolved[id] != "" {
+					continue
+				}
+				visited := map[string]bool{id: true}
+				cur := strings.TrimSpace(byID[id].PartOf)
+				for cur != "" && !visited[cur] {
+					visited[cur] = true
+					parent, ok := byID[cur]
+					if !ok {
+						break
+					}
+					if d := resolved[cur]; d != "" {
+						resolved[id] = d
+						break
+					}
+					cur = strings.TrimSpace(parent.PartOf)
+				}
 			}
 		}
 	}
-	return ""
+
+	return resolved
+}
+
+// populateTodoEffectiveDirections attaches read-only effective_direction_id and
+// effective_direction_name onto each listedTodo in items. Callers must invoke this only when
+// todos_v2 is enabled.
+func (s *Service) populateTodoEffectiveDirections(items []listedTodo, directions map[string]string) {
+	if len(items) == 0 {
+		return
+	}
+	resolved := s.directionOwners(items).resolveEffectiveDirections(items, directions)
+	for i := range items {
+		dirID := resolved[items[i].ID]
+		items[i].EffectiveDirectionID = dirID
+		items[i].EffectiveDirectionName = strings.TrimSpace(directions[dirID])
+	}
 }
 
 func compareBoardMeta(a, b *todoBoardItemMeta) int {

@@ -14,6 +14,11 @@ import {
   encodeKey,
   fontLoadQuery,
   historyAnchor,
+  historyEnd,
+  POLL_FAST_FOR_MS,
+  POLL_MIN_MS,
+  POLL_MS,
+  pollDelay,
   keyDecision,
   keyNameForBytes,
   isStale,
@@ -157,14 +162,14 @@ describe("link status", () => {
   });
 
   it("says how old the screen is", () => {
-    expect(linkHeadline(null, 0)).toBe("还没有拿到终端");
-    expect(linkHeadline(1000, 13_400)).toBe("上次更新 12 秒前");
-    expect(linkHeadline(0, 125_000)).toBe("上次更新 2 分钟前");
-    expect(linkHeadline(new Date(2026, 10, 2, 9, 5).getTime(), new Date(2026, 10, 2, 11, 0).getTime())).toBe("上次更新 09:05");
+    expect(linkHeadline(null, 0)).toBe("暂未连接到终端");
+    expect(linkHeadline(1000, 13_400)).toBe("12 秒前更新");
+    expect(linkHeadline(0, 125_000)).toBe("2 分钟前更新");
+    expect(linkHeadline(new Date(2026, 10, 2, 9, 5).getTime(), new Date(2026, 10, 2, 11, 0).getTime())).toBe("更新于 09:05");
   });
 
   it("says when it tries again and why", () => {
-    expect(linkDetail(null, 0, 0)).toBe("等待电脑回应…");
+    expect(linkDetail(null, 0, 0)).toBe("正在等待电脑响应…");
     expect(linkDetail("连不上 hub", 4000, 200)).toBe("4 秒后重试 · 连不上 hub");
     expect(linkDetail("连不上 hub", 4000, 4000)).toBe("正在重试… · 连不上 hub");
   });
@@ -322,6 +327,26 @@ describe("history anchor", () => {
     expect(a.anchor).toHaveLength(20);
     expect(a.anchor[0]).toBe("line 0");
     expect(historyAnchor(["", ""])).toEqual({ anchor: [], loaded: 0 });
+  });
+
+  it("says where scrolling up stopped: more, the start, older output not kept, herdr's cap", () => {
+    expect(historyEnd({ has_more: true, at_limit: false })).toBe("more");
+    expect(historyEnd({ has_more: false, at_limit: false })).toBe("start");
+    expect(historyEnd({ has_more: false, at_limit: true, dropped: true })).toBe("dropped");
+    expect(historyEnd({ has_more: false, at_limit: true })).toBe("limit"); // a node without `dropped`
+    expect(historyEnd({})).toBe("start");
+  });
+});
+
+describe("poll pace", () => {
+  it("reads at the node's pace while the screen changes, once a second when it is idle or no pace is given", () => {
+    const now = 100_000;
+    expect(pollDelay(undefined, now, now)).toBe(POLL_MS);
+    expect(pollDelay(250, now - 100, now)).toBe(250);
+    expect(pollDelay(250, now - POLL_FAST_FOR_MS - 1, now)).toBe(POLL_MS);
+    expect(pollDelay(50, now, now)).toBe(POLL_MIN_MS);
+    expect(pollDelay(5000, now, now)).toBe(POLL_MS);
+    expect(pollDelay(Number.NaN, now, now)).toBe(POLL_MS);
   });
 });
 

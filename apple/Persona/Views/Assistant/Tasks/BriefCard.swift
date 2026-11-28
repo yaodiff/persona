@@ -59,7 +59,7 @@ struct BriefCard: View {
                 BriefHead(symbol: Theme.Icon.waitsForYou, tint: AgentState.needsYou.tone.text, title: String(localized: "Waiting for you (\(brief.waiting.count))"))
                 if brief.waiting.isEmpty { BriefNote(String(localized: "Nothing.")) }
                 // Only a hub from before the rows' chat needs the pending cards looked through.
-                let pending = brief.waiting.contains { $0.sessionID == nil } ? AppModel.shared.pendingInteractions : []
+                let pending = brief.waiting.contains { $0.sessionID == nil } ? AppModel.shared.aggregatePendingInteractions : []
                 ForEach(brief.waiting, id: \.id) { row in
                     BriefChatRow(row: row, chat: BriefBody.chat(for: row, waiting: true, group: group, pending: pending))
                 }

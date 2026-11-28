@@ -1545,6 +1545,18 @@
       "value": "无法保存附件"
     },
     {
+      "name": "chat_attachment_photos_count_as_files",
+      "value": "照片数量超过单条消息上限，部分照片已作为文件发送。"
+    },
+    {
+      "name": "chat_attachment_photos_size_as_files",
+      "value": "照片大小超过单条消息上限，部分照片已作为文件发送。"
+    },
+    {
+      "name": "chat_attachment_photos_count_size_as_files",
+      "value": "照片数量和大小超过单条消息上限，部分照片已作为文件发送。"
+    },
+    {
       "name": "chat_attachment_limit_reached",
       "value": "附件数量已达上限"
     },
@@ -8587,6 +8599,1650 @@
     {
       "name": "session_models_empty",
       "value": "此启动器没有可切换的模型。"
+    },
+    {
+      "name": "agent_mark_all_seen",
+      "value": "全部标为已读"
+    },
+    {
+      "name": "agent_mark_all_seen_confirm",
+      "value": "将 {count} 个未读会话全部标为已读？"
+    },
+    {
+      "name": "live_view_section_title",
+      "value": "实况窗"
+    },
+    {
+      "name": "live_view_enable",
+      "value": "启用实况窗"
+    },
+    {
+      "name": "live_view_enable_detail",
+      "value": "在状态栏胶囊和锁屏实时汇总等待、运行中与未读会话。"
+    },
+    {
+      "name": "live_view_lock_details",
+      "value": "锁屏显示 Agent 详情"
+    },
+    {
+      "name": "live_view_lock_details_detail",
+      "value": "显示会话标题与摘要，关闭时仅显示状态计数。"
+    },
+    {
+      "name": "live_view_test_publish",
+      "value": "在系统实况窗中预览"
+    },
+    {
+      "name": "live_view_test_stop",
+      "value": "结束"
+    },
+    {
+      "name": "live_view_needs_count",
+      "value": "{count} 个等你"
+    },
+    {
+      "name": "live_view_working_count",
+      "value": "{count} 个在做"
+    },
+    {
+      "name": "live_view_unread_count",
+      "value": "{count} 个未读"
+    },
+    {
+      "name": "live_view_all_caught_up",
+      "value": "已全部处理"
+    },
+    {
+      "name": "live_view_assistant_replying",
+      "value": "Persona 正在回复"
+    },
+    {
+      "name": "live_view_background_tag",
+      "value": "后台"
+    },
+    {
+      "name": "live_view_anon_permission",
+      "value": "有一条权限请求待处理"
+    },
+    {
+      "name": "live_view_anon_plan",
+      "value": "有一个计划待确认"
+    },
+    {
+      "name": "live_view_anon_question",
+      "value": "有一个问题等你回答"
+    },
+    {
+      "name": "live_view_anon_screen",
+      "value": "有一个终端等待处理"
+    },
+    {
+      "name": "live_view_anon_working",
+      "value": "正在处理"
+    },
+    {
+      "name": "live_view_anon_unread",
+      "value": "刚完成待看"
+    },
+    {
+      "name": "live_view_capsule_needs",
+      "value": "等你 {count}"
+    },
+    {
+      "name": "live_view_capsule_working",
+      "value": "在做 {count}"
+    },
+    {
+      "name": "live_view_capsule_unread",
+      "value": "未读 {count}"
+    },
+    {
+      "name": "live_view_capsule_done",
+      "value": "已看完"
+    },
+    {
+      "name": "live_view_more_count",
+      "value": "+{count}"
+    },
+    {
+      "name": "live_view_system_disabled",
+      "value": "请在系统设置中为 Persona 开启实况窗权限，以在状态栏和锁屏展示实时状态。"
+    },
+    {
+      "name": "live_view_entitlement_required",
+      "value": "系统实况窗需要已配置实况窗权益的签名包，当前已保留应用内预览。"
+    },
+    {
+      "name": "live_view_unavailable",
+      "value": "当前设备或模拟器暂不支持系统实况窗服务。"
+    },
+    {
+      "name": "project_agent_count_one",
+      "value": "1 个代理"
+    },
+    {
+      "name": "fold_inspector_title",
+      "value": "实时概览"
+    },
+    {
+      "name": "fold_inspector_fleet",
+      "value": "代理态势"
+    },
+    {
+      "name": "fold_posture_trifold",
+      "value": "三折叠宽屏工作台"
+    },
+    {
+      "name": "fold_posture_dual",
+      "value": "折叠双栏模式"
+    },
+    {
+      "name": "fold_posture_hover",
+      "value": "悬停分屏模式"
+    },
+    {
+      "name": "turn_changes_one",
+      "value": "已更改 1 个文件"
+    },
+    {
+      "name": "turn_changes_many",
+      "value": "已更改 {count} 个文件"
+    },
+    {
+      "name": "turn_changes_review",
+      "value": "查看变更"
+    },
+    {
+      "name": "turn_changes_more",
+      "value": "展开其余 {count} 个"
+    },
+    {
+      "name": "bubble_show_more",
+      "value": "展开全文"
+    },
+    {
+      "name": "bubble_show_less",
+      "value": "收起"
+    },
+    {
+      "name": "live_view_published_toast",
+      "value": "系统实况窗已更新"
+    },
+    {
+      "name": "agents_marked_seen_toast",
+      "value": "已将 {count} 项标为已读"
+    },
+    {
+      "name": "live_view_preview_approve",
+      "value": "批准"
+    },
+    {
+      "name": "live_view_preview_deny",
+      "value": "拒绝"
+    },
+    {
+      "name": "live_view_capsule_metric_working",
+      "value": "运行中"
+    },
+    {
+      "name": "fold_workbench_pulse",
+      "value": "动态"
+    },
+    {
+      "name": "fold_workbench_code",
+      "value": "代码"
+    },
+    {
+      "name": "fold_workbench_machines",
+      "value": "设备"
+    },
+    {
+      "name": "fold_posture_trifold_angled",
+      "value": "三折支架"
+    },
+    {
+      "name": "fold_workbench_expand_tools",
+      "value": "全屏展开"
+    },
+    {
+      "name": "fold_workbench_pick_session",
+      "value": "选择一个智能体会话即可并排查看文件、Git 差异与终端。"
+    },
+    {
+      "name": "fold_relay_next",
+      "value": "下一个"
+    },
+    {
+      "name": "fold_relay_prev",
+      "value": "上一个"
+    },
+    {
+      "name": "fold_relay_queue",
+      "value": "{count} 项待看"
+    },
+    {
+      "name": "fold_relay_clear",
+      "value": "已全部看完"
+    },
+    {
+      "name": "machine_load_per_core",
+      "value": "{per}/核"
+    },
+    {
+      "name": "phone_xiaoyi",
+      "value": "小艺"
+    },
+    {
+      "name": "phone_search_alias_phone_xiaoyi",
+      "value": "小艺 智能体 意图 技能 语音 助手"
+    },
+    {
+      "name": "xiaoyi_section_capabilities",
+      "value": "能力注册"
+    },
+    {
+      "name": "xiaoyi_section_preferences",
+      "value": "偏好与安全"
+    },
+    {
+      "name": "xiaoyi_section_diagnostics",
+      "value": "连通性自检"
+    },
+    {
+      "name": "xiaoyi_agent_card_label",
+      "value": "端侧智能体"
+    },
+    {
+      "name": "xiaoyi_intents_count_label",
+      "value": "已声明意图"
+    },
+    {
+      "name": "xiaoyi_skills_runtime_label",
+      "value": "已注册技能"
+    },
+    {
+      "name": "xiaoyi_suggestions_toggle",
+      "value": "小艺建议"
+    },
+    {
+      "name": "xiaoyi_suggestions_hint",
+      "value": "有待确认事项时向小艺分享脱敏状态提示，不包含敏感正文。"
+    },
+    {
+      "name": "xiaoyi_suggestions_unregistered",
+      "value": "小艺建议需在华为小艺开放平台完成意图注册后生效。"
+    },
+    {
+      "name": "xiaoyi_lock_screen_notice",
+      "value": "通过小艺执行批准时始终要求手机已解锁；高风险自动放行方案仅可在 Persona 应用内确认。"
+    },
+    {
+      "name": "xiaoyi_diag_run",
+      "value": "立即自检"
+    },
+    {
+      "name": "xiaoyi_diag_running",
+      "value": "正在检查…"
+    },
+    {
+      "name": "xiaoyi_diag_hub_paired",
+      "value": "Hub 配对"
+    },
+    {
+      "name": "xiaoyi_diag_credential",
+      "value": "凭据可读性"
+    },
+    {
+      "name": "xiaoyi_diag_transport",
+      "value": "直连通道"
+    },
+    {
+      "name": "xiaoyi_diag_pass",
+      "value": "正常"
+    },
+    {
+      "name": "xiaoyi_diag_attention",
+      "value": "需处理"
+    },
+    {
+      "name": "xiaoyi_diag_ssh_warning",
+      "value": "仅 SSH 隧道"
+    },
+    {
+      "name": "xiaoyi_diag_reachable",
+      "value": "已连通（{online}/{total} 台在线）"
+    },
+    {
+      "name": "xiaoyi_card_working",
+      "value": "{count} 进行中"
+    },
+    {
+      "name": "xiaoyi_card_needs_you",
+      "value": "{count} 待确认"
+    },
+    {
+      "name": "xiaoyi_card_approve",
+      "value": "允许 / 批准"
+    },
+    {
+      "name": "xiaoyi_card_submitting",
+      "value": "提交中…"
+    },
+    {
+      "name": "xiaoyi_card_confirm_prompt",
+      "value": "确认执行此批准？请确保手机处于解锁状态。"
+    },
+    {
+      "name": "xiaoyi_card_approved_done",
+      "value": "已确认。"
+    },
+    {
+      "name": "xiaoyi_card_open_persona",
+      "value": "在 Persona 中打开"
+    },
+    {
+      "name": "xiaoyi_card_continue",
+      "value": "在 Persona 中继续"
+    },
+    {
+      "name": "xiaoyi_card_open_failed",
+      "value": "无法打开 Persona。"
+    },
+    {
+      "name": "xiaoyi_sent_still_thinking",
+      "value": "已发给 Persona，正在思考中。"
+    },
+    {
+      "name": "xiaoyi_task_sent_summary",
+      "value": "已发送到 {session}（{machine}）。"
+    },
+    {
+      "name": "xiaoyi_approved_summary",
+      "value": "已批准：{summary}"
+    },
+    {
+      "name": "xiaoyi_todo_saved_summary",
+      "value": "已记下待办：{title}"
+    },
+    {
+      "name": "xiaoyi_water_logged_summary",
+      "value": "已记录 {amount} 毫升，今日 {today} / {goal} 毫升。"
+    },
+    {
+      "name": "xiaoyi_push_queued_summary",
+      "value": "Hub 暂不可达，已加入队列稍后发送。"
+    },
+    {
+      "name": "xiaoyi_push_sent_summary",
+      "value": "已发送到 Persona。"
+    },
+    {
+      "name": "xiaoyi_push_sent_no_dest_summary",
+      "value": "已发送。请在设置 › 订阅源中开启收件箱或知识库投递。"
+    },
+    {
+      "name": "xiaoyi_opening_recording",
+      "value": "正在打开 Persona 会议录音。"
+    },
+    {
+      "name": "xiaoyi_opening_persona",
+      "value": "正在打开 Persona。"
+    },
+    {
+      "name": "xiaoyi_kb_no_hits",
+      "value": "知识库中未找到与“{query}”相关的内容。"
+    },
+    {
+      "name": "xiaoyi_not_paired",
+      "value": "尚未配对，请先打开 Persona 连接你的 Hub。"
+    },
+    {
+      "name": "xiaoyi_auth_expired",
+      "value": "配对凭据已失效，请打开 Persona 重新配对。"
+    },
+    {
+      "name": "xiaoyi_already_handled",
+      "value": "该请求已被处理。"
+    },
+    {
+      "name": "xiaoyi_ssh_open_app",
+      "value": "当前 Hub 仅通过 SSH 隧道连接，请打开 Persona 应用操作。"
+    },
+    {
+      "name": "xiaoyi_unlock_required",
+      "value": "请先解锁手机，再批准待确认请求。"
+    },
+    {
+      "name": "xiaoyi_offline",
+      "value": "当前无法连接 Hub，请检查网络或 VPN。"
+    },
+    {
+      "name": "xiaoyi_machine_offline",
+      "value": "{target} 当前离线，请检查电脑是否在线及 Persona Link 是否运行。"
+    },
+    {
+      "name": "xiaoyi_machine_not_found",
+      "value": "未找到名为 {target} 的电脑。"
+    },
+    {
+      "name": "xiaoyi_no_online_machine",
+      "value": "当前没有在线的电脑。"
+    },
+    {
+      "name": "xiaoyi_no_live_session",
+      "value": "{target} 上没有活跃会话，请打开 Persona 新建会话。"
+    },
+    {
+      "name": "xiaoyi_hub_update_required",
+      "value": "当前 Hub 版本过旧，请更新 Persona Hub 后重试。"
+    },
+    {
+      "name": "xiaoyi_need_app_for_new_session",
+      "value": "请先在 Persona 中于 {target} 上启动一次会话，以记住目录和启动器。"
+    },
+    {
+      "name": "xiaoyi_nothing_pending",
+      "value": "当前没有需要你批准的事项。"
+    },
+    {
+      "name": "xiaoyi_needs_screen",
+      "value": "此请求需要在屏幕中交互，请打开 Persona 处理。"
+    },
+    {
+      "name": "xiaoyi_nothing_to_send",
+      "value": "没有可发送的内容。"
+    },
+    {
+      "name": "xiaoyi_water_not_enabled",
+      "value": "请先在 Persona 的健康空间中添加饮水记录项。"
+    },
+    {
+      "name": "xiaoyi_recording_module_off",
+      "value": "这台 hub 关闭了会议录音。"
+    },
+    {
+      "name": "xiaoyi_diag_recording_module",
+      "value": "会议录音模块"
+    },
+    {
+      "name": "xiaoyi_diag_on",
+      "value": "已开启"
+    },
+    {
+      "name": "xiaoyi_diag_off",
+      "value": "已关闭"
+    },
+    {
+      "name": "xiaoyi_agent_card_ready",
+      "value": "已就绪 · {count} 项能力"
+    },
+    {
+      "name": "xiaoyi_diag_preview_card",
+      "value": "预览小艺卡片"
+    },
+    {
+      "name": "xiaoyi_timeout",
+      "value": "Hub 响应超时，请打开 Persona 查看最新进度。"
+    },
+    {
+      "name": "xiaoyi_rate_limited",
+      "value": "短时间内推送过多，请稍后再试。"
+    },
+    {
+      "name": "xiaoyi_failed",
+      "value": "操作未能完成，请打开 Persona 查看详情。"
+    },
+    {
+      "name": "fold_urgent_review",
+      "value": "查看"
+    },
+    {
+      "name": "fold_hover_deck_title",
+      "value": "悬停控制坞"
+    },
+    {
+      "name": "fold_interrupt_agent",
+      "value": "中断"
+    },
+    {
+      "name": "knowledge_minutes_checking",
+      "value": "正在复核整场录音…"
+    },
+    {
+      "name": "knowledge_minutes_checking_progress",
+      "value": "正在复核整场录音（{done}/{total} 分钟）…"
+    },
+    {
+      "name": "knowledge_minutes_writing",
+      "value": "正在整理纪要…"
+    },
+    {
+      "name": "agents_use_herdr_tab_name",
+      "value": "使用 herdr 标签名作为会话名"
+    },
+    {
+      "name": "agents_use_herdr_tab_name_hint",
+      "value": "优先显示标签名。此设置会在连接同一 Hub 的设备间同步。"
+    },
+    {
+      "name": "composer_queued_count",
+      "value": "{count} 条排队中"
+    },
+    {
+      "name": "composer_queue_send_now",
+      "value": "立即发送"
+    },
+    {
+      "name": "composer_queue_relayed",
+      "value": "已转达"
+    },
+    {
+      "name": "code_wrap_lines",
+      "value": "换行"
+    },
+    {
+      "name": "code_unwrap_lines",
+      "value": "横向滚动"
+    },
+    {
+      "name": "copied",
+      "value": "已复制"
+    },
+    {
+      "name": "quick_palette_title",
+      "value": "快速命令"
+    },
+    {
+      "name": "quick_palette_placeholder",
+      "value": "跳转到智能体、工作区或操作…"
+    },
+    {
+      "name": "quick_palette_agents",
+      "value": "待处理与活跃智能体"
+    },
+    {
+      "name": "quick_palette_workspaces",
+      "value": "工作区"
+    },
+    {
+      "name": "quick_palette_actions",
+      "value": "快捷控制"
+    },
+    {
+      "name": "quick_palette_toggle_theme",
+      "value": "切换浅色 / 深色主题"
+    },
+    {
+      "name": "quick_palette_toggle_workbench",
+      "value": "切换实时工作台"
+    },
+    {
+      "name": "quick_palette_liveview_preview",
+      "value": "实况窗预览"
+    },
+    {
+      "name": "quick_palette_code_tab",
+      "value": "切换到代码标签页"
+    },
+    {
+      "name": "quick_palette_machines_tab",
+      "value": "切换到设备标签页"
+    },
+    {
+      "name": "quick_palette_empty",
+      "value": "没有匹配的命令"
+    },
+    {
+      "name": "fold_posture_book",
+      "value": "折叠书本模式"
+    },
+    {
+      "name": "machine_cpu_load",
+      "value": "CPU 与负载"
+    },
+    {
+      "name": "composer_queue_edit",
+      "value": "撤回到输入框编辑"
+    },
+    {
+      "name": "composer_queue_move_up",
+      "value": "上移"
+    },
+    {
+      "name": "composer_queue_move_down",
+      "value": "下移"
+    },
+    {
+      "name": "composer_queue_taken_back",
+      "value": "已移回输入框"
+    },
+    {
+      "name": "composer_queue_deleted",
+      "value": "已从队列移除"
+    },
+    {
+      "name": "composer_queue_arrives_turn_end",
+      "value": "本轮结束后送达"
+    },
+    {
+      "name": "composer_queue_arrives_next",
+      "value": "随下一条消息送达"
+    },
+    {
+      "name": "starred_messages",
+      "value": "星标消息"
+    },
+    {
+      "name": "star_message",
+      "value": "标星"
+    },
+    {
+      "name": "unstar_message",
+      "value": "取消标星"
+    },
+    {
+      "name": "starred_badge",
+      "value": "已标星"
+    },
+    {
+      "name": "starred_saved_toast",
+      "value": "已收藏星标消息"
+    },
+    {
+      "name": "starred_removed_toast",
+      "value": "已取消星标"
+    },
+    {
+      "name": "starred_search_placeholder",
+      "value": "搜索星标消息"
+    },
+    {
+      "name": "starred_empty_title",
+      "value": "暂无星标消息"
+    },
+    {
+      "name": "starred_empty_message",
+      "value": "长按任意消息即可添加星标。"
+    },
+    {
+      "name": "starred_unavailable_title",
+      "value": "星标消息暂不可用"
+    },
+    {
+      "name": "starred_unavailable_message",
+      "value": "请更新 Hub 以在此助手中使用星标消息功能。"
+    },
+    {
+      "name": "starred_load_failed",
+      "value": "无法加载星标消息"
+    },
+    {
+      "name": "starred_search_empty",
+      "value": "没有匹配的星标消息"
+    },
+    {
+      "name": "starred_open_original",
+      "value": "查看原消息"
+    },
+    {
+      "name": "starred_original_unavailable",
+      "value": "原消息已不可用。"
+    },
+    {
+      "name": "starred_original_check_failed",
+      "value": "无法检查原消息，请重试。"
+    },
+    {
+      "name": "starred_omitted_chars",
+      "value": "另有 {count} 个字符未展示"
+    },
+    {
+      "name": "export_chat",
+      "value": "导出对话"
+    },
+    {
+      "name": "export_include_timestamps",
+      "value": "包含时间戳"
+    },
+    {
+      "name": "export_include_work_steps",
+      "value": "包含工作步骤"
+    },
+    {
+      "name": "export_preview_count",
+      "value": "共 {count} 条消息"
+    },
+    {
+      "name": "export_truncated_badge",
+      "value": "{count} 条已截断"
+    },
+    {
+      "name": "export_truncated_notice",
+      "value": "已省略 {omitted} 个字符"
+    },
+    {
+      "name": "export_copy_markdown",
+      "value": "复制 Markdown"
+    },
+    {
+      "name": "export_save_share",
+      "value": "保存 / 分享"
+    },
+    {
+      "name": "export_copied_toast",
+      "value": "已复制 Markdown"
+    },
+    {
+      "name": "archived_chats",
+      "value": "已归档对话"
+    },
+    {
+      "name": "unarchive",
+      "value": "取消归档"
+    },
+    {
+      "name": "unarchived_toast",
+      "value": "已恢复到对话列表"
+    },
+    {
+      "name": "archived_search_placeholder",
+      "value": "搜索已归档对话"
+    },
+    {
+      "name": "archived_empty_title",
+      "value": "暂无已归档对话"
+    },
+    {
+      "name": "archived_empty_message",
+      "value": "归档的对话会显示在这里，点击即可打开或恢复。"
+    },
+    {
+      "name": "archived_search_empty",
+      "value": "没有匹配的已归档对话"
+    },
+    {
+      "name": "fork_continue_new_chat",
+      "value": "在新对话中继续"
+    },
+    {
+      "name": "fork_chat_done_toast",
+      "value": "已在新对话中继续"
+    },
+    {
+      "name": "undo",
+      "value": "撤销"
+    },
+    {
+      "name": "assistant",
+      "value": "助手"
+    },
+    {
+      "name": "token_usage_title",
+      "value": "Token 用量"
+    },
+    {
+      "name": "token_usage_quick_subtitle",
+      "value": "12 周热力图与项目分布"
+    },
+    {
+      "name": "token_usage_unsupported",
+      "value": "升级 Hub 后即可查看 Token 用量"
+    },
+    {
+      "name": "token_usage_total_12w",
+      "value": "近 12 周"
+    },
+    {
+      "name": "token_usage_hit_rate",
+      "value": "缓存命中"
+    },
+    {
+      "name": "token_usage_input",
+      "value": "输入"
+    },
+    {
+      "name": "token_usage_output",
+      "value": "输出"
+    },
+    {
+      "name": "token_usage_cache_read",
+      "value": "缓存读取"
+    },
+    {
+      "name": "token_usage_cache_write",
+      "value": "缓存写入"
+    },
+    {
+      "name": "token_usage_heatmap_title",
+      "value": "Token 活跃度"
+    },
+    {
+      "name": "token_usage_heatmap_tap_hint",
+      "value": "点按日期查看明细"
+    },
+    {
+      "name": "token_usage_less",
+      "value": "少"
+    },
+    {
+      "name": "token_usage_more",
+      "value": "多"
+    },
+    {
+      "name": "token_usage_by_project",
+      "value": "按项目统计"
+    },
+    {
+      "name": "token_usage_no_projects",
+      "value": "该时间范围内暂无项目用量"
+    },
+    {
+      "name": "token_usage_range_today",
+      "value": "今天"
+    },
+    {
+      "name": "token_usage_range_3d",
+      "value": "3天"
+    },
+    {
+      "name": "token_usage_range_7d",
+      "value": "7天"
+    },
+    {
+      "name": "token_usage_by_machine",
+      "value": "按设备"
+    },
+    {
+      "name": "token_usage_by_model",
+      "value": "按模型"
+    },
+    {
+      "name": "token_usage_share",
+      "value": "占比"
+    },
+    {
+      "name": "token_usage_project_home",
+      "value": "主目录"
+    },
+    {
+      "name": "token_usage_project_temp",
+      "value": "临时目录"
+    },
+    {
+      "name": "token_usage_project_assistant",
+      "value": "助手对话"
+    },
+    {
+      "name": "token_usage_project_unknown",
+      "value": "未知目录"
+    },
+    {
+      "name": "todo_wait_heading",
+      "value": "等待中"
+    },
+    {
+      "name": "todo_wait_from_step",
+      "value": "来自步骤：{step}"
+    },
+    {
+      "name": "todo_wait_waiting_on",
+      "value": "等待对象"
+    },
+    {
+      "name": "todo_wait_blocked_by",
+      "value": "阻塞原因"
+    },
+    {
+      "name": "todo_wait_details",
+      "value": "详情"
+    },
+    {
+      "name": "todo_wait_wakes_when",
+      "value": "唤醒条件"
+    },
+    {
+      "name": "todo_wait_scheduled_wake",
+      "value": "计划唤醒"
+    },
+    {
+      "name": "todo_wait_check_in_due_label",
+      "value": "跟进已到期"
+    },
+    {
+      "name": "todo_wait_until_label",
+      "value": "截止时间"
+    },
+    {
+      "name": "todo_wait_sent_via",
+      "value": "通过 {channel} 发送"
+    },
+    {
+      "name": "todo_wait_open_message",
+      "value": "打开消息"
+    },
+    {
+      "name": "todo_wait_view_pr",
+      "value": "查看 PR"
+    },
+    {
+      "name": "todo_wait_open_source",
+      "value": "打开来源"
+    },
+    {
+      "name": "todo_wait_waiting_since",
+      "value": "自 {time} 起等待"
+    },
+    {
+      "name": "todo_wait_kind_person_reply",
+      "value": "等待回复"
+    },
+    {
+      "name": "todo_wait_kind_merge_review",
+      "value": "等待评审"
+    },
+    {
+      "name": "todo_wait_kind_pr_merge",
+      "value": "等待合并"
+    },
+    {
+      "name": "todo_wait_kind_external_event",
+      "value": "等待外部事件"
+    },
+    {
+      "name": "todo_wait_kind_date",
+      "value": "等待指定日期"
+    },
+    {
+      "name": "todo_wait_kind_todo_handoff",
+      "value": "等待另一条待办"
+    },
+    {
+      "name": "todo_wait_kind_agent",
+      "value": "等待另一个 Agent"
+    },
+    {
+      "name": "todo_wait_kind_usage_limit",
+      "value": "已达用量上限"
+    },
+    {
+      "name": "todo_wait_kind_computer_offline",
+      "value": "设备离线"
+    },
+    {
+      "name": "todo_wait_kind_scheduled_report",
+      "value": "定时汇报"
+    },
+    {
+      "name": "todo_wait_kind_parked",
+      "value": "已搁置"
+    },
+    {
+      "name": "todo_wait_blocker_review_required",
+      "value": "需要评审"
+    },
+    {
+      "name": "todo_wait_blocker_changes_requested",
+      "value": "需要修改"
+    },
+    {
+      "name": "todo_wait_blocker_checks_pending",
+      "value": "检查运行中"
+    },
+    {
+      "name": "todo_wait_blocker_checks_failing",
+      "value": "检查失败"
+    },
+    {
+      "name": "todo_wait_blocker_conflicts",
+      "value": "存在合并冲突"
+    },
+    {
+      "name": "todo_wait_usage_limit_target",
+      "value": "{target} 已达用量上限"
+    },
+    {
+      "name": "todo_wait_waiting_to_merge_target",
+      "value": "等待合并 {target}"
+    },
+    {
+      "name": "todo_wait_waiting_on_target",
+      "value": "正在等待 {target}"
+    },
+    {
+      "name": "todo_wait_back_at",
+      "value": "{time} 恢复"
+    },
+    {
+      "name": "todo_wait_wakes_at",
+      "value": "{time} 唤醒"
+    },
+    {
+      "name": "todo_wait_check_in_due",
+      "value": "跟进已到期（{time}）"
+    },
+    {
+      "name": "todo_wait_until_at",
+      "value": "至 {time}"
+    },
+    {
+      "name": "todo_wait_since_at",
+      "value": "始于 {time}"
+    },
+    {
+      "name": "personal_agents",
+      "value": "个人 Agents"
+    },
+    {
+      "name": "personal_agents_hide",
+      "value": "移出列表"
+    },
+    {
+      "name": "personal_agents_restore",
+      "value": "恢复"
+    },
+    {
+      "name": "personal_agents_removed",
+      "value": "已移出（{count}）"
+    },
+    {
+      "name": "knowledge_minutes_debates",
+      "value": "分歧"
+    },
+    {
+      "name": "knowledge_minutes_debate_open",
+      "value": "未定"
+    },
+    {
+      "name": "knowledge_minutes_debate_settled",
+      "value": "已定"
+    },
+    {
+      "name": "knowledge_minutes_debate_outcome",
+      "value": "结论"
+    },
+    {
+      "name": "kb_chat_in_inbox",
+      "value": "收件箱关联项"
+    },
+    {
+      "name": "kb_chat_inbox_done_count",
+      "value": "{count} 项已完成"
+    },
+    {
+      "name": "kb_chat_knowledge_page",
+      "value": "知识库页面"
+    },
+    {
+      "name": "todo_stage_plan",
+      "value": "方案"
+    },
+    {
+      "name": "todo_stage_develop",
+      "value": "开发"
+    },
+    {
+      "name": "todo_stage_review",
+      "value": "审查"
+    },
+    {
+      "name": "todo_stage_merge",
+      "value": "合入"
+    },
+    {
+      "name": "todo_stage_deploy",
+      "value": "部署"
+    },
+    {
+      "name": "todo_stage_verify",
+      "value": "已验证"
+    },
+    {
+      "name": "todo_stage_done",
+      "value": "已完成"
+    },
+    {
+      "name": "todo_stage_state_done",
+      "value": "已完成"
+    },
+    {
+      "name": "todo_stage_state_current",
+      "value": "当前步骤"
+    },
+    {
+      "name": "todo_stage_state_ahead",
+      "value": "还没到"
+    },
+    {
+      "name": "todo_stage_step_of",
+      "value": "第 {current} 步，共 {total} 步"
+    },
+    {
+      "name": "todo_stage_step_summary",
+      "value": "第 {current} 步，共 {total} 步 · {stage}"
+    },
+    {
+      "name": "todo_decisions_title",
+      "value": "决策记录"
+    },
+    {
+      "name": "todo_decisions_loading",
+      "value": "正在加载决策记录…"
+    },
+    {
+      "name": "todo_decisions_load_failed",
+      "value": "无法加载决策记录。"
+    },
+    {
+      "name": "todo_decisions_empty",
+      "value": "此待办的决策会记录在这里。你对智能体问题的回答和任务完成结论会自动记下，也可以手动添加。"
+    },
+    {
+      "name": "todo_decisions_show_all",
+      "value": "显示全部 {count} 条决策"
+    },
+    {
+      "name": "todo_decisions_show_first",
+      "value": "仅显示前 {count} 条"
+    },
+    {
+      "name": "todo_decisions_full_history",
+      "value": "完整历史（含 {count} 条已修订）"
+    },
+    {
+      "name": "todo_decisions_current_only",
+      "value": "仅看当前生效"
+    },
+    {
+      "name": "todo_decision_chose",
+      "value": "选择："
+    },
+    {
+      "name": "todo_decision_reason_prefix",
+      "value": "原因："
+    },
+    {
+      "name": "todo_decision_revise",
+      "value": "修订"
+    },
+    {
+      "name": "todo_decision_revised_badge",
+      "value": "已修订"
+    },
+    {
+      "name": "todo_decision_revises",
+      "value": "修订了“{choice}”"
+    },
+    {
+      "name": "todo_decision_revises_item",
+      "value": "设为修订“{question} → {choice}”"
+    },
+    {
+      "name": "todo_decision_undo_revision",
+      "value": "撤销修订关联"
+    },
+    {
+      "name": "todo_decision_record_title",
+      "value": "记录决策"
+    },
+    {
+      "name": "todo_decision_save",
+      "value": "记录"
+    },
+    {
+      "name": "todo_decision_revise_note",
+      "value": "先前的选择“{choice}”会保留在历史记录中并加删除线；只有新决定会传给智能体。"
+    },
+    {
+      "name": "todo_decision_question_label",
+      "value": "问题"
+    },
+    {
+      "name": "todo_decision_question_placeholder",
+      "value": "需要决定什么…"
+    },
+    {
+      "name": "todo_decision_choice_label",
+      "value": "选择"
+    },
+    {
+      "name": "todo_decision_choice_placeholder",
+      "value": "最终选择了什么…"
+    },
+    {
+      "name": "todo_decision_reason_label",
+      "value": "原因（可选）"
+    },
+    {
+      "name": "todo_decision_reason_placeholder",
+      "value": "为什么这样选，以及排除了什么…"
+    },
+    {
+      "name": "todo_decision_source_manual",
+      "value": "手动添加"
+    },
+    {
+      "name": "todo_decision_source_outcome",
+      "value": "智能体完成时记下"
+    },
+    {
+      "name": "todo_decision_source_agent",
+      "value": "智能体执行中记下"
+    },
+    {
+      "name": "todo_decision_source_thread",
+      "value": "来自飞书话题"
+    },
+    {
+      "name": "todo_decision_source_card",
+      "value": "在智能体提问中回答"
+    },
+    {
+      "name": "todo_decision_recorded_toast",
+      "value": "已记录决策"
+    },
+    {
+      "name": "todo_decision_revised_toast",
+      "value": "已修订决策"
+    },
+    {
+      "name": "todo_decision_marked_revised",
+      "value": "已标记为修订"
+    },
+    {
+      "name": "todo_decision_revision_undone",
+      "value": "已撤销修订标记"
+    },
+    {
+      "name": "expand_all",
+      "value": "全部展开"
+    },
+    {
+      "name": "collapse_all",
+      "value": "全部收起"
+    },
+    {
+      "name": "saving",
+      "value": "保存中…"
+    },
+    {
+      "name": "token_usage_recent_hourly",
+      "value": "最近每小时用量"
+    },
+    {
+      "name": "token_usage_by_machine_7d",
+      "value": "按电脑 · 最近 7 天"
+    },
+    {
+      "name": "token_usage_by_agent_7d",
+      "value": "按智能体 · 最近 7 天"
+    },
+    {
+      "name": "token_usage_by_agent",
+      "value": "按智能体"
+    },
+    {
+      "name": "token_usage_by_launcher",
+      "value": "按启动器"
+    },
+    {
+      "name": "token_usage_by_place",
+      "value": "目录与工作树"
+    },
+    {
+      "name": "token_usage_requests",
+      "value": "请求数"
+    },
+    {
+      "name": "token_usage_worktree",
+      "value": "关联工作树"
+    },
+    {
+      "name": "token_usage_removed_computer",
+      "value": "已移除的电脑"
+    },
+    {
+      "name": "token_usage_not_split",
+      "value": "未拆分（更新前）"
+    },
+    {
+      "name": "token_usage_launcher_terminal",
+      "value": "在终端中打开"
+    },
+    {
+      "name": "token_usage_project_by_hour",
+      "value": "按小时"
+    },
+    {
+      "name": "token_usage_project_each_day",
+      "value": "按天"
+    },
+    {
+      "name": "next_suggestions_title",
+      "value": "建议下一条消息"
+    },
+    {
+      "name": "next_suggestions_note",
+      "value": "在打开的对话回复后，在空输入框上方建议你接下来可能发送的消息。"
+    },
+    {
+      "name": "suggestion_use",
+      "value": "填入"
+    },
+    {
+      "name": "suggestion_fill_in",
+      "value": "填入输入框"
+    },
+    {
+      "name": "suggestion_send_now",
+      "value": "立即发送"
+    },
+    {
+      "name": "suggestion_hint_safe",
+      "value": "点按填入输入框，长按可立即发送。"
+    },
+    {
+      "name": "suggestion_hint_risky",
+      "value": "点按填入输入框以便确认。"
+    },
+    {
+      "name": "rule_suggestion_always",
+      "value": "总是这样"
+    },
+    {
+      "name": "rule_suggestion_not_now",
+      "value": "暂不"
+    },
+    {
+      "name": "rule_suggestion_creates_task_trust",
+      "value": "“总是这样”会将此类任务加入直接启动列表，以后不再先询问。"
+    },
+    {
+      "name": "rule_suggestion_creates_task_trust_scoped",
+      "value": "“总是这样”会添加一条规则：在 {machine} 的 {directory} 中修改文件的任务将直接启动，不再先询问。"
+    },
+    {
+      "name": "rule_suggestion_creates_standing",
+      "value": "“总是这样”会创建一条长期授权：允许在 {machine} 的 {directory} 中执行“{action}”。"
+    },
+    {
+      "name": "rule_suggestion_creates_setting",
+      "value": "“总是这样”不会保存规则，仅将此建议收起 30 天。"
+    },
+    {
+      "name": "rule_suggestion_made_task_trust",
+      "value": "已添加规则：这类任务以后会直接启动。"
+    },
+    {
+      "name": "rule_suggestion_made_standing",
+      "value": "已添加长期授权。"
+    },
+    {
+      "name": "rule_suggestion_made_setting",
+      "value": "已收起此项建议（{setting}）。"
+    },
+    {
+      "name": "rule_suggestion_made_none",
+      "value": "已完成，未保存任何规则。"
+    },
+    {
+      "name": "rule_suggestion_conflict",
+      "value": "长期授权刚发生变动，请重试。"
+    },
+    {
+      "name": "rule_suggestion_failed",
+      "value": "无法保存你的选择。"
+    },
+    {
+      "name": "recording_bookmark",
+      "value": "书签"
+    },
+    {
+      "name": "recording_transcript_review",
+      "value": "检索转写"
+    },
+    {
+      "name": "recording_transcript_find",
+      "value": "在转写中查找…"
+    },
+    {
+      "name": "recording_transcript_previous",
+      "value": "上一个匹配"
+    },
+    {
+      "name": "recording_transcript_next",
+      "value": "下一个匹配"
+    },
+    {
+      "name": "recording_transcript_bookmarks",
+      "value": "只看书签"
+    },
+    {
+      "name": "recording_transcript_copy",
+      "value": "复制全文"
+    },
+    {
+      "name": "recording_transcript_copied",
+      "value": "已复制转写内容"
+    },
+    {
+      "name": "recording_transcript_no_matches",
+      "value": "无匹配结果"
+    },
+    {
+      "name": "recording_transcript_matches",
+      "value": "处匹配"
+    },
+    {
+      "name": "recording_transcript_expired",
+      "value": "语音转写已过期清理，仅保留书签。"
+    },
+    {
+      "name": "recording_transcript_empty",
+      "value": "暂无保留的转写内容。"
+    },
+    {
+      "name": "standing_auth_title",
+      "value": "长期授权"
+    },
+    {
+      "name": "standing_tab_standing",
+      "value": "长期授权"
+    },
+    {
+      "name": "standing_tab_session",
+      "value": "会话始终允许"
+    },
+    {
+      "name": "standing_action_merge",
+      "value": "合并变更"
+    },
+    {
+      "name": "standing_action_push",
+      "value": "推送变更"
+    },
+    {
+      "name": "standing_action_deploy_test",
+      "value": "部署到测试环境"
+    },
+    {
+      "name": "standing_action_deploy_production",
+      "value": "部署到生产环境"
+    },
+    {
+      "name": "standing_action_send",
+      "value": "发送消息"
+    },
+    {
+      "name": "standing_action_delete",
+      "value": "删除数据"
+    },
+    {
+      "name": "standing_action_spend",
+      "value": "消费资金"
+    },
+    {
+      "name": "standing_no_actions",
+      "value": "未记录操作"
+    },
+    {
+      "name": "standing_condition_ci_green",
+      "value": "所有检查通过"
+    },
+    {
+      "name": "standing_condition_no_conflicts",
+      "value": "无合并冲突"
+    },
+    {
+      "name": "standing_only_when",
+      "value": "仅当满足"
+    },
+    {
+      "name": "standing_place_format",
+      "value": "位于 {machine} 的 {folder}"
+    },
+    {
+      "name": "standing_reversible_yes",
+      "value": "可撤销"
+    },
+    {
+      "name": "standing_reversible_no",
+      "value": "不可撤销"
+    },
+    {
+      "name": "standing_since",
+      "value": "自 {date}"
+    },
+    {
+      "name": "standing_source_chat",
+      "value": "某次对话"
+    },
+    {
+      "name": "standing_source_suggested_rule",
+      "value": "建议的规则：14 天内 {count} 次相同的回答，点「总是」确认。"
+    },
+    {
+      "name": "standing_show_details",
+      "value": "详情"
+    },
+    {
+      "name": "standing_hide_details",
+      "value": "收起详情"
+    },
+    {
+      "name": "standing_revoke",
+      "value": "撤销"
+    },
+    {
+      "name": "standing_revoke_action",
+      "value": "撤销授权"
+    },
+    {
+      "name": "standing_revoke_confirm_title",
+      "value": "撤销此授权？"
+    },
+    {
+      "name": "standing_revoke_confirm_message",
+      "value": "此后在 {machine} 的 {folder} 执行以下操作前，Persona 会再次询问你：{actions}。已完成的工作不受影响。若要重新授权，请在主对话中告诉 Persona。"
+    },
+    {
+      "name": "standing_revoked_toast",
+      "value": "授权已撤销"
+    },
+    {
+      "name": "standing_revoke_failed_toast",
+      "value": "无法撤销此授权，当前仍然有效。请检查连接后重试。"
+    },
+    {
+      "name": "standing_empty_title",
+      "value": "暂无授权"
+    },
+    {
+      "name": "standing_empty_message",
+      "value": "合并、推送、部署、发送消息、删除数据或消费资金前，Persona 会先向你确认。当你在对话中允许某处始终继续执行时，该授权会显示在这里。"
+    },
+    {
+      "name": "standing_forbidden_title",
+      "value": "需要完整访问权限"
+    },
+    {
+      "name": "standing_forbidden_message",
+      "value": "只有具备完整访问权限的设备才能查看和撤销长期授权。"
+    },
+    {
+      "name": "standing_failed_title",
+      "value": "无法加载长期授权"
+    },
+    {
+      "name": "standing_footer_note",
+      "value": "在撤销之前，Persona 会直接执行这些操作而不再询问。"
+    },
+    {
+      "name": "standing_select_conversation",
+      "value": "对话"
+    },
+    {
+      "name": "phone_search_alias_standing_authorizations",
+      "value": "长期授权 始终允许 权限 撤销 standing authorizations always allow"
+    },
+    {
+      "name": "always_grants_heading",
+      "value": "此对话中始终允许"
+    },
+    {
+      "name": "always_grants_empty",
+      "value": "没有已保存的权限。"
+    },
+    {
+      "name": "always_grants_restart_needed",
+      "value": "已保存的权限已撤销，但运行中的对话未能重置。请在重启该对话后再依赖此次撤销。"
+    },
+    {
+      "name": "always_grants_scope_footer",
+      "value": "这些已保存的权限仅适用于当前对话。记录仅保存工具名称，不包含具体目录或命令范围。"
+    },
+    {
+      "name": "always_grant_unnamed",
+      "value": "未命名权限"
+    },
+    {
+      "name": "always_grant_revoke_title",
+      "value": "撤销此权限？"
+    },
+    {
+      "name": "always_grant_revoke_message",
+      "value": "撤销会停止当前回复以清除权限。发送下一条消息即可继续。"
+    },
+    {
+      "name": "always_grant_revoked_toast",
+      "value": "权限已撤销"
+    },
+    {
+      "name": "assistant_full_search_title",
+      "value": "搜索对话与智能体"
+    },
+    {
+      "name": "assistant_search_scope_chats",
+      "value": "对话"
+    },
+    {
+      "name": "archived_agents_empty_title",
+      "value": "没有已归档的智能体"
+    },
+    {
+      "name": "archived_agents_empty_message",
+      "value": "已归档的智能体会话会显示在这里，随时可恢复。"
+    },
+    {
+      "name": "agent_auto_rename",
+      "value": "自动重命名"
+    },
+    {
+      "name": "agent_renaming",
+      "value": "正在重命名…"
+    },
+    {
+      "name": "assistant_session",
+      "value": "不能在此自动重命名助手对话"
     }
   ]
 }

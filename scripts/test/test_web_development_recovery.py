@@ -130,10 +130,8 @@ class RecoveryValidation(unittest.TestCase):
     def test_unsafe_archive_members_and_links_are_rejected_before_extracting(self):
         normal = [("root-0", "directory", ""), ("root-0/data", "directory", ""), ("root-0/data/history.txt", "file", "saved history")]
         attacks = [[(name, "file", "outside")] for name in ["/escape", "root-0/../../escape", "root-0\\..\\escape", "C:/escape", "//host/share/escape", "root-0/C:escape", "root-0/data/./history.txt"]]
-        attacks += [[("root-0/link", kind, target)] for kind, target in [
-            ("symlink", "/outside"), ("symlink", "C:outside"), ("symlink", "..\\outside"),
-            ("symlink", "../../outside"), ("symlink", "missing"),
-            ("hardlink", "/outside"), ("hardlink", "root-0/data/history.txt")]]
+        attacks += [[("root-0/link", "symlink", target)] for target in
+                    ("/outside", "C:outside", "..\\outside", "../../outside", "missing", "../root-0/data/history.txt")]
         attacks += [[("root-0/link", "symlink", "data"), ("root-0/link/escape", "file", "unexpected")],
                     [("root-0/data/history.txt", "file", "duplicate")],
                     [("root-0/a", "symlink", "b"), ("root-0/b", "symlink", "a")]]
@@ -204,12 +202,90 @@ class RecoveryValidation(unittest.TestCase):
         self.assertEqual(list(target.iterdir()), [])
         self.assertTrue(destination.is_symlink())
 
-    def test_snapshot_rejects_hard_linked_history_without_pruning(self):
-        data = Path(self.request["runtime"]) / "data/history.txt"
-        os.link(data, data.with_name("hard-linked-history"))
-        with fixtures.contextlib.redirect_stdout(io.StringIO()), self.assertRaises(ValueError):
-            webdev.snapshot(self.request)
-        self.assertTrue(self.path.exists())
+    def test_snapshot_round_trips_managed_hard_link_and_absolute_skill_link(self):
+        runtime = Path(self.request["runtime"]).resolve()
+        skills = runtime / "skills"
+        skill = skills / "example"
+        skill.mkdir(parents=True)
+        marker = runtime / "persona-views/.persona-managed"
+        marker.parent.mkdir()
+        marker.write_text("managed")
+        owner = runtime / "assistant/.agents/skills/.persona-views-managed"
+        owner.parent.mkdir(parents=True)
+        os.link(marker, owner)
+        link = runtime / "assistant/.claude/skills/example"
+        link.parent.mkdir(parents=True)
+        link.symlink_to(skill)
+        (runtime / "skill-directory").symlink_to(skills)
+        (runtime / "example").symlink_to(runtime / "skill-directory/example")
+
+        with fixtures.contextlib.redirect_stdout(io.StringIO()):
+            receipt = webdev.snapshot(self.request)
+        snapshot = self.path.parent / receipt["id"]
+        webdev.verify(snapshot)
+        with tarfile.open(snapshot / "files.tar.gz") as archive:
+            hard = archive.getmember("root-0/persona-views/.persona-managed")
+            self.assertTrue(hard.islnk())
+            self.assertEqual(hard.linkname, "root-0/assistant/.agents/skills/.persona-views-managed")
+            soft = archive.getmember("root-0/assistant/.claude/skills/example")
+            self.assertTrue(soft.issym())
+            self.assertEqual(soft.linkname, "../../../skills/example")
+        destination = self.root / "recovered"
+        webdev.extract_history(snapshot, destination)
+        restored = destination / "root-0"
+
+        def recovered(path):
+            return restored / path.relative_to(runtime)
+
+        self.assertTrue(os.path.samefile(recovered(owner), recovered(marker)))
+        self.assertEqual(recovered(marker).read_text(), "managed")
+        self.assertEqual(os.readlink(recovered(link)), "../../../skills/example")
+        self.assertEqual(recovered(link).resolve(), recovered(skill).resolve())
+        self.assertEqual(os.readlink(restored / "example"), "skills/example")
+
+    def test_forward_hard_link_across_two_inventoried_roots(self):
+        self.manifest["roots"].append(str(self.root / "extra"))
+        self.archive([("root-0", "directory", ""), ("root-1", "directory", ""),
+                      ("root-0/soft", "symlink", "alias"), ("root-0/alias", "hardlink", "root-1/file"),
+                      ("root-1/file", "file", "contents")])
+        destination = self.root / "recovered"
+        webdev.extract_history(self.path, destination)
+        self.assertTrue(os.path.samefile(destination / "root-1/file", destination / "root-0/alias"))
+        self.assertEqual((destination / "root-0/soft").read_text(), "contents")
+
+    def test_invalid_hard_links_identify_member_before_extraction(self):
+        members = [("root-0", "directory", ""), ("root-0/file", "file", "contents"),
+                   ("root-0/soft", "symlink", "file"), ("root-0/hard", "hardlink", "root-0/file")]
+        for target in ("/outside", "../outside", "root-0/../root-0/file", "root-1/file", "root-0/missing",
+                       "root-0", "root-0/soft", "root-0/hard", "root-0/invalid"):
+            with self.subTest(target=target):
+                self.archive(members + [("root-0/invalid", "hardlink", target)])
+                destination = self.root / "recovered"
+                with self.assertRaisesRegex(ValueError, "root-0/invalid"):
+                    webdev.verify(self.path)
+                with self.assertRaisesRegex(ValueError, "root-0/invalid"):
+                    webdev.extract_history(self.path, destination)
+                self.assertFalse(destination.exists())
+
+    def test_snapshot_rejects_symlinks_outside_collected_tree_with_member_name(self):
+        runtime = Path(self.request["runtime"]).resolve()
+        other = self.root / "other"
+        other.mkdir()
+        (other / "file").touch()
+        excluded = runtime / "cache"
+        excluded.mkdir(exist_ok=True)
+        (excluded / "file").touch()
+        link = runtime / "data/link"
+        progress = webdev.Progress("backing_up")
+        progress.step("archive_files")
+        for target in (other / "file", "../../other/file", runtime, excluded / "file",
+                       str(runtime) + "/data/../data/history.txt", runtime / "missing"):
+            with self.subTest(target=target):
+                link.symlink_to(target)
+                with self.assertRaisesRegex(ValueError, "root-0/data/link"):
+                    webdev.archive_history([runtime, other], {excluded, runtime / "update"},
+                                          self.root / "archive.tar.gz", progress)
+                link.unlink()
 
 
 if __name__ == "__main__":

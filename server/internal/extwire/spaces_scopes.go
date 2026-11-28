@@ -16,6 +16,7 @@ func init() {
 		"GET /api/v1/assistant/tracks/{slug}/space-md":        ScopeSpaces,
 		"PUT /api/v1/assistant/tracks/{slug}/space-md":        ScopeSpaces,
 		"GET /api/v1/assistant/tracks/{slug}/conversations":   ScopeSpaces,
+		"GET /api/v1/assistant/tracks/launchers":              ScopeSpaces,
 		"GET /api/v1/assistant/conversations/{id}/categories": ScopeSpaces,
 		"PUT /api/v1/assistant/conversations/{id}/categories": ScopeSpaces,
 	})

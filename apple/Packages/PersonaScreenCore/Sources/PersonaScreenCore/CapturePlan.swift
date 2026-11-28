@@ -37,8 +37,12 @@ public enum CapturePlan {
         func even(_ v: Int) -> Int { max(2, v & ~1) }
         let long = max(width, height), short = min(width, height)
         guard maxSize > 0, long > maxSize else { return (even(width), even(height)) }
-        // In integers, so the long edge is exactly maxSize and the short one is rounded, not floored by float error.
-        let scaledShort = (short * maxSize + long / 2) / long
+        // In 128-bit integers, so the long edge is exactly maxSize and the short one is rounded without overflow or float error.
+        let uShort = UInt(short), uMax = UInt(maxSize), uLong = UInt(long)
+        let prod = uShort.multipliedFullWidth(by: uMax)
+        let (low, carry) = prod.low.addingReportingOverflow(uLong >> 1)
+        let high = prod.high + (carry ? 1 : 0)
+        let scaledShort = Int(uLong.dividingFullWidth((high, low)).quotient)
         return width >= height ? (even(maxSize), even(scaledShort)) : (even(scaledShort), even(maxSize))
     }
 
@@ -51,9 +55,15 @@ public enum CapturePlan {
             return size(width: pixels.width, height: pixels.height, maxSize: maxSize)
         }
         let s = min(max(scale, scales.lowerBound), scales.upperBound)
-        let width = min(Int((Double(points.width) * s).rounded()), max(pixels.width, 1))
-        let height = min(Int((Double(points.height) * s).rounded()), max(pixels.height, 1))
+        let width = min(clampedInt((Double(points.width) * s).rounded()), max(pixels.width, 1))
+        let height = min(clampedInt((Double(points.height) * s).rounded()), max(pixels.height, 1))
         return size(width: width, height: height, maxSize: maxSize)
+    }
+
+    private static func clampedInt(_ value: Double) -> Int {
+        guard !value.isNaN, value > 0 else { return 0 }
+        if value >= Double(Int.max) { return Int.max }
+        return Int(value)
     }
 
     /// The frame rate to capture at: the phone's, kept within 1–60.

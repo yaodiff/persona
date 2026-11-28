@@ -58,6 +58,7 @@ func TestPrivateNetworkOnlyStartCheck(t *testing.T) {
 	cfg.Security.PrivateNetworkOnly = true
 	cfg.PublicURL = "https://hub.corp.example:18662"
 	cfg.Public.Advertise = []string{"hub.corp.example", "[fd00::2]:18662", "100.80.0.2"}
+	cfg.Public.LinkAdvertise = []string{"https://link.corp.example:18662"}
 	off := false
 	cfg.Public.AdvertiseIPv6 = &off
 	if err := cfg.checkPrivateNetworkOnly(); err != nil {
@@ -66,6 +67,7 @@ func TestPrivateNetworkOnlyStartCheck(t *testing.T) {
 	on := true
 	cfg.Public.AdvertiseIPv6 = &on
 	cfg.Public.Advertise = append(cfg.Public.Advertise, "https://203.0.113.9:18662")
+	cfg.Public.LinkAdvertise = append(cfg.Public.LinkAdvertise, "https://203.0.113.10:18662")
 	cfg.Public.DDNS = &DDNSConfig{}
 	cfg.Security.AllowPublicPlaintext = true
 	cfg.Sharing = &SharingConfig{PublicOrigin: "https://share.example.com"}
@@ -74,7 +76,7 @@ func TestPrivateNetworkOnlyStartCheck(t *testing.T) {
 	if !errors.Is(err, errPrivateNetworkConflicts) {
 		t.Fatalf("err %v, want errPrivateNetworkConflicts", err)
 	}
-	for _, want := range []string{"allow_public_plaintext", "public.ddns", "advertise_ipv6", "203.0.113.9", "sharing.public_origin", `"nat"`, `"old"`} {
+	for _, want := range []string{"allow_public_plaintext", "public.ddns", "advertise_ipv6", "203.0.113.9", "203.0.113.10", "sharing.public_origin", `"nat"`, `"old"`} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error does not name %s: %v", want, err)
 		}

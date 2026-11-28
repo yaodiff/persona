@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/i18n"
 )
@@ -51,6 +52,13 @@ func (r *Registry) prune(id string, keep ...string) {
 	r.pruneTools(id, keep...)
 }
 
+// hasYielded: a built-in of id is put aside for the installed plugin that took its place.
+func (r *Registry) hasYielded(id string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.yielded[id] != nil
+}
+
 // Rollback goes back to the version installed before the last upgrade.
 func (r *Registry) Rollback(ctx context.Context, id, actor string) (*Extension, error) {
 	unlock, err := r.beginOperation()
@@ -63,8 +71,16 @@ func (r *Registry) Rollback(ctx context.Context, id, actor string) (*Extension, 
 		return nil, fmt.Errorf("没有装过扩展 %s", id)
 	}
 	id = old.Record.ID
+	if errors.Is(old.problemErr, ErrIdentity) {
+		return nil, ErrIdentity
+	}
 	if old.Record.AttachedPackage() {
 		return nil, i18n.Err("extension-status.attached_detach_first", i18n.Args{"id": id})
+	}
+	if old.Record.BuiltinPredecessor && (old.Record.PreviousOrigin == builtinOrigin(id) || old.Record.PreviousVersion == "" && r.hasYielded(id)) {
+		// The second case: a build without the built-in rolled the package back to its first version, which dropped
+		// the anchor (no built-in to name); a build with it put the built-in aside again at Load (#16263).
+		return r.rollbackBuiltin(ctx, old, actor, unlock)
 	}
 	prev := old.Record.PreviousVersion
 	if prev == "" || old.Record.Remote != nil {
@@ -135,6 +151,17 @@ func (r *Registry) Rollback(ctx context.Context, id, actor string) (*Extension, 
 			row.Origin, row.MarketKey = row.PreviousOrigin, row.PreviousMarketKey
 		}
 		row.PreviousOrigin, row.PreviousMarketKey = "", ""
+		if row.BuiltinPredecessor {
+			if !row.VerifiedBuiltinPredecessor() {
+				return ErrIdentity
+			}
+			if err := r.guardHandoff(ctx, old, &row); err != nil {
+				return err
+			}
+			if back := r.yielded[id]; back != nil {
+				row.PreviousVersion, row.PreviousOrigin = back.Record.Version, builtinOrigin(id)
+			}
+		}
 		row.Manifest, _ = json.Marshal(m)
 		row.Granted, row.GrantedDigest = m.Permissions, Digest(m)
 		if err := r.store.PutExtension(ctx, row); err != nil {
@@ -182,6 +209,9 @@ func (r *Registry) Uninstall(ctx context.Context, id string, keepData bool, acto
 		return i18n.Err("extension-status.config_disable_only", i18n.Args{"id": id})
 	}
 	id = old.Record.ID
+	if keepData && errors.Is(old.problemErr, ErrIdentity) {
+		return ErrIdentity
+	}
 	mutation := r.settingsWrite(id)
 	defer mutation.finish()
 	var trash string
@@ -232,6 +262,13 @@ func (r *Registry) Uninstall(ctx context.Context, id string, keepData bool, acto
 		delete(r.extensions, id)
 		back := r.yielded[id]
 		if back != nil {
+			if r.handoffs[id] {
+				back = snapshotExtension(back)
+				back.Record.Enabled, back.Record.Config = back.builtinDefaultEnabled, nil
+				back.Record.DisabledContributions, back.Record.PackOff = nil, nil
+				back.Record.InstalledAt, back.Record.UpdatedAt = time.Time{}, time.Time{}
+				back.Manifest = back.Full
+			}
 			delete(r.yielded, id)
 			r.extensions[id] = back
 		}

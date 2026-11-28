@@ -27,6 +27,14 @@ import (
 // sessions, and a session's earlier transcripts once the one it runs now is listed. Only these files are read, never the
 // app's config file (it holds credentials). The saved-environment mirror supplies native project names and folders.
 //
+// One session can have several entries: the app keeps copies of its local_<id>.json under its other account and
+// organization folders (measured 2026-11-23: 5 of 6 sessions had 4 or 5), each with the cliSessionId and isArchived
+// it had when it was written. The index reads each session once (desktopSessions, #14394), from the copy that names
+// the transcript it runs now; every other transcript its copies name (a stale cliSessionId, priorCliSessionIds, and
+// lastAssistantCliSessionId when it differs) is one it ran before. The list folds those into the row of the
+// transcript the session runs now, live or at rest, and names them in that row's aliases (foldDesktopEarlier); a
+// message to one goes on in the session (desktopWentOn).
+//
 // Deleting a session in the app removes its entry and leaves its transcript. A transcript the desktop app ran (its
 // entrypoint says so) that no entry names, now or as an earlier transcript, is such a session's and is left out too
 // (claudeDesktopIndex.gone, #8314). Only that: a transcript another client ran is never judged by the index; an index
@@ -131,7 +139,7 @@ var claudeDesktopOpens = runtime.GOOS == "darwin" || runtime.GOOS == "windows"
 type claudeDesktopEntry struct {
 	transcript  string   // cliSessionId
 	archived    bool     // isArchived
-	prior       []string // priorCliSessionIds
+	prior       []string // priorCliSessionIds, oldest first, then a lastAssistantCliSessionId of another transcript
 	title, cwd  string   // as the sidebar shows it, and where it runs
 	originCwd   string   // the original project directory, before the app creates a worktree
 	local       string   // the app's own id of the session (sessionId, local_<uuid>): its link opens it (claudedesktop_open.go)
@@ -178,7 +186,7 @@ const (
 // claudeDesktopIndex is what the desktop apps' session index says about transcripts.
 type claudeDesktopIndex struct {
 	visible      map[string]bool                     // a session's current transcript → some entry naming it is unarchived
-	earlier      map[string][]claudeDesktopNow       // an earlier transcript → the sessions that ran it before
+	earlier      map[string][]claudeDesktopNow       // a transcript none runs now → the sessions that ran it before
 	about        map[string]claudeDesktopAbout       // an unarchived session's current transcript → its title and directory
 	environments map[string]claudeDesktopEnvironment // profile/account-qualified saved local environments
 	// parents: an unarchived session's current transcript → the current transcript of the unarchived session that
@@ -200,6 +208,9 @@ type claudeDesktopIndex struct {
 	// deletedFromEntry: transcripts a deleted local session's previously readable entry named. A local-only tombstone
 	// hides exactly these, never every unnamed old transcript.
 	deletedFromEntry map[string]bool
+	// before: an unarchived session's current transcript → the transcripts it ran before that none runs now, newest
+	// first (at most maxDesktopAssociationTranscripts): its row's aliases (foldDesktopEarlier, #14394).
+	before map[string][]string
 }
 
 type claudeDesktopAbout struct{ title, cwd, originCwd, local, environment string }
@@ -216,7 +227,7 @@ func readClaudeDesktopIndex(home string) claudeDesktopIndex {
 	deleted, markerPaths := deletedMarkers(home)
 	x := claudeDesktopIndex{visible: map[string]bool{}, earlier: map[string][]claudeDesktopNow{}, about: map[string]claudeDesktopAbout{},
 		environments: map[string]claudeDesktopEnvironment{}, parents: map[string]string{}, origins: map[string]string{}, seen: map[string]claudeDesktopSeen{}, named: map[string]bool{},
-		deleted: deleted, deletedFromEntry: map[string]bool{}}
+		deleted: deleted, deletedFromEntry: map[string]bool{}, before: map[string][]string{}}
 	dirs := claudeDesktopDirs(home)
 	for _, dir := range dirs {
 		found, _ := filepath.Glob(filepath.Join(dir, "claude-code-sessions", "*", "*", "local_*.json"))
@@ -238,10 +249,10 @@ func readClaudeDesktopIndex(home string) claudeDesktopIndex {
 		currentMarkers[p] = true
 	}
 	current := make(map[string]bool, len(paths))
-	byLocal := map[string]claudeDesktopEntry{} // the readable entries by the app's own id, to find a side session's parent
-	byLocalAt := map[string]time.Time{}        // the file time of each entry byLocal holds, for newerDesktopEntry
-	var started []claudeDesktopEntry           // the unarchived entries another session started or forked
+	byLocal := map[string]claudeDesktopEntry{} // the sessions by the app's own id, to find a side session's parent
+	var started []claudeDesktopEntry           // the unarchived sessions another session started or forked
 	runs := map[string][]claudeDesktopEntry{}  // a scheduled task → its unarchived runs no session started
+	var read []desktopEntryFile                // the readable entries, copies of one session included
 	for _, p := range paths {
 		st, err := os.Stat(p)
 		if err != nil {
@@ -271,6 +282,26 @@ func readClaudeDesktopIndex(home string) claudeDesktopIndex {
 		for _, old := range e.prior {
 			x.named[old] = true
 		}
+		read = append(read, desktopEntryFile{entry: e, path: p, mtime: f.mtime})
+		if e.local != "" {
+			key := filepath.Join(filepath.Dir(p), "deleted_"+strings.TrimPrefix(e.local, "local_"))
+			currentEntries[key] = true
+			a := claudeDesktopFiles.associations[key]
+			if a == nil {
+				a = &claudeDesktopAssociation{}
+				claudeDesktopFiles.associations[key] = a
+			}
+			a.transcripts = desktopAssociationTranscripts(e)
+			if !currentMarkers[key] {
+				a.markerSeen = false
+			}
+			claudeDesktopFiles.associationClock++
+			a.used = claudeDesktopFiles.associationClock
+		}
+	}
+	sessions := desktopSessions(read)
+	for _, s := range sessions {
+		e, p := s.head.entry, s.head.path
 		x.visible[e.transcript] = x.visible[e.transcript] || !e.archived
 		if !e.archived {
 			environment := ""
@@ -292,28 +323,26 @@ func readClaudeDesktopIndex(home string) claudeDesktopIndex {
 			}
 		}
 		if e.local != "" {
-			// One session can have several entries: a copy under each account's directory, and older ones left behind
-			// that still name an earlier transcript. The most recently active one describes the session, whichever is
-			// read last (#15262): a side session's parent is that one's transcript and archived state.
-			if cur, ok := byLocal[e.local]; !ok || !newerDesktopEntry(cur, byLocalAt[e.local], e, st.ModTime()) {
-				byLocal[e.local], byLocalAt[e.local] = e, st.ModTime()
-			}
-			key := filepath.Join(filepath.Dir(p), "deleted_"+strings.TrimPrefix(e.local, "local_"))
-			currentEntries[key] = true
-			a := claudeDesktopFiles.associations[key]
-			if a == nil {
-				a = &claudeDesktopAssociation{}
-				claudeDesktopFiles.associations[key] = a
-			}
-			a.transcripts = desktopAssociationTranscripts(e)
-			if !currentMarkers[key] {
-				a.markerSeen = false
-			}
-			claudeDesktopFiles.associationClock++
-			a.used = claudeDesktopFiles.associationClock
+			byLocal[e.local] = e
 		}
-		for _, old := range e.prior {
+		for _, old := range s.earlier {
 			x.earlier[old] = append(x.earlier[old], claudeDesktopNow{e.transcript, e.archived})
+		}
+	}
+	// A transcript a session runs now is that session's, whatever another one ran before (hidden reads it so too).
+	for old := range x.earlier {
+		if _, now := x.visible[old]; now {
+			delete(x.earlier, old)
+		}
+	}
+	for _, s := range sessions {
+		if e := s.head.entry; !e.archived {
+			for _, old := range s.earlier {
+				if _, ranBefore := x.earlier[old]; ranBefore && len(x.before[e.transcript]) < maxDesktopAssociationTranscripts &&
+					!slices.Contains(x.before[e.transcript], old) {
+					x.before[e.transcript] = append(x.before[e.transcript], old)
+				}
+			}
 		}
 	}
 	for _, p := range markerPaths {
@@ -372,14 +401,81 @@ func readClaudeDesktopIndex(home string) claudeDesktopIndex {
 	return x
 }
 
-// newerDesktopEntry: of two entries for one session, a (its file written at) describes the session rather than b: it
-// was active later (lastActivityAt), or at the same time and its file was written later. Equal on both, b does, so the
-// entry read last stands as it did before entries were compared.
-func newerDesktopEntry(a claudeDesktopEntry, at time.Time, b claudeDesktopEntry, bt time.Time) bool {
-	if a.activity != b.activity {
-		return a.activity > b.activity
+// desktopEntryFile is a readable entry of the index, with its file and when that was last written.
+type desktopEntryFile struct {
+	entry claudeDesktopEntry
+	path  string
+	mtime time.Time
+}
+
+// desktopSession is one session of the app: the copy of its entry that names the transcript it runs now (head), and
+// the other transcripts its copies name, newest first, never the head's.
+type desktopSession struct {
+	head    desktopEntryFile
+	earlier []string
+}
+
+// desktopSessions groups the readable entries (in path order) by the session they are, the app's own id (sessionId; an
+// entry without one is a session of its own), in the order the sessions first come. A session's copies under the app's
+// other account and organization folders keep the cliSessionId and isArchived they had when written (#14394): a copy
+// whose transcript a copy names as an earlier one is from before the session went on. The head is the newest file of
+// the copies whose transcripts no copy names so (of all of them, in a loop no app writes; the larger transcript id on a
+// tie). Its transcript and archived flag are the session's; the earlier transcripts are the head's (priorCliSessionIds
+// and lastAssistantCliSessionId, latest first), then each other copy's transcript and earlier ones, newer copies first.
+func desktopSessions(read []desktopEntryFile) []desktopSession {
+	groups := map[string][]desktopEntryFile{}
+	var order []string
+	for _, r := range read {
+		key := cmp.Or(r.entry.local, r.path)
+		if _, ok := groups[key]; !ok {
+			order = append(order, key)
+		}
+		groups[key] = append(groups[key], r)
 	}
-	return at.After(bt)
+	out := make([]desktopSession, 0, len(order))
+	for _, key := range order {
+		copies := groups[key]
+		ranBefore := map[string]bool{}
+		for _, c := range copies {
+			for _, old := range c.entry.prior {
+				ranBefore[old] = true
+			}
+		}
+		// Newest first: the copy active last (lastActivityAt) describes the session, then the later-written file (#15262).
+		slices.SortStableFunc(copies, func(a, b desktopEntryFile) int {
+			return cmp.Or(cmp.Compare(b.entry.activity, a.entry.activity), b.mtime.Compare(a.mtime),
+				strings.Compare(b.entry.transcript, a.entry.transcript))
+		})
+		head := 0
+		for i, c := range copies {
+			if !ranBefore[c.entry.transcript] {
+				head = i
+				break
+			}
+		}
+		s := desktopSession{head: copies[head]}
+		seen := map[string]bool{s.head.entry.transcript: true}
+		add := func(id string) {
+			if validID(id) && !seen[id] {
+				seen[id] = true
+				s.earlier = append(s.earlier, id)
+			}
+		}
+		addPrior := func(e claudeDesktopEntry) {
+			for j := len(e.prior) - 1; j >= 0; j-- {
+				add(e.prior[j])
+			}
+		}
+		addPrior(s.head.entry)
+		for i, c := range copies {
+			if i != head {
+				add(c.entry.transcript)
+				addPrior(c.entry)
+			}
+		}
+		out = append(out, s)
+	}
+	return out
 }
 
 // desktopAssociationTranscripts bounds what one readable entry retains: its current transcript first, then each
@@ -451,9 +547,16 @@ func readClaudeDesktopEntry(path string) claudeDesktopEntry {
 		Created     float64         `json:"createdAt"`
 		Activity    float64         `json:"lastActivityAt"`
 		Detached    bool            `json:"lineageDetached"` // moved to the sidebar's top level: the old lineage stays, unnested
+		// The transcript of the session's last answer: until a session that went on in a new transcript answers there,
+		// the one it went on from (#14394). Read on its own, as spawnedFrom.
+		LastAnswer json.RawMessage `json:"lastAssistantCliSessionId"`
 	}
 	if json.Unmarshal(b, &raw) != nil || !validID(raw.Transcript) {
 		return claudeDesktopEntry{}
+	}
+	var last string
+	if json.Unmarshal(raw.LastAnswer, &last) == nil && validID(last) && last != raw.Transcript && !slices.Contains(raw.Prior, last) {
+		raw.Prior = append(raw.Prior, last)
 	}
 	// The session this one came from, as the app's sidebar finds it: spawnedFrom.sessionId, else forkedFromSessionId
 	// (a fork made with the app's Fork writes only that); none once the user moved it to the top level.
@@ -526,20 +629,33 @@ func localID(id string) string {
 // list does whatever its age (up to maxDesktopOffline, the newest first), on a count of its own (#3304).
 func (x claudeDesktopIndex) listed(id string) bool { return x.visible[id] }
 
-// maxDesktopOffline bounds the desktop app's sessions the offline list shows (the newest, whatever their age); they are
-// counted on their own, not toward the 80 of the others. It only guards against a runaway index: the list follows the
-// sidebar, which keeps every unarchived session. It was 100, and a sidebar outgrows that (one Mac had 208 top-level
-// sessions): the ones quiet for a week or more were cut, newest transcript first, while the sidebar still showed them
-// (#15522).
+// maxDesktopOffline bounds the desktop app's top-level sessions the offline list shows (the newest, whatever their age);
+// they are counted on their own, not toward the 80 of the others. It only guards against a runaway index: the list
+// follows the sidebar, which keeps every unarchived session. It was 100, and a sidebar outgrows that (one Mac had 208
+// top-level sessions): the ones quiet for a week or more were cut, newest transcript first, while the sidebar still
+// showed them (#15522). Folded sessions have their own bound below (#15279).
 const maxDesktopOffline = 1000
 
+// maxDesktopFolded bounds the desktop app's sessions the offline list shows under another row (the index gives them a
+// parent, claudeDesktopIndex.parents): the newest, counted apart from maxDesktopOffline. A daily scheduled task leaves
+// one a day, and they took the places of the top-level sessions (#15279).
+const maxDesktopFolded = 300
+
 // hidden: the offline list leaves transcript id out as the desktop app's sidebar does. shown are the transcripts the
-// list has shown so far (newest first, so a session's current one comes before its earlier ones).
+// list has shown so far (newest first, so a session's current one normally comes before its earlier ones; the list
+// folds the rest, foldDesktopEarlier).
 func (x claudeDesktopIndex) hidden(id string, shown map[string]bool) bool {
 	if visible, named := x.visible[id]; named {
-		return !visible // a session's current transcript: hidden while every entry naming it is archived
+		return !visible // a session's current transcript: hidden while every session running it is archived
 	}
-	sessions := x.earlier[id]
+	return wentOn(x.earlier[id], shown)
+}
+
+// wentOn: a transcript that sessions ran before (claudeDesktopIndex.earlier) is theirs no more: an unarchived one of
+// them is listed through the transcript it runs now (in listed), or only archived ones ran it. While an unarchived
+// session's current transcript is not listed, its earlier one stands in for it: at worst a session shows twice, never
+// not at all.
+func wentOn(sessions []claudeDesktopNow, listed map[string]bool) bool {
 	if len(sessions) == 0 {
 		return false
 	}
@@ -547,12 +663,81 @@ func (x claudeDesktopIndex) hidden(id string, shown map[string]bool) bool {
 	for _, s := range sessions {
 		if !s.archived {
 			open = true
-			if shown[s.transcript] {
+			if listed[s.transcript] {
 				return true // its session is listed through the transcript it runs now
 			}
 		}
 	}
 	return !open // only archived sessions ran it
+}
+
+// desktopFolds is what the list folds of the desktop app's sessions, read with the offline scan (offlineFolds):
+// claudeDesktopIndex.earlier and .before.
+type desktopFolds struct {
+	earlier map[string][]claudeDesktopNow
+	before  map[string][]string
+}
+
+// foldDesktopEarlier lists each session of the desktop app once, as its sidebar does (#14394): the row of a transcript
+// one of its sessions went on from goes, live or at rest, once an unarchived session that ran it is listed through the
+// transcript it runs now; at rest also when only archived sessions ran it (wentOn, as the scan hides it), while a
+// claude of the app still running it is not judged by the archive. The scan's newest-first rule (hidden) misses one
+// written after the current transcript, and the live list had no rule. The row of a session's current transcript names
+// the transcripts it ran before that no row lists in its aliases (on the row's own copy), so the manager shows no
+// archive record under an old id. Left as they are: the rows keep (the main conversation, Persona's branches, as the
+// scan keeps them), an assistant conversation, a row in a pane or of another source (a terminal's claude that took up
+// an earlier transcript), one Persona is starting, and one that waits on the user, whose question or prompt stays
+// reachable. The rows kept stay in order.
+func foldDesktopEarlier(list []proto.Session, f desktopFolds, keep map[string]bool) []proto.Session {
+	if len(f.earlier) == 0 {
+		return list // no session went on from a transcript: nothing goes, and no row has one to name
+	}
+	listed := make(map[string]bool, len(list))
+	for i := range list {
+		listed[list[i].SessionID] = true
+	}
+	gone := map[string]bool{}
+	for i := range list {
+		s := &list[i]
+		sessions := f.earlier[s.SessionID]
+		if len(sessions) == 0 || keep[s.SessionID] || s.Assistant || s.PaneID != "" || s.Starting || s.Status == proto.StatusBlocked {
+			continue
+		}
+		switch resting := s.Status == proto.StatusOffline || s.Status == proto.StatusInterrupted; {
+		case resting && (s.SourceKind == "" || s.SourceKind == proto.SourceClaudeDesktop):
+		case !resting && s.SourceKind == proto.SourceClaudeDesktop:
+			// A claude of the app still running it: only into a row its unarchived session is listed through, as the
+			// offline rules never judge a running session by the archive.
+			sessions = slices.DeleteFunc(slices.Clone(sessions), func(c claudeDesktopNow) bool { return c.archived })
+		default:
+			continue
+		}
+		if wentOn(sessions, listed) {
+			gone[s.SessionID] = true
+		}
+	}
+	j := 0
+	for i := range list {
+		s := &list[i]
+		if gone[s.SessionID] {
+			continue
+		}
+		if ids := f.before[s.SessionID]; len(ids) > 0 {
+			aliases := slices.Clone(s.Aliases())
+			for _, id := range ids {
+				if (!listed[id] || gone[id]) && !slices.Contains(aliases, id) {
+					aliases = append(aliases, id)
+				}
+			}
+			s.SetAliases(aliases)
+		}
+		if j != i {
+			list[j] = *s
+		}
+		j++
+	}
+	clear(list[j:])
+	return list[:j]
 }
 
 // linkSideSessions draws each of the desktop app's side sessions under the session that started it (parent_agent_id,

@@ -32,6 +32,10 @@ describe("Lark Inbox message presentation", () => {
   await act(async()=>root.render(<ConnectorReplyTarget item={{...item,connector:{...item.connector!,can_reply:false}}} page={page} />));
   expect(host.querySelector("button")).not.toBeNull();
   expect(host.querySelector("details")).toBeNull();
+  for (const bad of ["javascript:alert(1)", "https:/admin", "https://@evil.example/x", "https://good.example\\@evil.example/x"]) {
+    await act(async()=>root.render(<ConnectorReplyTarget item={{...item,connector:{...item.connector!,can_reply:false}}} page={{...page,messages:[{...page.messages[0],url:bad}]}} />));
+    expect(host.querySelector("button")).toBeNull();
+  }
  });
  it("keeps long content accessible while providing a preview and a collapse action", async () => {
   await act(async()=>root.render(<LarkInboxContent text={card} markdown />));

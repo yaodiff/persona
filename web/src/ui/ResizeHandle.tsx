@@ -103,7 +103,9 @@ export function ResizeHandle(props: {
       }}
       onPointerDown={start}
       onDoubleClick={onReset}
-      className={cx("absolute inset-y-0 z-10 w-2 cursor-col-resize touch-none", edge === "right" ? "-right-1" : "-left-1", props.className)}
-    />
+      className={cx("group absolute inset-y-0 z-10 flex w-2 cursor-col-resize items-center justify-center touch-none", edge === "right" ? "-right-1" : "-left-1", props.className)}
+    >
+      <span aria-hidden className="pointer-events-none h-8 w-0.5 rounded-full bg-line-strong opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-visible:opacity-100" />
+    </div>
   );
 }

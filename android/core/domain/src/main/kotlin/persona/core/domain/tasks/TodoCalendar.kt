@@ -34,6 +34,8 @@ data class CalendarEntry(
     val high: Boolean,
     /** A reminder still to be pushed (the list's bell). */
     val reminding: Boolean,
+    /** Specific at-rest display status (open PR, parked, or tracking concern) overriding "Not started". */
+    val restStatus: TodoRestStatus? = null,
 ) {
     val allDay: Boolean get() = time == null
 }
@@ -52,6 +54,7 @@ fun Todo.calendarEntry(sessionLookup: (SessionKey) -> Session?, now: Instant, zo
         overdue = isOverdue(now, zone),
         high = priority == "high" && !isDone,
         reminding = !isDone && remind != null && remindedAt == null,
+        restStatus = restStatus(sessionLookup, now.toEpochMilli()),
     )
 }
 

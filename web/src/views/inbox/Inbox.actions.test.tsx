@@ -109,7 +109,7 @@ describe("inbox merge and add to to-dos (#6480)", () => {
     expect((call?.json as { items: unknown[] }).items).toHaveLength(2);
     expect(bar()).toBeNull();
     expect(host.querySelectorAll("[data-merged]")).toHaveLength(1);
-    expect(host.querySelector("[data-merged]")?.textContent).toBe("由 2 行合并");
+    expect(host.querySelector("[data-merged]")?.textContent).toBe("由 2 条合并");
   });
   it("Add to to-dos asks the due time once and makes one to-do per row", async () => {
     await pickTwo();
@@ -127,7 +127,7 @@ describe("inbox merge and add to to-dos (#6480)", () => {
   it("no due date sends no due", async () => {
     await pickTwo();
     await click(button("加入待办"));
-    await click([...document.querySelectorAll('[role="radio"]')].find((b) => b.textContent === "不设截止"));
+    await click([...document.querySelectorAll('[role="radio"]')].find((b) => b.textContent === "不设截止时间"));
     await click([...document.querySelectorAll("button")].find((b) => b.textContent?.trim() === "添加"));
     const json = calls.list.find((c) => c.path === "/inbox/todo")?.json as Record<string, unknown>;
     expect(json.due_date).toBeUndefined();

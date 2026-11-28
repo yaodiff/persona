@@ -56,8 +56,8 @@ func rootAssign(dir string, q func(string) string) string {
 
 // agentMarkEnv marks a terminal Persona opened for an Agent, and the Agent's own processes (#10111,
 // docs/integrations/engines.md "Agents run in a terminal"): a shell's startup files can tell such a terminal from one
-// the user opened. herdr and the Herdr App start the shell with it (startShellEnv, host.EnvLauncher); agentCommand puts
-// it in front of the Agent too, for engines whose terminals take no environment (Orca).
+// the user opened. herdr, the Herdr App and Orca start the shell with it (startShellEnv, host.EnvLauncher); agentCommand
+// puts it in front of the Agent too, for engines whose terminals take no environment (Tern, an Orca without env).
 const agentMarkEnv = "PERSONA_AGENT=1"
 
 // agentCommand is cmd, a command line quoted with q that starts an Agent in a pane whose shell is shells (the programs

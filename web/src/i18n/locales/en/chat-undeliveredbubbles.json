@@ -5,5 +5,18 @@
   "action_failed": "That did not work: {error}",
   "held_waiting": "Will send when {computer} is back",
   "held_failed": "Not sent",
-  "held_placeholder": "{computer} is offline. Sends when it's back."
+  "held_placeholder": "{computer} is offline. Sends when it's back.",
+  "time_left": "{seconds}s left",
+  "resend": "Resend",
+  "ignore": "Ignore",
+  "banner_awaiting": "A message is not confirmed delivered yet: waiting for its receipt ({seconds}s left). It is never sent twice.",
+  "banner_awaiting_now": "A message got no delivery confirmation in time: it leaves the send queue now, and later messages go on.",
+  "banner_behind_one": "{count} more message waits behind it and goes in by itself.",
+  "banner_behind_other": "{count} more messages wait behind it and go in by themselves.",
+  "banner_queued_one": "{count} message is queued and goes in by itself.",
+  "banner_queued_other": "{count} messages are queued and go in by themselves.",
+  "banner_expired_one": "{count} message got no delivery confirmation in time and left the send queue; later messages go on as usual. It may have gone in: check the conversation, then resend or ignore it.",
+  "banner_expired_other": "{count} messages got no delivery confirmation in time and left the send queue; later messages go on as usual. They may have gone in: check the conversation, then resend or ignore each.",
+  "banner_expired_more_one": "And {count} more, shown with the messages above.",
+  "banner_expired_more_other": "And {count} more, shown with the messages above."
 }

@@ -209,6 +209,8 @@
     <string name="settings_engine_retry">再試行</string>
     <string name="settings_engine_continue">ひとまず続ける</string>
     <string name="settings_engine_save_failed">保存に失敗しました：%1$s</string>
+    <string name="settings_engine_orca_chats">新しい Agent を Orca チャットで開始</string>
+    <string name="settings_engine_orca_chats_detail">新規 Agent の Claude Code と Codex を、ターミナルではなく Orca のチャット画面で開きます。選んだランチャーはターミナルで開き、アシスタントの Agent も常にターミナルを使います。</string>
 
     <!-- Candidate addresses (Connection diagnostics) -->
     <string name="settings_endpoint_hint_unchanged">アドレスは変更されていません</string>

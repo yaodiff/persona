@@ -5,7 +5,7 @@ import { childMachineOf, childSessionOf, isChildSessionStep } from "../../lib/ch
 import { useSessionLive } from "../../lib/live";
 import { useStore } from "../../lib/store";
 import type { Item } from "../../lib/types";
-import { actionSummary, explorationSummary, groupTitle, nestedLineDefault, togglesLiveOverride, workLineOpen, workLineOpens, isAgentStep, isPlanStep, isRowStep, isWorkflowStep, planTodos, workDuration, type AgentStatus, type ToolStep, type WorkGroupNode, type WorkLineStyle, type WorkNode } from "../../lib/work-groups";
+import { actionSummary, groupTitle, nestedLineDefault, togglesLiveOverride, workLineOpen, workLineOpens, isAgentStep, isPlanStep, isRowStep, isWorkflowStep, planTodos, workDuration, type AgentStatus, type ToolStep, type WorkGroupNode, type WorkLineStyle, type WorkNode } from "../../lib/work-groups";
 import type { WorkflowCalls } from "../../lib/workflows";
 import type { Step } from "../../lib/turns";
 import { Collapse, cx, Spinner, useNow } from "../../ui/atoms";
@@ -64,6 +64,8 @@ export interface WorkProps {
   /** The dock RunningStatusBar already shows this foreground turn's elapsed clock, so the stream header keeps its
    *  expandable summary without rendering a second competing timer (#12380). */
   hideClock?: boolean;
+  /** The outermost group's fold fetch failed and is waiting for manual retry: suppress the fold loading spinner. */
+  foldFailed?: boolean;
 }
 
 /** A Workflow call that draws its run's card (the hub lists the run); one that does not is the row it always was. */
@@ -127,6 +129,11 @@ function foldsOf(g: WorkGroupNode): Item[] {
   return g.children.flatMap((c) => (c.kind === "group" ? foldsOf(c) : c.step.kind === "fold" ? [c.step.item] : []));
 }
 
+/** Whether a group's subtree has any visible step outside unloaded folds. */
+function hasNonFoldContent(nodes: readonly WorkNode[]): boolean {
+  return nodes.some((c) => (c.kind === "group" ? hasNonFoldContent(c.children) : c.step.kind !== "fold"));
+}
+
 /** The screen's status line while this exchange is live (contract §3): a thinking line at the live group's end. Read
  *  here, not handed down: it changes about once a second while the agent works, and only this line shows it (#5417). */
 function useThinkingNow(mid: string, sid: string) {
@@ -159,10 +166,14 @@ export const WorkGroup = memo(function WorkGroup({ g, p, limit }: { g: WorkGroup
   const actions = useMemo(() => actionSummary(g), [g]);
   const heading = p.nested && actions.text ? actions.text : groupTitle(g);
   const [loading, setLoading] = useState(false);
+  // a fetch that failed (the hub restarting, the network): the group says so, and "Retry" runs it again
+  const [failed, setFailed] = useState(false);
+  const [attempt, setAttempt] = useState(0);
   const opens = workLineOpens(g, style, turnLive);
   const open = workLineOpen({ style, turnLive, remembered, liveOverride }) && opens;
   const rowsLive = p.nested ? Boolean(p.rowsLive) : g.live;
-  const inside = useMemo(() => ({ ...p, nested: true, rowsLive, currentRun: g.live }), [p, rowsLive, g.live]);
+  const foldFailed = p.nested ? Boolean(p.foldFailed) : failed && !loading;
+  const inside = useMemo(() => ({ ...p, nested: true, rowsLive, currentRun: g.live, foldFailed }), [p, rowsLive, g.live, foldFailed]);
   const toggle = () => {
     const next = !open;
     setOpen(next);
@@ -187,19 +198,33 @@ export const WorkGroup = memo(function WorkGroup({ g, p, limit }: { g: WorkGroup
   const folds = useMemo(() => (open && !p.nested ? foldsOf(g) : []), [open, p.nested, g]);
   const foldKey = folds.map((f) => f.id).join(" ");
   const expandFold = p.expandFold;
-  // a fetch that failed (the hub restarting, the network): the group says so, and "Retry" runs it again
-  const [failed, setFailed] = useState(false);
-  const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     // every fold is in: done. A run cut short by the last fold coming in (its key changed) does not get to say so, and
     // the header's spinner kept spinning (#1614)
-    if (!foldKey) return setLoading(false);
+    if (!foldKey) {
+      setFailed(false);
+      setLoading(false);
+      return;
+    }
     let live = true;
     setLoading(true);
     setFailed(false);
     folds
       // each fold that comes in runs this again with the rest: this run stops there
-      .reduce<Promise<boolean | void>>((done, f) => done.then(() => (live ? expandFold(f) : undefined)), Promise.resolve())
+      .reduce<Promise<boolean | void>>(
+        (done, f) =>
+          done.then(() =>
+            live
+              ? Promise.resolve()
+                  .then(() => expandFold(f))
+                  .then((ok) => {
+                    if (live && ok === false) setFailed(true);
+                  })
+                  .catch(() => live && setFailed(true))
+              : undefined,
+          ),
+        Promise.resolve(),
+      )
       .catch(() => live && setFailed(true))
       .finally(() => live && setLoading(false));
     return () => {
@@ -208,6 +233,8 @@ export const WorkGroup = memo(function WorkGroup({ g, p, limit }: { g: WorkGroup
     // the folds by their ids: a new `g` with the same folds is not a new fetch
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [foldKey, expandFold, attempt]);
+  const compactHeader = !p.nested && !g.live;
+  const disclosure = opens && <Icon name="chevronRight" size={14} stroke={2.2} className="shrink-0 text-tool-ink transition-transform duration-150 motion-reduce:transition-none" style={{ transform: open ? "rotate(90deg)" : "none" }} />;
   const leadingIcon = p.nested && actions.text && actions.icon
     ? <Icon name={actions.icon} size={14} />
     : g.live
@@ -215,13 +242,9 @@ export const WorkGroup = memo(function WorkGroup({ g, p, limit }: { g: WorkGroup
       : null;
   const summary = useMemo(() => {
     if (p.nested && actions.text) return "";
-    if (g.live) {
-      const count = collectToolSteps(g.children).length;
-      return count > 0 ? t("chat-workgroup.live_steps", { count }) : "";
-    }
-    // groupTitle already includes explorationSummary when the group only read/searched
-    if (explorationSummary(g)) return "";
-    return summarizeWorkSteps(g.children);
+    if (!g.live) return "";
+    const count = collectToolSteps(g.children).length;
+    return count > 0 ? t("chat-workgroup.live_steps", { count }) : "";
   }, [g, p.nested, actions.text]);
   return (
     <div className="flex w-full min-w-0 flex-col" data-work-group={g.live ? "live" : "done"} data-group-id={g.id}>
@@ -234,9 +257,9 @@ export const WorkGroup = memo(function WorkGroup({ g, p, limit }: { g: WorkGroup
         // on a touch screen 40 tall, the margin taking back what it adds, so nothing around it moves
         className={cx("flex w-full min-w-0 items-center gap-1.5 py-[2px] text-left select-none [@media(pointer:coarse)]:-my-[7.5px] [@media(pointer:coarse)]:min-h-10", opens ? "cursor-pointer transition-opacity hover:opacity-80" : "cursor-default")}
       >
-        {leadingIcon && <span className="inline-flex h-[1lh] shrink-0 items-center text-tool-ink">{leadingIcon}</span>}
-        <span className={cx("translate-y-[1px] text-[length:var(--chat-secondary)] text-tool-ink", summary ? "shrink-0" : "min-w-0 truncate")}>{heading}</span>
-        {opens && <Icon name="chevronRight" size={14} stroke={2.2} className="shrink-0 text-tool-ink transition-transform duration-150 motion-reduce:transition-none" style={{ transform: open ? "rotate(90deg)" : "none" }} />}
+        {!compactHeader && leadingIcon && <span className="inline-flex h-[1lh] shrink-0 items-center text-tool-ink">{leadingIcon}</span>}
+        <span className={cx("translate-y-[1px] text-[length:var(--chat-secondary)] text-tool-ink", compactHeader || !summary ? "min-w-0 truncate" : "shrink-0")}>{heading}</span>
+        {compactHeader && disclosure}
         {summary && (
           <span className="min-w-0 translate-y-[1px] truncate text-[length:var(--chat-secondary)] text-ink-3" data-work-summary>
             · {summary}
@@ -245,6 +268,7 @@ export const WorkGroup = memo(function WorkGroup({ g, p, limit }: { g: WorkGroup
         {(loading || (!p.nested && g.live && g.startedAt !== undefined)) && <span className="flex-1" />}
         {loading && <Spinner size={11} />}
         {!p.nested && g.live && g.startedAt !== undefined && (p.hideClock ? <LiveClockPresence /> : <Elapsed since={g.startedAt} />)}
+        {!compactHeader && disclosure}
       </button>
       {open && failed && !loading && (
         <div className="mt-1 flex items-center gap-2 pl-5 text-[12px] text-ink-3" role="status">
@@ -252,13 +276,15 @@ export const WorkGroup = memo(function WorkGroup({ g, p, limit }: { g: WorkGroup
           <button type="button" onClick={() => setAttempt((n) => n + 1)} className="touch-hit rounded-control px-1.5 py-0.5 font-medium whitespace-nowrap text-accent-ink hover:bg-hover">{t("chat-workgroup.retry")}</button>
         </div>
       )}
-      <Collapse open={open} lazy>
-        <div className={cx("mt-1 flex min-w-0 flex-col gap-2 py-[2px]", p.nested ? "pl-3" : "ml-1.5 border-l-2 border-tool-rail pl-3")} data-work-detail>
-          <WorkNodes nodes={g.children} p={inside} live={rowsLive} limit={drawn} />
-          {/* once, in the innermost live group: a live timeline's last run is live too */}
-          {g.live && !g.children.some((c) => c.kind === "group" && c.live) && <LiveThinking mid={p.mid} sid={p.sid} />}
-        </div>
-      </Collapse>
+      {(!foldFailed || hasNonFoldContent(g.children) || (g.live && !g.children.some((c) => c.kind === "group" && c.live))) && (
+        <Collapse open={open} lazy>
+          <div className={cx("mt-1 flex min-w-0 flex-col gap-2 py-[2px]", p.nested ? "pl-3" : "ml-1.5 border-l-2 border-tool-rail pl-3")} data-work-detail>
+            <WorkNodes nodes={g.children} p={inside} live={rowsLive} limit={drawn} />
+            {/* once, in the innermost live group: a live timeline's last run is live too */}
+            {g.live && !g.children.some((c) => c.kind === "group" && c.live) && <LiveThinking mid={p.mid} sid={p.sid} />}
+          </div>
+        </Collapse>
+      )}
     </div>
   );
 });
@@ -454,6 +480,7 @@ export const StepView = memo(function StepView({ step, p, live, fade }: { step: 
         </div>
       );
     case "fold":
+      if (p.foldFailed) return null;
       return (
         <div className="flex h-7 items-center gap-2 px-2 text-[13px] text-tool-ink">
           <Spinner size={11} /> {t("chat-workgroup.loading_steps", { count: step.item.fold?.items ?? 0 })}

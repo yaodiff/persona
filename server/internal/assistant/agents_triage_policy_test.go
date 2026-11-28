@@ -12,66 +12,81 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-func TestTriageRequestFormatting(t *testing.T) {
+func TestTriageKeepsGroundedNaturalRequests(t *testing.T) {
 	for _, tc := range []struct {
-		text string
-		want bool
+		lang, reply, request string
 	}{
-		{"**Should I push to beta?**", true},
-		{"…? 🙏", true},
-		{"…? (y/n)", true},
-		{"「要推吗？」", true},
-		{"Let me know which option you prefer.", true},
-		{"Please open …", true},
-		{"请回复 1 或 2", true},
-		{"麻烦确认一下是否推送", true},
-		{"Open the authorization page.", true},
-		{"Visit the sign-in page.", true},
-		{"Reply with your choice.", true},
-		{"请帮我确认环境", true},
-		{"请在这两个方案里选一个", true},
-		{"你决定用哪个方案", true},
-		{"Confirm to continue.", true},
-		{"`Should I continue?` (yes/no) 🙏🏻  ", true},
-		{"（要推吗？）", true},
-		{"『要推吗？』", true},
-		{"【要推吗？】", true},
-		{"\"Should I continue?\"", true},
-		{"Should I continue? (yes/no) [one choice]", true},
-		{"好，收到 worker-a 的结果后我直接在 #123 发评论。目前还没收到结果。", false},
-		{"收到，不用再确认了，结果一到我就直接在 #123 发评论。", false},
-		{"**I will post after the checks pass.** 🙏", false},
-		{"I will wait (for the test results).", false},
-		{"", false},
+		{"zh-Hans", "预览已经好了。这两个配色你拿个主意就行", "这两个配色你拿个主意就行"},
+		{"en", "The preview is ready. I'll need your pick between the two palettes.", "I'll need your pick between the two palettes."},
+		{"ja", "プレビューができました。配色はどちらにするか決めてもらえると助かります。", "配色はどちらにするか決めてもらえると助かります。"},
 	} {
-		t.Run(tc.text, func(t *testing.T) {
-			if got := explicitUserRequest(tc.text); got != tc.want {
-				t.Fatalf("explicitUserRequest=%v, want %v", got, tc.want)
-			}
-			if tc.text == "" {
-				return
-			}
-			s, f := workService(t)
-			out, err := json.Marshal(triageOut{Phase: proto.WorkBlocked, On: proto.WaitUser,
-				Questions: []proto.Question{{Question: tc.text}}})
-			if err != nil {
-				t.Fatal(err)
-			}
-			f.triage = string(out)
-			f.setSessions("box", stopped("s1", tc.text))
-			triage(t, s, "s1")
-			if got := len(s.workCards()) == 1; got != tc.want {
-				t.Fatalf("card=%v, want %v", got, tc.want)
-			}
-			// Recognizing formatting does not let the model invent a request absent from the reply.
-			if tc.want {
-				s, f = workService(t)
-				f.triage = string(out)
-				f.setSessions("box", stopped("s1", "The checks are still running."))
-				triage(t, s, "s1")
-				if len(s.workCards()) != 0 {
-					t.Fatal("accepted a request absent from the reply")
+		for _, todosV2 := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/todos_v2=%t", tc.lang, todosV2), func(t *testing.T) {
+				s, f := workService(t)
+				setSettings(t, s, func(cfg *Settings) { cfg.TodosV2 = boolPtr(todosV2) })
+				out, err := json.Marshal(triageOut{Phase: proto.WorkBlocked, On: proto.WaitUser,
+					Questions: []proto.Question{{Question: tc.request}}})
+				if err != nil {
+					t.Fatal(err)
 				}
+				setTriageAnswer(f, string(out))
+				f.setSessions("box", stopped("s1", tc.reply))
+				triage(t, s, "s1")
+				if n := len(triageCalls(f)); n != 1 {
+					t.Fatalf("model calls = %d, want 1", n)
+				}
+				cards := s.workCards()
+				if len(cards) != 1 || len(cards[0].Questions) != 1 || cards[0].Questions[0].Question != tc.request {
+					t.Fatalf("cards = %+v, want one asking %q", cards, tc.request)
+				}
+			})
+		}
+	}
+}
+
+func TestTriageStructuredInteractionSkipsModel(t *testing.T) {
+	for _, tc := range []struct {
+		name, status string
+		pending      int
+	}{
+		{"pending interaction", proto.StatusDone, 1},
+		{"blocked terminal", proto.StatusBlocked, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, f := workService(t)
+			setTriageAnswer(f, `{"phase":"blocked","on":"user","questions":[{"question":"Which palette should I use?"}]}`)
+			c := stopped("s1", "Which palette should I use?")
+			c.Status, c.PendingInteractions = tc.status, tc.pending
+			f.setSessions("box", c)
+			triage(t, s, "s1")
+			if reads, calls := itemReads(f), len(triageCalls(f)); reads != 0 || calls != 0 {
+				t.Fatalf("structured interaction triggered %d transcript reads and %d model calls", reads, calls)
+			}
+			if cards := s.workCards(); len(cards) != 0 {
+				t.Fatalf("structured interaction got duplicate cards: %+v", cards)
+			}
+		})
+	}
+}
+
+func TestTriageNonUserClassificationsDoNotCreateQuestionCards(t *testing.T) {
+	const reply = "The preview is ready."
+	for _, tc := range []struct {
+		name, answer, phase, on string
+	}{
+		{"done", `{"phase":"done","on":"user","questions":[{"question":"The preview is ready."}]}`, proto.WorkDone, ""},
+		{"external", `{"phase":"blocked","on":"external","questions":[{"question":"The preview is ready."}]}`, proto.WorkBlocked, proto.WaitExternal},
+		{"agent", `{"phase":"blocked","on":"agent","wait":{"agent":"helper"},"questions":[{"question":"The preview is ready."}]}`, proto.WorkBlocked, proto.WaitAgent},
+		{"empty questions", `{"phase":"blocked","on":"user","line":"The preview is ready.","questions":[]}`, "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, f := workService(t)
+			setTriageAnswer(f, tc.answer)
+			f.setSessions("box", stopped("s1", reply), proto.Session{SessionID: "helper", Status: proto.StatusWorking})
+			triage(t, s, "s1")
+			w := entryOf(t, s, "s1").Work
+			if w.Phase != tc.phase || w.On != tc.on || len(w.Questions) != 0 || len(s.workCards()) != 0 {
+				t.Fatalf("work = %+v, want phase %q on %q without a question card", w, tc.phase, tc.on)
 			}
 		})
 	}

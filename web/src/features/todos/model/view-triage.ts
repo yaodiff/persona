@@ -6,7 +6,7 @@
 // triage. Browser-local restores still keep a locally restored inactive row in Other open across snapshots.
 
 import { TODO_LIST_SECTIONS, type TodoSummary } from "../../../lib/todo-view-wire";
-import { countsAsOpen, SHELVE_AFTER_MS, TRIAGE_SECTIONS, triageGroupKey, type Triage, type TriageGroup, type TriageResult, type TriageRule, type TriageSection } from "../../../lib/todo-triage";
+import { ALL_TRIAGE_SECTIONS, countsAsOpen, SHELVE_AFTER_MS, TRIAGE_SECTIONS, triageGroupKey, type Triage, type TriageGroup, type TriageResult, type TriageRule, type TriageSection } from "../../../lib/todo-triage";
 import { compareWaitAge } from "../../../lib/task-wait";
 import type { Todo } from "../../../lib/todos";
 import { knownView, legacyOf } from "./view-legacy";
@@ -100,10 +100,10 @@ export function drawnFromView(local: TriageResult, now: number, restored?: Reado
       (a.group.lead.manager ?? "").localeCompare(b.group.lead.manager ?? "") ||
       a.group.key.localeCompare(b.group.key),
   );
-  const sections = Object.fromEntries(TRIAGE_SECTIONS.map((s) => [s, [] as TriageGroup[]])) as Record<TriageSection, TriageGroup[]>;
+  const sections = Object.fromEntries(ALL_TRIAGE_SECTIONS.map((s) => [s, [] as TriageGroup[]])) as Record<TriageSection, TriageGroup[]>;
   for (const { group } of fromView) sections[group.section].push(group);
   for (const s of TRIAGE_SECTIONS) sections[s].push(...kept[s]);
-  const todoCounts = Object.fromEntries(TRIAGE_SECTIONS.map((s) => [s, 0])) as Record<TriageSection, number>;
+  const todoCounts = Object.fromEntries(ALL_TRIAGE_SECTIONS.map((s) => [s, 0])) as Record<TriageSection, number>;
   let open = 0;
   let finished = 0;
   for (const s of TRIAGE_SECTIONS)

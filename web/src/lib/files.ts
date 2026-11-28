@@ -386,7 +386,7 @@ export function splitDiff(diff: string): Record<string, string> {
 
 // ── the viewer ────────────────────────────────────────────
 
-export type ViewKind = "directory" | "markdown" | "json" | "notebook" | "html" | "video" | "audio" | "code" | "image" | "pdf" | "sheet" | "office" | "binary";
+export type ViewKind = "directory" | "markdown" | "json" | "notebook" | "html" | "video" | "audio" | "code" | "image" | "pdf" | "sheet" | "workbook" | "office" | "binary";
 
 const VIDEO_EXTS = ["mp4", "m4v", "mov", "webm", "mkv", "ogv", "avi"];
 const AUDIO_EXTS = ["mp3", "m4a", "aac", "wav", "flac", "ogg", "oga", "opus", "caf", "aiff", "aif"];
@@ -414,7 +414,7 @@ export function viewKind(f: FileContent): ViewKind {
     if (mime.startsWith("video/") || VIDEO_EXTS.includes(extOf(f.name))) return "video";
     if (mime.startsWith("audio/") || AUDIO_EXTS.includes(extOf(f.name))) return "audio";
     if (mime === "application/pdf" || extOf(f.name) === "pdf") return "pdf";
-    if (WORKBOOK_EXTS.includes(extOf(f.name))) return "sheet";
+    if (WORKBOOK_EXTS.includes(extOf(f.name))) return "workbook";
     if ([...OFFICE_RENDERED, ...OFFICE_CONVERTED].includes(extOf(f.name))) return "office";
     return "binary";
   }

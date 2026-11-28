@@ -1,0 +1,12 @@
+{
+  "tool_name": "Edit",
+  "tool_input": {
+    "file_path": "/example/project/first.txt"
+  },
+  "cwd": "/example/project",
+  "always_keys": [
+    "codex-edit:/example/project/first.txt",
+    "codex-edit://shared/project/second.txt"
+  ],
+  "summary": "/example/project/first.txt\n//shared/project/second.txt"
+}

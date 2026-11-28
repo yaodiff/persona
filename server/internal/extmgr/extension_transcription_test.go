@@ -23,12 +23,13 @@ func TestExtensionTranscriptionNeedsItsScopeAndIsAttributed(t *testing.T) {
 	var mu sync.Mutex
 	var asked []string
 	var got []json.RawMessage
+	const reply = `{"job":"j1","future_field": {"receipt":9007199254740993}}`
 	h.opts.Assistant = func(_ context.Context, method string, params json.RawMessage) (json.RawMessage, error) {
 		mu.Lock()
 		defer mu.Unlock()
 		asked = append(asked, method)
 		got = append(got, append(json.RawMessage{}, params...))
-		return json.RawMessage(`{"job":"j1"}`), nil
+		return json.RawMessage(reply), nil
 	}
 	params := json.RawMessage(`{"language":"zh-CN","extension":"someone-else"}`)
 	for name, call := range map[string]func(context.Context, string, json.RawMessage) (any, error){
@@ -47,12 +48,18 @@ func TestExtensionTranscriptionNeedsItsScopeAndIsAttributed(t *testing.T) {
 		t.Fatalf("refused calls reached the assistant: %v", asked)
 	}
 	out, err := granted.Handle(context.Background(), assistantwire.MethodTranscriptionStart, params)
-	if err != nil || !strings.Contains(string(out.(json.RawMessage)), "j1") {
-		t.Fatalf("granted: %v %v", out, err)
+	if raw, ok := out.(json.RawMessage); err != nil || !ok || string(raw) != reply {
+		t.Fatalf("extension received %T %s (%v), want %s", out, raw, err, reply)
 	}
 	var env assistantwire.ExtensionTranscription
 	if len(asked) != 1 || asked[0] != assistantwire.MethodTranscriptionExtension || json.Unmarshal(got[0], &env) != nil ||
 		env.Extension != "example-video" || env.Method != assistantwire.MethodTranscriptionStart || string(env.Params) != string(params) {
 		t.Fatalf("handed over: %v %s", asked, got)
+	}
+	h.opts.Assistant = nil
+	_, err = granted.Handle(context.Background(), assistantwire.MethodTranscriptionStart, params)
+	var re *rpc.Error
+	if !errors.As(err, &re) || re.Code != assistantwire.CodeAssistantOffline || re.Message != errAssistantOffline.Error() {
+		t.Fatalf("assistant offline: %v", err)
 	}
 }

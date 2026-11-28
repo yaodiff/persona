@@ -1545,6 +1545,18 @@
       "value": "添付ファイルを保存できませんでした"
     },
     {
+      "name": "chat_attachment_photos_count_as_files",
+      "value": "1件のメッセージに添付できる枚数を超えたため、一部の写真をファイルとして送信しました。"
+    },
+    {
+      "name": "chat_attachment_photos_size_as_files",
+      "value": "メッセージのサイズ上限を超えたため、一部の写真をファイルとして送信しました。"
+    },
+    {
+      "name": "chat_attachment_photos_count_size_as_files",
+      "value": "写真の枚数とサイズが上限を超えたため、一部の写真をファイルとして送信しました。"
+    },
+    {
       "name": "chat_attachment_limit_reached",
       "value": "添付数の上限に達しました"
     },
@@ -2438,7 +2450,7 @@
     },
     {
       "name": "health_question_resting_heart_rate",
-      "value": "今日の体重62.5kgを記録して"
+      "value": "今週の安静時心拍数の推移はどうですか？"
     },
     {
       "name": "health_log_weight",
@@ -8587,6 +8599,1650 @@
     {
       "name": "session_models_empty",
       "value": "このランチャーには切り替え可能なモデルがありません。"
+    },
+    {
+      "name": "agent_mark_all_seen",
+      "value": "すべて既読にする"
+    },
+    {
+      "name": "agent_mark_all_seen_confirm",
+      "value": "未読の {count} 件をすべて既読にしますか？"
+    },
+    {
+      "name": "live_view_section_title",
+      "value": "ライブビュー"
+    },
+    {
+      "name": "live_view_enable",
+      "value": "ライブビューを表示"
+    },
+    {
+      "name": "live_view_enable_detail",
+      "value": "待機中・作業中・未読のエージェントをステータスバーとロック画面に表示します。"
+    },
+    {
+      "name": "live_view_lock_details",
+      "value": "ロック画面に詳細を表示"
+    },
+    {
+      "name": "live_view_lock_details_detail",
+      "value": "件数だけでなくエージェント名と概要を表示します。"
+    },
+    {
+      "name": "live_view_test_publish",
+      "value": "システムでプレビュー"
+    },
+    {
+      "name": "live_view_test_stop",
+      "value": "終了"
+    },
+    {
+      "name": "live_view_needs_count",
+      "value": "{count} 件対応待ち"
+    },
+    {
+      "name": "live_view_working_count",
+      "value": "{count} 件作業中"
+    },
+    {
+      "name": "live_view_unread_count",
+      "value": "{count} 件未読"
+    },
+    {
+      "name": "live_view_all_caught_up",
+      "value": "すべて確認済み"
+    },
+    {
+      "name": "live_view_assistant_replying",
+      "value": "アシスタントが返信中"
+    },
+    {
+      "name": "live_view_background_tag",
+      "value": "バックグラウンド"
+    },
+    {
+      "name": "live_view_anon_permission",
+      "value": "権限のリクエストが待機中"
+    },
+    {
+      "name": "live_view_anon_plan",
+      "value": "承認待ちのプランがあります"
+    },
+    {
+      "name": "live_view_anon_question",
+      "value": "回答待ちの質問があります"
+    },
+    {
+      "name": "live_view_anon_screen",
+      "value": "対応待ちのターミナルがあります"
+    },
+    {
+      "name": "live_view_anon_working",
+      "value": "作業中"
+    },
+    {
+      "name": "live_view_anon_unread",
+      "value": "完了・未読"
+    },
+    {
+      "name": "live_view_capsule_needs",
+      "value": "待ち {count}"
+    },
+    {
+      "name": "live_view_capsule_working",
+      "value": "作業 {count}"
+    },
+    {
+      "name": "live_view_capsule_unread",
+      "value": "未読 {count}"
+    },
+    {
+      "name": "live_view_capsule_done",
+      "value": "完了"
+    },
+    {
+      "name": "live_view_more_count",
+      "value": "+{count}"
+    },
+    {
+      "name": "live_view_system_disabled",
+      "value": "ステータスバーやロック画面に表示するには、システム設定でライブビューを有効にしてください。"
+    },
+    {
+      "name": "live_view_entitlement_required",
+      "value": "システムライブビューには権限付き署名ビルドが必要です。アプリ内プレビューで確認できます。"
+    },
+    {
+      "name": "live_view_unavailable",
+      "value": "このデバイスではシステムライブビューを利用できません。"
+    },
+    {
+      "name": "project_agent_count_one",
+      "value": "1 個のエージェント"
+    },
+    {
+      "name": "fold_inspector_title",
+      "value": "ライブインスペクタ"
+    },
+    {
+      "name": "fold_inspector_fleet",
+      "value": "フリート状況"
+    },
+    {
+      "name": "fold_posture_trifold",
+      "value": "三つ折りワークスペース"
+    },
+    {
+      "name": "fold_posture_dual",
+      "value": "折りたたみ分割"
+    },
+    {
+      "name": "fold_posture_hover",
+      "value": "ホバーモード"
+    },
+    {
+      "name": "turn_changes_one",
+      "value": "1 件のファイル変更"
+    },
+    {
+      "name": "turn_changes_many",
+      "value": "{count} 件のファイル変更"
+    },
+    {
+      "name": "turn_changes_review",
+      "value": "レビュー"
+    },
+    {
+      "name": "turn_changes_more",
+      "value": "他 {count} 件を表示"
+    },
+    {
+      "name": "bubble_show_more",
+      "value": "もっと見る"
+    },
+    {
+      "name": "bubble_show_less",
+      "value": "折りたたむ"
+    },
+    {
+      "name": "live_view_published_toast",
+      "value": "ライブビューを更新しました"
+    },
+    {
+      "name": "agents_marked_seen_toast",
+      "value": "{count} 件を既読にしました"
+    },
+    {
+      "name": "live_view_preview_approve",
+      "value": "承認"
+    },
+    {
+      "name": "live_view_preview_deny",
+      "value": "拒否"
+    },
+    {
+      "name": "live_view_capsule_metric_working",
+      "value": "作業中"
+    },
+    {
+      "name": "fold_workbench_pulse",
+      "value": "パルス"
+    },
+    {
+      "name": "fold_workbench_code",
+      "value": "コード"
+    },
+    {
+      "name": "fold_workbench_machines",
+      "value": "マシン"
+    },
+    {
+      "name": "fold_posture_trifold_angled",
+      "value": "三つ折りスタンド"
+    },
+    {
+      "name": "fold_workbench_expand_tools",
+      "value": "拡大"
+    },
+    {
+      "name": "fold_workbench_pick_session",
+      "value": "エージェントセッションを選択するとファイル・Git差分・ターミナルを表示できます。"
+    },
+    {
+      "name": "fold_relay_next",
+      "value": "次へ"
+    },
+    {
+      "name": "fold_relay_prev",
+      "value": "前へ"
+    },
+    {
+      "name": "fold_relay_queue",
+      "value": "{count} 件の確認待ち"
+    },
+    {
+      "name": "fold_relay_clear",
+      "value": "すべて確認済み"
+    },
+    {
+      "name": "machine_load_per_core",
+      "value": "{per}/コア"
+    },
+    {
+      "name": "phone_xiaoyi",
+      "value": "XiaoYi"
+    },
+    {
+      "name": "phone_search_alias_phone_xiaoyi",
+      "value": "XiaoYi エージェント インテント スキル 音声"
+    },
+    {
+      "name": "xiaoyi_section_capabilities",
+      "value": "連携機能"
+    },
+    {
+      "name": "xiaoyi_section_preferences",
+      "value": "設定とセキュリティ"
+    },
+    {
+      "name": "xiaoyi_section_diagnostics",
+      "value": "接続セルフチェック"
+    },
+    {
+      "name": "xiaoyi_agent_card_label",
+      "value": "オンデバイス Agent"
+    },
+    {
+      "name": "xiaoyi_intents_count_label",
+      "value": "登録済みインテント"
+    },
+    {
+      "name": "xiaoyi_skills_runtime_label",
+      "value": "登録済みスキル"
+    },
+    {
+      "name": "xiaoyi_suggestions_toggle",
+      "value": "XiaoYi おすすめ"
+    },
+    {
+      "name": "xiaoyi_suggestions_hint",
+      "value": "確認待ちがあるときに機密情報を含まない状態ヒントを共有します。"
+    },
+    {
+      "name": "xiaoyi_suggestions_unregistered",
+      "value": "XiaoYi おすすめを利用するにはプラットフォームへのインテント登録が必要です。"
+    },
+    {
+      "name": "xiaoyi_lock_screen_notice",
+      "value": "XiaoYi からの承認には端末のロック解除が必要です。高リスクの自動実行は Persona アプリ内でのみ許可できます。"
+    },
+    {
+      "name": "xiaoyi_diag_run",
+      "value": "セルフチェックを実行"
+    },
+    {
+      "name": "xiaoyi_diag_running",
+      "value": "確認中…"
+    },
+    {
+      "name": "xiaoyi_diag_hub_paired",
+      "value": "ペアリング済み Hub"
+    },
+    {
+      "name": "xiaoyi_diag_credential",
+      "value": "トークン読み取り"
+    },
+    {
+      "name": "xiaoyi_diag_transport",
+      "value": "直接接続"
+    },
+    {
+      "name": "xiaoyi_diag_pass",
+      "value": "正常"
+    },
+    {
+      "name": "xiaoyi_diag_attention",
+      "value": "要確認"
+    },
+    {
+      "name": "xiaoyi_diag_ssh_warning",
+      "value": "SSH トンネルのみ"
+    },
+    {
+      "name": "xiaoyi_diag_reachable",
+      "value": "接続可能（{online}/{total} 台オンライン）"
+    },
+    {
+      "name": "xiaoyi_card_working",
+      "value": "{count} 件実行中"
+    },
+    {
+      "name": "xiaoyi_card_needs_you",
+      "value": "{count} 件確認待ち"
+    },
+    {
+      "name": "xiaoyi_card_approve",
+      "value": "許可 / 承認"
+    },
+    {
+      "name": "xiaoyi_card_submitting",
+      "value": "送信中…"
+    },
+    {
+      "name": "xiaoyi_card_confirm_prompt",
+      "value": "このリクエストを承認しますか？（端末のロック解除が必要です）"
+    },
+    {
+      "name": "xiaoyi_card_approved_done",
+      "value": "承認しました。"
+    },
+    {
+      "name": "xiaoyi_card_open_persona",
+      "value": "Persona で開く"
+    },
+    {
+      "name": "xiaoyi_card_continue",
+      "value": "Persona で続ける"
+    },
+    {
+      "name": "xiaoyi_card_open_failed",
+      "value": "Persona を開けませんでした。"
+    },
+    {
+      "name": "xiaoyi_sent_still_thinking",
+      "value": "Persona に送信しました。応答を作成中です。"
+    },
+    {
+      "name": "xiaoyi_task_sent_summary",
+      "value": "{session}（{machine}）に送信しました。"
+    },
+    {
+      "name": "xiaoyi_approved_summary",
+      "value": "承認しました: {summary}"
+    },
+    {
+      "name": "xiaoyi_todo_saved_summary",
+      "value": "ToDo を保存しました: {title}"
+    },
+    {
+      "name": "xiaoyi_water_logged_summary",
+      "value": "{amount} ml 記録しました。今日: {today} / {goal} ml。"
+    },
+    {
+      "name": "xiaoyi_push_queued_summary",
+      "value": "Hub に接続でき次第送信するようキューに保存しました。"
+    },
+    {
+      "name": "xiaoyi_push_sent_summary",
+      "value": "Persona に送信しました。"
+    },
+    {
+      "name": "xiaoyi_push_sent_no_dest_summary",
+      "value": "送信しました。設定 › サブスクリプションで配信先を有効にしてください。"
+    },
+    {
+      "name": "xiaoyi_opening_recording",
+      "value": "Persona の会議録音を開いています。"
+    },
+    {
+      "name": "xiaoyi_opening_persona",
+      "value": "Persona を開いています。"
+    },
+    {
+      "name": "xiaoyi_kb_no_hits",
+      "value": "「{query}」に一致するナレッジは見つかりませんでした。"
+    },
+    {
+      "name": "xiaoyi_not_paired",
+      "value": "未ペアリングです。先に Persona を開いて Hub に接続してください。"
+    },
+    {
+      "name": "xiaoyi_auth_expired",
+      "value": "ペアリングの有効期限が切れています。Persona で再ペアリングしてください。"
+    },
+    {
+      "name": "xiaoyi_already_handled",
+      "value": "このリクエストはすでに処理済みです。"
+    },
+    {
+      "name": "xiaoyi_ssh_open_app",
+      "value": "この Hub は SSH トンネル専用です。Persona アプリを開いて実行してください。"
+    },
+    {
+      "name": "xiaoyi_unlock_required",
+      "value": "承認を実行する前に端末のロックを解除してください。"
+    },
+    {
+      "name": "xiaoyi_offline",
+      "value": "現在 Hub に接続できません。ネットワーク設定を確認してください。"
+    },
+    {
+      "name": "xiaoyi_machine_offline",
+      "value": "{target} はオフラインです。PC と Persona Link を確認してください。"
+    },
+    {
+      "name": "xiaoyi_machine_not_found",
+      "value": "{target} という名前のコンピューターが見つかりません。"
+    },
+    {
+      "name": "xiaoyi_no_online_machine",
+      "value": "オンラインのコンピューターがありません。"
+    },
+    {
+      "name": "xiaoyi_no_live_session",
+      "value": "{target} に実行中のセッションがありません。Persona で開始してください。"
+    },
+    {
+      "name": "xiaoyi_hub_update_required",
+      "value": "この操作を利用するには Persona Hub を更新してください。"
+    },
+    {
+      "name": "xiaoyi_need_app_for_new_session",
+      "value": "先に Persona アプリで {target} のセッションを一度開始してください。"
+    },
+    {
+      "name": "xiaoyi_nothing_pending",
+      "value": "現在承認待ちのリクエストはありません。"
+    },
+    {
+      "name": "xiaoyi_needs_screen",
+      "value": "このリクエストには画面操作が必要です。Persona を開いてください。"
+    },
+    {
+      "name": "xiaoyi_nothing_to_send",
+      "value": "送信する内容がありません。"
+    },
+    {
+      "name": "xiaoyi_water_not_enabled",
+      "value": "先に Persona のヘルスケアで水分トラッキングを有効にしてください。"
+    },
+    {
+      "name": "xiaoyi_recording_module_off",
+      "value": "このhubでは会議の録音がオフです。"
+    },
+    {
+      "name": "xiaoyi_diag_recording_module",
+      "value": "会議録音モジュール"
+    },
+    {
+      "name": "xiaoyi_diag_on",
+      "value": "オン"
+    },
+    {
+      "name": "xiaoyi_diag_off",
+      "value": "オフ"
+    },
+    {
+      "name": "xiaoyi_agent_card_ready",
+      "value": "準備完了 · {count} 機能"
+    },
+    {
+      "name": "xiaoyi_diag_preview_card",
+      "value": "小芸カードをプレビュー"
+    },
+    {
+      "name": "xiaoyi_timeout",
+      "value": "Hub からの応答がタイムアウトしました。Persona で進行状況を確認してください。"
+    },
+    {
+      "name": "xiaoyi_rate_limited",
+      "value": "短時間の送信が多すぎます。しばらくしてから再試行してください。"
+    },
+    {
+      "name": "xiaoyi_failed",
+      "value": "リクエストを完了できませんでした。Persona で詳細を確認してください。"
+    },
+    {
+      "name": "fold_urgent_review",
+      "value": "確認"
+    },
+    {
+      "name": "fold_hover_deck_title",
+      "value": "テーブルトップデッキ"
+    },
+    {
+      "name": "fold_interrupt_agent",
+      "value": "中断"
+    },
+    {
+      "name": "knowledge_minutes_checking",
+      "value": "録音全体を確認しています…"
+    },
+    {
+      "name": "knowledge_minutes_checking_progress",
+      "value": "録音全体を確認しています（{done}/{total}分）…"
+    },
+    {
+      "name": "knowledge_minutes_writing",
+      "value": "議事録を作成中…"
+    },
+    {
+      "name": "agents_use_herdr_tab_name",
+      "value": "herdr のタブ名をセッション名として使う"
+    },
+    {
+      "name": "agents_use_herdr_tab_name_hint",
+      "value": "タブ名を優先して表示します。この設定は同じハブのデバイス間で同期されます。"
+    },
+    {
+      "name": "composer_queued_count",
+      "value": "{count} 件待機中"
+    },
+    {
+      "name": "composer_queue_send_now",
+      "value": "今すぐ送信"
+    },
+    {
+      "name": "composer_queue_relayed",
+      "value": "転送済み"
+    },
+    {
+      "name": "code_wrap_lines",
+      "value": "折り返し"
+    },
+    {
+      "name": "code_unwrap_lines",
+      "value": "横スクロール"
+    },
+    {
+      "name": "copied",
+      "value": "コピーしました"
+    },
+    {
+      "name": "quick_palette_title",
+      "value": "クイックコマンド"
+    },
+    {
+      "name": "quick_palette_placeholder",
+      "value": "エージェント、ワークスペース、操作を検索…"
+    },
+    {
+      "name": "quick_palette_agents",
+      "value": "対応待ち・稼働中のエージェント"
+    },
+    {
+      "name": "quick_palette_workspaces",
+      "value": "ワークスペース"
+    },
+    {
+      "name": "quick_palette_actions",
+      "value": "プロコントロール"
+    },
+    {
+      "name": "quick_palette_toggle_theme",
+      "value": "ライト / ダークテーマを切り替え"
+    },
+    {
+      "name": "quick_palette_toggle_workbench",
+      "value": "ライブワークベンチを切り替え"
+    },
+    {
+      "name": "quick_palette_liveview_preview",
+      "value": "LiveView プレビュー"
+    },
+    {
+      "name": "quick_palette_code_tab",
+      "value": "コードタブに切り替え"
+    },
+    {
+      "name": "quick_palette_machines_tab",
+      "value": "マシンタブに切り替え"
+    },
+    {
+      "name": "quick_palette_empty",
+      "value": "一致するコマンドがありません"
+    },
+    {
+      "name": "fold_posture_book",
+      "value": "折りたたみブック"
+    },
+    {
+      "name": "machine_cpu_load",
+      "value": "CPU と負荷"
+    },
+    {
+      "name": "composer_queue_edit",
+      "value": "入力欄に戻して編集"
+    },
+    {
+      "name": "composer_queue_move_up",
+      "value": "上へ移動"
+    },
+    {
+      "name": "composer_queue_move_down",
+      "value": "下へ移動"
+    },
+    {
+      "name": "composer_queue_taken_back",
+      "value": "入力欄に戻しました"
+    },
+    {
+      "name": "composer_queue_deleted",
+      "value": "キューから削除しました"
+    },
+    {
+      "name": "composer_queue_arrives_turn_end",
+      "value": "このターン終了時に届きます"
+    },
+    {
+      "name": "composer_queue_arrives_next",
+      "value": "次のメッセージと一緒に届きます"
+    },
+    {
+      "name": "starred_messages",
+      "value": "スター付きメッセージ"
+    },
+    {
+      "name": "star_message",
+      "value": "スターを付ける"
+    },
+    {
+      "name": "unstar_message",
+      "value": "スターを外す"
+    },
+    {
+      "name": "starred_badge",
+      "value": "スター付き"
+    },
+    {
+      "name": "starred_saved_toast",
+      "value": "メッセージをスターに追加しました"
+    },
+    {
+      "name": "starred_removed_toast",
+      "value": "スターを外しました"
+    },
+    {
+      "name": "starred_search_placeholder",
+      "value": "スター付きメッセージを検索"
+    },
+    {
+      "name": "starred_empty_title",
+      "value": "スター付きメッセージはありません"
+    },
+    {
+      "name": "starred_empty_message",
+      "value": "メッセージを長押ししてスターを付けられます。"
+    },
+    {
+      "name": "starred_unavailable_title",
+      "value": "スター付きメッセージは利用できません"
+    },
+    {
+      "name": "starred_unavailable_message",
+      "value": "このアシスタントでスター付きメッセージを使うにはハブを更新してください。"
+    },
+    {
+      "name": "starred_load_failed",
+      "value": "スター付きメッセージを読み込めませんでした"
+    },
+    {
+      "name": "starred_search_empty",
+      "value": "一致するスター付きメッセージがありません"
+    },
+    {
+      "name": "starred_open_original",
+      "value": "元のメッセージを開く"
+    },
+    {
+      "name": "starred_original_unavailable",
+      "value": "元のメッセージは利用できません。"
+    },
+    {
+      "name": "starred_original_check_failed",
+      "value": "元のメッセージを確認できませんでした。もう一度お試しください。"
+    },
+    {
+      "name": "starred_omitted_chars",
+      "value": "ほか {count} 文字"
+    },
+    {
+      "name": "export_chat",
+      "value": "チャットを書き出す"
+    },
+    {
+      "name": "export_include_timestamps",
+      "value": "タイムスタンプを含める"
+    },
+    {
+      "name": "export_include_work_steps",
+      "value": "作業ステップを含める"
+    },
+    {
+      "name": "export_preview_count",
+      "value": "{count} 件のメッセージ"
+    },
+    {
+      "name": "export_truncated_badge",
+      "value": "{count} 件が省略されました"
+    },
+    {
+      "name": "export_truncated_notice",
+      "value": "{omitted} 文字が省略されました"
+    },
+    {
+      "name": "export_copy_markdown",
+      "value": "Markdown をコピー"
+    },
+    {
+      "name": "export_save_share",
+      "value": "保存 / 共有"
+    },
+    {
+      "name": "export_copied_toast",
+      "value": "Markdown をコピーしました"
+    },
+    {
+      "name": "archived_chats",
+      "value": "アーカイブ済み"
+    },
+    {
+      "name": "unarchive",
+      "value": "アーカイブ解除"
+    },
+    {
+      "name": "unarchived_toast",
+      "value": "アーカイブを解除しました"
+    },
+    {
+      "name": "archived_search_placeholder",
+      "value": "アーカイブ済みチャットを検索"
+    },
+    {
+      "name": "archived_empty_title",
+      "value": "アーカイブされたチャットはありません"
+    },
+    {
+      "name": "archived_empty_message",
+      "value": "アーカイブされた会話がここに表示されます。タップして開くか解除できます。"
+    },
+    {
+      "name": "archived_search_empty",
+      "value": "一致するアーカイブ済みチャットがありません"
+    },
+    {
+      "name": "fork_continue_new_chat",
+      "value": "新しいチャットで続ける"
+    },
+    {
+      "name": "fork_chat_done_toast",
+      "value": "新しいチャットに分岐しました"
+    },
+    {
+      "name": "undo",
+      "value": "元に戻す"
+    },
+    {
+      "name": "assistant",
+      "value": "アシスタント"
+    },
+    {
+      "name": "token_usage_title",
+      "value": "トークン使用量"
+    },
+    {
+      "name": "token_usage_quick_subtitle",
+      "value": "12週間ヒートマップ・プロジェクト別"
+    },
+    {
+      "name": "token_usage_unsupported",
+      "value": "トークン使用量を表示するには Hub を更新してください"
+    },
+    {
+      "name": "token_usage_total_12w",
+      "value": "直近12週間"
+    },
+    {
+      "name": "token_usage_hit_rate",
+      "value": "キャッシュヒット"
+    },
+    {
+      "name": "token_usage_input",
+      "value": "入力"
+    },
+    {
+      "name": "token_usage_output",
+      "value": "出力"
+    },
+    {
+      "name": "token_usage_cache_read",
+      "value": "キャッシュ読込"
+    },
+    {
+      "name": "token_usage_cache_write",
+      "value": "キャッシュ書込"
+    },
+    {
+      "name": "token_usage_heatmap_title",
+      "value": "トークンアクティビティ"
+    },
+    {
+      "name": "token_usage_heatmap_tap_hint",
+      "value": "日付をタップして詳細表示"
+    },
+    {
+      "name": "token_usage_less",
+      "value": "少"
+    },
+    {
+      "name": "token_usage_more",
+      "value": "多"
+    },
+    {
+      "name": "token_usage_by_project",
+      "value": "プロジェクト別使用量"
+    },
+    {
+      "name": "token_usage_no_projects",
+      "value": "この期間にプロジェクトの使用量はありません"
+    },
+    {
+      "name": "token_usage_range_today",
+      "value": "今日"
+    },
+    {
+      "name": "token_usage_range_3d",
+      "value": "3日"
+    },
+    {
+      "name": "token_usage_range_7d",
+      "value": "7日"
+    },
+    {
+      "name": "token_usage_by_machine",
+      "value": "コンピュータ別"
+    },
+    {
+      "name": "token_usage_by_model",
+      "value": "モデル別"
+    },
+    {
+      "name": "token_usage_share",
+      "value": "割合"
+    },
+    {
+      "name": "token_usage_project_home",
+      "value": "ホームフォルダ"
+    },
+    {
+      "name": "token_usage_project_temp",
+      "value": "一時フォルダ"
+    },
+    {
+      "name": "token_usage_project_assistant",
+      "value": "アシスタント"
+    },
+    {
+      "name": "token_usage_project_unknown",
+      "value": "不明なフォルダ"
+    },
+    {
+      "name": "todo_wait_heading",
+      "value": "待機中"
+    },
+    {
+      "name": "todo_wait_from_step",
+      "value": "ステップより: {step}"
+    },
+    {
+      "name": "todo_wait_waiting_on",
+      "value": "待機対象"
+    },
+    {
+      "name": "todo_wait_blocked_by",
+      "value": "ブロック要因"
+    },
+    {
+      "name": "todo_wait_details",
+      "value": "詳細"
+    },
+    {
+      "name": "todo_wait_wakes_when",
+      "value": "再開条件"
+    },
+    {
+      "name": "todo_wait_scheduled_wake",
+      "value": "予定再開時刻"
+    },
+    {
+      "name": "todo_wait_check_in_due_label",
+      "value": "確認期限超過"
+    },
+    {
+      "name": "todo_wait_until_label",
+      "value": "期限"
+    },
+    {
+      "name": "todo_wait_sent_via",
+      "value": "{channel} 経由で送信"
+    },
+    {
+      "name": "todo_wait_open_message",
+      "value": "メッセージを開く"
+    },
+    {
+      "name": "todo_wait_view_pr",
+      "value": "PR を表示"
+    },
+    {
+      "name": "todo_wait_open_source",
+      "value": "ソースを開く"
+    },
+    {
+      "name": "todo_wait_waiting_since",
+      "value": "{time} から待機中"
+    },
+    {
+      "name": "todo_wait_kind_person_reply",
+      "value": "返信待ち"
+    },
+    {
+      "name": "todo_wait_kind_merge_review",
+      "value": "レビュー待ち"
+    },
+    {
+      "name": "todo_wait_kind_pr_merge",
+      "value": "マージ待ち"
+    },
+    {
+      "name": "todo_wait_kind_external_event",
+      "value": "外部イベント待ち"
+    },
+    {
+      "name": "todo_wait_kind_date",
+      "value": "指定日まで待機"
+    },
+    {
+      "name": "todo_wait_kind_todo_handoff",
+      "value": "他のタスク待ち"
+    },
+    {
+      "name": "todo_wait_kind_agent",
+      "value": "別のエージェント待ち"
+    },
+    {
+      "name": "todo_wait_kind_usage_limit",
+      "value": "使用上限に到達"
+    },
+    {
+      "name": "todo_wait_kind_computer_offline",
+      "value": "コンピュータがオフライン"
+    },
+    {
+      "name": "todo_wait_kind_scheduled_report",
+      "value": "定期レポート"
+    },
+    {
+      "name": "todo_wait_kind_parked",
+      "value": "保留中"
+    },
+    {
+      "name": "todo_wait_blocker_review_required",
+      "value": "レビューが必要"
+    },
+    {
+      "name": "todo_wait_blocker_changes_requested",
+      "value": "変更リクエストあり"
+    },
+    {
+      "name": "todo_wait_blocker_checks_pending",
+      "value": "チェック実行中"
+    },
+    {
+      "name": "todo_wait_blocker_checks_failing",
+      "value": "チェック失敗"
+    },
+    {
+      "name": "todo_wait_blocker_conflicts",
+      "value": "マージコンフリクト"
+    },
+    {
+      "name": "todo_wait_usage_limit_target",
+      "value": "{target} が使用上限に達しました"
+    },
+    {
+      "name": "todo_wait_waiting_to_merge_target",
+      "value": "{target} のマージ待ち"
+    },
+    {
+      "name": "todo_wait_waiting_on_target",
+      "value": "{target} の待機中"
+    },
+    {
+      "name": "todo_wait_back_at",
+      "value": "{time} に再開"
+    },
+    {
+      "name": "todo_wait_wakes_at",
+      "value": "{time} に再開"
+    },
+    {
+      "name": "todo_wait_check_in_due",
+      "value": "確認期限超過 ({time})"
+    },
+    {
+      "name": "todo_wait_until_at",
+      "value": "{time} まで"
+    },
+    {
+      "name": "todo_wait_since_at",
+      "value": "{time} から"
+    },
+    {
+      "name": "personal_agents",
+      "value": "パーソナルエージェント"
+    },
+    {
+      "name": "personal_agents_hide",
+      "value": "非表示"
+    },
+    {
+      "name": "personal_agents_restore",
+      "value": "復元"
+    },
+    {
+      "name": "personal_agents_removed",
+      "value": "非表示 ({count})"
+    },
+    {
+      "name": "knowledge_minutes_debates",
+      "value": "意見の相違"
+    },
+    {
+      "name": "knowledge_minutes_debate_open",
+      "value": "未決"
+    },
+    {
+      "name": "knowledge_minutes_debate_settled",
+      "value": "解決済み"
+    },
+    {
+      "name": "knowledge_minutes_debate_outcome",
+      "value": "結論"
+    },
+    {
+      "name": "kb_chat_in_inbox",
+      "value": "受信トレイの項目"
+    },
+    {
+      "name": "kb_chat_inbox_done_count",
+      "value": "{count} 件完了"
+    },
+    {
+      "name": "kb_chat_knowledge_page",
+      "value": "ナレッジページ"
+    },
+    {
+      "name": "todo_stage_plan",
+      "value": "計画"
+    },
+    {
+      "name": "todo_stage_develop",
+      "value": "開発"
+    },
+    {
+      "name": "todo_stage_review",
+      "value": "レビュー"
+    },
+    {
+      "name": "todo_stage_merge",
+      "value": "マージ"
+    },
+    {
+      "name": "todo_stage_deploy",
+      "value": "デプロイ"
+    },
+    {
+      "name": "todo_stage_verify",
+      "value": "検証済み"
+    },
+    {
+      "name": "todo_stage_done",
+      "value": "完了"
+    },
+    {
+      "name": "todo_stage_state_done",
+      "value": "完了"
+    },
+    {
+      "name": "todo_stage_state_current",
+      "value": "現在のステップ"
+    },
+    {
+      "name": "todo_stage_state_ahead",
+      "value": "未着手"
+    },
+    {
+      "name": "todo_stage_step_of",
+      "value": "{total} ステップ中 {current} 番目"
+    },
+    {
+      "name": "todo_stage_step_summary",
+      "value": "ステップ {current}/{total} · {stage}"
+    },
+    {
+      "name": "todo_decisions_title",
+      "value": "決定事項"
+    },
+    {
+      "name": "todo_decisions_loading",
+      "value": "決定事項を読み込み中…"
+    },
+    {
+      "name": "todo_decisions_load_failed",
+      "value": "決定事項を読み込めませんでした。"
+    },
+    {
+      "name": "todo_decisions_empty",
+      "value": "このTo-Doでの決定がここに記録されます。エージェントへの回答や完了結果が自動で記録されるほか、手動でも追加できます。"
+    },
+    {
+      "name": "todo_decisions_show_all",
+      "value": "全 {count} 件を表示"
+    },
+    {
+      "name": "todo_decisions_show_first",
+      "value": "最初の {count} 件を表示"
+    },
+    {
+      "name": "todo_decisions_full_history",
+      "value": "すべての履歴（改訂 {count} 件）"
+    },
+    {
+      "name": "todo_decisions_current_only",
+      "value": "現在の有効分のみ"
+    },
+    {
+      "name": "todo_decision_chose",
+      "value": "決定："
+    },
+    {
+      "name": "todo_decision_reason_prefix",
+      "value": "理由："
+    },
+    {
+      "name": "todo_decision_revise",
+      "value": "改訂"
+    },
+    {
+      "name": "todo_decision_revised_badge",
+      "value": "改訂済み"
+    },
+    {
+      "name": "todo_decision_revises",
+      "value": "「{choice}」を改訂"
+    },
+    {
+      "name": "todo_decision_revises_item",
+      "value": "「{question} → {choice}」の改訂にする"
+    },
+    {
+      "name": "todo_decision_undo_revision",
+      "value": "改訂の関連付けを解除"
+    },
+    {
+      "name": "todo_decision_record_title",
+      "value": "決定を記録"
+    },
+    {
+      "name": "todo_decision_save",
+      "value": "記録"
+    },
+    {
+      "name": "todo_decision_revise_note",
+      "value": "以前の選択「{choice}」は取り消し線付きで履歴に残り、新しい選択のみがエージェントに渡されます。"
+    },
+    {
+      "name": "todo_decision_question_label",
+      "value": "質問"
+    },
+    {
+      "name": "todo_decision_question_placeholder",
+      "value": "何を決める必要がありますか…"
+    },
+    {
+      "name": "todo_decision_choice_label",
+      "value": "選択"
+    },
+    {
+      "name": "todo_decision_choice_placeholder",
+      "value": "決まった内容…"
+    },
+    {
+      "name": "todo_decision_reason_label",
+      "value": "理由（任意）"
+    },
+    {
+      "name": "todo_decision_reason_placeholder",
+      "value": "その理由や除外した選択肢…"
+    },
+    {
+      "name": "todo_decision_source_manual",
+      "value": "手動で追加"
+    },
+    {
+      "name": "todo_decision_source_outcome",
+      "value": "エージェント完了時に記録"
+    },
+    {
+      "name": "todo_decision_source_agent",
+      "value": "エージェント作業中に記録"
+    },
+    {
+      "name": "todo_decision_source_thread",
+      "value": "Lark トピックで発言"
+    },
+    {
+      "name": "todo_decision_source_card",
+      "value": "エージェントの質問に回答"
+    },
+    {
+      "name": "todo_decision_recorded_toast",
+      "value": "決定を記録しました"
+    },
+    {
+      "name": "todo_decision_revised_toast",
+      "value": "決定を改訂しました"
+    },
+    {
+      "name": "todo_decision_marked_revised",
+      "value": "改訂としてマークしました"
+    },
+    {
+      "name": "todo_decision_revision_undone",
+      "value": "改訂マークを解除しました"
+    },
+    {
+      "name": "expand_all",
+      "value": "すべて展開"
+    },
+    {
+      "name": "collapse_all",
+      "value": "すべて折りたたむ"
+    },
+    {
+      "name": "saving",
+      "value": "保存中…"
+    },
+    {
+      "name": "token_usage_recent_hourly",
+      "value": "最近の時間別利用量"
+    },
+    {
+      "name": "token_usage_by_machine_7d",
+      "value": "コンピュータ別 · 過去7日間"
+    },
+    {
+      "name": "token_usage_by_agent_7d",
+      "value": "エージェント別 · 過去7日間"
+    },
+    {
+      "name": "token_usage_by_agent",
+      "value": "エージェント別"
+    },
+    {
+      "name": "token_usage_by_launcher",
+      "value": "ランチャー別"
+    },
+    {
+      "name": "token_usage_by_place",
+      "value": "フォルダとワークツリー"
+    },
+    {
+      "name": "token_usage_requests",
+      "value": "リクエスト"
+    },
+    {
+      "name": "token_usage_worktree",
+      "value": "リンクされたワークツリー"
+    },
+    {
+      "name": "token_usage_removed_computer",
+      "value": "削除されたコンピュータ"
+    },
+    {
+      "name": "token_usage_not_split",
+      "value": "未分類（更新前）"
+    },
+    {
+      "name": "token_usage_launcher_terminal",
+      "value": "ターミナルで開始"
+    },
+    {
+      "name": "token_usage_project_by_hour",
+      "value": "時間別"
+    },
+    {
+      "name": "token_usage_project_each_day",
+      "value": "日別"
+    },
+    {
+      "name": "next_suggestions_title",
+      "value": "次のメッセージを提案"
+    },
+    {
+      "name": "next_suggestions_note",
+      "value": "開いているチャットで返信があった後、空の入力欄の上に次のメッセージ候補を提案します。"
+    },
+    {
+      "name": "suggestion_use",
+      "value": "使う"
+    },
+    {
+      "name": "suggestion_fill_in",
+      "value": "入力欄に入れる"
+    },
+    {
+      "name": "suggestion_send_now",
+      "value": "今すぐ送信"
+    },
+    {
+      "name": "suggestion_hint_safe",
+      "value": "タップで入力、長押しですぐに送信できます。"
+    },
+    {
+      "name": "suggestion_hint_risky",
+      "value": "タップして入力欄で確認してください。"
+    },
+    {
+      "name": "rule_suggestion_always",
+      "value": "常に実行"
+    },
+    {
+      "name": "rule_suggestion_not_now",
+      "value": "今はしない"
+    },
+    {
+      "name": "rule_suggestion_creates_task_trust",
+      "value": "「常に実行」はこの種類のタスクを自動開始に追加し、次回から確認なしで開始します。"
+    },
+    {
+      "name": "rule_suggestion_creates_task_trust_scoped",
+      "value": "「常に実行」はルールを追加します：{machine} の {directory} でファイルを変更するタスクを確認なしで開始します。"
+    },
+    {
+      "name": "rule_suggestion_creates_standing",
+      "value": "「常に実行」は {machine} の {directory} での「{action}」に常時許可を作成します。"
+    },
+    {
+      "name": "rule_suggestion_creates_setting",
+      "value": "「常に実行」はルールを保存せず、この提案を30日間非表示にします。"
+    },
+    {
+      "name": "rule_suggestion_made_task_trust",
+      "value": "ルールを追加しました：次回から確認なしで開始します。"
+    },
+    {
+      "name": "rule_suggestion_made_standing",
+      "value": "常時許可を追加しました。"
+    },
+    {
+      "name": "rule_suggestion_made_setting",
+      "value": "この提案（{setting}）を非表示にしました。"
+    },
+    {
+      "name": "rule_suggestion_made_none",
+      "value": "完了しました。ルールは保存されませんでした。"
+    },
+    {
+      "name": "rule_suggestion_conflict",
+      "value": "常時許可が変更されました。もう一度お試しください。"
+    },
+    {
+      "name": "rule_suggestion_failed",
+      "value": "回答を保存できませんでした。"
+    },
+    {
+      "name": "recording_bookmark",
+      "value": "ブックマーク"
+    },
+    {
+      "name": "recording_transcript_review",
+      "value": "文字起こしを検索"
+    },
+    {
+      "name": "recording_transcript_find",
+      "value": "文字起こし内を検索…"
+    },
+    {
+      "name": "recording_transcript_previous",
+      "value": "前の一致"
+    },
+    {
+      "name": "recording_transcript_next",
+      "value": "次の一致"
+    },
+    {
+      "name": "recording_transcript_bookmarks",
+      "value": "ブックマーク"
+    },
+    {
+      "name": "recording_transcript_copy",
+      "value": "テキストをコピー"
+    },
+    {
+      "name": "recording_transcript_copied",
+      "value": "文字起こしをコピーしました"
+    },
+    {
+      "name": "recording_transcript_no_matches",
+      "value": "一致なし"
+    },
+    {
+      "name": "recording_transcript_matches",
+      "value": "件一致"
+    },
+    {
+      "name": "recording_transcript_expired",
+      "value": "音声の文字起こしは期限切れとなり、ブックマークのみ保持されています。"
+    },
+    {
+      "name": "recording_transcript_empty",
+      "value": "保持されている文字起こしはありません。"
+    },
+    {
+      "name": "standing_auth_title",
+      "value": "常時許可"
+    },
+    {
+      "name": "standing_tab_standing",
+      "value": "常時許可"
+    },
+    {
+      "name": "standing_tab_session",
+      "value": "セッション許可"
+    },
+    {
+      "name": "standing_action_merge",
+      "value": "変更をマージ"
+    },
+    {
+      "name": "standing_action_push",
+      "value": "変更をプッシュ"
+    },
+    {
+      "name": "standing_action_deploy_test",
+      "value": "テスト環境へデプロイ"
+    },
+    {
+      "name": "standing_action_deploy_production",
+      "value": "本番環境へデプロイ"
+    },
+    {
+      "name": "standing_action_send",
+      "value": "メッセージを送信"
+    },
+    {
+      "name": "standing_action_delete",
+      "value": "データを削除"
+    },
+    {
+      "name": "standing_action_spend",
+      "value": "費用を支出"
+    },
+    {
+      "name": "standing_no_actions",
+      "value": "記録された操作はありません"
+    },
+    {
+      "name": "standing_condition_ci_green",
+      "value": "すべてのチェックが通過"
+    },
+    {
+      "name": "standing_condition_no_conflicts",
+      "value": "マージ競合なし"
+    },
+    {
+      "name": "standing_only_when",
+      "value": "条件"
+    },
+    {
+      "name": "standing_place_format",
+      "value": "{machine} の {folder}"
+    },
+    {
+      "name": "standing_reversible_yes",
+      "value": "取り消し可能"
+    },
+    {
+      "name": "standing_reversible_no",
+      "value": "取り消し不可"
+    },
+    {
+      "name": "standing_since",
+      "value": "{date} から"
+    },
+    {
+      "name": "standing_source_chat",
+      "value": "チャット"
+    },
+    {
+      "name": "standing_source_suggested_rule",
+      "value": "提案されたルール：14 日間に同じ回答が {count} 回あり、「常に」で確認されました。"
+    },
+    {
+      "name": "standing_show_details",
+      "value": "詳細"
+    },
+    {
+      "name": "standing_hide_details",
+      "value": "詳細を隠す"
+    },
+    {
+      "name": "standing_revoke",
+      "value": "取り消す"
+    },
+    {
+      "name": "standing_revoke_action",
+      "value": "許可を取り消す"
+    },
+    {
+      "name": "standing_revoke_confirm_title",
+      "value": "この許可を取り消しますか？"
+    },
+    {
+      "name": "standing_revoke_confirm_message",
+      "value": "取り消すと、{machine} の {folder} で {actions} を実行する前に Persona が再度確認します。完了済みの作業には影響しません。再び許可するにはメインチャットで指示してください。"
+    },
+    {
+      "name": "standing_revoked_toast",
+      "value": "許可を取り消しました"
+    },
+    {
+      "name": "standing_revoke_failed_toast",
+      "value": "この許可を取り消せませんでした。現在も有効です。接続を確認して再試行してください。"
+    },
+    {
+      "name": "standing_empty_title",
+      "value": "許可はまだありません"
+    },
+    {
+      "name": "standing_empty_message",
+      "value": "マージ、プッシュ、デプロイ、メッセージ送信、データ削除、支出の前に Persona が確認します。チャットで常に許可するとここに表示されます。"
+    },
+    {
+      "name": "standing_forbidden_title",
+      "value": "フルアクセスが必要です"
+    },
+    {
+      "name": "standing_forbidden_message",
+      "value": "常時許可の表示と取り消しができるのは、フルアクセス権のあるデバイスのみです。"
+    },
+    {
+      "name": "standing_failed_title",
+      "value": "常時許可を読み込めませんでした"
+    },
+    {
+      "name": "standing_footer_note",
+      "value": "取り消されるまで、Persona は確認なしでこれらを実行します。"
+    },
+    {
+      "name": "standing_select_conversation",
+      "value": "会話"
+    },
+    {
+      "name": "phone_search_alias_standing_authorizations",
+      "value": "常時許可 セッション許可 権限 取り消し standing authorizations always allow"
+    },
+    {
+      "name": "always_grants_heading",
+      "value": "この会話で常に許可"
+    },
+    {
+      "name": "always_grants_empty",
+      "value": "保存された許可はありません。"
+    },
+    {
+      "name": "always_grants_restart_needed",
+      "value": "保存された許可は取り消されましたが、実行中の会話をリセットできませんでした。取り消しを有効にするにはこの会話を再開してください。"
+    },
+    {
+      "name": "always_grants_scope_footer",
+      "value": "これらの保存された許可はこの会話のみに適用されます。記録にはツール名のみが保存され、詳細なディレクトリやコマンド範囲は保存されません。"
+    },
+    {
+      "name": "always_grant_unnamed",
+      "value": "名前のない許可"
+    },
+    {
+      "name": "always_grant_revoke_title",
+      "value": "この許可を取り消しますか？"
+    },
+    {
+      "name": "always_grant_revoke_message",
+      "value": "取り消すと許可をクリアするため現在の応答を停止します。次のメッセージを送信すると続行できます。"
+    },
+    {
+      "name": "always_grant_revoked_toast",
+      "value": "許可を取り消しました"
+    },
+    {
+      "name": "assistant_full_search_title",
+      "value": "チャットとエージェントを検索"
+    },
+    {
+      "name": "assistant_search_scope_chats",
+      "value": "チャット"
+    },
+    {
+      "name": "archived_agents_empty_title",
+      "value": "アーカイブ済みのエージェントはありません"
+    },
+    {
+      "name": "archived_agents_empty_message",
+      "value": "アーカイブされたエージェントセッションは復元するまでここに表示されます。"
+    },
+    {
+      "name": "agent_auto_rename",
+      "value": "自動名前変更"
+    },
+    {
+      "name": "agent_renaming",
+      "value": "名前を変更中…"
+    },
+    {
+      "name": "assistant_session",
+      "value": "アシスタントチャットはここで自動名前変更できません"
     }
   ]
 }

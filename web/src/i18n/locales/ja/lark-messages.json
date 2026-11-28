@@ -31,5 +31,12 @@
   "pinned_label": "固定したチャット",
   "pinned": "固定",
   "at_all": "[@全員]",
-  "at_me": "[@あなた宛て]"
+  "at_me": "[@あなた宛て]",
+  "pin_agent": "ピン留め",
+  "unpin_agent": "ピン留めを外す",
+  "kind_agent": "AIアシスタント",
+  "filter_label": "表示",
+  "filter_all": "すべて",
+  "filter_lark": "Lark",
+  "filter_agents": "AIアシスタント"
 }

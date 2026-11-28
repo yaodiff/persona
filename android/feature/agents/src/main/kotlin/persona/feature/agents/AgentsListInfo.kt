@@ -79,7 +79,7 @@ internal fun visibleAgentRequests(
     return pending.filter { request ->
         val session = rows[request.sessionKey]
         val row = session?.let { AgentSession(it) }
-        session?.assistant != true && !mutes.mutes(request.sessionKey.path, row?.spacePreferenceKey) &&
+        session?.assistant != true && !request.isDisplayMirror && !mutes.mutes(request.sessionKey.path, row?.spacePreferenceKey) &&
             (settings.machineFilter.isEmpty() || request.machineId == settings.machineFilter) &&
             (settings.quick == AgentQuickFilter.All || (row?.let { settings.quick.matches(it) || it.id in settings.kept }
                 ?: (settings.quick == AgentQuickFilter.NeedsYou))) &&

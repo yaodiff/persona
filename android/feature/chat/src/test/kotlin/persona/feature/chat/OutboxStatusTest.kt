@@ -96,4 +96,19 @@ class OutboxStatusTest {
         show(DeliveryState.Queued, details = true, mutableListOf())
         rule.onAllNodesWithText("丢弃").assertCountEquals(0)
     }
+
+    @Test fun resendConfirmationDialogClosesWhenStateLeavesNeedsConfirmation() {
+        var state by mutableStateOf(DeliveryState.NeedsConfirmation)
+        val actions = mutableListOf<DeliveryAction>()
+        rule.setContent {
+            PersonaTheme(darkTheme = false, reduceMotion = true, style = AppStyle.Glass) {
+                OutboxStatus(message.copy(state = state), busy = false, onAction = { actions += it }, onDetails = {})
+            }
+        }
+        rule.onNodeWithText("重试").performClick()
+        rule.onNodeWithText("重发这条消息？").assertExists()
+        rule.runOnIdle { state = DeliveryState.Sent }
+        rule.onAllNodesWithText("重发这条消息？").assertCountEquals(0)
+        assertEquals(emptyList<DeliveryAction>(), actions)
+    }
 }

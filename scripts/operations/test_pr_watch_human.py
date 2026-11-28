@@ -16,10 +16,13 @@ SELF = "watchbot-login"
 
 
 def review(review_id, state, commit_id=HEAD, login="reviewer", user_type="User",
-           submitted_at=None):
-    return {"id": review_id, "node_id": "MDE_%s" % review_id, "state": state,
-            "commit_id": commit_id, "submitted_at": submitted_at or "2026-11-20T10:00:%02dZ" % (review_id % 60),
-            "user": {"login": login, "type": user_type}, "author_association": "MEMBER"}
+           submitted_at=None, author_association="MEMBER"):
+    rec = {"id": review_id, "node_id": "MDE_%s" % review_id, "state": state,
+           "commit_id": commit_id, "submitted_at": submitted_at or "2026-11-20T10:00:%02dZ" % (review_id % 60),
+           "user": {"login": login, "type": user_type}}
+    if author_association is not None:
+        rec["author_association"] = author_association
+    return rec
 
 
 class ClassificationTests(unittest.TestCase):
@@ -128,6 +131,161 @@ class ClassificationTests(unittest.TestCase):
             pr_watch_human.classify_human_reviews([], "short", SELF)
         with self.assertRaises(pr_watch_common.WatchError):
             pr_watch_human.classify_human_reviews([], HEAD, " ")
+
+    def test_only_trusted_author_associations_count(self):
+        for assoc in ("OWNER", "MEMBER", "COLLABORATOR"):
+            with self.subTest(trusted=assoc):
+                decision = self.classify([review(1, "APPROVED", author_association=assoc)])
+                self.assertEqual(decision["decision"], "approved")
+        for assoc in ("NONE", "CONTRIBUTOR", "FIRST_TIME_CONTRIBUTOR", "FIRST_TIMER", "MANNEQUIN", None):
+            for state in ("APPROVED", "CHANGES_REQUESTED", "COMMENTED"):
+                with self.subTest(untrusted=assoc, state=state):
+                    decision = self.classify([review(1, state, author_association=assoc)])
+                    self.assertEqual(decision["decision"], "none")
+        # Explicit non-string author_association fails closed.
+        bad = review(1, "APPROVED")
+        bad["author_association"] = 123
+        with self.assertRaises(pr_watch_common.WatchError):
+            self.classify([bad])
+
+    def test_login_comparison_is_case_insensitive(self):
+        # Self login in different casing still cannot self-approve.
+        self.assertEqual(self.classify([review(1, "APPROVED", login=SELF.upper())])["decision"], "none")
+        # Mixed-case logins for the same reviewer collapse onto one reviewer state.
+        reviews = [review(1, "APPROVED", login="Reviewer", submitted_at="2026-11-20T09:00:00Z"),
+                   review(2, "CHANGES_REQUESTED", login="reviewer", submitted_at="2026-11-20T10:00:00Z")]
+        decision = self.classify(reviews)
+        self.assertEqual(decision["decision"], "changes_requested")
+        self.assertEqual(decision["review"]["id"], 2)
+
+    def test_commented_reply_does_not_overwrite_changes_requested_or_approved(self):
+        # Bob requests changes, then replies in a review thread (COMMENTED): must still block even if Alice approved.
+        reviews = [
+            review(1, "APPROVED", login="alice", submitted_at="2026-11-20T10:00:00Z"),
+            review(2, "CHANGES_REQUESTED", login="bob", submitted_at="2026-11-20T10:01:00Z"),
+            review(3, "COMMENTED", login="bob", submitted_at="2026-11-20T10:02:00Z"),
+        ]
+        decision = self.classify(reviews)
+        self.assertEqual(decision["decision"], "changes_requested")
+        self.assertEqual(decision["review"]["id"], 2)
+
+        # Sole approver replying in a thread (COMMENTED) must keep their approval intact.
+        reviews = [
+            review(1, "APPROVED", login="alice", submitted_at="2026-11-20T10:00:00Z"),
+            review(2, "COMMENTED", login="alice", submitted_at="2026-11-20T10:01:00Z"),
+        ]
+        decision = self.classify(reviews)
+        self.assertEqual(decision["decision"], "approved")
+        self.assertEqual(decision["review"]["id"], 1)
+
+        # Dismissal clears CHANGES_REQUESTED even after a thread COMMENTED; a comment after dismissal still counts.
+        reviews = [
+            review(1, "CHANGES_REQUESTED", login="bob", submitted_at="2026-11-20T10:00:00Z"),
+            review(2, "COMMENTED", login="bob", submitted_at="2026-11-20T10:01:00Z"),
+            review(3, "DISMISSED", login="bob", submitted_at="2026-11-20T10:02:00Z"),
+        ]
+        self.assertEqual(self.classify(reviews)["decision"], "none")
+        reviews.append(review(4, "COMMENTED", login="bob", submitted_at="2026-11-20T10:03:00Z"))
+        decision = self.classify(reviews)
+        self.assertEqual(decision["decision"], "commented")
+        self.assertEqual(decision["review"]["id"], 4)
+
+    def test_null_commit_id_and_pending_reviews_do_not_crash_or_erase_submitted_state(self):
+        pending_null = {"id": 2, "state": "PENDING", "commit_id": None, "submitted_at": None,
+                        "user": {"login": "bob", "type": "User"}, "author_association": "MEMBER"}
+        gc_null = {"id": 3, "state": "APPROVED", "commit_id": None, "submitted_at": "2026-11-20T09:00:00Z",
+                   "user": {"login": "carol", "type": "User"}, "author_association": "MEMBER"}
+        pending_head = {"id": 4, "state": "PENDING", "commit_id": HEAD, "submitted_at": "2026-11-20T11:00:00Z",
+                        "user": {"login": "alice", "type": "User"}, "author_association": "MEMBER"}
+        approved = review(1, "APPROVED", login="alice", submitted_at="2026-11-20T10:00:00Z")
+        decision = self.classify([approved, pending_null, gc_null, pending_head])
+        self.assertEqual(decision["decision"], "approved")
+        self.assertEqual(decision["review"]["id"], 1)
+        # Standalone null-commit reviews yield decision none (not a crash).
+        self.assertEqual(self.classify([pending_null, gc_null])["decision"], "none")
+
+    def test_pr_author_reviews_and_replies_are_excluded(self):
+        # PR author replying COMMENTED in a review thread must not park their own PR.
+        author_reply = review(1, "COMMENTED", login="Pr-Author", author_association="MEMBER")
+        self.assertEqual(
+            pr_watch_human.classify_human_reviews([author_reply], HEAD, SELF, pr_author="pr-author")["decision"],
+            "none",
+        )
+        # Another maintainer's review still counts alongside the PR author's reply.
+        maintainer_approval = review(2, "APPROVED", login="maintainer", author_association="OWNER")
+        decision = pr_watch_human.classify_human_reviews(
+            [author_reply, maintainer_approval], HEAD, SELF, pr_author="pr-author"
+        )
+        self.assertEqual(decision["decision"], "approved")
+        self.assertEqual(decision["review"]["id"], 2)
+        # Non-string pr_author fails closed.
+        with self.assertRaises(pr_watch_common.WatchError):
+            pr_watch_human.classify_human_reviews([], HEAD, SELF, pr_author=123)
+
+    def test_realistic_in_place_github_dismissal_semantics(self):
+        # Model #1: earlier APPROVED followed by later DISMISSED leaves no approval resurrection.
+        reviews = [
+            review(1, "APPROVED", login="alice", submitted_at="2026-11-20T10:00:00Z"),
+            review(2, "DISMISSED", login="alice", submitted_at="2026-11-20T10:01:00Z"),
+        ]
+        self.assertEqual(self.classify(reviews)["decision"], "none")
+
+        # Model #2: real GitHub REST in-place mutation turns #1 into DISMISSED at 10:00;
+        # a later inline COMMENTED reply at 10:01 yields "commented" (safe park) alone,
+        # and yields "approved" when another trusted maintainer has approved.
+        mutated = [
+            review(1, "DISMISSED", login="alice", submitted_at="2026-11-20T10:00:00Z"),
+            review(2, "COMMENTED", login="alice", submitted_at="2026-11-20T10:01:00Z"),
+        ]
+        decision = self.classify(mutated)
+        self.assertEqual(decision["decision"], "commented")
+        self.assertEqual(decision["review"]["id"], 2)
+
+        with_other_approval = mutated + [
+            review(3, "APPROVED", login="bob", submitted_at="2026-11-20T10:02:00Z"),
+        ]
+        decision = self.classify(with_other_approval)
+        self.assertEqual(decision["decision"], "approved")
+        self.assertEqual(decision["review"]["id"], 3)
+
+    def test_timestamp_parsing_handles_fractional_seconds_and_rejects_invalid_or_dismissed_missing(self):
+        # Fractional-second timestamp 10:00:00.500Z is newer than 10:00:00Z even with smaller id
+        # (lexicographical string sort would wrongly place ".500Z" < "Z").
+        reviews = [
+            review(2, "APPROVED", login="alice", submitted_at="2026-11-20T10:00:00Z"),
+            review(1, "CHANGES_REQUESTED", login="alice", submitted_at="2026-11-20T10:00:00.500Z"),
+        ]
+        decision = self.classify(reviews)
+        self.assertEqual(decision["decision"], "changes_requested")
+        self.assertEqual(decision["review"]["id"], 1)
+        self.assertEqual(decision["review"]["submitted_at"], "2026-11-20T10:00:00.500Z")
+
+        # Non-UTC offset timestamps and DISMISSED with missing/blank submitted_at fail closed.
+        for bad in (
+            [review(1, "APPROVED", submitted_at="2026-11-20T12:00:00+02:00")],
+            [review(1, "APPROVED", submitted_at="2026-11-20T10:00:00+00:00")],
+            [{"id": 1, "state": "DISMISSED", "commit_id": HEAD, "submitted_at": None,
+              "user": {"login": "alice", "type": "User"}, "author_association": "MEMBER"}],
+            [{"id": 1, "state": "DISMISSED", "commit_id": HEAD, "submitted_at": "",
+              "user": {"login": "alice", "type": "User"}, "author_association": "MEMBER"}],
+        ):
+            with self.subTest(bad=bad):
+                with self.assertRaises(pr_watch_common.WatchError):
+                    self.classify(bad)
+
+    def test_missing_commit_id_or_user_keys_fail_closed(self):
+        # Omitting commit_id or user entirely (e.g. schema drift / wrong API shape) must fail closed,
+        # unlike explicit null values from GitHub REST.
+        missing_commit = {"id": 1, "state": "CHANGES_REQUESTED",
+                          "submitted_at": "2026-11-20T10:00:00Z",
+                          "user": {"login": "alice", "type": "User"}, "author_association": "MEMBER"}
+        missing_user = {"id": 2, "state": "CHANGES_REQUESTED", "commit_id": HEAD,
+                        "submitted_at": "2026-11-20T10:00:00Z", "author_association": "MEMBER"}
+        missing_user_null_commit = {"id": 3, "state": "PENDING", "commit_id": None}
+        for bad in (missing_commit, missing_user, missing_user_null_commit):
+            with self.subTest(bad=bad):
+                with self.assertRaises(pr_watch_common.WatchError):
+                    self.classify([bad])
 
 
 class FetchTests(unittest.TestCase):

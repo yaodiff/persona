@@ -1,7 +1,9 @@
 package hub
 
 import (
+	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -9,7 +11,9 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/nwverse/persona/server/internal/bus"
 	"github.com/nwverse/persona/server/internal/devicewire"
+	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/update"
 )
@@ -102,11 +106,31 @@ func (u *updater) publishDevelopmentPackages(p update.Pending) error {
 
 var developmentArchive = lazyre.New(`^(?:personad|persona-manager|persona-node)-[a-z0-9]+-[a-z0-9]+(?:\.exe)?\.gz$`)
 
+func (u *updater) publishedBuild() *devicewire.DevelopmentTarget {
+	if u == nil || u.h.build.Channel != update.Release || !u.isConfirmed() || u.adoptionUnresolved() {
+		return nil
+	}
+	t := devicewire.PublishedBuild(u.h.build.Commit, u.h.version, u.h.build.Number)
+	if !t.ValidPublished() {
+		return nil
+	}
+	return &t
+}
+
 func (h *Hub) serveDevelopmentPackage(w http.ResponseWriter, r *http.Request) {
-	if _, ok := h.busCaller(w, r); !ok {
+	ident, ok := h.busCaller(w, r)
+	if !ok {
 		return
 	}
 	w.Header().Set("Cache-Control", "private, no-store")
+	if t := h.upd.publishedBuild(); t != nil && t.Commit == r.PathValue("commit") && t.Version == r.PathValue("version") {
+		if ident.Role != bus.RoleManager {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		servePublishedPackage(w, r, *t)
+		return
+	}
 	t, _ := h.upd.confirmedDevelopment()
 	if t == nil || t.Commit != r.PathValue("commit") || t.Version != r.PathValue("version") {
 		// Distinct from a missing file of the current target: no source fallback.
@@ -135,4 +159,119 @@ func (h *Hub) serveDevelopmentPackage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.ServeContent(w, r, name, info.ModTime(), f)
+}
+
+func servePublishedPackage(w http.ResponseWriter, r *http.Request, t devicewire.DevelopmentTarget) {
+	w.Header().Set(devicewire.DevelopmentCommitHeader, t.Commit)
+	dir := identity.NodeBinaryDir()
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			http.NotFound(w, r)
+		} else {
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+		return
+	}
+	defer root.Close()
+	index, err := root.Open(update.PackageIndex)
+	managed := false
+	if errors.Is(err, os.ErrNotExist) {
+		// The private release publisher has its own immutable directory.
+		// Its manifest pins the unpacked binaries without a second index.
+		if info, statErr := os.Lstat(dir); statErr == nil && info.Mode()&os.ModeSymlink != 0 {
+			index, err = root.Open("manifest.json")
+			managed = true
+		}
+	}
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			http.NotFound(w, r)
+		} else {
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+		return
+	}
+	defer index.Close()
+	data, err := io.ReadAll(io.LimitReader(index, 1<<20))
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	m, err := update.ParseManifest(data)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	if m.Version != t.Version || m.Build != t.Build || m.Commit != t.Commit {
+		http.NotFound(w, r)
+		return
+	}
+	if managed {
+		useInstalledArtifacts(root, m.Files, "personad")
+		useInstalledArtifacts(root, m.Nodes["persona-node"], "persona-node")
+		useInstalledArtifacts(root, m.Programs["persona-manager"], "persona-manager")
+		if len(m.Files) == 0 {
+			http.NotFound(w, r)
+			return
+		}
+		data, err = json.Marshal(m)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+	}
+	name := r.PathValue("file")
+	if name == "manifest.json" {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(data)
+		return
+	}
+	if !developmentArchive.MatchString(name+".gz") || !listedPackageFile(m, name) {
+		http.NotFound(w, r)
+		return
+	}
+	info, err := root.Lstat(name)
+	if err != nil || !info.Mode().IsRegular() {
+		http.NotFound(w, r)
+		return
+	}
+	f, err := root.Open(name)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	defer f.Close()
+	if opened, err := f.Stat(); err != nil || !os.SameFile(info, opened) {
+		w.WriteHeader(http.StatusConflict)
+		return
+	}
+	http.ServeContent(w, r, name, info.ModTime(), f)
+}
+
+func useInstalledArtifacts(root *os.Root, files map[string]update.File, program string) {
+	for platform, f := range files {
+		name := update.PackageName(program, platform)
+		if !developmentArchive.MatchString(name+".gz") || f.BinarySHA256 == "" {
+			delete(files, platform)
+			continue
+		}
+		info, err := root.Lstat(name)
+		if err != nil || !info.Mode().IsRegular() || info.Size() <= 0 {
+			delete(files, platform)
+			continue
+		}
+		files[platform] = update.File{Name: name, Size: info.Size(), SHA256: f.BinarySHA256, BinarySHA256: f.BinarySHA256}
+	}
+}
+
+func listedPackageFile(m *update.Manifest, name string) bool {
+	for _, group := range []map[string]update.File{m.Files, m.Nodes["persona-node"], m.Programs["persona-manager"]} {
+		for _, f := range group {
+			if f.Name == name {
+				return true
+			}
+		}
+	}
+	return false
 }

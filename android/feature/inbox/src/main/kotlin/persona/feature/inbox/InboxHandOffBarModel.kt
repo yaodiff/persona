@@ -242,7 +242,7 @@ class InboxHandOffBarModel internal constructor(
                 // A finished item opened from history is not in the live list; the page's own lookup finds it.
                 val record = repository.item(itemId) ?: error("The Inbox item is no longer available")
                 known = record
-                operation.text = handoffPrompt(resources, handOffItem(record, repository.personaContext(itemId)), operation.ask)
+                operation.text = handoffPrompt(resources, handOffItem(record, repository.personaContext(itemId)?.text), operation.ask)
             }
             val text = checkNotNull(operation.text)
             val target = operation.target

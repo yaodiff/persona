@@ -1,6 +1,6 @@
 {
   "title": "Named herdr sessions",
-  "footer": "Choose named herdr sessions (herdr --session <name>) on the selected computer to keep out of Persona. Blocking a session stops Persona from listing its panes, workspaces, hooks, approval cards, live processes and remembered transcripts, while herdr keeps running. Unblock a session to show it again. The default server and persona-* data-directory sessions are managed automatically.",
+  "footer": "Choose named herdr sessions (herdr --session <name>) on the selected computer to keep out of Persona. Blocking a session stops Persona from listing its tabs, workspaces, hooks, approval cards, live processes and remembered transcripts, while herdr keeps running. Unblock a session to show it again. The default server and persona-* data-directory sessions are managed automatically.",
   "machine": "Computer",
   "session": "Session name",
   "placeholder": "agent",

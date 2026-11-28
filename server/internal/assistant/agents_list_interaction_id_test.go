@@ -7,7 +7,48 @@ import (
 	"unicode/utf8"
 
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/screen"
 )
+
+func TestAgentsListScreenDialogSummary(t *testing.T) {
+	const question = "Use this workspace?"
+	const hidden = "private input value"
+	for _, tc := range []struct {
+		name   string
+		change func(*proto.Interaction)
+	}{
+		{"safe", nil},
+		{"private", func(ix *proto.Interaction) { ix.Private = true }},
+		{"secret", func(ix *proto.Interaction) { ix.Secret = true }},
+		{"form", func(ix *proto.Interaction) { ix.Fields = []proto.Field{{}} }},
+		{"unparsed", func(ix *proto.Interaction) { ix.Dialog = nil }},
+		{"blank question", func(ix *proto.Interaction) { ix.Dialog.Question = " \n " }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFakeHub()
+			f.setSessions("box", proto.Session{SessionID: "s1", Title: "Fixture", State: proto.StateNeedsYou})
+			ix := proto.Interaction{ID: "screen-1", MachineID: "box", SessionID: "s1", Kind: proto.IxScreen, Screen: hidden, Summary: hidden,
+				Dialog: &screen.Dialog{Question: question, Options: []screen.Option{
+					{Key: "1", Label: "Continue"}, {Key: "2", Label: "Cancel"}, {Key: "3", Label: hidden, Kind: screen.KindTypeSomething},
+				}}}
+			want := "终端对话框：" + question + " · Continue / Cancel"
+			if tc.change != nil {
+				tc.change(&ix)
+				want = "终端对话框等你处理"
+			}
+			f.hubCards = []proto.Interaction{ix}
+			s := newStorelessService(t, f)
+
+			got := s.describeAgents(t.Context(), proto.StateNeedsYou, "", "")
+			if !strings.Contains(got, want+" (interaction_id=screen-1)") || strings.Contains(got, hidden) {
+				t.Fatalf("screen summary = %s, want %q without raw or typed text", got, want)
+			}
+			if tc.change != nil && (strings.Contains(got, question) || strings.Contains(got, "Continue / Cancel")) {
+				t.Fatalf("protected screen summary exposed the dialog: %s", got)
+			}
+		})
+	}
+}
 
 // A pending card's text is clipped in agents_list, but never its interaction_id: without the id the assistant cannot
 // answer the card with interaction_answer, so a long question (or approval, or plan) must not push it past the cut.

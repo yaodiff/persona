@@ -60,23 +60,26 @@ def reason(body):
 
 
 def evaluate(files, labels, body):
-    """(ok, message) for a PR with these changed files (renames: both names), label names and description."""
+    """(ok, message) for a PR with these changed files (renames: both names), label names and description.
+
+    Advisory only (#17195): a Core change no longer needs the `core-change` label or a reason section to merge.
+    The reviewer applies the Core rules strictly instead. This still reports which core files changed and whether
+    a label / reason section is present, for visibility; `ok` is always True."""
     touched = core_paths.core_files(files)
     if not touched:
         return True, "core-change-check: no tier-core path changed (panel, module, docs and test changes are free); nothing to add"
     missing = []
     if LABEL not in labels:
-        missing.append(f"add the label `{LABEL}`")
+        missing.append(f"the label `{LABEL}`")
     if reason(body) is None:
-        missing.append(f"add a section to the description with the exact heading `{HEADING}` and a line saying why the "
-                       "core must change (not a placeholder)")
+        missing.append(f"a `{HEADING}` section")
     shown = "\n".join(f"  {p}" for p in touched[:LISTED])
     more = f"\n  … and {len(touched) - LISTED} more" if len(touched) > LISTED else ""
     listing = f"{len(touched)} tier-core file{'s' * (len(touched) != 1)} changed (tier core of schema/core-paths.txt):\n{shown}{more}"
     if missing:
-        return False, ("core-change-check: this PR changes Persona Core (tier core: no UI; the clients' interface code is the panel tier and is not checked) and is not ready.\n"
-                       + listing + "\nTo fix it: " + "; ".join(missing)
-                       + ".\nSee CONTRIBUTING.md \"Changing Persona Core\".")
+        return True, ("core-change-check: this PR changes Persona Core (tier core: no UI); it gets strict Core review "
+                      "(#17195) and does not need a label to merge. For visibility you may still add: "
+                      + "; ".join(missing) + ".\n" + listing)
     return True, "core-change-check: core change with label and reason.\n" + listing
 
 

@@ -123,11 +123,11 @@ func TestThreadModeAndIdleHoursValidation(t *testing.T) {
 			t.Errorf("ThreadMode(%q).Check() = %v, want ok=%v", tc.mode, err, tc.ok)
 		}
 	}
-	if got := ThreadMode("").Normalized(); got != ThreadModeChannelDefault {
-		t.Fatalf("Normalized empty = %q, want %q", got, ThreadModeChannelDefault)
+	if got := ThreadMode("").Effective(false); got != ThreadModeChannelDefault {
+		t.Fatalf("Effective empty = %q, want %q", got, ThreadModeChannelDefault)
 	}
-	if got := ThreadModePerTopic.Normalized(); got != ThreadModePerTopic {
-		t.Fatalf("Normalized per_topic = %q, want %q", got, ThreadModePerTopic)
+	if got := ThreadModePerTopic.Effective(false); got != ThreadModePerTopic {
+		t.Fatalf("Effective per_topic = %q, want %q", got, ThreadModePerTopic)
 	}
 	for _, tc := range []struct {
 		hours int
@@ -378,6 +378,21 @@ func TestAnswerKeepsAReportBeforeAToolCall(t *testing.T) {
 	got := Answer(items)
 	if len(got) != 2 || got[0].Text != report || got[1].Text != "已经发给它了。" {
 		t.Fatalf("answer %+v, want the report then the closing line", got)
+	}
+}
+
+func TestAnswerSeparatesWokenReplyFromPriorDeliveredReply(t *testing.T) {
+	items := []proto.Item{
+		{Role: "user", Kind: proto.KindText, Text: "Run the checks."},
+		{Role: "assistant", Kind: proto.KindText, Text: "Initial complete report."},
+		{Role: "system", Kind: proto.KindNotice, Wake: true, Text: "后台任务有更新"},
+		{Role: "assistant", Kind: proto.KindToolUse, ToolName: "Read"},
+		{Role: "user", Kind: proto.KindToolResult, Text: "ok"},
+		{Role: "assistant", Kind: proto.KindText, Text: "Follow-up task finished."},
+	}
+	got := Answer(items)
+	if len(got) != 1 || got[0].Text != "Follow-up task finished." {
+		t.Fatalf("answer %+v, want only the woken reply after the wake notice", got)
 	}
 }
 

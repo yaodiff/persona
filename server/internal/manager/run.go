@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 
@@ -121,19 +122,33 @@ func (e *env) runManager(ctx context.Context, build update.Build, dir string) er
 	if err != nil {
 		return err
 	}
-	return managerupdate.RunDevelopment(ctx, dir, build, out, func(ctx context.Context) error {
+	err = managerupdate.RunDevelopment(ctx, dir, build, out, func(ctx context.Context) error {
 		return e.runBoundManager(ctx, build, dir, hostDataDir, env, out)
 	})
+	if errors.Is(err, managerupdate.ErrReloadLauncher) && !managerupdate.IsUpdateWorker(dir, build) {
+		if shouldWatchBinary(e.getenv) {
+			return nil // the supervisor starts the installed launcher again
+		}
+		return reexec(env)
+	}
+	return err
 }
 
 func (e *env) runBoundManager(ctx context.Context, build update.Build, dir, hostDataDir string, env []string, out io.Writer) error {
 	var watch *binaryWatch
-	if shouldWatchBinary(e.getenv) {
+	supervised, worker := shouldWatchBinary(e.getenv), managerupdate.IsUpdateWorker(dir, build)
+	if (runtime.GOOS == "linux" || runtime.GOOS == "darwin") && build.Channel != update.Docker &&
+		strings.TrimSpace(e.getenv("PERSONA_DEVELOPMENT_MANAGER_WORKER")) == "" {
 		watch = newBinaryWatchWithGuard(out, filepath.Join(dir, binaryRestartGuardFile))
-		if watch != nil {
-			watch.logPrefix = "manager"
-			watch.waitUntilIdle = true
+	} else if worker {
+		if path, seen := launcherBinary(); seen != nil {
+			watch = &binaryWatch{path: path, seen: seen, out: out}
 		}
+	}
+	if watch != nil {
+		watch.logPrefix = "manager"
+		watch.waitUntilIdle = true
+		watch.hostDataDir = hostDataDir
 	}
 	for {
 		before, _ := assistant.ReadManagerConfig(dir)
@@ -168,6 +183,7 @@ func (e *env) runBoundManager(ctx context.Context, build update.Build, dir, host
 		err := runManagerWith(run, build, dir, assistant.MainHooks{
 			HostDataDir: hostDataDir,
 			Ready:       func(p assistant.Idle) { idle.Store(&p) },
+			HubVersion:  watch.setHubVersion,
 			PendingRestart: func(fn func(bool)) {
 				pendingFn.Store(&fn)
 				if pendingState.Load() {
@@ -178,8 +194,14 @@ func (e *env) runBoundManager(ctx context.Context, build update.Build, dir, host
 		stop()
 		<-watched
 		if renew.Load() && ctx.Err() == nil {
-			if watch.prepareExitForNew(ctx) {
+			if worker && watch.prepareExitForNew(ctx) {
+				return managerupdate.ErrReloadLauncher
+			}
+			if supervised && watch.prepareExitForNew(ctx) {
 				return nil // exit cleanly so systemd/launchd starts the new binary
+			}
+			if !supervised {
+				watch.restartOnNew(ctx, env)
 			}
 			continue
 		}
@@ -211,21 +233,44 @@ func (e *env) runBoundManager(ctx context.Context, build update.Build, dir, host
 // starts again in place on a new file where it runs from, one that runs, once it is idle (binaryWatch): nothing else
 // restarts its service after an update.
 func RunBuiltin(ctx context.Context, build update.Build, out io.Writer) error {
-	l := i18n.Terminal()
-	env := os.Environ()
 	home := dataDir()
+	dir := managerconf.DefaultDir(home)
 	// One at a time: a second one on the same binding would take turns on the bus with the first, both running the
 	// computers and the extensions.
-	if err := os.MkdirAll(managerconf.DefaultDir(home), 0o700); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
-	if err := lockFile(filepath.Join(managerconf.DefaultDir(home), builtinLock)); err != nil {
-		if errors.Is(err, errLocked) {
-			return ConfigError{errors.New("another persona-manager assistant runs on this data directory as a service already")}
+	if !managerupdate.IsUpdateWorker(dir, build) {
+		if err := lockFile(filepath.Join(dir, builtinLock)); err != nil {
+			if errors.Is(err, errLocked) {
+				return ConfigError{errors.New("another persona-manager assistant runs on this data directory as a service already")}
+			}
+			return err
 		}
-		return err
 	}
-	watch := newBinaryWatch(out)
+	err := managerupdate.RunDevelopment(ctx, dir, build, out, func(ctx context.Context) error {
+		return runBuiltinBound(ctx, build, out, home, dir)
+	}, "assistant")
+	if errors.Is(err, managerupdate.ErrReloadLauncher) && !managerupdate.IsUpdateWorker(dir, build) {
+		return nil
+	}
+	return err
+}
+
+func runBuiltinBound(ctx context.Context, build update.Build, out io.Writer, home, dir string) error {
+	l := i18n.Terminal()
+	env := os.Environ()
+	var watch *binaryWatch
+	worker := managerupdate.IsUpdateWorker(dir, build)
+	if !worker {
+		watch = newBinaryWatch(out)
+	} else if path, seen := launcherBinary(); seen != nil {
+		watch = &binaryWatch{path: path, seen: seen, out: out}
+	}
+	if watch != nil {
+		watch.waitUntilIdle = true
+		watch.hostDataDir = home
+	}
 	for {
 		before, err := managerconf.ReadBinding(home)
 		if err != nil { // not bound, or a manager.json that does not read: restarting cannot fix it (exit 2)
@@ -262,7 +307,8 @@ func RunBuiltin(ctx context.Context, build update.Build, out io.Writer) error {
 			close(watched)
 		}
 		err = runAssistant(run, build, nil, assistant.MainHooks{
-			Ready: func(p assistant.Idle) { idle.Store(&p) },
+			Ready:      func(p assistant.Idle) { idle.Store(&p) },
+			HubVersion: watch.setHubVersion,
 			PendingRestart: func(fn func(bool)) {
 				pendingFn.Store(&fn)
 				if pendingState.Load() {
@@ -273,6 +319,12 @@ func RunBuiltin(ctx context.Context, build update.Build, out io.Writer) error {
 		stop()
 		<-watched
 		if renew.Load() && ctx.Err() == nil {
+			if worker {
+				if watch.prepareExitForNew(ctx) {
+					return managerupdate.ErrReloadLauncher
+				}
+				continue
+			}
 			watch.restartOnNew(ctx, env) // returns when it did not: the manager runs again on this code
 			continue
 		}

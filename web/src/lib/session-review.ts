@@ -14,7 +14,7 @@ import { useSyncExternalStore } from "react";
 /** The hub feature that says it has git/review: lib/types.ts, so the chat reads it without loading this module. */
 export { REVIEW_FEATURE } from "./types";
 
-export type ReviewScope = "uncommitted" | "branch" | "commit";
+export type ReviewScope = "uncommitted" | "branch" | "commit" | "turn";
 
 export interface GitReviewFile {
   path: string;
@@ -36,21 +36,31 @@ export interface GitReviewFile {
 export interface GitReview {
   root: string;
   scope: ReviewScope;
+  session?: string;
   base: { hash?: string; short?: string; subject?: string; ref?: string; empty?: boolean };
+  target?: { hash?: string; short?: string; subject?: string; working?: boolean };
+  turn?: number;
   head?: { hash: string; short: string; branch?: string };
   files: GitReviewFile[];
   truncated?: boolean;
 }
 
-/** What is reviewed: a scope, and the commit (commit) or branch (branch) it is against when one was picked. */
+/** What is reviewed: a scope, and the commit (commit) or branch (branch) it is against when one was picked.
+ *  A turn names its session; base and target pin a review already read, so a big file is the same review. */
 export interface ReviewTarget {
   scope: ReviewScope;
   base?: string;
+  session?: string;
+  target?: string;
+  live?: boolean;
 }
 
 export function reviewURL(mid: string, cwd: string, t: ReviewTarget, paths: readonly string[] = []): string {
   const q = new URLSearchParams({ cwd, scope: t.scope });
   if (t.base) q.set("base", t.base);
+  if (t.session) q.set("session", t.session);
+  if (t.target) q.set("target", t.target);
+  if (t.live) q.set("live", "1");
   for (const p of paths) q.append("path", p);
   return `/machines/${enc(mid)}/git/review?${q}`;
 }
@@ -59,7 +69,12 @@ export const loadReview = (mid: string, cwd: string, t: ReviewTarget, signal?: A
 
 /** One file asked for on its own (it came `big`): against the same base, so it is the same review. */
 export async function loadReviewFile(mid: string, cwd: string, res: GitReview, f: GitReviewFile): Promise<GitReviewFile | null> {
-  const target: ReviewTarget = res.base.hash ? { scope: "commit", base: res.base.hash } : { scope: res.scope };
+  const target: ReviewTarget =
+    res.scope === "turn"
+      ? { scope: "turn", session: res.session, base: res.base.hash, ...(res.target?.hash ? { target: res.target.hash } : { live: true }) }
+      : res.base.hash
+        ? { scope: "commit", base: res.base.hash }
+        : { scope: res.scope };
   const got = await api<GitReview>(reviewURL(mid, cwd, target, f.old_path ? [f.old_path, f.path] : [f.path]));
   return got.files.find((x) => x.path === f.path) ?? null;
 }
@@ -69,12 +84,31 @@ export function reviewTotals(files: readonly GitReviewFile[]): { added: number; 
   return files.reduce((s, f) => ({ added: s.added + f.added, deleted: s.deleted + f.deleted }), { added: 0, deleted: 0 });
 }
 
-/** The scope as a comment's `Diff:` line says it: `uncommitted`, `branch since <hash>`, `since <hash>` (Git's own
- *  short hash of the base, unique in the repository). */
-export function reviewDiff(res: Pick<GitReview, "scope" | "base">): DiffScope {
-  const base = res.base.short || res.base.hash?.slice(0, 8);
+/** The scope as a comment's `Diff:` line says it: `uncommitted`, `branch since <hash>`, `since <hash>`, `turn <hash>`
+ *  (Git's own short hash of the base, unique in the repository). */
+export function reviewDiff(res: Pick<GitReview, "scope" | "base" | "target">): DiffScope {
+  if (res.scope === "turn" && res.base.empty) {
+    const target = res.target?.hash;
+    return {
+      kind: "review",
+      scope: "turn",
+      base: res.target?.short ?? target?.slice(0, 7) ?? "",
+      emptyBase: true,
+      ...(target ? { target } : {}),
+      ...(res.target?.working ? { live: true } : {}),
+    };
+  }
+  const base = res.base.short || res.base.hash?.slice(0, 8) || res.target?.short || res.target?.hash?.slice(0, 8);
   if (res.scope === "uncommitted" || !base) return { kind: "review", scope: "uncommitted" };
-  return { kind: "review", scope: res.scope, base };
+  return {
+    kind: "review",
+    scope: res.scope,
+    base,
+    ...(res.base.hash ? { baseHash: res.base.hash } : {}),
+    ...(res.base.ref ? { ref: res.base.ref } : {}),
+    ...(res.target?.hash ? { target: res.target.hash } : {}),
+    ...(res.scope === "turn" && res.target?.working ? { live: true } : {}),
+  };
 }
 
 // ── the comments of the review under way ──────────────

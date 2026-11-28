@@ -152,11 +152,19 @@ func boundedResponse(r *http.Response) error {
 	return nil
 }
 
+// shutdownGrace bounds how long Serve waits for in-flight HTTP requests to drain on cancellation.
+var shutdownGrace = 5 * time.Second
+
 // Handler rejects nonpublic traffic before proxying, even if a client forges the application's Host.
 func Handler(c Config) (http.Handler, error) {
+	h, _, err := handlerWithTransport(c)
+	return h, err
+}
+
+func handlerWithTransport(c Config) (http.Handler, *http.Transport, error) {
 	upstream, origin, err := validate(c)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	transport := &http.Transport{Proxy: nil, DialContext: (&net.Dialer{Timeout: 2 * time.Second}).DialContext,
 		DisableCompression: true, MaxConnsPerHost: maxRelays, MaxIdleConnsPerHost: maxRelays,
@@ -221,15 +229,17 @@ func Handler(c Config) (http.Handler, error) {
 		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 		defer cancel()
 		proxy.ServeHTTP(w, r.WithContext(ctx))
-	}), nil
+	}), transport, nil
 }
 
-// Serve owns only this new listener. Cancellation never signals or switches the upstream hub.
+// Serve owns only this new listener. Cancellation drains in-flight requests for up to shutdownGrace
+// before closing active connections, and never signals or switches the upstream hub.
 func Serve(ctx context.Context, c Config) error {
-	h, err := Handler(c)
+	h, transport, err := handlerWithTransport(c)
 	if err != nil {
 		return err
 	}
+	defer transport.CloseIdleConnections()
 	if err := probeIngress(ctx, c); err != nil {
 		return err
 	}
@@ -240,23 +250,27 @@ func Serve(ctx context.Context, c Config) error {
 	server := &http.Server{Handler: h, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second,
 		WriteTimeout: 15 * time.Second, IdleTimeout: 15 * time.Second, MaxHeaderBytes: 16 << 10,
 		ErrorLog: log.New(io.Discard, "", 0)}
-	defer server.Close()
-	done := make(chan struct{})
-	defer close(done)
+	server.RegisterOnShutdown(transport.CloseIdleConnections)
+	served := make(chan error, 1)
 	go func() {
-		select {
-		case <-ctx.Done():
-			shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			_ = server.Shutdown(shutdown)
-		case <-done:
-		}
+		served <- server.Serve(netutil.LimitListener(listener, maxConnections))
 	}()
-	err = server.Serve(netutil.LimitListener(listener, maxConnections))
-	if errors.Is(err, http.ErrServerClosed) {
-		return nil
+	select {
+	case err = <-served:
+		_ = server.Close()
+		if errors.Is(err, http.ErrServerClosed) {
+			return nil
+		}
+		return errors.New("sharing HTTP server stopped")
+	case <-ctx.Done():
 	}
-	return errors.New("sharing HTTP server stopped")
+	shutdown, cancel := context.WithTimeout(context.Background(), shutdownGrace)
+	defer cancel()
+	if err := server.Shutdown(shutdown); err != nil {
+		_ = server.Close()
+	}
+	<-served
+	return nil
 }
 
 func Run(ctx context.Context, args []string, output io.Writer) error {

@@ -208,9 +208,10 @@ func liveFleet(tb testing.TB, machines, rows int) *Service {
 // state, the summary and the counts view built from it, over the needs-you arrays r kept from its last round, as
 // liveLoop's.
 func liveRoundOnce(s *Service, kept map[string][]proto.Session, r *fleetRound) (assistantwire.FleetState, link.Attention) {
-	agents, ixs, told := s.fleetInputsInto(kept)
+	var quiet []fleetInput
+	agents, ixs, told := s.fleetInputsForRound(kept, &quiet)
 	st := r.buildFleet("en", agents, ixs)
-	attention, _ := r.linkAndCounts("en", agents, ixs, told, s.fleet.live.counts.todos.kept())
+	attention, _ := r.linkAndCounts("en", agents, ixs, told, quiet, s.fleet.live.counts.todos.kept())
 	return st, attention
 }
 

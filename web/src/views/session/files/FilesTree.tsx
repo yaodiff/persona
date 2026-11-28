@@ -9,11 +9,12 @@ import { entryPayload, ENTRY_DRAG_TYPE } from "../../../lib/entry-drag";
 import { FILE_THUMB_FEATURE, markThumbFailed, thumbFailed, thumbSlots, thumbSrc } from "../../../lib/file-thumbs";
 import { thumbable, type FsEntry, type FsListing, type GitStatus } from "../../../lib/files";
 import { markFor } from "../../../lib/git-marks";
-import { expandedKey, listingCache, readExpanded, toggleExpanded, treeRows, visibleDirs, withExpanded, writeExpanded, type Listed, type TreeRow } from "../../../lib/files-tree";
+import { expandedKey, listingCache, readExpanded, sameTreePath, toggleExpanded, treePathKey, treeRows, visibleDirs, withExpanded, writeExpanded, type Listed, type TreeRow } from "../../../lib/files-tree";
 import { hubHas, useStore } from "../../../lib/store";
 import { useFsLive } from "../../../lib/use-fs-live";
 import { Button, cx, Loading, Spinner } from "../../../ui/atoms";
 import { Icon } from "../../../ui/icons";
+import { scrollBehavior } from "../../../ui/stream/motion";
 import { RowCheck, rowClick, RowEnd, rowFrameProps, type OpTarget, type RowOps } from "./FileOps";
 import { Empty, FileGlyph, GitBadge, GitDot } from "./parts";
 
@@ -23,6 +24,7 @@ export function FilesTree({
   cwd,
   root,
   reveal,
+  activePath,
   showHidden,
   git,
   reloads,
@@ -37,6 +39,8 @@ export function FilesTree({
   root: string;
   /** Folders to open so a path shows (the panel was opened at a path inside the root). */
   reveal: string[];
+  /** Currently viewed file path, highlighted in the tree. */
+  activePath?: string;
   showHidden: boolean;
   git: GitStatus | null;
   /** The panel's refresh button: every folder shown is listed again. */
@@ -118,6 +122,20 @@ export function FilesTree({
   });
 
   const toggle = (dir: string) => setOpen((o) => toggleExpanded(o, dir));
+  const treeRef = useRef<HTMLDivElement>(null);
+  const lastScrolledPath = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (!activePath) {
+      lastScrolledPath.current = undefined;
+      return;
+    }
+    const key = treePathKey(activePath);
+    if (lastScrolledPath.current === key) return;
+    const el = treeRef.current?.querySelector<HTMLElement>('[data-active="true"]');
+    if (!el) return;
+    lastScrolledPath.current = key;
+    el.scrollIntoView?.({ block: "nearest", behavior: scrollBehavior() });
+  }, [activePath, rows]);
 
   const top = rows[0];
   if (top?.depth === 0 && top.kind === "loading") {
@@ -131,21 +149,21 @@ export function FilesTree({
     return <Empty icon="folder" title={t("files-tree.openFailed")} detail={top.error} action={<Button icon="retry" onClick={() => fetchDir(root)}>{t("files-tree.retry")}</Button>} />;
   }
   if (top?.depth === 0 && top.kind === "empty") {
-    const hiddenOnly = (lists[root]?.listing?.entries.length ?? 0) > 0;
+    const hiddenOnly = (lists[root]?.listing?.entries?.length ?? 0) > 0;
     return <Empty icon="folder" title={hiddenOnly ? t("files-tree.hiddenOnly") : t("files-tree.emptyFolder")} action={hiddenOnly ? <Button onClick={onShowHidden}>{t("files-tree.showHidden")}</Button> : undefined} />;
   }
 
   return (
-    <div role="tree" aria-label={t("files-tree.tree")} className="py-1" style={{ animation: "fade-in 160ms ease-out both" }}>
+    <div ref={treeRef} role="tree" aria-label={t("files-tree.tree")} className="px-1.5 py-1" style={{ animation: "fade-in 160ms ease-out both" }}>
       {rows.map((r) => (
-        <Row key={r.key} r={r} mid={mid} cwd={cwd} thumbs={thumbs} git={git} onToggle={toggle} onOpenFile={onOpenFile} onRetry={fetchDir} ops={rowOps} />
+        <Row key={r.key} r={r} mid={mid} cwd={cwd} thumbs={thumbs} git={git} active={r.kind === "entry" && !r.entry.dir && sameTreePath(activePath, r.path)} onToggle={toggle} onOpenFile={onOpenFile} onRetry={fetchDir} ops={rowOps} />
       ))}
     </div>
   );
 }
 
-/** Where a row's content starts: one step in per level (the design system's spacing unit). */
-const indent = (depth: number, extra = 0) => ({ paddingLeft: `calc(var(--spacing) * ${3 + depth * 4 + extra})` });
+/** Where a row's content starts: 8px inset plus 12px per depth level (shared with ChangesPanel). */
+const indent = (depth: number, extra = 0) => ({ paddingLeft: `${8 + depth * 12 + extra}px` });
 
 function Row({
   r,
@@ -153,6 +171,7 @@ function Row({
   cwd,
   thumbs,
   git,
+  active,
   onToggle,
   onOpenFile,
   onRetry,
@@ -164,6 +183,7 @@ function Row({
   /** The hub can ask the machine for thumbnails (`file_thumb`). */
   thumbs: boolean;
   git: GitStatus | null;
+  active: boolean;
   onToggle: (dir: string) => void;
   onOpenFile: (path: string) => void;
   onRetry: (dir: string) => void;
@@ -171,7 +191,7 @@ function Row({
 }) {
   if (r.kind === "loading") {
     return (
-      <div role="none" style={indent(r.depth, 7)} className="flex h-8 items-center gap-2 text-[12px] text-ink-3">
+      <div role="none" style={indent(r.depth, 28)} className="flex h-7 items-center gap-2 text-[12px] text-ink-3">
         <Spinner />
         {t("files-tree.loading")}
       </div>
@@ -179,21 +199,21 @@ function Row({
   }
   if (r.kind === "empty") {
     return (
-      <div role="none" style={indent(r.depth, 7)} className="flex h-8 items-center text-[12px] text-ink-3">
+      <div role="none" style={indent(r.depth, 28)} className="flex h-7 items-center text-[12px] text-ink-3">
         {t("files-tree.emptyFolder")}
       </div>
     );
   }
   if (r.kind === "more") {
     return (
-      <div role="none" style={indent(r.depth, 7)} className="py-1.5 text-[11.5px] text-ink-3">
+      <div role="none" style={indent(r.depth, 28)} className="py-1.5 text-[11.5px] text-ink-3">
         {t("files-tree.tooMany")}
       </div>
     );
   }
   if (r.kind === "error") {
     return (
-      <div role="none" style={indent(r.depth, 7)} className="flex min-h-8 items-center gap-2 pr-3 text-[12px] text-ink-3">
+      <div role="none" style={indent(r.depth, 28)} className="flex min-h-7 items-center gap-2 pr-3 text-[12px] text-ink-3">
         <span className="min-w-0 flex-1 truncate" title={r.error}>
           {t("files-tree.openFailedInline", { error: r.error })}
         </span>
@@ -210,11 +230,16 @@ function Row({
   const picked = ops?.selecting && ops.isSelected(r.path);
   return (
     <div
+      {...rowFrameProps(ops, x, open)}
       role="treeitem"
       aria-level={r.depth + 1}
       aria-expanded={e.dir ? r.expanded : undefined}
-      {...rowFrameProps(ops, x, open)}
-      className={cx("group/row relative flex items-center transition-colors hover:bg-hover", picked && "bg-hover")}
+      aria-selected={ops?.selecting ? ops.isSelected(r.path) : active || undefined}
+      data-active={active ? "true" : undefined}
+      className={cx(
+        "group/row relative flex h-7 items-center rounded-md transition-colors hover:bg-hover [@media(pointer:coarse)]:min-h-11",
+        (active || picked) && "bg-hover-2 font-medium text-ink",
+      )}
       // dragged into a terminal or the chat box it becomes `@path ` (lib/entry-drag.ts)
       draggable
       onDragStart={(ev) => {
@@ -227,14 +252,14 @@ function Row({
         type="button"
         onClick={rowClick(ops, x, open)}
         style={indent(r.depth)}
-        className="flex min-w-0 flex-1 items-center gap-2 py-1.5 pr-2 text-left"
+        className="flex h-full min-w-0 flex-1 items-center gap-1.5 pr-2 text-left text-tree-row"
         title={e.ignored ? t("files-tree.gitIgnored", { path: r.path }) : r.path}
       >
         {e.dir ? <Icon name={r.expanded ? "chevron" : "chevronRight"} size={12} stroke={2.2} className="shrink-0 text-ink-3" /> : <span aria-hidden className="size-3 shrink-0" />}
         <span className={cx("flex shrink-0", e.ignored && "opacity-50")}>
-          {thumbs && !e.dir && thumbable(e.name, e.size) ? <ThumbGlyph mid={mid} cwd={cwd} path={r.path} entry={e} /> : <FileGlyph name={e.name} dir={e.dir} />}
+          {thumbs && !e.dir && thumbable(e.name, e.size) ? <ThumbGlyph mid={mid} cwd={cwd} path={r.path} entry={e} /> : <FileGlyph name={e.name} dir={e.dir} size={14} />}
         </span>
-        <span className={cx("truncate text-[13px]", e.ignored ? "text-ink-3" : hidden ? "text-ink-2" : "text-ink")}>{e.name}</span>
+        <span className={cx("truncate", active || picked ? "font-medium text-ink" : e.ignored ? "text-ink-3" : hidden ? "text-ink-2" : "text-ink")}>{e.name}</span>
         {e.symlink && <Icon name="link" size={11} className="shrink-0 text-ink-3" />}
         <span className="flex-1" />
         {mark && (e.dir ? <GitDot letter={mark} /> : <GitBadge letter={mark} />)}

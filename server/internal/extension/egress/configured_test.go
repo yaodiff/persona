@@ -13,17 +13,19 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // connectStatus asks the proxy at purl (with its credential) for a CONNECT tunnel to target and says the status.
 func connectStatus(t *testing.T, purl, target string) int {
 	t.Helper()
 	u, _ := url.Parse(purl)
-	c, err := net.Dial("tcp", u.Host)
+	c, err := net.DialTimeout("tcp", u.Host, 3*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer c.Close()
+	_ = c.SetDeadline(time.Now().Add(3 * time.Second))
 	pw, _ := u.User.Password()
 	auth := base64.StdEncoding.EncodeToString([]byte(u.User.Username() + ":" + pw))
 	fmt.Fprintf(c, "CONNECT %s HTTP/1.1\r\nHost: %s\r\nProxy-Authorization: Basic %s\r\n\r\n", target, target, auth)

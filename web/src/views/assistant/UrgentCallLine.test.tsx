@@ -14,12 +14,12 @@ describe("urgent call rows", () => {
   };
 
   it("says how each call went", () => {
-    expect(callSummary(ended)).toMatch(/^已接 · \S/); // the duration as lib/format writes it
-    expect(callSummary({ ...ended, state: "missed", attempt: 2 })).toBe("未接（打了 2 次）");
-    expect(callSummary({ ...ended, state: "missed", attempt: 1 })).toBe("未接");
+    expect(callSummary(ended)).toMatch(/^已接听 · \S/); // the duration as lib/format writes it
+    expect(callSummary({ ...ended, state: "missed", attempt: 2 })).toBe("未接听（响铃 2 次）");
+    expect(callSummary({ ...ended, state: "missed", attempt: 1 })).toBe("未接听");
     expect(callSummary({ ...ended, state: "declined" })).toBe("已拒接");
     expect(callSummary({ ...ended, state: "cancelled" })).toBe("已在别处处理");
-    expect(callSummary({ ...ended, state: "answered", seconds: 0 })).toBe("已接");
+    expect(callSummary({ ...ended, state: "answered", seconds: 0 })).toBe("已接听");
   });
 
   it("starts folded, and opens to the matter, the outcome and the transcript", () => {

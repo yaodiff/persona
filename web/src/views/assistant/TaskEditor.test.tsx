@@ -53,14 +53,14 @@ describe("the scheduled task editor", () => {
   it("opens a blank task with a grey Add and no error, and says what is missing once something changed", async () => {
     await open(blankTask());
     expect(add().disabled).toBe(true);
-    expect(document.body.textContent).not.toContain("要有标题");
+    expect(document.body.textContent).not.toContain("请填写标题");
 
     type(dialog().querySelector("textarea")!, "看看今天的日程");
-    expect(document.body.textContent).toContain("要有标题");
+    expect(document.body.textContent).toContain("请填写标题");
     expect(add().disabled).toBe(true);
 
     type(dialog().querySelector<HTMLInputElement>("input:not([type])")!, "早报");
-    expect(document.body.textContent).not.toContain("要有标题");
+    expect(document.body.textContent).not.toContain("请填写标题");
     expect(add().disabled).toBe(false);
   });
 
@@ -88,7 +88,7 @@ describe("the scheduled task editor", () => {
     expect(text).not.toContain("schedule_followup");
     const options = [...dialog().querySelectorAll("option")].map((o) => o.textContent);
     expect(options).toContain("自动审批");
-    expect(text).toContain("可以选「自动审批」");
+    expect(text).toContain("可选择「自动审批」");
     expect(text).not.toContain("「自动」");
   });
 
@@ -214,7 +214,7 @@ describe("the scheduled task editor's start grant", () => {
 
     await open(granted(["m1|/home/me/notes|edit", "m1|/home/me/notes|read"]));
     expect(dialog().textContent).toContain("无需确认即可开始");
-    expect(dialog().textContent).toContain("修改它的指令或运行位置会清空这个列表");
+    expect(dialog().textContent).toContain("修改任务指令或运行位置将清空此列表");
     expect(rows().map((r) => r.textContent)).toEqual(["工作机 · /home/me/notes可编辑文件移除", "工作机 · /home/me/notes只读移除"]);
 
     const remove = rows()[0].querySelector("button")!;

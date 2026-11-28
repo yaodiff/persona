@@ -121,7 +121,7 @@ func (n *Node) terminalModesRow(s *proto.Session, m quickMeta) {
 	if s.Agent != "claude" || s.PaneID != confirmed.pane {
 		confirmed = terminalEffort{}
 	}
-	s.PermissionMode, s.Effort = n.currentModesWithEffort(s.SessionID, m, confirmed)
+	s.PermissionMode, s.Effort = n.currentModesWithEffort(s.SessionID, m, confirmed.value, confirmed.at)
 }
 
 // Held sends use the cached pane when present, and verify a disappearance before lifting the barrier.

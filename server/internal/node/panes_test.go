@@ -318,9 +318,57 @@ func TestNewShellForARuntimeWorkspaceOpensWhereTheFolderIs(t *testing.T) {
 	})
 }
 
+// Each host says what the menus can do with it, read from what it implements (#17053): classic herdr everything; Orca
+// renames, closes a pane and runs Git, splits and closes tabs once it implements them; "Run agent here" only in the
+// default engine's host.
+func TestPanesListSaysWhatEachHostCanDo(t *testing.T) {
+	streamingHerdr()
+	n, f, home := herdrNode(t)
+	cwd := mkdir(t, filepath.Join(home, "proj"))
+	f.reply("session.snapshot", paneSnapshot(cwd))
+	listSessions(t, n)
+	res, err := n.listPanes(context.Background())
+	if err != nil || len(res.Hosts) != 1 {
+		t.Fatalf("herdr: %+v, %v", res.Hosts, err)
+	}
+	all := proto.PaneAbilities{Rename: true, ClosePane: true, Split: true, CloseTab: true, Git: true, RunHere: true}
+	if a := res.Hosts[0].Abilities; a == nil || *a != all {
+		t.Errorf("herdr abilities = %+v, want %+v", a, all)
+	}
+
+	on, _, _, oh := orcaPlainNode(t)
+	res, err = on.listPanes(t.Context())
+	if err != nil || len(res.Hosts) != 1 || res.Hosts[0].Kind != host.Orca {
+		t.Fatalf("orca: %+v, %v", res.Hosts, err)
+	}
+	_, splits := host.Host(oh).(host.Splitter)
+	_, closesTabs := host.Host(oh).(host.SlotCloser)
+	want := proto.PaneAbilities{Rename: true, ClosePane: true, Split: splits, CloseTab: closesTabs, Git: true, RunHere: true}
+	if a := res.Hosts[0].Abilities; a == nil || *a != want {
+		t.Errorf("orca abilities = %+v, want %+v", a, want)
+	}
+	// Orca beside herdr as the default: a start would open in herdr, so not in an Orca pane.
+	on.eng.mu.Lock()
+	on.eng.set = &proto.EngineChoice{Hosts: []string{proto.EngineHerdr, proto.EngineOrca}, Default: proto.EngineHerdr}
+	on.eng.mu.Unlock()
+	if on.paneAbilities(oh).RunHere {
+		t.Error("Run agent here offered in a host that is not the default engine's")
+	}
+
+	// A host whose terminals the node does not drive gets no Git.
+	b, err := json.Marshal(proto.PaneHost{Kind: "botmux", Abilities: &proto.PaneAbilities{}})
+	if err != nil || !strings.Contains(string(b), `"abilities":{"rename":false,"close_pane":false,"split":false,"close_tab":false,"git":false,"run_here":false}`) {
+		t.Errorf("json = %s, %v", b, err)
+	}
+	if drivesScreen(&botmuxHost{}) {
+		t.Error("botmux's terminals are driven by the node")
+	}
+}
+
 func TestPanesResponseJSON(t *testing.T) {
 	b, err := json.Marshal(proto.PanesResponse{Hosts: []proto.PaneHost{{Kind: "herdr", Panes: []proto.PaneItem{{Pane: "w1:p1", Terminal: "pane:w1:p1"}}}}})
-	if err != nil || !strings.Contains(string(b), `"terminal":"pane:w1:p1"`) || strings.Contains(string(b), "session_id") {
+	if err != nil || !strings.Contains(string(b), `"terminal":"pane:w1:p1"`) || strings.Contains(string(b), "session_id") ||
+		strings.Contains(string(b), "abilities") { // unset abilities read as an older node's: the clients' own table
 		t.Errorf("json = %s, %v", b, err)
 	}
 }

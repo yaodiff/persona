@@ -3,6 +3,8 @@
   "waiting_idle_message": "このコンピューターのエージェントがアイドルになってからノードを更新します…",
   "transferring": "転送中",
   "transferring_message": "ハブと同じバージョンのノードをこのコンピューターに転送しています…",
+  "draining": "再起動待ち",
+  "draining_message": "新しいバージョンをインストールしました。処理が落ち着くのを待ってから再起動します…",
   "restarting": "再起動中",
   "restarting_message": "このコンピューターのノードを再起動しています…",
   "confirming": "確認中",

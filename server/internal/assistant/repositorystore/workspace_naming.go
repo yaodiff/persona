@@ -144,6 +144,20 @@ func ReadWorkspaceNamingPlanTx(ctx context.Context, tx pgx.Tx, id, operation str
 	return plan, workspacenaming.CheckPlan(plan)
 }
 
+func matchesWorkspaceSnapshot(plan workspacenaming.Plan, set repository.TaskSet) (bool, error) {
+	repos := plan.Source.Repositories.Repositories
+	if len(repos) == 1 && repos[0].Local != nil {
+		// CheckPlan has already verified the frozen local source. It has no catalog association.
+		return true, nil
+	}
+	ids := make([]string, 0, len(repos))
+	for _, repo := range repos {
+		ids = append(ids, repo.RepoID)
+	}
+	snapshot, err := repository.Snapshot(plan.Source.Manager, plan.Source.TodoID, set.Revision, set.Repositories, ids)
+	return snapshot.Digest == plan.Source.Repositories.Digest, err
+}
+
 func (d *Store) SaveWorkspaceNamingPlan(ctx context.Context, id, operation string, revision int64, plan workspacenaming.Plan) (*workspacenaming.Plan, error) {
 	if !workspacenaming.ValidOperationID(operation) || plan.Source.TodoID != id {
 		return nil, repository.Problem("invalid")
@@ -175,15 +189,11 @@ func (d *Store) SaveWorkspaceNamingPlan(ctx context.Context, id, operation strin
 		if err != nil {
 			return err
 		}
-		ids := []string{}
-		for _, repo := range plan.Source.Repositories.Repositories {
-			ids = append(ids, repo.RepoID)
-		}
-		snapshot, err := repository.Snapshot(plan.Source.Manager, id, set.Revision, set.Repositories, ids)
+		matches, err := matchesWorkspaceSnapshot(plan, set)
 		if err != nil {
 			return err
 		}
-		if snapshot.Digest != plan.Source.Repositories.Digest {
+		if !matches {
 			return repository.Problem("revision_conflict")
 		}
 		raw, err := json.Marshal(plan)

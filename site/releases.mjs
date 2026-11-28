@@ -13,6 +13,7 @@ export const RELEASES_API = `https://api.github.com/repos/${REPOSITORY}/releases
 export const DOWNLOAD_ORIGIN = `https://github.com/${REPOSITORY}/releases/download/`;
 export const FRESH_MS = 10 * 60 * 1000;
 const KEEP_SECONDS = 30 * 24 * 3600;
+const FETCH_TIMEOUT_MS = 8000;
 const CACHE_KEY = "https://persona-site.cache/releases/data.json?v=2";
 
 const TAG = /^v(\d{1,6})\.(\d{1,6})\.(\d{1,6})(?:-([0-9A-Za-z][0-9A-Za-z.-]{0,40}))?$/;
@@ -208,6 +209,7 @@ async function cached(cache) {
 async function upstream() {
   const res = await fetch(RELEASES_API, {
     headers: { accept: "application/vnd.github+json", "x-github-api-version": "2022-11-28", "user-agent": "persona-site" },
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
   });
   if (!res.ok) throw new Error(`GitHub answered ${res.status}`);
   return slimReleases(await res.json());

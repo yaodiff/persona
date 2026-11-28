@@ -9,6 +9,7 @@ import type { Machine, Session } from "./types";
 import { workspaceTarget, type HostWorkspace, type WorkspaceCatalogSnapshot } from "./workspace-catalog";
 import { directoryKey } from "./workspace-directory";
 import type { WorkspaceTarget } from "./workspace-target";
+import { orcaChatRenamesSpace } from "./host-abilities";
 
 export const worktreeActionKey = (target: WorkspaceTarget) => JSON.stringify([
   target.owner, target.manager, target.machineId, target.host, target.workspaceId, target.cwd,
@@ -88,8 +89,10 @@ export function spaceWorktreeSources(space: SpaceLike, catalog: WorkspaceCatalog
 }
 
 /** A Paseo space (its project) is renamed in Paseo: offered while the catalog has the project's workspaces from Paseo on
- *  that computer, which a bridge that renames them lists (docs/integrations/paseo.md "Spaces and workspaces"). */
+ *  that computer, which a bridge that renames them lists (docs/integrations/paseo.md "Spaces and workspaces"). An Orca
+ *  native chat's space is its Orca worktree, renamed in Orca where its computer's Orca renames (#17053). */
 export function renamesRuntimeSpace(s: Session | undefined, catalog: WorkspaceCatalogSnapshot): boolean {
+  if (s && orcaChatRenamesSpace(s)) return true;
   if (!s?.space_id || s.source_kind !== "runtime" || (s.space_kind || s.host) !== "paseo") return false;
   if (s.manager && s.manager !== catalog.manager) return false;
   return catalog.workspaces.some((w) => w.machine_id === s.machine_id && w.source === "paseo" && w.project_id === s.space_id);

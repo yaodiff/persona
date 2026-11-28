@@ -315,6 +315,56 @@ func TestExtensionMarketRows(t *testing.T) {
 	}
 }
 
+// A private market's trusted keys survive a round trip; a row written without them (every market before the column,
+// or an older manager's upsert that does not name it) reads as no keys, and the shape check refuses a non-array.
+func TestExtensionMarketTrustedKeys(t *testing.T) {
+	d, ctx := open(t), context.Background()
+	at := time.Date(2026, 11, 26, 1, 2, 3, 0, time.UTC)
+	clean := func() { _ = d.DeleteExtensionMarket(context.Background(), "mk-keys") }
+	clean()
+	t.Cleanup(clean)
+	if _, err := d.pool.Exec(ctx, `INSERT INTO plugin_markets (id, spec, name, token_sealed, warnings, error, added_at)
+		VALUES ('mk-keys', 'https://example.com/keys/persona-extensions.json', '', '', '[]', '', $1)`, at); err != nil {
+		t.Fatal(err)
+	}
+	find := func() extension.MarketRecord {
+		rows, err := d.ExtensionMarkets(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, r := range rows {
+			if r.ID == "mk-keys" {
+				return r
+			}
+		}
+		t.Fatal("market row missing")
+		return extension.MarketRecord{}
+	}
+	if r := find(); len(r.TrustedKeys) != 0 {
+		t.Fatalf("legacy row has keys: %v", r.TrustedKeys)
+	}
+	r := find()
+	r.TrustedKeys = []string{"ed25519:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=", "ed25519:AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE="}
+	if err := d.PutExtensionMarket(ctx, r); err != nil {
+		t.Fatal(err)
+	}
+	if g := find(); len(g.TrustedKeys) != 2 || g.TrustedKeys[1] != r.TrustedKeys[1] {
+		t.Fatalf("keys lost: %v", g.TrustedKeys)
+	}
+	// An older manager's upsert (no trusted_keys column in its statement) keeps the keys.
+	if _, err := d.pool.Exec(ctx, `INSERT INTO plugin_markets (id, spec, name, token_sealed, warnings, error, added_at)
+		VALUES ('mk-keys', 'https://example.com/keys/persona-extensions.json', 'Renamed', '', '[]', '', $1)
+		ON CONFLICT (id) DO UPDATE SET name = 'Renamed'`, at); err != nil {
+		t.Fatal(err)
+	}
+	if g := find(); len(g.TrustedKeys) != 2 || g.Name != "Renamed" {
+		t.Fatalf("older upsert dropped the keys: %+v", g)
+	}
+	if _, err := d.pool.Exec(ctx, `UPDATE plugin_markets SET trusted_keys = '{"k":1}' WHERE id = 'mk-keys'`); err == nil {
+		t.Fatal("a non-array trusted_keys was stored")
+	}
+}
+
 func TestIdleArchiveAuditMirrorIsIdempotent(t *testing.T) {
 	d, ctx := open(t), context.Background()
 	const plugin = "example-idle-archive-audit"

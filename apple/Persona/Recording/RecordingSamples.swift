@@ -231,7 +231,8 @@ enum RecordingSamples {
         // meetings it shows.
         let untitled = ["untitled", "untitled-page", "untitled-live"].contains(mode)
         // `after-…` (#8731 V3): the same made-up meetings, opened after the meeting.
-        let overview = mode == "overview" || mode == "after-overview"
+        // `debates` / `after-debates` (#16728): the five-minute sprint review for disagreements (mock hub `/mock/recording_minutes_debates`).
+        let overview = ["overview", "after-overview", "debates", "after-debates"].contains(mode)
         let others = overview ? [liveMeeting, pastMeeting, untitledMeeting, untitledNote]
             : untitled ? [liveMeeting, pastMeeting, overviewMeeting] : [overviewMeeting, untitledMeeting, untitledNote]
         for id in others where RecordingLibrary.shared.entry(id) != nil { try? RecordingLibrary.shared.remove(id) }

@@ -33,12 +33,15 @@ func TestWorkMachineQuestionsAndApprovals(t *testing.T) {
 				t.Fatal("the fixture must enforce work privacy before testing its cards")
 			}
 			ix := proto.Interaction{ID: "ix_work", MachineID: "untrusted-payload", SessionID: tc.session,
-				Kind: tc.kind, Agent: tc.agent, ToolName: tc.tool, Summary: "Continue the build?",
+				Kind: tc.kind, OutwardWrite: tc.kind == proto.IxPermission, Agent: tc.agent, ToolName: tc.tool, Summary: "Continue the build?",
 				ExpiresAt: time.Now().Add(time.Minute), CreatedAt: time.Now().UTC()}
 			answer := `{"allow":true}`
-			if tc.kind == proto.IxQuestion {
+			switch tc.kind {
+			case proto.IxQuestion:
 				ix.Questions = []proto.Question{{Question: "Which build?", Options: []proto.QuestionOption{{Label: "Debug"}, {Label: "Release"}}}}
 				answer = `{"answers":{"Which build?":"Debug"}}`
+			case proto.IxPlan:
+				answer = `{"approve":true}`
 			}
 			params, err := json.Marshal(map[string]any{"interaction": ix})
 			if err != nil {
@@ -76,7 +79,8 @@ func TestWorkMachineQuestionsAndApprovals(t *testing.T) {
 				}
 				resolution, ok := got.value.(proto.Resolution)
 				if !ok || tc.kind == proto.IxQuestion && resolution.Answers["Which build?"] != "Debug" ||
-					tc.kind != proto.IxQuestion && (resolution.Allow == nil || !*resolution.Allow) {
+					tc.kind == proto.IxPermission && (resolution.Allow == nil || !*resolution.Allow) ||
+					tc.kind == proto.IxPlan && (resolution.Approve == nil || !*resolution.Approve) {
 					t.Fatalf("node resolution: %+v", got.value)
 				}
 				status, saved, err := ft.st.InteractionOutcome(ctx, ix.ID)

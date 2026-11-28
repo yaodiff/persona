@@ -94,6 +94,32 @@ def documentation_guard(relative, checkout, base):
         raise WatchError("documentation guard did not pass: " + relative)
 
 
+def extension_documentation_guards(checkout, base):
+    """persona-extensions' own documentation gates (its scripts/ci.sh runs check-docs.py and test-docs.py).
+
+    Like documentation_guard, the exact base's copies run against the PR's files; the PR's Python is never loaded.
+    """
+    original_path = sys.path.copy()
+    try:
+        with tempfile.TemporaryDirectory(prefix="pr-watch-base-guards-") as directory:
+            source_root = Path(directory)
+            (source_root / "scripts").mkdir()
+            for name in ("check-docs.py", "test-docs.py"):
+                source = checked(["git", "show", base + ":scripts/" + name], cwd=checkout)
+                (source_root / "scripts" / name).write_text(source, encoding="utf-8")
+            # test-docs.py loads its sibling check-docs.py, so it tests the base checker on synthetic files only.
+            tests = load_guard("scripts/test-docs.py", "pr_watch_extension_test_docs", source_root)
+            result = unittest.TextTestRunner(verbosity=1).run(unittest.TestLoader().loadTestsFromModule(tests))
+            if result.testsRun == 0 or not result.wasSuccessful():
+                raise WatchError("documentation guard did not pass: scripts/test-docs.py")
+            checker = load_guard("scripts/check-docs.py", "pr_watch_extension_check_docs", source_root)
+            checker.ROOT = Path(checkout)
+            if checker.main():
+                raise WatchError("documentation guard did not pass: scripts/check-docs.py")
+    finally:
+        sys.path[:] = original_path
+
+
 def validate_base_commit(base, checkout):
     """Require the exact base object to be an available commit before guarding a PR."""
     if not SHA.fullmatch(base):
@@ -112,6 +138,9 @@ def main(argv=None):
     parser.add_argument("--head", required=True)
     parser.add_argument("--worktree", default=str(ROOT))
     parser.add_argument("--repository-guards", action="store_true")
+    # Each repository keeps its own documentation gates; persona-extensions has no scripts/test/test_doc_*.py.
+    parser.add_argument("--repository", choices=("nwverse/persona", "nwverse/persona-extensions"),
+                        default="nwverse/persona")
     parser.add_argument("names", nargs="*")
     args = parser.parse_args(argv)
     checkout = Path(args.worktree).resolve()
@@ -122,6 +151,9 @@ def main(argv=None):
         checked(["python3", "-I", str(ROOT / "scripts/privacy_check.py"),
                  "--range", args.base + ".." + args.head], cwd=checkout,
                 environ=privacy_environment(checkout))
+        if args.repository == "nwverse/persona-extensions":
+            extension_documentation_guards(checkout, args.base)
+            return 0
         for relative in ("test_doc_paths.py", "test_doc_go_paths.py", "test_doc_sections.py", "test_doc_wire.py"):
             documentation_guard(relative, checkout, args.base)
         return 0

@@ -7,6 +7,7 @@ import android.app.NotificationManager
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -14,10 +15,13 @@ import org.junit.runner.RunWith
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import persona.core.contracts.Interaction
+import persona.core.contracts.InteractionResolvedEvent
 import persona.core.contracts.JsonCodec
 import persona.core.contracts.Machine
 import persona.core.contracts.Session
+import persona.core.contracts.Resolution
 import persona.core.contracts.api.DeviceNotificationPreferences
+import persona.core.contracts.api.InteractionCenter
 import persona.core.contracts.api.SessionsRepository
 import persona.core.designsystem.PendingStatus
 import persona.core.navigation.NotificationRoute
@@ -104,7 +108,9 @@ class InteractionNotificationPostingTest {
                 .single { it.tag == "interaction:${request.id}" }.notification
         }
         val original = prepared(java.time.Instant.now().plusSeconds(60))
-        val updated = prepared(java.time.Instant.now().plusSeconds(7_200))
+        val updated = prepared(java.time.Instant.now().plusSeconds(7_200)).copy(
+            createdAt = "2026-01-02T03:04:05.000000002Z",
+        )
         val first = postAndRead(original)
         val current = postAndRead(updated)
         assertTrue("the existing notification lives for the server's extended window",
@@ -113,6 +119,7 @@ class InteractionNotificationPostingTest {
         assertEquals(listOf("deny", "allow"), actionIntents.map { it.getStringExtra(ActionReceiver.EXTRA_ACTION) })
         val allow = actionIntents.single { it.getStringExtra(ActionReceiver.EXTRA_ACTION) == "allow" }
         assertEquals(updated.expiresAt, allow.getStringExtra(ActionReceiver.EXTRA_EXPIRES_AT))
+        assertEquals(updated.createdAt, allow.getStringExtra(ActionReceiver.EXTRA_CREATED_AT))
         assertEquals(setOf(updated.id), notifier.showingRequests())
     }
 
@@ -143,5 +150,54 @@ class InteractionNotificationPostingTest {
 
         notifier.retract(request.id)
         assertTrue(notifier.deliveredRequests().isEmpty())
+    }
+
+    @Test fun aResolvedEventRetractsOnlyItsOwnOccurrence() = runBlocking {
+        val app = ApplicationProvider.getApplicationContext<Application>()
+        shadowOf(app).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
+        val sessions = object : SessionsRepository {
+            override val machines = MutableStateFlow<List<Machine>>(emptyList())
+            override val sessions = MutableStateFlow<List<Session>>(emptyList())
+            override suspend fun refresh() = Unit
+        }
+        val preferences = object : NotificationPreferencesSource {
+            override val preferences = MutableStateFlow<DeviceNotificationPreferences?>(DeviceNotificationPreferences())
+            override suspend fun refreshPreferences() = preferences.value
+        }
+        val notifier = Notifier(app, sessions, preferences)
+        val original = Interaction("same", machineId = "machine", sessionId = "session", kind = "permission", createdAt = "2026-01-02T03:04:05.000000001Z")
+        val replacement = original.copy(createdAt = "2026-01-02T03:04:05.000000002Z")
+        notifier.postInteraction(replacement)
+        val center = object : InteractionCenter {
+            override val pending = MutableStateFlow(listOf(replacement))
+            override suspend fun refresh() = Unit
+            override suspend fun resolve(id: String, resolution: Resolution) = Unit
+        }
+        val delivery = NotificationDelivery(center, sessions, { false },
+            { ix, _, _ -> notifier.postInteraction(ix) }, { notifier.postNotify(it) }, { id -> notifier.retract(id) },
+            retractOccurrence = { id, occurrence -> notifier.retract(id, occurrence) })
+        delivery.accept(InteractionResolvedEvent(original.id, createdAt = original.createdAt))
+        assertEquals(setOf(replacement.id), notifier.showingRequests())
+    }
+
+    @Test fun expiredRetryDoesNotRetractItsReplacement() {
+        val app = ApplicationProvider.getApplicationContext<Application>()
+        shadowOf(app).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
+        val sessions = object : SessionsRepository {
+            override val machines = MutableStateFlow<List<Machine>>(emptyList())
+            override val sessions = MutableStateFlow<List<Session>>(emptyList())
+            override suspend fun refresh() = Unit
+        }
+        val preferences = object : NotificationPreferencesSource {
+            override val preferences = MutableStateFlow<DeviceNotificationPreferences?>(DeviceNotificationPreferences())
+            override suspend fun refreshPreferences() = preferences.value
+        }
+        val notifier = Notifier(app, sessions, preferences)
+        val original = Interaction("same", machineId = "machine", sessionId = "session", kind = "permission",
+            createdAt = "2026-01-02T03:04:05.000000001Z", expiresAt = "2020-01-01T00:00:00Z")
+        val replacement = original.copy(createdAt = "2026-01-02T03:04:05.000000002Z", expiresAt = null)
+        notifier.postInteraction(replacement)
+        notifier.notSent(original.id, original, original.sessionKey, null, original.createdAt)
+        assertEquals(setOf(replacement.id), notifier.showingRequests())
     }
 }

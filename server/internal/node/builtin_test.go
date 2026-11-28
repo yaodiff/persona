@@ -92,7 +92,7 @@ func TestEveryOldNameIsABuiltinMethod(t *testing.T) {
 			names = append(names, name)
 		}
 	}
-	if len(names) != 17 {
+	if len(names) != 19 {
 		t.Fatalf("%d old names: %v", len(names), names)
 	}
 	builtinSrc, _ := os.ReadFile("builtin.go")

@@ -64,7 +64,7 @@ func (s *Service) recordingWait(d time.Duration) {
 var recordingCapabilities = []string{assistantwire.CapabilityMeetingAttendance, assistantwire.CapabilityMeetingConversation,
 	assistantwire.CapabilityMeetingPhotos, assistantwire.CapabilityMeetingLiveView, assistantwire.CapabilityMeetingHighlights,
 	assistantwire.CapabilityMeetingNotes, assistantwire.CapabilityMeetingEcho, assistantwire.CapabilityMeetingTranscription,
-	assistantwire.CapabilityRecordingDay}
+	assistantwire.CapabilityMeetingSpeakers, assistantwire.CapabilityRecordingDay}
 
 // withRecording is caps without the recording module's capabilities when svc has no recording layer (none yet: when
 // the build has no recording module), in their order.

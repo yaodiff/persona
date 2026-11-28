@@ -1,12 +1,12 @@
 {
   "name": "model_profile_get",
-  "description": "Inspect a profile. Edit bindings with persona_settings model_profiles.bindings, tiers with model_profiles.tiers, or capture with model_profile_capture. Saving does not apply purposes/launchers.",
+  "description": "Inspect a saved profile. Edit its bindings or tiers with persona_settings.",
   "input_schema": {
     "type": "object",
     "properties": {
       "id": {
         "type": "string",
-        "description": "Profile id from model_profiles_list"
+        "description": "Saved profile ID"
       }
     },
     "additionalProperties": false,

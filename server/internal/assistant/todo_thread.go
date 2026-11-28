@@ -14,7 +14,7 @@ import (
 )
 
 // The chat thread a todo is bound to (#5279, docs/assistant/todos.md "Chat thread"): at most one thread per todo and one todo
-// per thread. This is the binding only; nothing is posted to the thread and nothing it says comes back yet.
+// per thread. Binding itself posts nothing; topic_followup.go observes human activity through the configured reader.
 
 // TodoThread is the binding as the apps and the store have it. Channel is a channel id (internal/channel: "feishu"
 // for the Feishu bot's chats); for Feishu ChatID is the chat's id (oc_…) and ThreadID the thread_id of its events

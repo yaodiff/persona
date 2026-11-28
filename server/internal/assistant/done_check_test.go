@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistant/repositorystore"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -39,14 +40,16 @@ func doneCheck(t *testing.T, s *Service, id, body string) doneCheckAnswer {
 // (a turn end the hub missed) and writes the verdict. Even a legacy unsupervised task becomes delivered and supervised by
 // the main conversation: a judge never closes it (#5732).
 func TestDoneCheckApplyMarksAFinishedTaskDelivered(t *testing.T) {
-	s, f := newTaskService(t)
+	s, f := newTaskServiceOn(t, repositorystore.New(todoTestDB(t)))
 	f.judge = `{"verdict":"done","reason":"修好了"}`
 	todo := startedTask(t, s, f)
 	if todo.Supervision != nil {
 		t.Fatalf("supervised: %+v", todo.Supervision)
 	}
 	setSettings(t, s, func(v *Settings) { v.Main = "conv1" })
-	agentStopped(f, "修好了，PR https://github.com/o/r/pull/9 已合并")
+	reply := "修好了，PR https://github.com/o/r/pull/9 已合并"
+	artifactReportProof(f, todo, reply, "https://github.com/o/r/pull/9")
+	agentStopped(f, reply)
 
 	got := doneCheck(t, s, todo.ID, "")
 	if got.Verdict != verdictDone || got.WouldClose || got.Applied != nil {

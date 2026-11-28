@@ -69,14 +69,8 @@ struct AskClaudeIntent: AppIntent {
     private func deliver(_ api: APIClient, on machine: MachineEntity, text: String) async throws -> Session {
         guard machine.online else { throw IntentFailure.offline(machine.name) }
         if newSession { return try await startSession(api, on: machine, text: text) }
-
-        let sessions = IntentSupport.folded(try await api.sessions())
-        guard let session = IntentPicker.session(sessions, machine: machine.ref.id, group: machine.ref.group) else {
-            throw IntentFailure.noSession(machine.name)
-        }
-        guard session.canSend else { throw IntentFailureSentence(session.sourceSubtitle ?? String(localized: "This session is view-only")) }
-        try await api.send(session.key, text: text, via: .intent) // Siri's or a Shortcut's, not typed in the app
-        return session
+        return try await AskClaudeFlow.sendToLatest(api, machineID: machine.ref.id, group: machine.ref.group,
+                                                    machineName: machine.name, text: text)
     }
 
     private func startSession(_ api: APIClient, on machine: MachineEntity, text: String) async throws -> Session {
@@ -86,5 +80,21 @@ struct AskClaudeIntent: AppIntent {
         else { throw IntentFailure.noLauncher(machine.name) }
         // The prompt rides along with the start request; sending it again would duplicate it.
         return try await api.start(.init(machineID: machine.ref.id, cwd: cwd, launcher: launcher, prompt: text, async: true))
+    }
+}
+
+/// The network part of AskClaudeIntent for an existing session (tested in SiriIntentsTests).
+nonisolated enum AskClaudeFlow {
+    static func sendToLatest(_ api: APIClient, machineID: String, group: String, machineName: String,
+                             text: String, clientMsgID: UUID = UUID()) async throws -> Session {
+        let sessions = IntentSupport.folded(try await api.sessions())
+        guard let session = IntentPicker.session(sessions, machine: machineID, group: group) else {
+            throw IntentFailure.noSession(machineName)
+        }
+        guard session.canSend else {
+            throw IntentFailureSentence(session.sourceSubtitle ?? String(localized: "This session is view-only"))
+        }
+        try await api.send(session.key, text: text, clientMsgID: clientMsgID.uuidString, via: .intent, opID: clientMsgID) // Siri's or a Shortcut's, not typed in the app
+        return session
     }
 }

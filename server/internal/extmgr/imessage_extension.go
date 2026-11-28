@@ -34,7 +34,7 @@ const imessageMigratedKey = "imessage.migrated_to_extension"
 const imessageConfig = `{
   "type": "object",
   "properties": {
-    "machines": {"type": "array", "title": "读哪台 Mac", "description": "打开的那台 Mac 上的「信息」由 hub 只读读取（只能开一台：同一个 Apple ID 的 Mac 里是同一份）。开关即时生效。要先在那台 Mac 上给 personad 完全磁盘访问权限，见 设置 › 连接器 › 信息", "items": {"type": "string", "format": "machine", "x-os": ["darwin"]}, "uniqueItems": true, "maxItems": 1}
+    "machines": {"type": "array", "title": "读哪台 Mac", "description": "打开的那台 Mac 上的「信息」由 hub 只读读取（只能开一台：同一个 Apple ID 的 Mac 里是同一份）。开关即时生效。请先在该 Mac 上为 personad 开启「完全磁盘访问权限」，详细步骤见本页或对应连接器的状态说明。", "items": {"type": "string", "format": "machine", "x-os": ["darwin"]}, "uniqueItems": true, "maxItems": 1}
   }
 }`
 
@@ -48,7 +48,7 @@ func imessageManifest(h *Manager) *extension.Manifest {
 	connector, _ := json.Marshal([]extension.ConnectorItem{{ID: imessagewire.ID, Name: newRemote(imessagewire.Config{}, "", nil).Name(),
 		Capabilities: []string{"status", "tools", "events", "inbox", "archive", "machines"}}})
 	return &extension.Manifest{ManifestVersion: extension.ManifestVersion, ID: imessageExtensionID, Name: "信息（iMessage）", Version: h.version,
-		Description: "读你一台 Mac 上「信息」App 的短信和 iMessage（只读，不发送），交给收件箱、知识库和助手。读哪台在这里选；「交给 Persona」和删除已存的数据在 设置 › 连接器 › 信息。",
+		Description: "读你一台 Mac 上「信息」App 的短信和 iMessage（只读，不发送），交给收件箱、知识库和助手。读哪台 Mac 在这里选；「交给 Persona」和删除已存的数据可在本页的收件箱与连接器设置中管理。",
 		Contributes: map[string]json.RawMessage{"connectors": connector}, Configuration: json.RawMessage(imessageConfig), Node: builtinNode("machines")}
 }
 

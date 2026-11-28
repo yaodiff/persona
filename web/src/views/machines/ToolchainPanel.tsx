@@ -1,11 +1,12 @@
 // On-demand read-only development toolchain and local environment panel for the Machines view (#12350).
 // Loaded lazily via lazyPage in Machines.tsx so it adds zero bytes to the cold first screen or idle tier.
 // Never polls in the background: fetches once per selected machine on demand and only re-probes on Refresh.
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { t } from "../../i18n";
 import { api, ApiError, enc, errorText, isAbort, pastHub } from "../../lib/api";
 import { ago } from "../../lib/format";
 import type { Machine } from "../../lib/types";
+import { MachineTool, type MachineToolProps } from "./MachinePicker";
 import { Button, cx, EASE, Spinner } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 
@@ -162,15 +163,16 @@ function classifyUnavailable(err: unknown): UnavailableReason | null {
   return null;
 }
 
-export function ToolchainPanel({ machines }: { machines: Machine[] }) {
-  const defaultMid = useMemo(() => {
-    const firstOnline = machines.find((m) => m.online);
-    return firstOnline?.id ?? machines[0]?.id ?? "";
-  }, [machines]);
+export function ToolchainPanel(props: MachineToolProps) {
+  return (
+    <MachineTool {...props}>
+      {(machine) => <Toolchain activeMachine={machine} />}
+    </MachineTool>
+  );
+}
 
-  const [selectedMid, setSelectedMid] = useState(defaultMid);
-  const activeMid = machines.some((m) => m.id === selectedMid) ? selectedMid : defaultMid;
-  const activeMachine = machines.find((m) => m.id === activeMid);
+function Toolchain({ activeMachine }: { activeMachine?: Machine }) {
+  const activeMid = activeMachine?.id ?? "";
 
   const [state, setState] = useState<LoadState>({ kind: "idle" });
   const [refreshing, setRefreshing] = useState<{ seq: number; mid: string } | null>(null);
@@ -249,7 +251,7 @@ export function ToolchainPanel({ machines }: { machines: Machine[] }) {
     };
   }, [activeMachine?.id, activeMachine?.online, fetchReport, abortInFlight]);
 
-  if (machines.length === 0) {
+  if (!activeMachine) {
     return (
       <section data-testid="toolchain-panel" className="rounded-card bg-surface px-4 py-5 shadow-card">
         <p className="text-meta text-ink-3">{t("machines-toolchain.no_machines")}</p>
@@ -265,7 +267,7 @@ export function ToolchainPanel({ machines }: { machines: Machine[] }) {
 
   return (
     <div data-testid="toolchain-panel" className="flex flex-col gap-3" style={{ animation: `fade-up 320ms ${EASE} both` }}>
-      {/* Header & machine picker */}
+      {/* Report header */}
       <section className="rounded-card bg-surface px-4 py-3.5 shadow-card">
         <div className="flex flex-wrap items-start gap-3">
           <div className="min-w-0 flex-1">
@@ -283,30 +285,6 @@ export function ToolchainPanel({ machines }: { machines: Machine[] }) {
             </Button>
           )}
         </div>
-
-        {machines.length > 1 && (
-          <div className="mt-3 flex flex-wrap gap-1.5" role="tablist" aria-label={t("machines-toolchain.machine_select")}>
-            {machines.map((m) => {
-              const selected = m.id === activeMid;
-              return (
-                <button
-                  key={m.id}
-                  type="button"
-                  role="tab"
-                  aria-selected={selected}
-                  onClick={() => setSelectedMid(m.id)}
-                  className={cx(
-                    "inline-flex h-7 items-center gap-1.5 rounded-full px-2.5 text-label font-medium transition-colors",
-                    selected ? "bg-ink text-page" : "bg-field text-ink-2 hover:bg-hover hover:text-ink",
-                  )}
-                >
-                  <span className={cx("size-1.5 rounded-full", m.online ? "bg-green" : "bg-ink-3")} aria-hidden />
-                  <span className="max-w-44 truncate">{m.name}</span>
-                </button>
-              );
-            })}
-          </div>
-        )}
 
         {report && (
           <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-line pt-2.5 text-submeta text-ink-3">

@@ -19,7 +19,8 @@ describe("codexThreadOf", () => {
     expect(codexThreadOf([s({ session_id: "t2", pane_id: "w1:p3" })], waiting)).toBeUndefined();
     expect(codexThreadOf([s({ session_id: "t3", pane_id: "w1:p2", status: "offline" })], waiting)).toBeUndefined();
     expect(codexThreadOf([s({ session_id: "t4", pane_id: "w1:p2", agent: "claude" })], waiting)).toBeUndefined();
-    expect(codexThreadOf([s({ session_id: "t5", pane_id: "w1:p2" })], { session_id: waiting.session_id })).toBeUndefined();
+    expect(codexThreadOf([s({ session_id: "t5", pane_id: "w1:p2", machine_id: "other" })], waiting)).toBeUndefined();
+    expect(codexThreadOf([s({ session_id: "t6", pane_id: "w1:p2" })], { ...waiting, pane_id: undefined })).toBeUndefined();
   });
 });
 
@@ -27,6 +28,6 @@ describe("a waiting Codex's row", () => {
   it("says it waits for its first message", () => {
     expect(waitsForFirstMessage(waiting)).toBe(true);
     expect(waitsForFirstMessage(s({}))).toBe(false);
-    expect(rowLine(waiting)?.text).toBe("等第一条消息");
+    expect(rowLine(waiting)?.text).toBe("等待首条消息");
   });
 });

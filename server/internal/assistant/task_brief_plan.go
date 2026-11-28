@@ -98,11 +98,16 @@ func (s *Service) takeOver(ctx context.Context, conversation string, t *PlanTask
 
 // planBriefs gives each task of a plan from conversation (on machine) its brief as it will be kept, for the card to
 // show before "Start": who asked is read off the conversation once (briefOrigin); a task that continues another takes
-// that task's brief, with its criteria and expected time as they stand.
-func (s *Service) planBriefs(ctx context.Context, machine, conversation string, tasks []PlanTask) error {
+// that task's brief, with its criteria and expected time as they stand. The optional contracts from task_plan
+// are in task order.
+func (s *Service) planBriefs(ctx context.Context, machine, conversation string, tasks []PlanTask, contracts ...taskContract) error {
 	var origin *briefRecord
 	for i := range tasks {
 		t := &tasks[i]
+		var contract taskContract
+		if i < len(contracts) {
+			contract = contracts[i]
+		}
 		if t.Continues != "" {
 			prev, ok := s.todoNow(t.Continues)
 			if !ok {
@@ -117,6 +122,9 @@ func (s *Service) planBriefs(ctx context.Context, machine, conversation string, 
 			}
 			if t.ScopeRevision != "" && t.ScopeRevision != brief.scopeRevision().Format(time.RFC3339Nano) {
 				return fmt.Errorf("task %d: the scope of %s changed; read its brief and plan the continuation again", i+1, prev.ID)
+			}
+			if contract.changesFrom(brief) != (taskContract{}) {
+				return fmt.Errorf("task %d: a continuation keeps its task contract. Use task_scope to change work_mode or completion_mode first", i+1)
 			}
 			// Its own prompt stays its own; what done means is the brief's, as its scope changes left it.
 			// A continuation of an automatic brief keeps its current estimate. A manual or legacy brief becomes
@@ -140,6 +148,15 @@ func (s *Service) planBriefs(ctx context.Context, machine, conversation string, 
 			origin = &o
 		}
 		rec := *origin
+		if current, ok := s.briefOfTodo(t.ReuseTodo); ok {
+			if contract.changesFrom(current) != (taskContract{}) {
+				return fmt.Errorf("task %d: this to-do already has a task contract. Use task_scope to change work_mode or completion_mode", i+1)
+			}
+			rec.taskContract = taskContract{WorkMode: current.WorkModeNow, CompletionMode: current.CompletionModeNow,
+				WorkModeDeclared: current.workModeDeclared()}
+		} else {
+			rec.taskContract = contract.withDefaultWorkMode(t.Readonly)
+		}
 		if t.EstimateCalibration {
 			s.estimateNewPlanTask(ctx, conversation, t)
 		} else {
@@ -147,6 +164,7 @@ func (s *Service) planBriefs(ctx context.Context, machine, conversation string, 
 		}
 		rec.ID, rec.CreatedAt = "brief_"+randomHex(8), time.Now().UTC()
 		rec.EstimateEvidence = t.EstimateEvidence
+		rec.DistinctFrom = slices.Clone(t.DistinctFrom)
 		rec.Goal, rec.DoneWhen, rec.ExpectMinutes, rec.EstimateSource, rec.OutOfBounds = firstNonEmpty(t.Goal, t.Title), t.DoneWhen, t.ExpectMinutes, t.EstimateSource, t.OutOfBounds
 		if rec.StartedBy != briefByOwner {
 			rec.Reason = t.StartedWhy
@@ -201,7 +219,7 @@ func (s *Service) briefStarted(ctx context.Context, p *TaskPlan, t *PlanTask, to
 	if briefID == "" {
 		rec := briefRecord{StartedBy: briefByUnknown, Conversation: p.Conversation, Goal: firstNonEmpty(t.Goal, t.Title),
 			DoneWhen: t.DoneWhen, ExpectMinutes: t.ExpectMinutes, EstimateSource: t.EstimateSource,
-			EstimateEvidence: t.EstimateEvidence, OutOfBounds: t.OutOfBounds}
+			EstimateEvidence: t.EstimateEvidence, OutOfBounds: t.OutOfBounds, DistinctFrom: slices.Clone(t.DistinctFrom)}
 		if t.Brief != nil && !t.Brief.Reconstructed && t.Continues == "" {
 			rec = t.Brief.briefRecord
 		}

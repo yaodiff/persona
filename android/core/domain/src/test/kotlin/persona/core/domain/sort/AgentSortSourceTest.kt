@@ -17,7 +17,11 @@ class AgentSortSourceTest {
         assertEquals(AgentSource.Terminal, row("a", pane = "herdr-core:1").session.agentSource)
         assertEquals(AgentSource.Feishu, row("a", pane = "botmux:topic").session.agentSource)
         assertTrue(row("a", pane = "botmux:topic").session.isBotmux)
-        assertNull(row("a", pane = "orca:1").session.agentSource)
+        // An Orca terminal is a terminal; an Orca chat (the bridge's, no pane) Orca's own app (#17054).
+        assertEquals(AgentSource.Terminal, row("a", pane = "orca:1").session.agentSource)
+        val chat = row("a", pane = null).session.copy(sourceKind = "runtime", sourceInstanceId = "orca", spaceKind = "orca")
+        assertEquals(AgentSource.Desktop, chat.agentSource)
+        assertNull(chat.copy(sourceInstanceId = "paseo").agentSource)
         // A Tern pane is a block's number behind its kind; it is a terminal like herdr's.
         assertTrue(row("a", pane = "tern:201863462919").session.isTern)
         assertEquals(AgentSource.Terminal, row("a", pane = "tern:201863462919").session.agentSource)
@@ -46,7 +50,8 @@ class AgentSortSourceTest {
     @Test fun sourceFiltersCountAndShowOnlyWhileTheyHaveAgents() {
         val rows = listOf(row("t"), row("f", pane = "botmux:topic"), row("o", pane = "orca:1"))
         val list = buildAgentList(rows, machines, settings = AgentListSettings(quick = AgentQuickFilter.Feishu))
-        assertEquals(1, list.counts[AgentQuickFilter.Feishu]); assertEquals(1, list.counts[AgentQuickFilter.Terminal])
+        // the Orca pane is in a tab like herdr's (#17054)
+        assertEquals(1, list.counts[AgentQuickFilter.Feishu]); assertEquals(2, list.counts[AgentQuickFilter.Terminal])
         assertEquals(listOf("m/f"), list.groups.flatMap { it.rows }.map { it.id })
         val none = mapOf(AgentQuickFilter.NeedsYou to 1, AgentQuickFilter.Unread to 0, AgentQuickFilter.Feishu to 0, AgentQuickFilter.Terminal to 0)
         assertEquals(listOf(AgentQuickFilter.All, AgentQuickFilter.NeedsYou), AgentQuickFilter.shown(AgentQuickFilter.All, none))

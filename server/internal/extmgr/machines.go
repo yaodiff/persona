@@ -30,6 +30,7 @@ type MachineConfig struct {
 	Name    string
 	Kind    string
 	SSHHost string
+	trust   string
 }
 
 // nodeCaller is how calls reach a computer's node: the devices here, or a test's rpc.Peer.
@@ -187,7 +188,7 @@ func (h *Manager) machinesNow() []*Machine {
 	}
 	seen := map[string]bool{}
 	for _, d := range views {
-		cfg := MachineConfig{ID: d.ID, Name: d.Name, Kind: d.Kind, SSHHost: d.SSHHost}
+		cfg := MachineConfig{ID: d.ID, Name: d.Name, Kind: d.Kind, SSHHost: d.SSHHost, trust: d.Trust}
 		m := h.byID[d.ID]
 		if m == nil {
 			m = &Machine{cfg: cfg}

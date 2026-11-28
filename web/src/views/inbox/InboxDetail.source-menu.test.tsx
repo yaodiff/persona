@@ -124,9 +124,8 @@ describe("a menu over an item's original page", () => {
     expect(menuRows().length).toBeGreaterThan(0);
     // Escape closes the menu from the page: its entry comes off, the original stays
     await act(async () => {
-      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      await popped(() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
     });
-    await act(async () => { await new Promise((r) => setTimeout(r, 30)); });
     await flush();
     expect(menuRows().length).toBe(0);
     expect(eventBody()).toBeNull(); // still the original

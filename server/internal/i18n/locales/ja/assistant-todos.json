@@ -1,4 +1,11 @@
 {
+  "close_active_refused": "タスク {id} を閉じられません。Agent「{agent}」にユーザーからの未完了の依頼があります（{activity}）。",
+  "latest_owner_message": "この Agent へのユーザーの最新メッセージ：「{message}」",
+  "close_active_choices": "task_scope で完了条件に追加するか、Agent に作業の完了または監視の停止を依頼するか、needs_user でユーザーに確認してください。",
+  "close_active_confirm": "Agent「{agent}」は引き続き監視中、または予定済みの作業があります。「{title}」を完了しますか？",
+  "accept_active_confirm": "Agent「{agent}」は引き続き監視中、または予定済みの作業があります。レビューを承認して「{title}」を閉じますか？",
+  "latest_agent_message": "この Agent に送った最新のメッセージは「{message}」です。",
+  "close_not_confirmed": "Agent は監視中、または予定済みの作業があります。確認するまでタスクは開いたままです。",
   "remind_subtitle": "ToDo リマインダー",
   "remind_body": "時間になりました",
   "remind_due": "期限 {when}",
@@ -13,5 +20,11 @@
   "not_found": "このToDoはもうありません",
   "round_not_found": "ToDoの会話のこの部分はもうありません",
   "agent_not_listed": "このエージェントはまだコンピュータに表示されていません。少し待ってからもう一度お試しください。",
-  "images_forbidden": "このデバイスではToDoの画像を読み込めません"
+  "not_told_yet": "このToDoは今は確認できません。少し待ってからもう一度お試しください。",
+  "machine_not_found": "このコンピュータはハブのコンピュータではありません。",
+  "machine_offline": "このコンピュータは現在オフラインです。戻ってからもう一度お試しください。",
+  "images_forbidden": "このデバイスではToDoの画像を読み込めません",
+  "reorganize_requires_v2": "ToDoを整理するには、Labsで「新しい To-do とタスク」を有効にしてください。",
+  "topology_changed": "ToDoが変更されました。ToDo一覧を更新してから、もう一度お試しください。",
+  "split_children_changed": "分割で作成されたToDoの一部が移動または削除されました。ToDo一覧を更新してから、もう一度お試しください。"
 }

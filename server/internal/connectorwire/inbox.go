@@ -84,10 +84,29 @@ type InboxThing struct {
 	// Parent is what the thing grew out of, when the connector knows (a reply to a todo's card, a thread an agent
 	// opened): the item keeps it, unless the user set another. Optional; the hub only keeps and lists it.
 	Parent *ThingParent `json:"parent,omitempty"`
+	// OwnerPromise is an observation from the built-in Lark CLI pilot. The
+	// assistant consumes it before admitting an ordinary Inbox item.
+	OwnerPromise *OwnerPromise `json:"owner_promise,omitempty"`
 }
 
-// ThingParent is a thing's parent: kind "inbox" (an item's id), "todo" (a todo's id) or "session"
-// ("<machine>/<session>").
+// OwnerPromise carries the exact source of a hand-typed follow-up. Request
+// identifies the preceding request when the connector could verify it.
+type OwnerPromise struct {
+	ChatID    LarkChatID    `json:"chat_id"`
+	TopicID   LarkTopicID   `json:"topic_id"`
+	RequestID LarkMessageID `json:"request_id,omitempty"`
+	Model     bool          `json:"model,omitempty"`
+}
+
+type LarkChatID string
+type LarkTopicID string
+type LarkMessageID string
+
+// OwnerPromiseKind identifies the pilot's private Inbox reminder.
+const OwnerPromiseKind = "owner_promise"
+
+// ThingParent is a thing's parent: kind "inbox" (an item's id), "todo" (a todo's id), "session" (a coding Agent's
+// "<machine>/<session>") or "agent" (a personal Agent's "<source>:<sessionKey>").
 type ThingParent struct {
 	Kind string `json:"kind"`
 	ID   string `json:"id"`
@@ -203,12 +222,23 @@ const (
 	TagExternalObject = "external_object"
 )
 
+// MentionUserID is a person's user ID on the connector's own service, as verified for a real @ mention.
+type MentionUserID string
+
+// InboxMention binds an exact @name in InboxReply.Text to a verified external user ID.
+type InboxMention struct {
+	ID   MentionUserID `json:"id"`
+	Name string        `json:"name"`
+}
+
 // InboxReply is a reply to one of a connector's inbox items.
 type InboxReply struct {
 	Thread string `json:"thread"`
 	ItemID string `json:"item_id,omitempty"` // the hub's inbox item
 	Last   string `json:"last,omitempty"`    // the newest move the item holds (InboxThing.Last): what the reply answers
 	Text   string `json:"text,omitempty"`
+	// Mentions lists explicit @name bindings (verified user ID + exact display name) for connectors that support real @ mentions.
+	Mentions []InboxMention `json:"mentions,omitempty"`
 	// ClientID is the app's id for the send: a retry with the same one goes out once (empty: the connector derives one).
 	ClientID string `json:"client_id,omitempty"`
 	// Changes move a document row's status first (a document item's "Change status", the AI twin's proposal); Text may then be empty.

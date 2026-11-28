@@ -63,11 +63,52 @@ struct QuestionSendingTests {
         #expect(other != nil && other != op)
     }
 
-    @Test func aFinishedCardLeavesNothing() {
+    @Test func aFinishedCardLeavesNothing() throws {
+        var a = AnswerAttempts()
+        let started = a.begin("ix", answer)
+        let op = try #require(started)
+        let finished = a.finish("ix", op: op)
+        #expect(finished)
+        #expect(a.progress("ix") == nil && a.retryable("ix") == nil)
+    }
+
+    @Test func anOldNilOccurrenceCompletionDoesNotFinishAReplacement() throws {
+        var a = AnswerAttempts()
+        let started = a.begin("ix", answer)
+        let old = try #require(started)
+        _ = a.begin("ix", answer, occurrence: "2026-11-21T12:00:01Z")
+        let finished = a.finish("ix", op: old)
+        #expect(!finished)
+        #expect(a.progress("ix") == .sending)
+    }
+
+    @Test func aReplacementCompletionRetiresTheOldOperation() throws {
+        var a = AnswerAttempts()
+        let started = a.begin("ix", answer)
+        let old = try #require(started)
+        let replaced = a.begin("ix", answer, occurrence: "2026-11-21T12:00:01Z")
+        let replacement = try #require(replaced)
+        let finished = a.finish("ix", op: replacement)
+        #expect(finished)
+        let oldFinished = !a.owns("ix", op: old) && !a.finish("ix", op: old)
+        #expect(oldFinished)
+    }
+
+    @Test func anOldNilOccurrenceFailureDoesNotFailAReplacement() {
         var a = AnswerAttempts()
         _ = a.begin("ix", answer)
-        a.finish("ix")
-        #expect(a.progress("ix") == nil && a.retryable("ix") == nil)
+        _ = a.begin("ix", answer, occurrence: "2026-11-21T12:00:01Z")
+        a.fail("ix", "old request failed")
+        #expect(a.progress("ix") == .sending)
+    }
+
+    @Test func equivalentOccurrenceTextStillIdentifiesTheSameAttempt() throws {
+        var a = AnswerAttempts()
+        let started = a.begin("ix", answer, occurrence: "2026-11-21T20:00:00.123456789+08:00")
+        let op = try #require(started)
+        a.fail("ix", "offline", occurrence: "2026-11-21T12:00:00.123456789Z")
+        let repeated = a.begin("ix", answer, occurrence: "2026-11-21T12:00:00.123456789Z")
+        #expect(repeated == op)
     }
 
     // MARK: The model
@@ -178,6 +219,162 @@ struct QuestionSendingTests {
         }
         await model.resolve(ix, answer)
         #expect(model.pendingInteractions.isEmpty && model.answerProgress(ix.uid) == nil)
+    }
+
+    @Test func aLateQuestionAnswerResponseKeepsASameIDReplacement() async {
+        let hub = FakeHub()
+        var first = card()
+        first.createdAt = Date(timeIntervalSince1970: 1_000)
+        var replacement = first
+        replacement.createdAt = first.createdAt!.addingTimeInterval(1)
+        replacement.summary = "replacement"
+        let model = model(hub, first)
+        hub.on("POST", path) { _ in
+            model.handle(.interaction(replacement), group: "")
+            return Data(#"{"ok":true}"#.utf8)
+        }
+        await model.resolve(first, answer)
+        #expect(model.interactions[first.uid]?.createdAt == replacement.createdAt)
+        model.replaceInteractions("", [replacement])
+        #expect(model.interactions[first.uid]?.createdAt == replacement.createdAt)
+    }
+
+    @Test func aLateAlreadyResponseDoesNotPublishForAReplacement() async {
+        let hub = FakeHub()
+        var first = card()
+        first.createdAt = Date(timeIntervalSince1970: 1_000)
+        var replacement = first
+        replacement.createdAt = first.createdAt!.addingTimeInterval(1)
+        replacement.summary = "replacement"
+        let model = model(hub, first)
+        hub.on("POST", path) { _ in
+            model.handle(.interaction(replacement), group: "")
+            return Data(#"{"ok":true,"already":true,"status":"resolved","resolution":{"answered_by":"assistant","answers":{"用哪个库？":"pgx"}}}"#.utf8)
+        }
+        await model.resolve(first, answer)
+        #expect(model.interactions[first.uid]?.summary == "replacement")
+        #expect(model.delegatedAnswers.isEmpty && model.toast == nil)
+    }
+
+    @Test func aReplacementArrivingDuringAPermissionAnswerStaysPending() async {
+        let hub = FakeHub()
+        var first = card(kind: .permission)
+        first.createdAt = Date(timeIntervalSince1970: 1_000)
+        var replacement = first
+        replacement.createdAt = first.createdAt!.addingTimeInterval(1)
+        replacement.summary = "replacement"
+        let model = model(hub, first)
+        hub.on("POST", path) { _ in
+            model.handle(.interaction(replacement), group: "")
+            return Data(#"{"ok":true}"#.utf8)
+        }
+        await model.resolve(first, Resolution(allow: true))
+        #expect(model.interactions[first.uid]?.createdAt == replacement.createdAt)
+        model.replaceInteractions("", [replacement])
+        #expect(model.interactions[first.uid]?.createdAt == replacement.createdAt)
+    }
+
+    @Test func catchUpInstallsANanosecondReplacementWithoutRevertingToAnOlderSnapshot() throws {
+        let first = try JSON.decoder.decode(Interaction.self, from: Data(#"{"id":"ix_1","machine_id":"m","session_id":"","kind":"permission","created_at":"2026-11-21T01:02:03.000000001Z"}"#.utf8))
+        let replacement = try JSON.decoder.decode(Interaction.self, from: Data(#"{"id":"ix_1","machine_id":"m","session_id":"","kind":"permission","created_at":"2026-11-21T01:02:03.000000002Z","summary":"replacement"}"#.utf8))
+        let model = model(FakeHub(), first)
+        model.replaceInteractions("", [replacement])
+        #expect(model.interactions[first.uid]?.createdAtWire == replacement.createdAtWire)
+        model.replaceInteractions("", [first])
+        #expect(model.interactions[first.uid]?.createdAtWire == replacement.createdAtWire)
+        model.handle(.interaction(first), group: "")
+        #expect(model.interactions[first.uid]?.createdAtWire == replacement.createdAtWire)
+    }
+
+    @Test func catchUpInstallsANanosecondOnlyReplacement() throws {
+        let first = try JSON.decoder.decode(Interaction.self, from: Data(#"{"id":"ix_1","machine_id":"m","session_id":"","kind":"permission","created_at":"2026-11-21T01:02:03.000000001Z"}"#.utf8))
+        let replacement = try JSON.decoder.decode(Interaction.self, from: Data(#"{"id":"ix_1","machine_id":"m","session_id":"","kind":"permission","created_at":"2026-11-21T01:02:03.000000002Z"}"#.utf8))
+        #expect(first == replacement) // Compatibility Date equality is why this exercises the store's occurrence fence.
+        let model = model(FakeHub(), first)
+        model.replaceInteractions("", [replacement])
+        #expect(model.interactions[first.uid]?.createdAtWire == replacement.createdAtWire)
+    }
+
+    @Test func watchAnswerCompletionRemovesOnlyItsDisplayedOccurrence() throws {
+        let first = try JSON.decoder.decode(Interaction.self, from: Data(#"{"id":"ix_1","machine_id":"m","session_id":"","kind":"permission","created_at":"2026-11-21T01:02:03.000000001Z"}"#.utf8))
+        let replacement = try JSON.decoder.decode(Interaction.self, from: Data(#"{"id":"ix_1","machine_id":"m","session_id":"","kind":"permission","created_at":"2026-11-21T01:02:03.000000002Z"}"#.utf8))
+        #expect(interactionRemovalMatches(first, resolved: first))
+        #expect(!interactionRemovalMatches(replacement, resolved: first))
+        var legacy = first
+        legacy.createdAt = nil
+        #expect(interactionRemovalMatches(replacement, resolved: legacy))
+    }
+
+    @Test func aSameIDReplacementIsANewArrivalButItsReplayIsNot() throws {
+        let first = try JSON.decoder.decode(Interaction.self, from: Data(#"{"id":"ix_1","machine_id":"m","session_id":"","kind":"permission","created_at":"2026-11-21T01:02:03.000000001Z"}"#.utf8))
+        let replacement = try JSON.decoder.decode(Interaction.self, from: Data(#"{"id":"ix_1","machine_id":"m","session_id":"","kind":"permission","created_at":"2026-11-21T01:02:03.000000002Z"}"#.utf8))
+        #expect(AppModel.announcesInteraction(replacement, replacing: first))
+        #expect(!AppModel.announcesInteraction(replacement, replacing: replacement))
+    }
+
+    @Test func aNanosecondReplacementSurvivesAnEarlierResolvedEvent() throws {
+        let first = try JSON.decoder.decode(Interaction.self, from: Data(#"{"id":"ix_1","machine_id":"m","session_id":"","kind":"permission","created_at":"2026-11-21T01:02:03.000000001Z"}"#.utf8))
+        let replacement = try JSON.decoder.decode(Interaction.self, from: Data(#"{"id":"ix_1","machine_id":"m","session_id":"","kind":"permission","created_at":"2026-11-21T01:02:03.000000002Z","summary":"replacement"}"#.utf8))
+        let hub = FakeHub()
+        let model = model(hub, first)
+        model.handle(.interaction(replacement), group: "")
+        let resolved = try #require(ServerEvent.decode(Data(#"{"type":"interaction_resolved","id":"ix_1","created_at":"2026-11-21T01:02:03.000000001Z"}"#.utf8)))
+        model.handle(resolved, group: "")
+        #expect(model.interactions[first.uid]?.createdAtWire == "2026-11-21T01:02:03.000000002Z")
+        model.replaceInteractions("", [replacement])
+        #expect(model.interactions[first.uid]?.createdAtWire == replacement.createdAtWire)
+    }
+
+    @Test func anEarlierResolvedEventDoesNotBlockANewerPermissionRetry() async throws {
+        let first = try JSON.decoder.decode(Interaction.self, from: Data(#"{"id":"ix_1","machine_id":"m","session_id":"","kind":"permission","created_at":"2026-11-21T01:02:03.000000001Z"}"#.utf8))
+        let replacement = try JSON.decoder.decode(Interaction.self, from: Data(#"{"id":"ix_1","machine_id":"m","session_id":"","kind":"permission","created_at":"2026-11-21T01:02:03.000000002Z","summary":"replacement"}"#.utf8))
+        let resolved = try #require(ServerEvent.decode(Data(#"{"type":"interaction_resolved","id":"ix_1","created_at":"2026-11-21T01:02:03.000000001Z"}"#.utf8)))
+        let hub = FakeHub()
+        let model = model(hub, replacement)
+        hub.on("POST", path) { _ in
+            // The permission card is optimistically hidden while B is in flight.
+            // A's delayed withdrawal must not poison B's put-back state.
+            model.handle(resolved, group: "")
+            throw APIError(status: 400, message: "try again")
+        }
+        await model.resolve(replacement, Resolution(allow: true))
+        #expect(model.interactions[first.uid]?.createdAtWire == replacement.createdAtWire)
+        model.replaceInteractions("", [replacement])
+        #expect(model.interactions[first.uid]?.createdAtWire == replacement.createdAtWire)
+    }
+
+    @Test func aDatedAnswerCannotRemoveAnArrivedLegacyReplacement() async throws {
+        var dated = card()
+        dated.createdAt = Date(timeIntervalSince1970: 1_000)
+        let first = try JSON.decoder.decode(Interaction.self, from: JSONEncoder().encode(dated))
+        var replacement = first
+        replacement.createdAt = nil
+        replacement.summary = "legacy replacement"
+        let hub = FakeHub()
+        let model = model(hub, first)
+        hub.on("POST", path) { _ in
+            model.handle(.interaction(replacement), group: "")
+            return Data(#"{"ok":true}"#.utf8)
+        }
+        await model.resolve(first, answer)
+        #expect(model.interactions[first.uid]?.summary == "legacy replacement")
+        model.replaceInteractions("", [replacement])
+        #expect(model.interactions[first.uid]?.summary == "legacy replacement")
+    }
+
+    @Test func anOrdinaryDatedAnswerCannotRestoreItsHubEndedOccurrence() async throws {
+        let ix = try JSON.decoder.decode(Interaction.self, from: Data(#"{"id":"ix_1","machine_id":"m","session_id":"","kind":"permission","created_at":"2026-11-21T01:02:03.000000001Z"}"#.utf8))
+        let resolved = try #require(ServerEvent.decode(Data(#"{"type":"interaction_resolved","id":"ix_1","created_at":"2026-11-21T01:02:03.000000001Z"}"#.utf8)))
+        let hub = FakeHub()
+        let model = model(hub, ix)
+        hub.on("POST", path) { _ in
+            model.handle(resolved, group: "")
+            throw APIError(status: 400, message: "request failed after withdrawal")
+        }
+        await model.resolve(ix, Resolution(allow: true))
+        #expect(model.interactions[ix.uid] == nil && model.answerProgress(ix.uid) == nil)
+        model.replaceInteractions("", [])
+        #expect(model.interactions[ix.uid] == nil)
     }
 
     @Test func otherCardsStillGoAtOnce() async {

@@ -23,7 +23,7 @@
   "hint_link_pair_now": "Pair Persona Link",
   "hint_link_use_hub": "Use Hub address only",
   "help_toggle": "Where do I get a pairing link?",
-  "help_step_1": "On your phone or a signed-in browser, open Settings › Devices › Connect a new device.",
+  "help_step_1": "On a signed-in phone or browser, open Devices in Settings and choose Connect a new device. On Apple and the web, Devices is under Advanced.",
   "help_step_2": "Copy the pairing link and paste it above — no second login needed.",
   "help_step_3": "Or run personad hub pair in the terminal on your Hub machine.",
   "link_entry_btn": "Run Agents on this computer",

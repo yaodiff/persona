@@ -88,11 +88,31 @@ const flush = async () => {
   for (let i = 0; i < 5; i++) await act(async () => { await Promise.resolve(); });
 };
 const titles = () => [...el.querySelectorAll("[data-agent-archives] a")].map((a) => a.textContent ?? "");
+const archiveLinks = () => [...el.querySelectorAll("[data-agent-archives] a")].map((a) => a.getAttribute("href"));
+const showMore = () => [...el.querySelectorAll("button")].find((b) => b.textContent === t("agents-archives.show_more"));
+
+function chooseFilter(label: string, value: string) {
+  const select = el.querySelector<HTMLSelectElement>(`select[aria-label="${label}"]`)!;
+  act(() => {
+    select.value = value;
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  expect(select.value).toBe(value);
+}
+
+function search(value: string) {
+  const input = el.querySelector("input")!;
+  act(() => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+}
 
 describe("Archived agents", () => {
   it("lists the archived agents newest first and restores one", async () => {
     act(() => root.render(<AgentArchives onToggleSidebar={() => {}} />));
     await flush();
+    chooseFilter(t("agents-archives.computer"), "mac");
     expect(titles().map((x) => x.slice(0, 13))).toEqual(["Release notes", "Fix the build"]);
     const restore = [...el.querySelectorAll("[data-agent-archives] button")].find((b) => b.getAttribute("title") === t("agents-archives.restore_label", { title: "Fix the build" })) as HTMLButtonElement;
     await act(async () => restore.click());
@@ -108,6 +128,67 @@ describe("Archived agents", () => {
     expect(filterArchived(hub.archived, "/w/b", machines).map((s) => s.session_id)).toEqual(["b"]);
     expect(filterArchived(hub.archived, "studio", machines)).toHaveLength(2);
     expect(filterArchived(hub.archived, "codex", machines).map((s) => s.session_id)).toEqual(["b"]);
+  });
+
+  it("appends matching rows in order and resets the visible batch on each filter change", async () => {
+    const matches = Array.from({ length: 120 }, (_, n) => row(String(n).padStart(3, "0"), { agent: "codex" }));
+    const expected = matches.map((s) => `/s/mac/${s.session_id}`);
+    hub.archived = [...matches, row("other", { machine_id: "laptop", agent: "codex", title: "Agent 000 from Studio" })];
+    act(() => root.render(<AgentArchives onToggleSidebar={() => {}} />));
+    await flush();
+    expect(archiveLinks()).toHaveLength(40);
+    expect(el.querySelector('[role="status"]')?.textContent).toBe(t("agents-archives.showing", { shown: 40, matches: 121 }));
+    act(() => showMore()!.click());
+    expect(archiveLinks()).toHaveLength(80);
+
+    chooseFilter(t("agents-archives.computer"), "mac");
+    expect(archiveLinks()).toEqual(expected.slice(0, 40));
+    act(() => showMore()!.click());
+    chooseFilter(t("agents-archives.runtime"), "codex");
+    expect(archiveLinks()).toEqual(expected.slice(0, 40));
+    act(() => showMore()!.click());
+    search("Studio");
+    expect(archiveLinks()).toEqual(expected.slice(0, 40));
+    act(() => showMore()!.click());
+    expect(archiveLinks()).toEqual(expected.slice(0, 80));
+    expect(document.activeElement?.getAttribute("href")).toBe(expected[40]);
+    act(() => showMore()!.click());
+    expect(archiveLinks()).toEqual(expected);
+    expect(document.activeElement?.getAttribute("href")).toBe(expected[80]);
+    expect(el.querySelector('[role="status"]')?.textContent).toBe(t("agents-archives.showing", { shown: 120, matches: 120 }));
+    expect(showMore()).toBeUndefined();
+
+    act(() => {
+      el.querySelector("input")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    });
+    expect(el.querySelector("input")!.value).toBe("");
+    expect(archiveLinks()).toEqual(expected.slice(0, 40));
+    expect(hub.posted).toEqual([]);
+  });
+
+  it("intersects exact computer and runtime identities with text, including empty intersections", async () => {
+    hub.archived = [
+      row("history", { agent: undefined, source_kind: "codex_history", title: "Release notes" }),
+      row("changelog", { agent: "codex", title: "Changelog" }),
+      row("claude", { agent: "claude", title: "Codex release notes" }),
+      row("laptop", { machine_id: "laptop", agent: "codex", title: "Studio release notes" }),
+    ];
+    act(() => root.render(<AgentArchives onToggleSidebar={() => {}} />));
+    await flush();
+    chooseFilter(t("agents-archives.computer"), "mac");
+    chooseFilter(t("agents-archives.runtime"), "codex");
+    search("release");
+    expect(archiveLinks()).toEqual(["/s/mac/history"]);
+    chooseFilter(t("agents-archives.computer"), "laptop");
+    expect(archiveLinks()).toEqual(["/s/laptop/laptop"]);
+    search("");
+    chooseFilter(t("agents-archives.runtime"), "claude");
+    expect(archiveLinks()).toEqual([]);
+    expect(el.textContent).toContain(t("agents-archives.no_filter_results"));
+    expect(showMore()).toBeUndefined();
+    chooseFilter(t("agents-archives.runtime"), "");
+    expect(archiveLinks()).toEqual(["/s/laptop/laptop"]);
+    expect(hub.posted).toEqual([]);
   });
 
   it("says when there are none, and when the list cannot be read", async () => {

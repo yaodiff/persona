@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/prompts"
@@ -14,9 +15,7 @@ import (
 )
 
 var (
-	sideConversationContext = lazyre.New(`<persona-context\b[^>]*\bkind\s*=\s*["']side-conversation["'][^>]*>`)
-	sideConversationMarker  = lazyre.New(`<persona-side-conversation\s*/>`)
-	loopInspectionRequest   = lazyre.New(`^/loop(?:\s|$)`)
+	loopInspectionRequest = lazyre.New(`^/loop(?:\s|$)`)
 )
 
 // A runtime's user role also carries peer messages and automated injections. Those
@@ -46,7 +45,7 @@ func taskTurnSource(t Todo, items []proto.Item) (from, source string) {
 		if it.Role == "user" && it.Kind == proto.KindText && loopInspectionRequest.MatchString(text) {
 			return from, "inspection"
 		}
-		if sideConversationContext.MatchString(text) || sideConversationMarker.MatchString(text) {
+		if prompts.IsSideConversation(text) {
 			return from, "side-conversation"
 		}
 		if strings.Contains(text, "<cross-session-message") || strings.Contains(text, "<teammate-message") {
@@ -153,21 +152,118 @@ func taskAgentsSettled(t Todo, agents []proto.Session) bool {
 		return false
 	}
 	for _, c := range agents {
-		if !taskAgentSettled(c) {
+		if !taskAgentSettledIn(t, agents, c) {
 			return false
 		}
 	}
 	return true
 }
 
+// taskAgentSettledIn is taskAgentSettled for c, one of task t's current agents (agents, without the superseded ones):
+// an agent that reported t done in this round also settles with background commands started before that report that
+// only wait, were moved from the foreground or stalled (#16418). A report is tied to the machine and session that sent
+// it, so another agent linked to t cannot inherit it.
+func taskAgentSettledIn(t Todo, agents []proto.Session, c proto.Session) bool {
+	reportAt, ok := taskReportedDone(t, c)
+	wait := len(agents) == 1 && t.Phase == assistantwire.TaskPhaseWaiting && t.WaitState != nil &&
+		t.WaitState.WaitingOn.Valid() && (c.BackgroundWorking || c.State != proto.StateWorking)
+	return taskAgentSettledReported(c, ok && len(agents) > 0, reportAt, wait)
+}
+
+// taskAgentSettled: c's turn is over and nothing of it goes on: no question or card waits, no background work runs
+// (stalled background commands alone do not count, #16418), and no "Continue" is due by itself.
 func taskAgentSettled(c proto.Session) bool {
-	if c.Status != proto.StatusDone && c.Status != proto.StatusIdle ||
-		c.State == proto.StateWorking || c.State == proto.StateNeedsYou ||
-		c.PendingInteractions > 0 || backgroundRunning(c) {
+	return taskAgentSettledReported(c, false, time.Time{}, false)
+}
+
+// taskAgentSettledReported is taskAgentSettled; reportedDone/reportAt: c reported its task done in this round at
+// reportAt, so background commands left behind from before that report that only wait, were moved from the foreground
+// or stalled do not hold it (backgroundLeftOver). A turn that stopped on a person also settles with its background
+// work left running (#14899). A structured wait on a single-worker task serves the same purpose.
+func taskAgentSettledReported(c proto.Session, reportedDone bool, reportAt time.Time, reportedWait bool) bool {
+	if c.Status != proto.StatusDone && c.Status != proto.StatusIdle || c.State == proto.StateNeedsYou || c.PendingInteractions > 0 {
+		return false
+	}
+	if (c.State == proto.StateWorking || backgroundRunning(c)) &&
+		!backgroundLeftOver(c, reportedDone, reportAt) && !reportedWait && !stoppedOnPerson(c) {
 		return false
 	}
 	w := c.Work
 	return w == nil || w.Phase != proto.WorkBlocked || w.On != proto.WaitTransient || w.WakeAt == nil
+}
+
+// stoppedOnPerson: c's current turn, as its work state has it, ended with a closeout that says it stopped on a person.
+// Background work it left running then does not keep that turn from settling: its end is no stretch still going on but
+// a wait its task's supervisor or owner must hear of (#14899).
+func stoppedOnPerson(c proto.Session) bool {
+	w := c.Work
+	return w != nil && w.Closeout != nil && !w.TurnAt.IsZero() && sameTurn(c, w.TurnAt) && closeoutWaitsOnPerson(*w.Closeout)
+}
+
+// withPersonWait is agents with the work state the triage put for an agent's current turn when that turn, left with
+// background work, stopped on a person (stoppedOnPerson) and its listed row does not carry that state yet: the lists
+// take the triage's state only with the next publish (publishSoon), and the triage settles such a turn at once
+// (triageTurn, #14899). Every other row stays as listed.
+func (s *Service) withPersonWait(agents []proto.Session) []proto.Session {
+	for i, c := range agents {
+		if !backgroundRunning(c) || stoppedOnPerson(c) {
+			continue
+		}
+		if e, ok := s.workEntry([2]string{c.MachineID, c.SessionID}); ok && sameTurn(c, e.TurnAt) {
+			w := e.Work
+			if w.TurnAt.IsZero() {
+				w.TurnAt = e.TurnAt
+			}
+			if c.Work = &w; stoppedOnPerson(c) {
+				agents[i] = c
+			}
+		}
+	}
+	return agents
+}
+
+// backgroundLeftOver (#16418): c's turn is over and all it still has running are background commands nothing waits
+// for: the node found them stalled (backgroundStalledShellOnly), or, after a done report (reportedDone at reportAt),
+// each started no later than reportAt and only waits, was moved from the foreground by the timeout, or stalled. Never
+// while its own turn is working (state working without background_working), nor with a subagent, a workflow or a Monitor.
+func backgroundLeftOver(c proto.Session, reportedDone bool, reportAt time.Time) bool {
+	if c.State == proto.StateWorking && !c.BackgroundWorking {
+		return false
+	}
+	if backgroundStalledShellOnly(c) {
+		return true
+	}
+	if !reportedDone || len(c.Background) == 0 || backgroundIsWork(c) {
+		return false
+	}
+	return !slices.ContainsFunc(c.Background, func(b proto.BackgroundTask) bool {
+		if b.Kind != "shell" {
+			return true
+		}
+		if !reportAt.IsZero() && !b.StartedAt.IsZero() && b.StartedAt.After(reportAt) {
+			return true
+		}
+		return !b.MovedFromForeground && !c.BackgroundWaiting && c.BackgroundStalledSince == 0
+	})
+}
+
+// taskReportedDone: agent c reported task t done (report_to_supervisor kind done) in the round under way, after the
+// supervision last changed (a review, a rework, the task opened again), as freshTaskDoneReport counts a round.
+func taskReportedDone(t Todo, c proto.Session) (time.Time, bool) {
+	v := t.Supervision
+	if t.Phase == assistantwire.TaskPhaseWaiting && t.WaitState != nil {
+		return time.Time{}, false
+	}
+	if v == nil || v.Progress == nil || v.Progress.Kind != upReportDone || v.Progress.At.IsZero() || v.Progress.At.Before(v.UpdatedAt) {
+		return time.Time{}, false
+	}
+	if v.Progress.machine == "" || v.Progress.session == "" || v.Progress.machine != c.MachineID || v.Progress.session != c.SessionID {
+		return time.Time{}, false
+	}
+	if t.ReopenedAt != nil && v.Progress.At.Before(*t.ReopenedAt) {
+		return time.Time{}, false
+	}
+	return v.Progress.At, true
 }
 
 // supersededAgents are the links of t another agent took over from (#6483): an unreleased link whose session is
@@ -272,6 +368,16 @@ func (s *Service) taskCompletionCurrent(ctx context.Context, t Todo, work time.T
 
 func (s *Service) taskRuntimeSettled(ctx context.Context, t Todo) bool {
 	agents, reached := s.taskAgentsReached(ctx, t)
+	if reached {
+		if c, missing := s.missingPendingTurnAgent(ctx, t, agents); missing {
+			items, read := s.lastTurnItems(ctx, c.MachineID, c.SessionID)
+			end, closed := turnEndOf(items)
+			e, known := s.turnOf(ctx, t.ID)
+			if read && closed && known && e.of(c, end) {
+				agents = append(agents, c) // fresh transcript proof, never absence alone
+			}
+		}
+	}
 	return reached && taskAgentsSettled(t, s.rowsProven(agents))
 }
 

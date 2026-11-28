@@ -109,7 +109,7 @@ func hiddenDirectoryCardRoundTrip(t *testing.T, previouslyOmitted bool) {
 	h.mu.Unlock()
 	t.Cleanup(func() { h.mu.Lock(); delete(h.clients, app); h.mu.Unlock() })
 	ctx, cancel := context.WithCancel(t.Context())
-	ix := proto.Interaction{ID: "ix_hidden_transport", MachineID: "box", SessionID: "blocked", Kind: proto.IxPermission, Summary: "Approve work"}
+	ix := proto.Interaction{ID: "ix_hidden_transport", MachineID: "box", SessionID: "blocked", Kind: proto.IxPermission, OutwardWrite: true, Summary: "Send the project update"}
 	raw, _ := json.Marshal(map[string]any{"interaction": ix})
 	done := make(chan struct{})
 	var value any

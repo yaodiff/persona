@@ -57,5 +57,21 @@
   "official_unreachable": "Can't reach the official extensions right now. Try again later.",
   "catalog_unreadable": "Can't read the marketplace right now. Its extensions show up here once it can be read",
   "token_create_hint": "No token yet? Create one on GitHub: the name, purpose and a one-year expiry are filled in and no permissions are needed. Click Generate token, then paste it above.",
-  "token_create": "Create on GitHub"
+  "token_create": "Create on GitHub",
+  "keys_tag_one": "{count} key",
+  "keys_tag_other": "{count} keys",
+  "signing_keys": "Signing keys",
+  "keys_optional": "Signing public keys (optional)",
+  "keys_hint": "For a private market you sign yourself: one ed25519:… key per line. With keys, the index must be signed by one of them or the market isn't added; installs and upgrades are verified. Leave empty for an unsigned market.",
+  "keys_title": "Signing keys · {name}",
+  "keys_signed_intro": "This market's index must be signed by one of these keys. Installs and upgrades from it are verified; an index no key verifies is refused. Verified extensions still run in the sandbox by default: only the official market's key lifts it.",
+  "keys_unsigned_intro": "This market has no signing keys, so it is unsigned: its extensions install as unsigned and run in the sandbox. Add the public key you sign its index with to verify it.",
+  "key_signs_index": "Signs the index",
+  "remove_key_label": "Remove key {key}",
+  "new_key": "Add a public key",
+  "new_key_hint": "ed25519:<base64>, printed by personad extension keygen. To rotate, add the new key, sign the index with both, then remove the old one.",
+  "add_key": "Add key",
+  "done": "Done",
+  "key_added": "Added a key to \"{name}\"",
+  "key_removed": "Removed a key from \"{name}\""
 }

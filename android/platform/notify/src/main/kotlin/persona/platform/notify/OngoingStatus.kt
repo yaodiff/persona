@@ -80,7 +80,7 @@ internal data class OngoingStatus(
                     // A fleet row can arrive before its card. Until the card is known, open the app rather than guessing
                     // that this is an ordinary permission; a secret hand-off must never gain a quick Allow.
                     needsFieldValues = card?.needsFieldValues ?: true,
-                    secretHandoff = card?.isSecretHandoff ?: (item.kind == "permission"))
+                    secretHandoff = card?.isSecretHandoff ?: (item.kind == "permission"), createdAt = card?.createdAt)
             }
             // With buttons, the body is the request they settle (like iOS), not an older question above it.
             val first = if (action != null) actionable else shown.firstOrNull()
@@ -136,11 +136,11 @@ internal data class OngoingButton(@StringRes val label: Int, val key: String?, v
  * The first permission or plan and its buttons, from the lock screen entry of the shared policy: "Deny" / "Allow" for a
  * permission, "View" / "Approve" for a plan (acceptEdits). Saying yes needs an unlocked phone; saying no does not.
  */
-internal data class OngoingAction(val kind: String, val interaction: String, val session: SessionKey?, val buttons: List<OngoingButton>) {
+internal data class OngoingAction(val kind: String, val interaction: String, val session: SessionKey?, val buttons: List<OngoingButton>, val createdAt: String? = null) {
     companion object {
         /** [needsFieldValues]: allowing needs values this app has no form for, so only Deny (#4987). */
         fun of(kind: String, interaction: String, session: SessionKey?, needsFieldValues: Boolean = false,
-            secretHandoff: Boolean = false): OngoingAction? {
+            secretHandoff: Boolean = false, createdAt: String? = null): OngoingAction? {
             if (interaction.isEmpty()) return null
             val policy = ApprovalPolicy.actions(AnswerEntry.LockScreen, kind, locked = true).associateBy { it.id }
             fun answer(id: ApprovalAction, @StringRes label: Int) = policy[id]?.let {
@@ -154,7 +154,7 @@ internal data class OngoingAction(val kind: String, val interaction: String, val
                     answer(ApprovalAction.ApproveEdits, R.string.notify_action_approve))
                 else -> emptyList()
             }
-            return OngoingAction(kind, interaction, session, buttons).takeIf { buttons.isNotEmpty() }
+            return OngoingAction(kind, interaction, session, buttons, createdAt).takeIf { buttons.isNotEmpty() }
         }
     }
 }

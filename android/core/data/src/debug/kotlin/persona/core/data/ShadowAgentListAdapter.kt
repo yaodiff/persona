@@ -195,6 +195,7 @@ private fun CoreProjection.toAndroidIdentities(): CoreProjection {
 }
 
 private fun unsupported(input: AgentListAdapter.Input): String? = when {
+    input.settings.heldSeen.isNotEmpty() -> "held-set-scope"
     input.settings.grouping !in listOf(AgentGrouping.State, AgentGrouping.Space, AgentGrouping.Machine,
         AgentGrouping.Repo, AgentGrouping.MachineSpace) -> "unsupported-grouping"
     input.settings.quick !in listOf(AgentQuickFilter.All, AgentQuickFilter.NeedsYou, AgentQuickFilter.Unread,

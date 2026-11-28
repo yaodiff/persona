@@ -33,4 +33,31 @@ class TodoSnapshotTest {
         // A new store over the same directory is the next start.
         assertEquals(todos, ListSnapshotStore(directory).todoCache().read())
     }
+
+    @Test fun oversizedTodoSnapshotFallsBackToOpenTodosAndSkipsWhenStillOverBudget() = runTest {
+        val directory = temporary.newFolder()
+        val openTodo = Todo(id = "open-1", title = "Keep me")
+        val hugeDone = Todo(
+            id = "done-1",
+            title = "Completed",
+            notes = "x".repeat(2048),
+            doneAt = "2026-11-05T09:30:00Z",
+            doneBy = "user",
+        )
+        val bounded = ListSnapshotStore(directory).todoCache(maxBytes = 512)
+        bounded.write(listOf(openTodo, hugeDone))
+        assertEquals(listOf(openTodo), bounded.read())
+        val snapshotFile = java.io.File(directory, snapshotHash("todos"))
+        org.junit.Assert.assertTrue(snapshotFile.length() <= 512)
+
+        // When even open todos exceed the cap, write skips gracefully without throwing or corrupting the prior file.
+        val tiny = ListSnapshotStore(directory).todoCache(maxBytes = 64)
+        tiny.write(listOf(Todo(id = "huge-open", title = "Too big", notes = "y".repeat(512))))
+        assertEquals(listOf(openTodo), bounded.read())
+        // Reading with a maxBytes smaller than the existing file skips it without deleting it.
+        assertNull(ListSnapshotStore(directory).todoCache(maxBytes = snapshotFile.length() - 1).read())
+        assertEquals(listOf(openTodo), bounded.read())
+        // No leaked temp files left behind.
+        assertEquals(listOf(snapshotHash("todos")), directory.list()?.toList().orEmpty())
+    }
 }

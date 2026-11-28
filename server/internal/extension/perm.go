@@ -42,6 +42,8 @@ type Permissions struct {
 	// ErrorReports: it is given the error and crash reports of the hub and the user's devices, scrubbed first
 	// (contributes.error_reports, docs/extensions/extensions.md "Error reports").
 	ErrorReports bool `json:"error_reports,omitempty"`
+	// RoutineFacts allows a host routine to request briefing material for its date and language.
+	RoutineFacts bool `json:"routine_facts,omitempty"`
 	// AuthRelay: it is handed the authorization links the user's Agents stop at, the ones its contributes.auth_relay
 	// names, to complete them with the account it is signed in with (docs/operations/auth-relay.md).
 	AuthRelay bool `json:"auth_relay,omitempty"`
@@ -91,6 +93,7 @@ func (p Permissions) FullHub() bool { return p.HubAPI && len(p.Hub) == 0 }
 func (p Permissions) Covers(q Permissions) bool {
 	if q.FullHub() && !p.FullHub() || q.LauncherKeys && !p.LauncherKeys || q.GhLogin && !p.GhLogin ||
 		q.UsageGateways && !p.UsageGateways || q.AgentRuntimes && !p.AgentRuntimes || q.ErrorReports && !p.ErrorReports ||
+		q.RoutineFacts && !p.RoutineFacts ||
 		q.AuthRelay && !p.AuthRelay || !p.Storage.covers(q.Storage) {
 		return false
 	}
@@ -403,6 +406,9 @@ func ExplainWith(l i18n.Lang, m *Manifest, config json.RawMessage) []PermissionL
 	if m.Permissions.AgentRuntimes {
 		out = append(out, permissionLine(l, "agent_runtimes"))
 	}
+	if m.Permissions.RoutineFacts {
+		out = append(out, permissionLine(l, "routine_facts"))
+	}
 	if m.Permissions.ErrorReports {
 		out = append(out, permissionLine(l, "error_reports"))
 	}
@@ -563,6 +569,9 @@ func AddedWith(l i18n.Lang, old, m *Manifest, config json.RawMessage) []Permissi
 	}
 	if m.Permissions.AgentRuntimes && !old.Permissions.AgentRuntimes {
 		out = append(out, permissionLine(l, "agent_runtimes"))
+	}
+	if m.Permissions.RoutineFacts && !old.Permissions.RoutineFacts {
+		out = append(out, permissionLine(l, "routine_facts"))
 	}
 	if m.Permissions.ErrorReports && !old.Permissions.ErrorReports {
 		out = append(out, permissionLine(l, "error_reports"))

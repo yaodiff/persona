@@ -1,11 +1,11 @@
 {
-  "code_node_service_down": "这台电脑上的 Persona 后台服务没在运行。打开 Persona Link，让它重新装一次。",
-  "code_link_offline": "这台电脑离线了：Persona Link 没在运行，或者电脑睡着了。",
-  "code_never_connected": "这台电脑还没连上来过：在它上面用配对链接配对一次。",
-  "code_node_outdated": "这台电脑上的 Persona 太旧了，没法从这里更新。在那台电脑上重新安装一次。",
-  "err_tls_required": "hub 还没打开安全连接，电脑接不进来。到 hub 的管理界面 › 网络里打开安全连接后再试。",
-  "err_mesh_member": "这台 hub 是组里的成员，到中心 hub 上添加电脑。",
-  "err_too_many_pending": "已经加了 3 台电脑还没处理完（有的可能还没连上来过）。到「机器」页删掉用不上的，再添加。",
-  "err_forbidden": "这个设备不能添加电脑。用已经登录好的 App 或网页再试。",
-  "err_invalid_name": "名字不能为空，最多 40 个字。"
+  "code_node_service_down": "这台电脑上的 Persona 后台服务未运行。请打开 Persona Link，让它重新安装。",
+  "code_link_offline": "这台电脑当前离线：Persona Link 未运行，或电脑已进入休眠状态。",
+  "code_never_connected": "这台电脑尚未连接过。请在这台电脑上使用配对链接完成一次配对。",
+  "code_node_outdated": "这台电脑上的 Persona 版本过旧，无法从此处更新。请在该电脑上重新安装。",
+  "err_tls_required": "hub 尚未开启安全连接，电脑无法接入。请前往 hub 的「管理界面 › 网络」开启安全连接后重试。",
+  "err_mesh_member": "当前 hub 是成员 hub，请前往中心 hub 添加电脑。",
+  "err_too_many_pending": "已有 3 台尚未完成设置的电脑（部分可能从未连接过）。请前往「机器」页面移除不再使用的电脑，再添加新电脑。",
+  "err_forbidden": "当前设备无法添加电脑。请在已登录的 App 或浏览器中重试。",
+  "err_invalid_name": "请输入名称，最多 40 个字符。"
 }

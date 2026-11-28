@@ -101,6 +101,10 @@ describe("Health's default-panel archive", () => {
     expect(hub.composer).toBe(0);
     expect(host.textContent).not.toContain(t("spaces.new_chat"));
     expect(host.textContent).not.toContain(t("spaces.md_edit"));
+    // A built-in space has no SPACE.md, so asking for one would always 404 (server/internal/assistant/track_space.go):
+    // the archive draws no card and makes no request (the 404 a core-only hub logged before, #16243).
+    expect(host.querySelector('[data-testid="space-md"]')).toBeNull();
+    expect(hub.calls.some((c) => c.path === "/assistant/tracks/health/space-md")).toBe(false);
 
     await act(async () => button("Annual checkup").click());
     await flush();

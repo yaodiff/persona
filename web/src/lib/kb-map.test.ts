@@ -73,6 +73,21 @@ describe("buildTopicMap", () => {
     expect(root.kids.map((k) => k.meta)).toEqual(["10", "9", "8", "7", "6", "5", "4", "3"]);
     expect(new Set(root.kids.map((k) => k.side))).toEqual(new Set(["R", "L"]));
   });
+
+  it("on a large base opens the biggest topics only while what they show fits the budget, skipping one that does not", () => {
+    // a topic with n subtopics of one point each opens onto n rows of 40 px; the budget is 3,200 px
+    const topic = (id: string, n: number) => ({ entry: entry("topics", id), detail: topicDetail(id, Array.from({ length: n }, (_, i) => point(`${id}-${i}`, [`Part ${i}`]))) });
+    const root = buildTopicMap([topic("a", 100), topic("b", 50), topic("c", 40), topic("d", 20), topic("e", 5), topic("f", 4), topic("g", 3), topic("h", 2), topic("i", 1)]);
+    // a: 4,000 px, too big; b: 2,000; c: 1,600, more than the 1,200 left; d: 800; e, f: 200 and 160; g: 120 is over the 40 left
+    expect(root.kids.map((k) => [k.title, !k.collapsed])).toEqual([
+      ["Example a", false], ["Example b", true], ["Example c", false], ["Example d", true], ["Example e", true], ["Example f", true],
+      ["Example g", false], ["Example h", false], ["Example i", true],
+    ]);
+    // loose points count as two-line rows (56 px): 58 of them (3,248 px) no longer fit
+    const loose = (id: string, n: number) => ({ entry: entry("topics", id), detail: topicDetail(id, Array.from({ length: n }, (_, i) => point(`${id}-${i}`))) });
+    expect(buildTopicMap([loose("x", 58)]).kids[0].collapsed).toBe(true);
+    expect(buildTopicMap([loose("x", 57)]).kids[0].collapsed).toBe(false);
+  });
 });
 
 describe("buildProjectMap", () => {
@@ -120,6 +135,20 @@ describe("buildProjectMap", () => {
     walk(root, (n) => { if (n.kind === "project") ps.push(n); });
     expect(ps[0].kids[0]).toMatchObject({ title: "Goal", goal: true });
     expect(ps.map((x) => x.noGoal)).toEqual([false, true]);
+  });
+
+  it("opens the importance groups in order, at most two, and stops at the first whose projects do not fit the budget", () => {
+    // a project card is a 70 px row; the budget is 3,200 px
+    const groups = (sizes: [string, number][]) => {
+      const list = sizes.flatMap(([imp, n]) => Array.from({ length: n }, (_, i) => entry("projects", `${imp}-${i}`, { importance: imp, extra: "short · active" })));
+      return buildProjectMap(list, new Map()).kids[0].kids.map((g) => [g.title, !g.collapsed]);
+    };
+    // a small base as before: the first two open
+    expect(groups([["P0", 2], ["P1", 3], ["P2", 1]])).toEqual([["P0", true], ["P1", true], ["P2", false]]);
+    // P0 (2,100 px) fits, P1 (1,400 px) is over the 1,100 left: it and every group after it stay closed, P3 included
+    expect(groups([["P0", 30], ["P1", 20], ["P3", 1]])).toEqual([["P0", true], ["P1", false], ["P3", false]]);
+    // P0 alone over the budget: nothing opens, rather than a less important group
+    expect(groups([["P0", 46], ["P1", 1]])).toEqual([["P0", false], ["P1", false]]);
   });
 });
 

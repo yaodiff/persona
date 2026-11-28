@@ -3,7 +3,9 @@ package assistantwire
 import (
 	"time"
 
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/wireids"
 )
 
 // ---- the assistant's settings, and the conversations the hub's features start (docs/assistant/assistant.md "Boundary with hub") ----
@@ -24,9 +26,8 @@ type Profile struct {
 	// Keep are the conversations their machines list however long they are quiet: the main one, the main ones it
 	// replaced, scheduled tasks' own (node.configure keep_sessions: a busy machine's newest transcripts crowd them out).
 	Keep []SessionRef `json:"keep"`
-	// ExtensionOwners are the extensions the user marked as their own (#13246, trust owner, such as their memory
-	// extension): the hub does not hide the tracks' conversations and cards from them. Any other extension is a third
-	// party's, from which the hub hides every track; an older manager names none.
+	// ExtensionOwners lists the extensions the user marked as their own. It carries the legacy trust snapshot for
+	// track reads. Current managers also include the live verdict in extensions.authorize.
 	ExtensionOwners []string `json:"extension_owners,omitempty"`
 	// Attention is the attention mode the user set (attention.go, #13503), which the hub's push filter reads; nil (an
 	// older manager, or never set) is normal. The hub reads its end itself (Attention.Effective).
@@ -70,6 +71,11 @@ const (
 	// the owner's Retry or Delete when it is not found (#10669). An older manager answers "unknown method": the hub
 	// answers the app with the failure, as before.
 	MethodKeepUndelivered = "assistant.keep_undelivered"
+)
+
+var (
+	StartMethod           = buswire.Method[StartParams, StartResult]{Name: MethodStart}
+	KeepUndeliveredMethod = buswire.Method[KeepUndeliveredParams, KeepUndeliveredResult]{Name: MethodKeepUndelivered}
 )
 
 // InboxPermissionModeParam is manager-only authorization metadata on assistant.send, session.send and
@@ -172,6 +178,12 @@ type StartParams struct {
 	// GuestTools: a guest conversation (assistant/guest.go) that may use only these connector tools; nil is an
 	// ordinary one.
 	GuestTools []string `json:"guest_tools,omitempty"`
+	// GuestHandoff: a proxy reply's guest (assistant/bot_handoff.go). The manager registers it before the node
+	// starts it; never over the bus.
+	GuestHandoff string `json:"-"`
+	// GuestGroup: a group guest's conversation key (chat and thread, assistant/bot_guest.go). The manager registers it
+	// before the node starts it; never over the bus.
+	GuestGroup string `json:"-"`
 	// NewSessionID: start it under this session id (a meeting's follow-up, made once also across a restart); a node
 	// that cannot picks its own. Never over the bus.
 	NewSessionID string `json:"-"`
@@ -181,6 +193,14 @@ type StartParams struct {
 	// Human attributes the first message to an app start vouched for by the hub. It is used for missing replies.
 	// The node adds no client message ID to that input. Never over the bus.
 	Human bool `json:"-"`
+	// OriginDeviceID is the hub-authenticated paired device ID that opened this conversation, set from
+	// DeviceIDHeader on POST /api/v1/assistant/conversations; never over the bus.
+	OriginDeviceID wireids.DeviceID `json:"-"`
+}
+
+// StartResult carries the conversation started for the hub.
+type StartResult struct {
+	Session proto.Session `json:"session"`
 }
 
 // FirstMessageIDPrefix begins the client_msg_id the manager gives the first message of a conversation a person's own
@@ -206,24 +226,33 @@ type SendParams struct {
 	// ReplyInput is a direct app send authenticated by the hub's legacy owner credential. It only qualifies for
 	// missing-reply recovery. Internal sends and other roles cannot set it, and it does not authorize a hand-off.
 	ReplyInput bool `json:"reply_input,omitempty"`
+	// OriginDeviceID is the hub-authenticated paired device ID (for example "dev_...") that sent this message, or
+	// "" when not sent by a paired user device. Set by the hub from verified credentials, never from request body.
+	OriginDeviceID wireids.DeviceID `json:"origin_device_id,omitempty"`
 }
 
 // KeepUndeliveredParams is assistant.keep_undelivered's params. Params are the app's message as it came (text, images,
 // launcher, model; never what SendParams made of it): a retry runs SendParams again. Human is SendParams.Human for it;
 // Error the failure the owner is told, Code its code ("" for none).
 type KeepUndeliveredParams struct {
-	MachineID    string         `json:"machine_id"`
-	SessionID    string         `json:"session_id"`
-	Params       map[string]any `json:"params"`
-	Human        bool           `json:"human,omitempty"`
-	Lang         string         `json:"lang,omitempty"`
-	Code         string         `json:"code,omitempty"`
-	Error        string         `json:"error,omitempty"`
-	CredentialID string         `json:"credential_id,omitempty"`
+	MachineID      string           `json:"machine_id"`
+	SessionID      string           `json:"session_id"`
+	Params         map[string]any   `json:"params"`
+	Human          bool             `json:"human,omitempty"`
+	Lang           string           `json:"lang,omitempty"`
+	Code           string           `json:"code,omitempty"`
+	Error          string           `json:"error,omitempty"`
+	CredentialID   string           `json:"credential_id,omitempty"`
+	OriginDeviceID wireids.DeviceID `json:"origin_device_id,omitempty"`
 	// TriedAt is when the first send began for CodeDeliveryUnknown: its line is looked for from then on. Zero means
 	// nothing was typed, so the message is simply sent again. The original start, not when the connection ended,
 	// covers a slow first attempt.
 	TriedAt time.Time `json:"tried_at,omitempty"`
+}
+
+// KeepUndeliveredResult carries the message kept for later delivery.
+type KeepUndeliveredResult struct {
+	Undelivered *proto.UndeliveredMessage `json:"undelivered"`
 }
 
 // RenameParams is assistant.rename's params: Params are the app's ({title?, tab_name?}).

@@ -341,6 +341,49 @@ func TestCodexOriginTellsAppChatsFromCLIAndSubagents(t *testing.T) {
 	}
 }
 
+func TestCodexSharedOriginNeedsSidebarMembership(t *testing.T) {
+	home := t.TempDir()
+	state := `{
+		"projectless-thread-ids": ["listed", "cli", "subagent", "parented"],
+		"thread-project-assignments": {"assigned": {"projectKind": "local", "projectId": "p1"}},
+		"local-projects": {"p1": {"name": "Alpha"}}
+	}`
+	if err := os.WriteFile(filepath.Join(home, ".codex-global-state.json"), []byte(state), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	pass := newCodexListPass()
+	for _, tt := range []struct {
+		name, metadata string
+		spaceID        string
+	}{
+		{"listed", `"source":"vscode"`, "codex-chats:" + home},
+		{"assigned", `"source":"vscode"`, codexDesktopProjectID(home, "p1")},
+		{"unlisted", `"source":"vscode"`, ""},
+		{"cli", `"source":"cli"`, ""},
+		{"subagent", `"source":"vscode","thread_source":"subagent"`, ""},
+		{"parented", `"source":"vscode","parent_thread_id":"listed"`, ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			p := filepath.Join(home, tt.name+".jsonl")
+			line := `{"type":"session_meta","payload":{"originator":"persona",` + tt.metadata + "}}\n"
+			if err := os.WriteFile(p, []byte(line), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			src := codexSource{home: home, thread: tt.name, path: p}
+			wantDesktop := tt.spaceID != ""
+			if got := codexDesktopChatIn(src, pass); got != wantDesktop {
+				t.Fatalf("desktop chat = %t, want %t", got, wantDesktop)
+			}
+			n := &Node{}
+			s := proto.Session{SessionID: tt.name, Capabilities: &proto.SessionCapabilities{}}
+			n.decorateCodexSessionIn(&s, src, home, map[string]string{}, pass)
+			if s.SpaceID != tt.spaceID {
+				t.Fatalf("space ID = %q, want %q", s.SpaceID, tt.spaceID)
+			}
+		})
+	}
+}
+
 // A Codex thread's row says when the thread began: its rollout's first line, read once with its origin and shared by
 // every row of it (#5120). A first line with no time says nothing.
 func TestCodexRowStartedAt(t *testing.T) {

@@ -15,14 +15,49 @@ import (
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
-type usageStartupWriter struct{ reports chan []byte }
+// usageStartupWriter is the manager's side of the node's connection: it takes the notifications (reports) and answers
+// the calls, usage.features as a manager that keeps directories does when dirs is set (#16530), as an older one (an
+// unknown method) otherwise.
+type usageStartupWriter struct {
+	reports chan []byte
+	answers io.Writer // the node's input
+	dirs    bool
+	temps   bool // and takes temporary folders by their paths (temp_dirs, #16827)
+}
 
 func (w usageStartupWriter) Write(p []byte) (int, error) {
+	var call struct {
+		ID     string `json:"id"`
+		Method string `json:"method"`
+	}
+	if json.Unmarshal(p, &call) == nil && call.Method != "" {
+		reply := `{"id":"` + call.ID + `","error":{"message":"unknown method"}}`
+		if call.Method == "usage.features" && w.dirs {
+			reply = `{"id":"` + call.ID + `","result":{"dirs":true}}`
+			if w.temps {
+				reply = `{"id":"` + call.ID + `","result":{"dirs":true,"temp_dirs":true}}`
+			}
+		}
+		go func() { _, _ = w.answers.Write([]byte(reply + "\n")) }()
+		return len(p), nil
+	}
 	w.reports <- append([]byte(nil), p...)
 	return len(p), nil
 }
 
 func usageStartupNode(t *testing.T) (*Node, <-chan []byte) {
+	t.Helper()
+	return usageStartupNodeDirs(t, false)
+}
+
+// usageStartupNodeDirs is usageStartupNode with a manager that keeps directories (dirs) or not.
+func usageStartupNodeDirs(t *testing.T, dirs bool) (*Node, <-chan []byte) {
+	t.Helper()
+	return usageStartupNodeFeatures(t, dirs, false)
+}
+
+// usageStartupNodeFeatures is usageStartupNodeDirs with a manager that also takes temporary folders (temps) or not.
+func usageStartupNodeFeatures(t *testing.T, dirs, temps bool) (*Node, <-chan []byte) {
 	t.Helper()
 	home := t.TempDir()
 	config := filepath.Join(home, "claude-fixture")
@@ -37,10 +72,12 @@ func usageStartupNode(t *testing.T) (*Node, <-chan []byte) {
 	if err := os.WriteFile(filepath.Join(dir, "fixture-session.jsonl"), []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	w := usageStartupWriter{reports: make(chan []byte, 4)}
+	in, answers := io.Pipe()
+	w := usageStartupWriter{reports: make(chan []byte, 4), answers: answers, dirs: dirs, temps: temps}
 	n := &Node{home: home, dir: home, state: newState(), logger: log.New(io.Discard, "", 0)}
 	n.peer = rpc.New("usage-test", w)
-	t.Cleanup(func() { n.peer.Close(io.EOF) })
+	go func() { _ = n.peer.Serve(context.Background(), in) }()
+	t.Cleanup(func() { n.peer.Close(io.EOF); _ = answers.Close() })
 	return n, w.reports
 }
 

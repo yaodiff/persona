@@ -11,7 +11,7 @@ const graphOf = (raw: unknown) => readView({ sections: [{ items: [raw] }] }).sec
 
 describe("UI 10: reading a view's graph", () => {
   it("is the version the web sends", () => {
-    expect(UI_VERSION).toBe(12);
+    expect(UI_VERSION).toBe(13);
   });
 
   it("keeps every node, edge, fold and selection of the examples", () => {

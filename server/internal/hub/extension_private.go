@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/apierr"
+	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/extwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/nodeproto"
@@ -32,12 +34,32 @@ func restrictedAgentData(r *http.Request) bool {
 	return role == roleExtension || role == roleScoped || role == roleReadOnly
 }
 
-// ownerExtension: r carries the token of an extension the user marked as their own (#13246,
-// assistantwire.Profile.ExtensionOwners, such as their memory extension), which reads the tracks' conversations too.
-// The hub cannot see the categories: any other extension stays shown none of a track's.
+// ownerExtension checks the owner's trust verdict from the connection that authenticated the extension and its route.
+// A legacy Assistant can confirm owner trust through a snapshot it sent on that same connection.
 func (h *Hub) ownerExtension(r *http.Request) bool {
 	p := principalOf(r.Context())
-	return p.Role == roleExtension && p.Extension != "" && slices.Contains(h.assistantProfileOf(p.Manager).ExtensionOwners, p.Extension)
+	c := p.extAuthConn
+	if p.Role != roleExtension || c == nil {
+		return false
+	}
+	h.bus.mu.Lock()
+	defer h.bus.mu.Unlock()
+	if h.bus.current[p.Manager] != c {
+		return false
+	}
+	select {
+	case <-c.peer.Done():
+		return false
+	default:
+	}
+	if p.extOwner != extwire.OwnerUnreported {
+		return p.extOwner == extwire.OwnerConfirmed
+	}
+	if slices.Contains(c.presence.Capabilities, assistantwire.CapabilityExtensionInfoAccessScoped) {
+		return false
+	}
+	profile := c.extensionOwnerProfile.Load()
+	return profile != nil && slices.Contains(profile.ExtensionOwners, p.Extension)
 }
 
 // spacesHidden: r's token is shown none of the tracks' conversations on the read routes: an extension's other than

@@ -80,6 +80,46 @@ func TestLegacyEngineRoundTrip(t *testing.T) {
 	}
 }
 
+// An older client's single engine on a stored set (#17052): it only moves the default of a set no single engine stands
+// for when the set already holds it; outside the set, and on sets a single engine stands for, it replaces as before.
+func TestLegacyEngineOnto(t *testing.T) {
+	set := func(def string, hosts ...string) EngineChoice {
+		c, err := NormalizeEngineChoice(hosts, def)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+	web := set("orca", "herdr", "orca", "paseo")
+	for _, c := range []struct {
+		name   string
+		stored EngineChoice
+		engine string
+		want   EngineChoice
+	}{
+		{"in the set: default only", web, "herdr", set("herdr", "herdr", "orca", "paseo")},
+		{"the default again: unchanged", web, "orca", web},
+		{"outside the set: replaces", web, "herdr-core", set("herdr-core", "herdr-core")},
+		{"herdr-both inside a larger set: default herdr", set("orca", "herdr", "herdr-core", "orca"), "herdr-both", set("herdr", "herdr", "herdr-core", "orca")},
+		{"herdr-both half outside: replaces", web, "herdr-both", set("herdr", "herdr", "herdr-core")},
+		{"a host alone: replaces", set("orca", "orca"), "herdr", set("herdr", "herdr")},
+		{"herdr-both narrowed: replaces", set("herdr", "herdr", "herdr-core"), "herdr", set("herdr", "herdr")},
+		{"herdr with herdr-core by default: default only", set("herdr-core", "herdr", "herdr-core"), "herdr", set("herdr", "herdr", "herdr-core")},
+		{"the empty set: replaces", set(""), "herdr", set("herdr", "herdr")},
+	} {
+		got := LegacyEngineOnto(c.stored, c.engine)
+		if !SameEngineChoice(got, c.want) {
+			t.Errorf("%s: %v + %s = %v, want %v", c.name, c.stored, c.engine, got, c.want)
+		}
+	}
+	// The stored set is not shared with the result.
+	got := LegacyEngineOnto(web, "paseo")
+	got.Hosts[0] = "changed"
+	if web.Hosts[0] != "herdr" {
+		t.Errorf("stored set changed: %v", web)
+	}
+}
+
 func TestSuggestEngineHosts(t *testing.T) {
 	found := []Engine{
 		{ID: "herdr", Available: false}, {ID: "herdr-core", Available: true}, {ID: "herdr-both", Available: false},

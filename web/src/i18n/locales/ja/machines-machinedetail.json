@@ -61,7 +61,6 @@
   "busiest": "最大{value}",
   "core_title": "コア{n}：{value}",
   "open_space": "スペース「{name}」を開く",
-  "engine_pill_hint": "このコンピューターのエンジン。クリックすると下の「エンジン」で変更できます",
   "rename": "名前を変更",
   "rename_label": "コンピュータ名",
   "rename_hint": "すべてのアプリとこのコンピュータの Persona Link に表示されます。空欄なら ID を使います。ID は変わりません。",
@@ -69,7 +68,6 @@
   "screen": "画面を見る",
   "screen_hint": "この Mac の画面をリアルタイムで開く（画面共有）",
   "files": "ファイル",
-  "files_hint": "ホームフォルダからこのコンピュータのファイルを見る",
   "machine_switch_link_intro": "SSHで接続しています。Persona Linkにすると、このコンピューターはほかのネットワークからでも自分でハブに接続します。",
   "machine_switch_link_action": "Persona Linkに切り替え…",
   "machine_switch_link_title": "「{name}」をPersona Linkに切り替えますか？",
@@ -113,8 +111,13 @@
   "machine_switch_link_why_unknown": "問題が発生しました。",
   "machine_switch_link_why_unavailable": "このコンピューターは今はPersona Linkに切り替えられません。",
   "hosted_assistants_other": "このコンピューターのアシスタント",
-  "hosted_assistants_settings": "設定 › ハブ › アシスタント",
+  "hosted_assistants_settings": "設定 › 詳細 › アシスタント",
   "manager_pending_restart_hint": "再デプロイでバイナリが更新されました。アイドル状態になり次第、自動で再起動して反映されます。",
   "manager_older_version": "旧バージョン",
-  "manager_version_lag_hint": "このアシスタントはこのコンピューターの node より古いバージョンで動作しています。適用するにはアシスタントサービスを再起動してください。"
+  "manager_version_lag_hint": "このアシスタントはこのコンピューターの node より古いバージョンで動作しています。適用するにはアシスタントサービスを再起動してください。",
+  "configuration": "設定",
+  "other_workspaces": "その他のワークスペース",
+  "no_other_workspaces": "他のワークスペースはありません",
+  "workspaces_loading": "ワークスペースを読み込み中…",
+  "workspaces_failed": "一部のワークスペースを読み込めませんでした。しばらくしてから再試行します。"
 }

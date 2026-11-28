@@ -30,7 +30,14 @@ func (f *storeFake) StoreSecret(_ context.Context, _ extension.SecretProvider, i
 		out.KeyID = "single-use"
 	}
 	if in.Phase == "commit" {
-		out.References = map[string]string{"credential": "op://vault/item/field"}
+		refs := map[string]string{}
+		for _, field := range in.Target.Fields {
+			if field.Delete {
+				continue
+			}
+			refs[field.Name] = "op://vault/item/" + field.Name
+		}
+		out.References = refs
 	}
 	return out, nil
 }
@@ -84,5 +91,47 @@ func TestSecretStorageRequiresExplicitVouchedCardAndConsumesApproval(t *testing.
 				t.Fatal("replay committed")
 			}
 		})
+	}
+}
+
+func TestSecretStorageEditOTPAndDelete(t *testing.T) {
+	r := newHandoffRig(t)
+	r.devs.setSessions("box", []proto.Session{{MachineID: "box", SessionID: "writer", Title: "Edit test"}})
+	f := &storeFake{handoffSecretsFake: r.secrets}
+	r.s.refs = f
+	target := wire.SecretStoreTarget{
+		Operation: "edit",
+		Vault:     "vaultid123",
+		Item:      "itemid123",
+		Fields: []wire.SecretStoreField{
+			{Name: "totp_secret", Type: "OTP", KeepValue: true},
+			{Name: "dup_field", Delete: true},
+		},
+	}
+	args, _ := json.Marshal(storeToolArgs{Phase: "prepare", Target: target})
+	done := make(chan proto.ToolResult, 1)
+	go func() { done <- r.s.toolSecretStore(context.Background(), "box", "writer", args) }()
+	ix := r.card()
+	if !strings.Contains(string(ix.ToolInput), "totp_secret") || !strings.Contains(string(ix.ToolInput), "dup_field") {
+		t.Fatalf("incomplete edit card: %+v", ix)
+	}
+	r.post(ix.ID, `{"allow":true}`, &assistantwire.HandoffApprover{DeviceID: "phone"})
+	var got proto.ToolResult
+	select {
+	case got = <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("card did not finish")
+	}
+	if got.IsError {
+		t.Fatalf("prepare failed: %+v", got)
+	}
+	commit, _ := json.Marshal(storeToolArgs{Phase: "commit", Target: target, KeyID: "single-use", Sealed: "encrypted"})
+	res := r.s.toolSecretStore(context.Background(), "box", "writer", commit)
+	if res.IsError {
+		t.Fatalf("commit failed: %+v", res)
+	}
+	text := res.Content[0].Text
+	if !strings.Contains(text, `"totp_secret":"op://vault/item/totp_secret"`) || !strings.Contains(text, `"deleted":["dup_field"]`) {
+		t.Fatalf("unexpected commit result: %s", text)
 	}
 }

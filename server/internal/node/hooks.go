@@ -494,8 +494,12 @@ func (n *Node) handleHook(ctx context.Context, req sockRequest) (any, error) {
 		return nil, nil
 	}
 
+	createdAt := time.Now().UTC() // legacy client without occurrence transport
+	if req.CreatedAt != nil && !req.CreatedAt.IsZero() {
+		createdAt = *req.CreatedAt
+	}
 	ix := proto.Interaction{
-		ID: interactionID(in, req.Attempt), SessionID: in.SessionID, Cwd: in.Cwd, CreatedAt: time.Now().UTC(),
+		ID: interactionID(in, req.Attempt), SessionID: in.SessionID, Cwd: in.Cwd, CreatedAt: createdAt,
 		ExpiresAt: time.Now().Add(nodeclient.HookTimeout).UTC(), ToolName: in.ToolName, ToolUseID: in.ToolUseID, ToolInput: in.ToolInput,
 		Resumable: req.Attempt != "",
 		AgentID:   in.AgentID, AgentType: in.AgentType, MCPServerName: in.MCPServerName, MCPConfigSource: in.MCPConfigSource,
@@ -637,7 +641,7 @@ func (n *Node) handleHook(ctx context.Context, req sockRequest) (any, error) {
 		if req.Resume && n.restoreQuestionFromTranscript(in, req.Attempt, time.Now()) {
 			// Several identical calls fit no exact PostToolUse. Hand this attempt back to the terminal and withdraw
 			// its restored card instead of waiting for a completion that may never come (#2382).
-			_ = n.peer.Notify("interaction.cancel", map[string]any{"id": ix.ID})
+			_ = n.peer.Notify("interaction.cancel", map[string]any{"id": ix.ID, "created_at": ix.CreatedAt})
 			return nil, nil
 		}
 		ctx, otherAnswered, stopOther := n.decided.watch(ctx, permissionKey(in))
@@ -649,7 +653,7 @@ func (n *Node) handleHook(ctx context.Context, req sockRequest) (any, error) {
 		if n.decided.grace(ctx, answered) {
 			if questionAnswered() {
 				// No new ask means askOnce cannot withdraw the resumable card retained by the hub (#2382).
-				_ = n.peer.Notify("interaction.cancel", map[string]any{"id": ix.ID})
+				_ = n.peer.Notify("interaction.cancel", map[string]any{"id": ix.ID, "created_at": ix.CreatedAt})
 			}
 			return nil, nil
 		}
@@ -827,13 +831,17 @@ func hookEventParams(in hookInput, stopSig string, reportOnly bool) map[string]a
 
 // promptSource says who a UserPromptSubmit's prompt is from, for the manager (a meeting's batch is not the user's own
 // message: docs/assistant/meeting-minutes.md "Feeding the attending session"): the kind of message source it carries
-// (meeting, conversation, task…), "notification" for a background task reporting back, else "user".
+// (meeting, conversation, task…), "notification" for a background task reporting back, "side_conversation" for an
+// unrelated agent_send wrapped by RenderSideConversation, else "user".
 func promptSource(prompt string) string {
 	if src := prompts.ItemSource(proto.Item{Role: "user", Kind: proto.KindText, Text: prompt}); src != nil && src.Kind != "" {
 		return src.Kind
 	}
 	if strings.Contains(prompt, "<task-notification>") {
 		return "notification"
+	}
+	if prompts.IsSideConversation(prompt) {
+		return proto.SourceSideConversation
 	}
 	return "user"
 }
@@ -955,7 +963,13 @@ func (n *Node) askOnce(ctx context.Context, ix proto.Interaction) (proto.Resolut
 	var res proto.Resolution
 	params := map[string]any{"interaction": ix}
 	if ix.SessionID != "" {
-		if origin := n.assistantOrigin(ix.SessionID); origin != "" {
+		origin := n.assistantOrigin(ix.SessionID)
+		if origin == "" {
+			if parent, _, ok := splitRuntimeChild(ix.SessionID); ok {
+				origin = n.assistantOrigin(parent)
+			}
+		}
+		if origin != "" {
 			params["origin"] = origin
 		}
 	}
@@ -973,10 +987,10 @@ func (n *Node) askOnce(ctx context.Context, ix proto.Interaction) (proto.Resolut
 			return res, false, errNodeGone
 		}
 		if d, _ := ctx.Value(terminalDecidedKey{}).(*terminalDecided); d != nil && d.Load() {
-			_ = n.peer.Notify("interaction.dismiss", map[string]any{"id": ix.ID}) // answered in the terminal (planthen.go)
+			_ = n.peer.Notify("interaction.dismiss", map[string]any{"id": ix.ID, "created_at": ix.CreatedAt}) // answered in the terminal (planthen.go)
 			return res, false, nil
 		}
-		_ = n.peer.Notify("interaction.cancel", map[string]any{"id": ix.ID})
+		_ = n.peer.Notify("interaction.cancel", map[string]any{"id": ix.ID, "created_at": ix.CreatedAt})
 		return res, false, nil
 	}
 	if res.Cancel && (ix.Kind != proto.IxQuestion || !ix.CanCancel || !res.IsQuestionCancel()) {
@@ -984,9 +998,6 @@ func (n *Node) askOnce(ctx context.Context, ix proto.Interaction) (proto.Resolut
 	}
 	if res.Dismiss {
 		return res, false, nil
-	}
-	if ix.EditableText != "" && res.EditedText != "" {
-		n.editedAnswers.Store(ix.ID, res.EditedText)
 	}
 	return res, true, nil
 }

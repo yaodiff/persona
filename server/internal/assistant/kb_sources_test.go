@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/ai"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/kb"
@@ -355,5 +356,30 @@ func TestKBCollectsItemsThroughTheHub(t *testing.T) {
 	}
 	if it, ok := st.Item(kb.KindDoc, "d1"); !ok || it.Title != "发布计划" {
 		t.Fatalf("document %+v", it)
+	}
+}
+
+// Items that exist without any connector handing them over (documents linked in chats, an import of the owner's
+// minutes) are tagged too: a round with no connector items does not stop before tagging.
+func TestKBCollectItemsTagsWithoutConnectorItems(t *testing.T) {
+	f := newFakeHub()
+	f.answerApp(AppConnectors, assistantwire.ConnectorsArchives, func(json.RawMessage) (any, error) {
+		return assistantwire.Archives{}, nil
+	})
+	s := newKBService(t, f)
+	e := kbEng(t, s)
+	if err := e.Store.PutItem(&kb.Item{Kind: kb.KindMeeting, ID: "m1", Title: "周会", At: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	e.ModelFor = nil
+	e.Model = ai.NewRun(ai.Config{Model: "fake"}, func(context.Context, ai.Request) (ai.Reply, error) {
+		calls++
+		return ai.Reply{Text: `{"items":[{"id":"meetings/m1","importance":"P1","relevance":80,"tags":["会议"],"note":"周会"}]}`}, nil
+	})
+	s.kbCollectItems(context.Background(), e, false)
+	it, ok := e.Store.Item(kb.KindMeeting, "m1")
+	if !ok || it.TaggedAt.IsZero() || it.Importance != "P1" || it.Relevance != 80 || len(it.Tags) != 1 {
+		t.Fatalf("item %+v after %d call(s)", it, calls)
 	}
 }

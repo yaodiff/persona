@@ -11,17 +11,21 @@ import (
 // The ports the kernel's registry takes from the Service (kernel/seam; docs/server/architecture.md "Validated and
 // sealed"). New makes the registry with newRegistry, the modules register through it, and New returns it sealed.
 
-// newRegistry is the registry the Service's modules register through.
+// newRegistry is the registry the Service's modules register through, kept as s.kernel: the Service answers their
+// bus methods and runs their hooks through it (seam_slots.go).
 func (s *Service) newRegistry() *seam.Registry {
-	return seam.NewRegistry(seamRoutes{s}, seamAccess{}, seamBodies{}, seamDefects{s})
+	s.kernel = seam.NewRegistry(seamRoutes{s}, seamAccess{}, seamBodies{}, seamDefects{s})
+	return s.kernel
 }
 
-// seamRoutes serves a module's routes the way New's own route calls are served: through Service.handle.
+// seamRoutes serves a module's routes the way New's own route calls are served (Service.serveRoute).
 type seamRoutes struct{ s *Service }
 
 func (t seamRoutes) Install(r seam.Route) { r.Accept(t) }
 
-func (t seamRoutes) VisitRoute(pattern string, serve http.HandlerFunc) { t.s.handle(pattern, serve) }
+func (t seamRoutes) VisitRoute(pattern string, serve http.HandlerFunc) {
+	t.s.serveRoute(pattern, serve)
+}
 
 // seamAccess is fullRole: a device that may do everything (RoleHeader).
 type seamAccess struct{}

@@ -11,6 +11,8 @@
   "load_failed": "チャットを読み込めません",
   "empty_title": "チャットはまだありません",
   "empty_body": "Personaに話しかけると、ここにチャットが表示されます。",
+  "external_empty_title": "外部のチャットはまだありません",
+  "external_empty_body": "Lark の /agent やほかの拡張機能が開いたチャットがここに表示されます。",
   "no_results": "「{query}」に一致するチャットはありません",
   "search_partial": "以前のチャットを整理中です。まだ表示されないものがあります。",
   "archived_count_other": "アーカイブ済み（{count}）",

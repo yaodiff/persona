@@ -6,7 +6,7 @@ import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
 import { requestHome } from "./child-sessions";
 import { foldRows } from "./folded-rows";
-import { stateOf } from "./format";
+import { activityOf } from "./format";
 import { cardChat, setSideFold } from "./side-fold";
 import type { Interaction, Session } from "./types";
 
@@ -32,7 +32,7 @@ describe("spec/fixtures/side-fold", () => {
     // what the hub sends: the manager's fold on the node's rows; a paged list's rows are folded already
     const sent = c.input.paged ? c.input.sessions : c.input.sessions.map((s) => ({ ...s, ...c.expected.fold[key(s)] }) as Session);
     const listed = foldRows(sent).filter((s) => !s.archived);
-    expect(listed.map((s) => ({ id: key(s), state: stateOf(s) }))).toEqual(c.expected.rows);
+    expect(listed.map((s) => ({ id: key(s), state: activityOf(s) }))).toEqual(c.expected.rows);
     // a card carries its session's fold (the hub copies it, Interaction.folded_*)
     const bySession = new Map(sent.map((s) => [key(s), s]));
     const cards = c.input.interactions.map((ix) => {

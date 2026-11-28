@@ -1,17 +1,17 @@
 {
   "section_running": "运行中",
   "section_completed": "已完成",
-  "empty": "这个会话还没有后台任务",
+  "empty": "当前会话暂无后台任务。",
   "back": "返回",
   "loop": "循环",
   "stop_loop": "停止循环",
-  "stop_loop_explain": "会给 Agent 发一条消息，让它不再安排下一次唤醒。正在执行的这一轮会先做完。",
+  "stop_loop_explain": "此操作会向 Agent 发送消息，通知它不再安排下一次唤醒。当前正在执行的这一轮会先完成。",
   "copy_command": "复制命令",
-  "output_loading": "正在读取输出…",
+  "output_loading": "正在加载输出…",
   "output_empty_running": "暂无输出。",
-  "output_empty_ended": "没有输出。",
+  "output_empty_ended": "无输出。",
   "output_not_running": "已不在运行列表中",
-  "output_failed": "暂时读不到输出",
+  "output_failed": "无法加载输出",
   "open_output_file": "作为文件打开",
   "command_status": "状态",
   "command_runtime": "运行时长",
@@ -22,5 +22,5 @@
   "output": "输出",
   "output_lines": "{count} 行",
   "output_tail_lines": "最近 {count} 行",
-  "output_tail": "这里只显示最近的输出，可作为文件打开查看更早内容。"
+  "output_tail": "较早的输出已省略，可作为文件打开查看更多内容。"
 }

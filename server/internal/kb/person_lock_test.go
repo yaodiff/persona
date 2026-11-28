@@ -32,7 +32,7 @@ func TestPersonUpdatesKeepEachOthersLinks(t *testing.T) {
 		go func() { // compression's project linking
 			defer wg.Done()
 			c := &Chat{ID: fmt.Sprintf("lark-g%d", i), People: []string{"lark-u1"}}
-			slugs[i] = e.evolveProject(fmt.Sprintf("Project %d", i), "short", nil, "", c, "", at)
+			slugs[i] = e.evolveProject(fmt.Sprintf("Project %d", i), "short", nil, "", c, true, "", at)
 		}()
 		go func() { // an edit
 			defer wg.Done()

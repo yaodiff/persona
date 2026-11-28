@@ -334,6 +334,14 @@ class PersonaScriptIdentityTests(unittest.TestCase):
 # and a nested bash for each fake ssh hop: about 7s of CPU, whose wall time grows with the machine's load (24-27s at
 # load 45-50 on an 18-core Mac, past 30s at 80) without any step hanging.
 DEPLOY_TIMEOUT = 120
+# What the fake go build writes for every program. As personad it also stands in for `personad hub publish-packages
+# <staging>`, which deploy.sh runs on the hub (update.PublishPackages): it lands the staged packages in bin/nodes, as the
+# real publisher does, so the deploy's result can be read back here. Anything else prints a line and succeeds.
+FIXTURE_BINARY = (
+    '#!/bin/sh\n'
+    'if [ "$1 $2" = "hub publish-packages" ]; then mkdir -p "$PERSONA_HOME/bin/nodes" && cp "$3"/* "$PERSONA_HOME/bin/nodes/"; exit; fi\n'
+    'printf "fixture-binary\\n"\n'
+)
 
 
 class PersonaDeploymentScriptTests(unittest.TestCase):
@@ -369,12 +377,12 @@ env['HOME'] = env['FIXTURE_REMOTE_HOME']
 result = subprocess.run(['bash', '-c', ' '.join(args)], env=env)
 sys.exit(result.returncode)
 ''')
-        executable(self.commands / 'go', '#!' + sys.executable + '\n' + r'''
+        executable(self.commands / 'go', '#!' + sys.executable + '\n' + 'BINARY = ' + repr(FIXTURE_BINARY) + '\n' + r'''
 import os, pathlib, sys
 if sys.argv[1] == 'generate': sys.exit(0)
 if sys.argv[1] == 'build':
     p = pathlib.Path(sys.argv[sys.argv.index('-o')+1]); p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text('#!/bin/sh\nprintf "fixture-binary\\n"\n'); p.chmod(0o755); sys.exit(0)
+    p.write_text(BINARY); p.chmod(0o755); sys.exit(0)
 sys.exit(2)
 ''')
         executable(self.commands / 'npm', '#!' + sys.executable + '\nfrom pathlib import Path\np=Path("dist");p.mkdir(exist_ok=True);(p/"index.html").write_text("Persona fixture web")\n')
@@ -422,7 +430,7 @@ sys.exit(2)
 
     def test_node_deploy_over_nested_ssh_preserves_binary_stdin(self):
         self.run_script('scripts/deploy/deploy.sh', 'via-fixture')
-        self.assertEqual((self.state / 'bin/personad').read_text(), '#!/bin/sh\nprintf "fixture-binary\\n"\n')
+        self.assertEqual((self.state / 'bin/personad').read_text(), FIXTURE_BINARY)
         self.assertFalse((self.state / 'bin/personad').is_symlink())
         self.assertEqual(os.readlink(self.state / 'bin' / (FORMER_NAME + 'd')), 'personad')
 

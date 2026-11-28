@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -72,7 +73,7 @@ func (h *Manager) RelayGate(ctx context.Context, machineID string, raw json.RawM
 	if err := json.Unmarshal(raw, &p); err != nil {
 		return nil, &rpc.Error{Code: "invalid_params", Message: "gate.relay: " + err.Error()}
 	}
-	if !gateRelayMethod.MatchString(p.Method) || !strings.HasPrefix(p.Path, "/") || strings.HasPrefix(p.Path, "//") ||
+	if !gateRelayMethod.MatchString(p.Method) || !validGateRelayPath(p.Path) ||
 		len(p.Body) > proto.GateRelayMaxBody {
 		return nil, &rpc.Error{Code: "invalid_params", Message: "gate.relay: a method, a path from / and a body within bounds"}
 	}
@@ -89,15 +90,71 @@ func (h *Manager) RelayGate(ctx context.Context, machineID string, raw json.RawM
 	return relayToSocket(ctx, socket, gf.Command, auth, env, p)
 }
 
+// validGateRelayPath checks that a relayed command-gate path is an unambiguous
+// absolute path with no duplicate/empty interior segments, dot segments, URL
+// delimiters ("?", "#"), backslashes, encoded separators/dots, or control
+// characters.
+func validGateRelayPath(p string) bool {
+	if !strings.HasPrefix(p, "/") {
+		return false
+	}
+	if p == "/" {
+		return true
+	}
+	segs := strings.Split(p[1:], "/")
+	for i, seg := range segs {
+		if seg == "" {
+			if i == len(segs)-1 && len(segs) > 1 {
+				continue
+			}
+			return false
+		}
+		if seg == "." || seg == ".." {
+			return false
+		}
+		for j := 0; j < len(seg); j++ {
+			ch := seg[j]
+			if ch < 0x20 || ch == 0x7f || ch == '\\' || ch == '?' || ch == '#' {
+				return false
+			}
+		}
+		if strings.ContainsRune(seg, '%') {
+			dec, err := url.PathUnescape(seg)
+			if err != nil || dec == "." || dec == ".." {
+				return false
+			}
+			for j := 0; j < len(dec); j++ {
+				ch := dec[j]
+				if ch < 0x20 || ch == 0x7f || ch == '/' || ch == '\\' || ch == '?' || ch == '#' {
+					return false
+				}
+			}
+		}
+	}
+	return true
+}
+
 // relayToSocket sends p to the HTTP server on socket, auth's header set (each ${NAME} from env), and reads its answer.
 func relayToSocket(ctx context.Context, socket, host string, auth *proto.GateAuth, env map[string]string, p proto.GateRelayParams) (proto.GateRelayAnswer, error) {
+	if !validGateRelayPath(p.Path) {
+		return proto.GateRelayAnswer{}, &rpc.Error{Code: "invalid_params", Message: "gate.relay: a method, a path from / and a body within bounds"}
+	}
 	ctx, cancel := context.WithTimeout(ctx, gateRelayFor)
 	defer cancel()
-	target := "http://" + host + p.Path
-	if p.Query != "" {
-		target += "?" + p.Query
+	decodedPath, err := url.PathUnescape(p.Path)
+	if err != nil {
+		return proto.GateRelayAnswer{}, &rpc.Error{Code: "invalid_params", Message: "gate.relay: " + err.Error()}
 	}
-	req, err := http.NewRequestWithContext(ctx, p.Method, target, bytes.NewReader(p.Body))
+	u := &url.URL{
+		Scheme:   "http",
+		Host:     host,
+		Path:     decodedPath,
+		RawQuery: p.Query,
+	}
+	if strings.ContainsRune(p.Path, '%') {
+		u.RawPath = p.Path
+	}
+	req, err := http.NewRequestWithContext(ctx, p.Method, u.String(), bytes.NewReader(p.Body))
 	if err != nil {
 		return proto.GateRelayAnswer{}, &rpc.Error{Code: "invalid_params", Message: "gate.relay: " + err.Error()}
 	}

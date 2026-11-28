@@ -120,6 +120,6 @@ it("the node's queued push, in the state but not yet drawn when the request retu
   act(() => sock.push({ type: "sessions", machine_id: "mac", sessions: [{ ...busy, ultracode: false, state: "idle", status: "idle", rev: 4 }] }));
   runFrame();
   await flush();
-  expect(line()).toBe("每个任务都编排多 Agent workflow · 很费额度 · 只对本会话");
+  expect(line()).toBe("每个任务都将以多 Agent 工作流运行 · 消耗较多额度 · 仅对当前会话生效");
   expect(theSwitch().getAttribute("aria-checked")).toBe("false");
 });

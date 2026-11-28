@@ -32,14 +32,21 @@ enum QuickAction: String, CaseIterable {
             return UIApplicationShortcutItem(type: recentType, localizedTitle: s.displayTitle, localizedSubtitle: recentSubtitle(s, key: key),
                                              icon: UIApplicationShortcutIcon(systemImageName: Theme.Icon.recent), userInfo: ["key": key.path as NSString])
         }
-        UIApplication.shared.shortcutItems = recent + offered(recording: RecordingModule.allowance).map(\.item)
+        let actions = offered(recording: RecordingModule.allowance, hidden: model.hiddenNavigationPages)
+        UIApplication.shared.shortcutItems = recent + actions.map(\.item)
     }
 
     /// The menu's actions on this hub: Start Meeting is left out while the hub's recording module is off (#15214). The
     /// menu is published at launch and when the app leaves the front, so one tapped before it caught up is refused in
     /// words (`MeetingRecorder.startRefusal`).
-    nonisolated static func offered(recording: RecordingAllowance) -> [QuickAction] {
-        allCases.filter { $0 != .meetingRecording || recording.offersWrites }
+    nonisolated static func offered(recording: RecordingAllowance, hidden: Set<HubNavigationPage> = []) -> [QuickAction] {
+        allCases.filter {
+            switch $0 {
+            case .meetingRecording: recording.offersWrites
+            case .inbox: !hidden.contains(.inbox)
+            case .newConversation: true
+            }
+        }
     }
 
     /// Where a recent conversation is: "Persona" for one of Persona's, else its computer and folder.
@@ -51,8 +58,7 @@ enum QuickAction: String, CaseIterable {
 
     /// The item the menu was tapped with: true when it was one of these.
     @MainActor @discardableResult
-    static func perform(_ item: UIApplicationShortcutItem) -> Bool {
-        let model = AppModel.shared
+    static func perform(_ item: UIApplicationShortcutItem, in model: AppModel = .shared) -> Bool {
         if item.type == recentType, let path = item.userInfo?["key"] as? String, let key = SessionKey(path: path) {
             model.open(key) // an Agent's chat or a Persona conversation, as a notification opens it
             return true
@@ -64,7 +70,8 @@ enum QuickAction: String, CaseIterable {
             Task { await MeetingRecorder.shared.startMeeting(inForeground: true) }
         case .newConversation:
             model.openNewAssistant()
-        case .inbox: model.selectedTab = .mail
+        case .inbox:
+            model.openNavigationEntry(.inbox)
         }
         return true
     }
@@ -83,6 +90,23 @@ enum QuickAction: String, CaseIterable {
         } else {
             assistantCurrent = nil
         }
+    }
+
+    /// Message Persona (#17789): the main conversation with its composer's keyboard up (`composerFocus`), from the
+    /// Action button, the control or Shortcuts. A cold launch waits (at most 8 s) for the hub's main conversation, as
+    /// Call Persona does; with none (a fresh install), the new conversation page, whose first message starts it.
+    func openMainAssistantForTyping(waits: Int = 32) async {
+        shellSettings = false
+        selectedTab = .assistant
+        for _ in 0..<waits where assistantMain == nil {
+            try? await Task.sleep(for: .milliseconds(250))
+        }
+        guard let main = assistantMain else {
+            openNewAssistant()
+            return
+        }
+        openAssistantConversation(main)
+        composerFocus = main
     }
 
     /// Clear the old conversation before the first view can run, so a cold launch keeps the control's new conversation.

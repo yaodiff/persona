@@ -326,6 +326,9 @@ func TestReversibleSettingsAutoApproveRestoreAndAudit(t *testing.T) {
 				rec.Resolution.AnsweredBy != proto.AnsweredByAssistant {
 				t.Fatalf("resolved assistant decision: %+v", rec)
 			}
+			if got := st.endedAs(rec.Interaction.ID); got != db.EndedByAssistant {
+				t.Fatalf("reversible-setting history ended_by = %q, want %q", got, db.EndedByAssistant)
+			}
 			var audit struct {
 				Actor       string          `json:"actor"`
 				Operation   string          `json:"operation"`

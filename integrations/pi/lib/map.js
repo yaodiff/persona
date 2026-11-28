@@ -6,6 +6,7 @@
 // the branch, so moving to another one makes the app reload the page instead of splicing two branches together.
 
 import { customTypeMatches } from './compat.js'
+import { assistantPreview } from '../../runtime-sdk/lib/assistant-preview.js'
 import { appToolName, clipInput, snippet } from '../../runtime-sdk/index.js'
 
 // pi's tools under the names the apps draw: the SDK's common ones, plus pi's own (toolInput renames the arguments).
@@ -199,7 +200,10 @@ export function lastText(branch) {
     const m = branch[i]?.message
     if (m?.role === 'assistant') {
       const t = textOf(m.content)
-      if (t) return snippet(t)
+      if (t) {
+        const preview = assistantPreview(t)
+        if (preview !== undefined) return preview
+      }
     }
   }
   return ''

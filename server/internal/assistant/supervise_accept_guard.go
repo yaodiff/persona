@@ -2,19 +2,52 @@ package assistant
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"slices"
 	"strings"
 
+	"github.com/nwverse/persona/server/internal/closeout"
 	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
-// Guarding a bare `task_review accepted` (#12026, extended structurally by supervise_accept_scope_guard.go #13169). A supervised task must not vanish from the owner's Needs-you list
+// Guarding a legacy bare `task_review accepted` (#12026, with scope coverage in #13169). A supervised task must not vanish from the owner's Needs-you list
 // when its result does not settle anything: the agent was blocked on information only the owner has, its closeout
 // status was not done, or a read-only evaluation / research came back inconclusive, ineffective or only partly done.
 // Such an accept is refused with the fixes that keep the task with the owner: needs_user (owner-only information),
-// accepted with user_check (the owner reads the result and passes it before it leaves Needs you, #3240), or a linked
-// follow-up to-do. The hub judges words, not intent: the signals below are deliberately specific, and the refusal
+// rework, or a linked follow-up to-do. The hub judges words, not intent: the signals below are deliberately specific, and the refusal
 // names which one matched, so a supervisor that disagrees can still close the loop the named way instead of being
 // silently overridden.
+
+// bareAcceptGuardError runs after the current done_when checks have been validated. A declared contract with
+// required checks gives the review structured evidence. The open owner request, findings, delivery and deferred
+// scope gates still apply to that review.
+func (s *Service) bareAcceptGuardError(ctx context.Context, t Todo, note, reason string, checks []ReviewCheck, alsoDone []string) error {
+	if t.Supervision != nil && len(t.Supervision.DoneWhen) > 0 {
+		brief, _ := s.committedBriefOfTodo(t.ID)
+		if brief.workModeDeclared() || brief.CompletionModeNow.Valid() {
+			a, readable, ok := s.askCopyReadable(t.ID)
+			if !readable {
+				return errors.New("bare accepted refused: the owner request ledger could not be read. Retry the review")
+			}
+			if ok && a.AcceptedAt.IsZero() && !acceptAskStale(&a, t) && !acceptAskEnded(&a, t) {
+				return errors.New("bare accepted refused: the owner request is still open. Resolve it or withdraw an unneeded decision before accepting")
+			}
+			return nil
+		}
+	}
+	return s.acceptEvidenceGuardError(ctx, t, note, reason, checks, alsoDone)
+}
+
+func (s *Service) acceptEvidenceGuardError(ctx context.Context, t Todo, note, reason string, checks []ReviewCheck, alsoDone []string) error {
+	if matched, _ := acceptGuardBlock(s.acceptGuardEvidence(ctx, t, note, reason, checks)); matched != "" {
+		return errors.New(acceptGuardRefusal(matched))
+	}
+	if uncovered := s.acceptGuardUncoveredScopes(ctx, t, note, reason, checks, alsoDone); len(uncovered) > 0 {
+		return errors.New(acceptScopeGuardRefusal(uncovered))
+	}
+	return nil
+}
 
 // Signals that the result does not settle the task. English and Chinese, word-bounded where the language has words.
 // Each pattern is one line of evidence in the refusal; keep them specific enough that an ordinary "done" note cannot
@@ -39,6 +72,7 @@ var (
 		`卡在用户|缺(?:少|的是)用户(?:才知道)?(?:的)?(?:信息|资料)`) // i18n-ignore: matches the original report text
 	// The agent's own closeout report (its work report's Status line) says the work is not finished or is blocked.
 	// Only an explicit non-done status matches: runtimes that write no report must never block an accept.
+	acceptWaitingRe    = lazyre.New(`(?im)^[ \t]*[-*][ \t]*Waiting[ \t]*[:：][ \t]*([^\r\n]*)`)             // i18n-ignore: matches the original report
 	acceptCloseoutRe   = lazyre.New(`(?im)^\s*[-*]\s*Status\s*[:：]\s*(not_done|blocked|waiting|unsure)\b`) // i18n-ignore: matches the original report's status delimiters
 	acceptCloseoutZhRe = lazyre.New(`(?m)^\s*[-*]\s*状态\s*[:：]\s*(没做完|未完成|卡住|阻塞|受阻|等待中|在等)`)                // i18n-ignore: matches the original report text
 )
@@ -60,7 +94,7 @@ func (s *Service) acceptGuardEvidence(ctx context.Context, t Todo, note, reason 
 		b.WriteString(c.Evidence)
 		b.WriteByte('\n')
 	}
-	if replies, sideBlocked := s.taskReplies(ctx, t); !sideBlocked {
+	if replies, sideBlocked, _ := s.taskReplies(ctx, t); !sideBlocked {
 		for _, r := range replies {
 			b.WriteString(r.Text)
 			b.WriteByte('\n')
@@ -95,11 +129,55 @@ func acceptGuardRefusal(matched string) string {
 			"(why_owner: only_owner_knows; reason: what the owner is to provide or decide; recommend: the option you suggest), " +
 			"so it stays in their Needs-you list"
 	case "inconclusive":
-		base += "the result does not settle the task. Re-review with accepted plus user_check: true (the owner reads the " +
-			"result and passes it before it leaves Needs you; the default for read-only research and evaluations), or " +
+		base += "the result does not settle the task. Use " +
 			"needs_user with the next-step options, or hand out the remaining work as a linked follow-up to-do and then accept"
 	default:
-		base += "the task's result does not settle it. Re-review with needs_user, or accepted with user_check: true, or link a follow-up to-do"
+		base += "the task's result does not settle it. Re-review with needs_user, or link a follow-up to-do"
 	}
 	return base + ". A question asked only in chat text never reaches Needs you."
+}
+
+// Closeout is a tripwire. The supervisor can hand off the exact outstanding text
+// in deferred_scope, or report it as a finding and confirm its disposition.
+var closeoutMissingFollowUp = lazyre.New(`(?i)\b(?:pending|uncovered|unverified|outstanding|follow[- ]up|deferred|still|await(?:ing)?|wait(?:ing)?|decision|confirm|separate (?:task|PR|issue)|not (?:covered|done|checked|verified))\b|待定|待确认|待核实|待验证|待处理|未覆盖|未完成|未核实|未验证|未处理|另起|另开|单独|拍板|需(?:要)?(?:决定|确认|补充)|等待|还没|待.{0,20}(?:定|确认|决定)`) // i18n-ignore: matches the original report text
+
+func (s *Service) closeoutFollowUpError(ctx context.Context, t Todo, deferred string) error {
+	replies, blocked, _ := s.taskReplies(ctx, t)
+	if blocked {
+		return nil
+	}
+	for _, reply := range replies {
+		report, _, parsed := closeout.Parse(reply.Text)
+		var outstanding []string
+		if parsed {
+			if closeoutMissingFollowUp.MatchString(report.Missing) {
+				outstanding = append(outstanding, report.Missing)
+			}
+			if report.Waiting != "" {
+				outstanding = append(outstanding, report.Waiting)
+			}
+		} else {
+			// Older Workers can emit only the Waiting line.
+			for _, line := range acceptWaitingRe.FindAllStringSubmatch(reply.Text, -1) {
+				text := strings.TrimSpace(line[1])
+				switch strings.ToLower(text) {
+				case "", "none", "n/a", "-", "—", "无": // i18n-ignore: matches the original report text
+				default:
+					outstanding = append(outstanding, text)
+				}
+			}
+		}
+		for _, text := range outstanding {
+			if strings.Contains(deferred, text) {
+				continue
+			}
+			if v := t.Supervision; v != nil && v.Investigation != nil &&
+				slices.ContainsFunc(v.Investigation.Items, func(f recordedFinding) bool { return f.Summary == text || f.Next == text }) &&
+				s.investigationTransitionError(ctx, t, v, nil) == nil {
+				continue
+			}
+			return fmt.Errorf("accepted refused: Closeout Missing/Waiting lists unfinished follow-up %q. Use needs_user, link this text in deferred_scope to an open follow-up to-do, or record it as a finding with a verified disposition.", text)
+		}
+	}
+	return nil
 }

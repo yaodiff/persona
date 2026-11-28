@@ -129,6 +129,6 @@ describe("machine metric summaries", () => {
     expect(cells(host)).toHaveLength(4);
     expect(host.querySelectorAll("svg")).toHaveLength(4);
     expect(host.textContent).toContain("25/分");
-    expect(host.textContent).toContain("今天 1K");
+    expect(host.textContent).toContain("今日 1K");
   });
 });

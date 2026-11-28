@@ -6,7 +6,7 @@ import { startFailure, useFeed } from "../../lib/feed";
 import { plainMarkdown } from "../../lib/plain-markdown";
 import { getState, useStore } from "../../lib/store";
 import type { Session } from "../../lib/types";
-import { dockAgents, isRemovable, mostUrgentAgent, openAsk, type Todo, type TodoStatus } from "../../lib/todos";
+import { dockAgents, isRemovable, mostUrgentAgent, openAsk, todoSupervisorLabel, type Todo, type TodoStatus } from "../../lib/todos";
 import { usageLimitLabel } from "../../lib/usage-limit";
 import { sessionTitle } from "../../lib/format";
 import { stateName } from "../../lib/state-labels";
@@ -75,7 +75,7 @@ export function TaskBoard({ open, conversation, onClose }: { open: boolean; conv
     const limit = status === "usage_limit" ? (usageLimitLabel(lead) ?? t("lib-usage-limit.short")) : undefined;
     // what its result waits on from the user (#2056), before its agent's last step
     const verdict = openAsk(todo)?.verdict;
-    const now = failure ?? ask ?? limit ?? verdict ?? progressOf(lead)?.text;
+    const now = failure ?? ask ?? limit ?? todoSupervisorLabel(todo, status, lookup) ?? verdict ?? progressOf(lead)?.text;
     return [where, now].filter(Boolean).join(" · ");
   };
   return (
@@ -113,7 +113,7 @@ export function TaskBoard({ open, conversation, onClose }: { open: boolean; conv
                       </span>
                       <span className="flex min-w-0 flex-1 flex-col gap-0.5">
                         <span className="truncate text-[13.5px] font-medium text-ink">{todo.title}</span>
-                        {sec.key !== "parked" && <span className="truncate text-[12px] text-ink-3">{subtitle(todo, status)}</span>}
+                        {todo.wait == null && sec.key !== "parked" && <span className="truncate text-[12px] text-ink-3">{subtitle(todo, status)}</span>}
                       </span>
                       <Icon name="chevronRight" size={13} className="shrink-0 text-ink-3" />
                     </button>
@@ -121,8 +121,8 @@ export function TaskBoard({ open, conversation, onClose }: { open: boolean; conv
                       <IconButton icon="trash" label={t("assistant-task-actions.board_remove", { title: todo.title })} onClick={() => removeTaskNow(todo)} className="mr-1.5" />
                     )}
                     </div>
-                    {sec.key === "parked" &&
-                      <div className="px-3 pb-2.5"><TaskWaitInfo todo={todo} merges={openMergePRs(todo, Date.now())} /></div>}
+                    {(todo.wait != null || sec.key === "parked") &&
+                      <div className="px-3 pb-2.5"><TaskWaitInfo todo={todo} merges={todo.wait == null ? openMergePRs(todo, Date.now()) : undefined} /></div>}
                   </div>
                 ))}
                 {sec.agents.map(({ session: s, state }) => (

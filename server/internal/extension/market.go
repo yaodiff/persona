@@ -115,8 +115,13 @@ func MarketID(s MarketSpec) string {
 // Market is a registered market with what reading it needs.
 type Market struct {
 	Spec MarketSpec
+	// HubBuild selects the compatible releases when the market is read.
+	HubBuild int64
 	// TrustedKey is supplied by the hub to pin the market's trust at preview time; it is not a download credential.
 	TrustedKey string
+	// TrustedKeys are a private market's owner-configured public keys (MarketRecord.TrustedKeys); ignored for the
+	// official market, whose key is compiled in.
+	TrustedKeys []string
 	// Token, when set, is sent to the market's own origin only (a private repository or site).
 	Token string
 	// Client, GitHubAPI, GitHubRaw and GitHubWeb: tests replace them. With GitHubAPI replaced and GitHubRaw not, a
@@ -202,6 +207,10 @@ type MarketRecord struct {
 	// SigningKey is a legacy stored official pin. Unofficial pins are cleared on load;
 	// official verification uses the compiled-in key and quarantines unrecognized pins.
 	SigningKey string `json:"-"`
+	// TrustedKeys are the public keys ("ed25519:<base64>") the owner configured for a private market: when there are
+	// any, its catalog must be signed by one of them, and installs and upgrades from it are verified like the official
+	// market's (docs/extensions/extensions.md "Private market keys"). Always empty for the official market.
+	TrustedKeys []string `json:"-"`
 	// Signature is the state of the index last read.
 	Signature MarketSignature `json:"signature"`
 }

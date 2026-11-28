@@ -62,20 +62,20 @@ afterEach(async () => {
 describe("the plan card's schedule grant", () => {
   it("names the scheduled task, falls back to plain words, and is absent from other plans", () => {
     expect(planSchedule(plan([scheduled()]))).toEqual({ id: "t1", name: "每周周报" });
-    expect(planSchedule(plan([scheduled({ schedule_title: " " })]))?.name).toBe("这个定时任务");
+    expect(planSchedule(plan([scheduled({ schedule_title: " " })]))?.name).toBe("此定时任务");
     expect(planSchedule(plan([task()]))).toBeNull();
   });
 
   it("is not drawn for a plan no scheduled task made: the card is as before", async () => {
     await render(plan([task()]));
     expect(checkboxes()).toHaveLength(1);
-    expect(host.textContent).not.toContain("自己开始这类任务");
+    expect(host.textContent).not.toContain("自动启动此类任务");
   });
 
   it("is not drawn when every task only reads (those start without asking anyway)", async () => {
     await render(plan([scheduled({ readonly: true })]));
     expect(checkboxes()).toHaveLength(0);
-    expect(host.textContent).not.toContain("自己开始这类任务");
+    expect(host.textContent).not.toContain("自动启动此类任务");
   });
 
   it("is drawn unticked under Start these directly, with what it covers", async () => {
@@ -84,9 +84,9 @@ describe("the plan card's schedule grant", () => {
     const box = grantBox();
     expect(box).toBe(checkboxes()[1]);
     expect(box!.checked).toBe(false);
-    expect(host.textContent).toContain("让「每周周报」以后自己开始这类任务");
+    expect(host.textContent).toContain("允许「每周周报」今后自动启动此类任务");
     const note = document.getElementById(box!.getAttribute("aria-describedby")!);
-    expect(note?.textContent).toContain("读过邮件、收件箱或网页的那次不会自动开始");
+    expect(note?.textContent).toContain("若当次运行读取过邮件、收件箱或网页，则不会自动启动");
   });
 
   it("sends schedule_grant only when ticked, independent of remember", async () => {

@@ -89,6 +89,6 @@ describe("the space page", () => {
   it("says so when the space is gone, with a way back to the machine", () => {
     const html = render([agent("idle")], [], "nope");
     expect(html).toContain("找不到这个空间");
-    expect(html).toContain("回到机器");
+    expect(html).toContain("返回机器");
   });
 });

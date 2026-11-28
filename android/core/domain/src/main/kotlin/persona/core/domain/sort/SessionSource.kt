@@ -131,8 +131,11 @@ fun Session.resumeCommand(cwd: String = this.cwd, id: String = sourceThreadId?.t
     return (cwd.takeIf(String::isNotBlank)?.let { "cd -- ${quote(it)} && " } ?: "") + "$command ${quote(id)}"
 }
 
-/** Where an agent was opened (#2526): a botmux session is a Feishu group's topic, a herdr or Tern pane a terminal. */
-enum class AgentSource { Feishu, Terminal }
+/**
+ * Where an agent was opened (#2526): a botmux session is a Feishu group's topic, a terminal engine's pane (herdr, Herdr App,
+ * Orca, Tern, Rex) a terminal, an Orca chat (Orca's own, with no terminal) a desktop app (#17054, the web's `sessionSource`).
+ */
+enum class AgentSource { Feishu, Terminal, Desktop }
 
 /**
  * The terminal host a pane id names (`orca:…`, `tern:…`, `botmux:…`), herdr for a bare id; empty without a pane (web
@@ -149,13 +152,17 @@ val Session.isBotmux: Boolean get() = hostKind == "botmux"
 val Session.isTern: Boolean get() = hostKind == "tern"
 /** A pane of Rex: its tab is renamed in Rex, not herdr (the rename dialogs say so, as on iOS). */
 val Session.isRex: Boolean get() = hostKind == "rex"
-/** Null for the rest (Orca, runtimes, apps), which carry no source label (iOS `Session.source`). */
+/** Null for the rest (other runtimes and apps), which carry no source label (iOS `Session.source`). */
 val Session.agentSource: AgentSource?
-    get() = when (hostKind) {
-        "botmux" -> AgentSource.Feishu
-        "herdr", "herdr-core", "tern", "rex" -> AgentSource.Terminal
+    get() = when {
+        isOrcaChat -> AgentSource.Desktop
+        hostKind == "botmux" -> AgentSource.Feishu
+        hostKind in TERMINAL_HOSTS -> AgentSource.Terminal
         else -> null
     }
+private val TERMINAL_HOSTS = setOf("herdr", "herdr-core", "orca", "tern", "rex")
+/** An Orca chat: Orca's own conversation around an agent, listed by the node's Orca bridge with no terminal (#17054). */
+val Session.isOrcaChat: Boolean get() = sourceKind == "runtime" && sourceInstanceId == "orca"
 // The kinds a pane id may be prefixed with: keep in step with Kinds in server/internal/host/host.go.
 private val HOST_KINDS = setOf("orca", "herdr-core", "tern", "rex", "botmux")
 

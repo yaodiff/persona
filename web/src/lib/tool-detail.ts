@@ -72,6 +72,12 @@ export function secretHandoffInput(input: Record<string, unknown> | undefined): 
   return { variables, store: input?.store_operation === "create" || input?.store_operation === "edit", agent: s(input?.agent), machine: s(input?.machine_name), cwd: s(input?.cwd), prompt: s(input?.prompt) };
 }
 
+/** A command an Agent runs that stopped at a prompt (`command_input`, #14527): the owner types the line it waits for,
+ *  and the line goes straight into the command, never through the model. Its card is views/chat/CommandInputCard.tsx. */
+export function isCommandInput(ix: Pick<Interaction, "kind" | "tool_name">): boolean {
+  return ix.kind === "permission" && ix.tool_name === "command_input";
+}
+
 /** A password card's computer, purpose, delivery and commands, the commands exactly as sent. */
 export function secretRunInput(input: Record<string, unknown> | undefined): { machine: string; purpose: string; delivery: "stdin" | "env"; commands: string[] } {
   const commands = Array.isArray(input?.commands) ? input.commands.filter((c): c is string => typeof c === "string" && c.trim() !== "") : [];

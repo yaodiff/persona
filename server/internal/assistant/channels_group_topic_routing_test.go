@@ -61,7 +61,7 @@ func TestChannelThreadModeAndIdleHoursAPIRoundTripAndValidation(t *testing.T) {
 	})
 	s := newServiceOn(t, f, st)
 
-	// Default GET detail exposes thread_mode=channel_default and thread_idle_hours=0.
+	// A thread-capable plugin defaults to per-topic routing with the standard idle timeout.
 	rec := channelAPIRequest(t, s, http.MethodGet, "/api/v1/channels/examplechat", "full", "")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("GET detail: %d %s", rec.Code, rec.Body.String())
@@ -70,7 +70,7 @@ func TestChannelThreadModeAndIdleHoursAPIRoundTripAndValidation(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &detail); err != nil {
 		t.Fatal(err)
 	}
-	if detail.ThreadMode != channel.ThreadModeChannelDefault || detail.ThreadIdleHours != 0 {
+	if detail.ThreadMode != channel.ThreadModePerTopic || detail.ThreadIdleHours != 0 {
 		t.Fatalf("default detail: thread_mode=%q thread_idle_hours=%d", detail.ThreadMode, detail.ThreadIdleHours)
 	}
 
@@ -168,9 +168,10 @@ func TestChannelThreadModeAndIdleHoursAPIRoundTripAndValidation(t *testing.T) {
 
 func TestChannelRoutingGatedByIntegrationsV2AndLosslessRollback(t *testing.T) {
 	s, f, _ := threadsChannelService(t, true)
+	setIntegrationsV2(t, s, false)
 	ctx := context.Background()
-	now := time.Date(2026, 11, 24, 12, 0, 0, 0, time.UTC)
-	s.chans.now = func() time.Time { return now }
+	clock := &fakeClock{now: time.Date(2026, 11, 24, 12, 0, 0, 0, time.UTC)}
+	s.setChannelTestClock(clock.Now)
 
 	// Configure thread_mode and thread_idle_hours while integrations_v2 is OFF.
 	rec := channelAPIRequest(t, s, http.MethodPut, "/api/v1/channels/examplechat", "full",
@@ -203,7 +204,7 @@ func TestChannelRoutingGatedByIntegrationsV2AndLosslessRollback(t *testing.T) {
 		proto.Session{SessionID: "m1", MachineID: "server", Assistant: true},
 		proto.Session{SessionID: legacySess, MachineID: "server", Assistant: true},
 	)
-	now = now.Add(2 * time.Hour)
+	clock.advance(2 * time.Hour)
 	if err := s.channelForward(ctx, "examplechat", channel.Message{
 		ID: "off_legacy_2", Text: "legacy 2", ChatID: "oc_g1", ChatKind: channel.ChatKindGroup, Thread: "legacy:t1",
 	}); err != nil {
@@ -241,7 +242,7 @@ func TestChannelRoutingGatedByIntegrationsV2AndLosslessRollback(t *testing.T) {
 	if detail.ThreadMode != channel.ThreadModePerGroupAndTopic || detail.ThreadIdleHours != 1 {
 		t.Fatalf("rollback lost persisted settings: mode=%q idle=%d", detail.ThreadMode, detail.ThreadIdleHours)
 	}
-	now = now.Add(5 * time.Hour) // > 1h idle, still < 30d
+	clock.advance(5 * time.Hour) // > 1h idle, still < 30d
 	if err := s.channelForward(ctx, "examplechat", channel.Message{
 		ID: "off_again_legacy", Text: "back to legacy", Thread: "legacy:t1",
 	}); err != nil {
@@ -256,8 +257,8 @@ func TestChannelRoutingGatedByIntegrationsV2AndLosslessRollback(t *testing.T) {
 	rec = channelAPIRequest(t, s, http.MethodGet, "/api/v1/channels/examplechat", "full", "")
 	detail = channel.Detail{}
 	_ = json.Unmarshal(rec.Body.Bytes(), &detail)
-	if detail.TargetOverride == nil || detail.TargetOverride.Mode != channel.TargetOverrideTopics {
-		t.Fatalf("integrations_v2=true per_group_and_topic target_override = %+v, want topics", detail.TargetOverride)
+	if detail.TargetOverride == nil || detail.TargetOverride.Mode != channel.TargetOverrideGroupsAndTopics {
+		t.Fatalf("integrations_v2=true per_group_and_topic target_override = %+v, want groups_and_topics", detail.TargetOverride)
 	}
 	if err := s.channelForward(ctx, "examplechat", channel.Message{
 		ID: "on_again_rotated", Text: "rotated group", ChatID: "oc_g1", ChatKind: channel.ChatKindGroup,
@@ -287,26 +288,21 @@ func TestChannelRoutingModesWhenIntegrationsV2Enabled(t *testing.T) {
 		setIntegrationsV2(t, s, true)
 		ctx := context.Background()
 
-		// Both unset (default) and explicit channel_default send everything to channel target m1.
-		for _, mode := range []channel.ThreadMode{"", channel.ThreadModeChannelDefault} {
-			if mode != "" {
-				rec := channelAPIRequest(t, s, http.MethodPut, "/api/v1/channels/examplechat", "full", `{"thread_mode":"channel_default"}`)
-				if rec.Code != http.StatusOK {
-					t.Fatalf("PUT channel_default: %d %s", rec.Code, rec.Body.String())
-				}
+		rec := channelAPIRequest(t, s, http.MethodPut, "/api/v1/channels/examplechat", "full", `{"thread_mode":"channel_default"}`)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("PUT channel_default: %d %s", rec.Code, rec.Body.String())
+		}
+		for _, msg := range []channel.Message{
+			{ID: "d1", Text: "direct", ChatID: "oc_dm", ChatKind: channel.ChatKindDirect},
+			{ID: "g1", Text: "group", ChatID: "oc_g1", ChatKind: channel.ChatKindGroup},
+			{ID: "t1", Text: "topic", ChatID: "oc_g1", ChatKind: channel.ChatKindTopic, TopicID: "omt_1"},
+			{ID: "l1", Text: "legacy", Thread: "legacy:t1"},
+		} {
+			if err := s.channelForward(ctx, "examplechat", msg); err != nil {
+				t.Fatalf("%s: %v", msg.ID, err)
 			}
-			for _, msg := range []channel.Message{
-				{ID: "d1_" + string(mode), Text: "direct", ChatID: "oc_dm", ChatKind: channel.ChatKindDirect},
-				{ID: "g1_" + string(mode), Text: "group", ChatID: "oc_g1", ChatKind: channel.ChatKindGroup},
-				{ID: "t1_" + string(mode), Text: "topic", ChatID: "oc_g1", ChatKind: channel.ChatKindTopic, TopicID: "omt_1"},
-				{ID: "l1_" + string(mode), Text: "legacy", Thread: "legacy:t1"},
-			} {
-				if err := s.channelForward(ctx, "examplechat", msg); err != nil {
-					t.Fatalf("%s: %v", msg.ID, err)
-				}
-				if f.sent() != 0 || lastSendOnceSession(f) != "m1" {
-					t.Fatalf("mode=%q msg=%s: starts=%d session=%q, want 0 starts and m1", mode, msg.ID, f.sent(), lastSendOnceSession(f))
-				}
+			if f.sent() != 0 || lastSendOnceSession(f) != "m1" {
+				t.Fatalf("msg=%s: starts=%d session=%q, want 0 starts and m1", msg.ID, f.sent(), lastSendOnceSession(f))
 			}
 		}
 	})
@@ -500,8 +496,8 @@ func TestChannelThreadIdleHoursRotationAndPruning(t *testing.T) {
 	s, f, _ := threadsChannelService(t, true)
 	setIntegrationsV2(t, s, true)
 	ctx := context.Background()
-	now := time.Date(2026, 11, 24, 0, 0, 0, 0, time.UTC)
-	s.chans.now = func() time.Time { return now }
+	clock := &fakeClock{now: time.Date(2026, 11, 24, 0, 0, 0, 0, time.UTC)}
+	s.setChannelTestClock(clock.Now)
 
 	rec := channelAPIRequest(t, s, http.MethodPut, "/api/v1/channels/examplechat", "full",
 		`{"thread_mode":"per_group_and_topic","thread_idle_hours":2}`)
@@ -528,7 +524,7 @@ func TestChannelThreadIdleHoursRotationAndPruning(t *testing.T) {
 	)
 
 	// t=1h: within 2h -> continues s1 and refreshes At to t=1h.
-	now = now.Add(time.Hour)
+	clock.advance(time.Hour)
 	if err := s.channelForward(ctx, "examplechat", groupMsg("m2")); err != nil {
 		t.Fatal(err)
 	}
@@ -537,7 +533,7 @@ func TestChannelThreadIdleHoursRotationAndPruning(t *testing.T) {
 	}
 
 	// t=2h30m: 1h30m since m2 -> still within 2h, continues s1 and refreshes At to t=2h30m.
-	now = now.Add(90 * time.Minute)
+	clock.advance(90 * time.Minute)
 	if err := s.channelForward(ctx, "examplechat", groupMsg("m3")); err != nil {
 		t.Fatal(err)
 	}
@@ -546,7 +542,7 @@ func TestChannelThreadIdleHoursRotationAndPruning(t *testing.T) {
 	}
 
 	// t=4h31m: 2h01m since m3 -> exceeds 2h idle timeout, rotates to a new conversation s2.
-	now = now.Add(2*time.Hour + time.Minute)
+	clock.advance(2*time.Hour + time.Minute)
 	if err := s.channelForward(ctx, "examplechat", groupMsg("m4")); err != nil {
 		t.Fatal(err)
 	}
@@ -565,14 +561,14 @@ func TestChannelThreadIdleHoursRotationAndPruning(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("PUT 0: %d %s", rec.Code, rec.Body.String())
 	}
-	now = now.Add(10 * 24 * time.Hour)
+	clock.advance(10 * 24 * time.Hour)
 	if err := s.channelForward(ctx, "examplechat", groupMsg("m5")); err != nil {
 		t.Fatal(err)
 	}
 	if f.sent() != 2 || lastSendOnceSession(f) != s2 {
 		t.Fatalf("m5 at +10d with idle=0: starts=%d session=%q want %q", f.sent(), lastSendOnceSession(f), s2)
 	}
-	now = now.Add(channelThreadsKeepFor + time.Minute)
+	clock.advance(channelThreadsKeepFor + time.Minute)
 	if err := s.channelForward(ctx, "examplechat", groupMsg("m6")); err != nil {
 		t.Fatal(err)
 	}
@@ -586,8 +582,8 @@ func TestChannelThreadIdleHoursRotationAndPruning(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("PUT 1000: %d %s", rec.Code, rec.Body.String())
 	}
-	now = now.Add(35 * 24 * time.Hour) // 840h: > 30d (720h), < 1000h
-	s.bindChannelThread("examplechat", channelGroupRouteKey("oc_other"), "server", "s_other")
+	clock.advance(35 * 24 * time.Hour) // 840h: > 30d (720h), < 1000h
+	s.seedThreadBinding("examplechat", channelGroupRouteKey("oc_other"), "server", "s_other")
 	if got := boundThread(s, groupKey); got != s3 {
 		t.Fatalf("binding with 1000h timeout was pruned at 35d: got %q want %q", got, s3)
 	}

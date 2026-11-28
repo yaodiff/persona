@@ -181,6 +181,14 @@ class AutoreleaseTests(unittest.TestCase):
         return [entry for entry in self.entries(self.action_log)
                 if entry["kind"] == "action" and (target is None or entry["target"] == target)]
 
+    def proc_zombie_or_gone(self, pid):
+        """Read a Linux child's state, accepting a disappearance between the liveness check and open."""
+        try:
+            os.kill(pid, 0)
+            return Path(f"/proc/{pid}/stat").read_text().split()[2] == "Z"
+        except (ProcessLookupError, FileNotFoundError):
+            return True
+
     def wait_for(self, predicate, timeout=5):
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
@@ -475,15 +483,22 @@ class AutoreleaseTests(unittest.TestCase):
         self.assertEqual(failure.exception.summary_hash, expected)
         pid = int(pid_file.read_text())
 
-        def gone():
-            try:
-                os.kill(pid, 0)
-            except ProcessLookupError:
-                return True
-            status = Path(f"/proc/{pid}/stat")
-            return status.exists() and status.read_text().split()[2] == "Z"
+        self.wait_for(lambda: self.proc_zombie_or_gone(pid))
 
-        self.wait_for(gone)
+    @unittest.skipIf(os.name == "nt", "procfs process states are Linux-specific")
+    def test_process_disappears_before_its_proc_stat_is_read(self):
+        status = self.root / "proc-stat"
+        with patch.object(os, "kill", return_value=None), \
+                patch.object(Path, "read_text", side_effect=ProcessLookupError):
+            self.assertTrue(self.proc_zombie_or_gone(12345))
+        status.write_text("12345 (fixture) S 1 1 1\n")
+        with patch.object(os, "kill", return_value=None), \
+                patch.object(Path, "read_text", return_value=status.read_text()):
+            self.assertFalse(self.proc_zombie_or_gone(12345))
+        status.write_text("12345 (fixture) Z 1 1 1\n")
+        with patch.object(os, "kill", return_value=None), \
+                patch.object(Path, "read_text", return_value=status.read_text()):
+            self.assertTrue(self.proc_zombie_or_gone(12345))
 
     def test_worker_recovery_is_durable_before_interrupted_action(self):
         config = autorelease.load_config(self.config_path)

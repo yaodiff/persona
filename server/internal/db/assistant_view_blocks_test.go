@@ -17,9 +17,6 @@ func TestAssistantInlineBlockProvenanceAndReplay(t *testing.T) {
 	ctx := context.Background()
 	at := time.Now().UTC()
 	conversation := "inline-db"
-	if _, err := d.pool.Exec(ctx, `TRUNCATE assistant_view_blocks,assistant_view_errors,assistant_view_error_marks,assistant_view_actions,assistant_views,assistant_feed`); err != nil {
-		t.Fatal(err)
-	}
 	b := AssistantViewBlockRow{Conversation: conversation, MachineID: "example-machine", ItemID: "item#0", Index: 1, Key: wire.AssistantBlockKey("item#0", 1), View: json.RawMessage(`{"fallback":"Original","sections":[]}`), CreatedAt: at}
 	if _, err := d.RegisterAssistantViewBlock(ctx, b); err != nil {
 		t.Fatal(err)
@@ -56,9 +53,6 @@ func TestAssistantInlineActionAndErrorFeedback(t *testing.T) {
 	ctx := context.Background()
 	at := time.Now().UTC()
 	conversation := "inline-action-db"
-	if _, err := d.pool.Exec(ctx, `TRUNCATE assistant_view_blocks,assistant_view_errors,assistant_view_error_marks,assistant_view_actions,assistant_views,assistant_feed`); err != nil {
-		t.Fatal(err)
-	}
 	b := AssistantViewBlockRow{Conversation: conversation, MachineID: "example-machine", ItemID: "item#0", Index: 0, Key: "item#0/0", View: json.RawMessage(`{"fallback":"Original","sections":[]}`), CreatedAt: at}
 	if _, err := d.RegisterAssistantViewBlock(ctx, b); err != nil {
 		t.Fatal(err)
@@ -107,9 +101,6 @@ func TestAssistantInlineActionAndErrorFeedback(t *testing.T) {
 func TestAssistantViewErrorsPeekAndAck(t *testing.T) {
 	d := open(t)
 	ctx := context.Background()
-	if _, err := d.pool.Exec(ctx, `TRUNCATE assistant_view_errors,assistant_view_error_marks`); err != nil {
-		t.Fatal(err)
-	}
 	const conv, machine = "errors-conv", "example-machine"
 	at := time.Now().UTC().Add(-time.Hour)
 	record := func(conversation, m, item string, errs []string, at time.Time) {
@@ -197,7 +188,7 @@ func TestAssistantViewErrorsPeekAndAck(t *testing.T) {
 		t.Fatalf("empty conversation %+v", got)
 	}
 	// Recorded problems survive a new connection (a hub restart).
-	d2 := open(t)
+	d2 := connectTestDB(t)
 	if got, err := d2.PeekAssistantViewErrors(ctx, conv, machine, 5); err != nil || len(got) != 1 || got[0].ItemID != "c" {
 		t.Fatalf("after reopen %+v %v", got, err)
 	}
@@ -208,9 +199,6 @@ func TestAssistantViewErrorsPeekAndAck(t *testing.T) {
 func TestAssistantViewErrorsPassMarkOrdersLateRecords(t *testing.T) {
 	d := open(t)
 	ctx := context.Background()
-	if _, err := d.pool.Exec(ctx, `TRUNCATE assistant_view_errors,assistant_view_error_marks`); err != nil {
-		t.Fatal(err)
-	}
 	const machine = "example-machine"
 	t1 := time.Now().UTC().Add(-time.Hour).Truncate(time.Microsecond)
 	t2, t3 := t1.Add(time.Minute), t1.Add(2*time.Minute)
@@ -251,7 +239,7 @@ func TestAssistantViewErrorsPassMarkOrdersLateRecords(t *testing.T) {
 		t.Fatalf("after an older pass %v", got)
 	}
 	// The mark outlives the connection (a hub restart).
-	d2 := open(t)
+	d2 := connectTestDB(t)
 	record(d2, "late", "t1c", []string{"x"}, t1)
 	if got := peek(d2, "late"); len(got) != 1 || got[0] != "t3" {
 		t.Fatalf("after reopen %v", got)
@@ -295,9 +283,6 @@ func TestAssistantViewErrorsPassMarkOrdersLateRecords(t *testing.T) {
 func TestAssistantViewErrorsSameItemValidAndInvalidDoNotDeadlock(t *testing.T) {
 	d := open(t)
 	ctx := context.Background()
-	if _, err := d.pool.Exec(ctx, `TRUNCATE assistant_view_errors,assistant_view_error_marks`); err != nil {
-		t.Fatal(err)
-	}
 	const machine = "example-machine"
 	at := time.Now().UTC().Add(-time.Hour).Truncate(time.Microsecond)
 	for i := range 6 {
@@ -357,7 +342,7 @@ func TestAssistantViewErrorsSameItemValidAndInvalidDoNotDeadlock(t *testing.T) {
 		}
 	}
 	// Left to themselves, with acks of the same reply in between, over two pools: never an error.
-	d2 := open(t)
+	d2 := connectTestDB(t)
 	for i := range 40 {
 		conv := fmt.Sprintf("same-item-free-%d", i)
 		if err := d.RecordAssistantViewErrors(ctx, conv, machine, "item", []string{"a"}, at); err != nil {

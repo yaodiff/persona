@@ -33,7 +33,7 @@ MID = "macbook"
 SID = "a1f3c2d4-0000-4000-8000-000000000001"
 UA = ("Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 "
       "(KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1")
-KEYS = "在预览里输入"  # the panel's keys field (preview.keyboard_label)
+KEYS = "在预览中输入"  # the panel's keys field (preview.keyboard_label)
 
 # iOS: a focused text field raises the keyboard, which shrinks only the visual viewport. A stand-in the page follows
 # (as web_mobile_input_e2e.py's), up while a text field has focus; __raised counts how often it came up.
@@ -91,7 +91,7 @@ def run(browser, base, hub, token, size, theme, shots, full):
             page.screenshot(path=os.path.join(shots, f"preview-{size}-{theme}-{name}.png"))
 
     def open_panel(mode):
-        mock(hub, token, "?mode=" + mode)
+        mock(hub, token, "?mode=" + mode + "&origin=0")
         page.evaluate(f"sessionStorage.clear()")
         page.goto(f"{base}/s/{MID}/{SID}")
         # ⋯ › Preview: the item is there once the hub's hello said preview, a moment after the page loads
@@ -102,9 +102,14 @@ def run(browser, base, hub, token, size, theme, shots, full):
                 item.wait_for(timeout=1000)
             except PlaywrightTimeout:
                 page.keyboard.press("Escape")
+                page.wait_for_timeout(150)
                 continue
             item.click()
-            break
+            try:
+                panel.wait_for(timeout=3000)
+                break
+            except PlaywrightTimeout:
+                continue
         else:
             fail(f"{tag}: the ⋯ menu has no Preview")
         expect(panel).to_be_visible()
@@ -128,35 +133,94 @@ def run(browser, base, hub, token, size, theme, shots, full):
     addr.press("Enter")
     expect(addr).to_have_value("/settings")
     page.wait_for_timeout(1500)
-    if not any(m.get("t") == "nav" and m.get("url") == "/settings" for m in mock(hub, token)["log"]):
-        fail(f"{tag}: the address went to the node as {mock(hub, token)['log'][-3:]}")
-    ok(f"{tag}: the address bar navigates")
+    snap = mock(hub, token)
+    if not any(m.get("t") == "nav" and m.get("url") == "/settings" for m in snap["log"]):
+        fail(f"{tag}: the address went to the node as {snap['log'][-3:]}")
+    if not any(m.get("t") == "features" and m.get("select") and m.get("png") for m in snap["log"]):
+        fail(f"{tag}: ready did not advertise features {{select: true, png: true}}")
+    ok(f"{tag}: the address bar navigates and features advertised")
     shot("settings")
+
+    # native <select> popup: real mouse pick, real keyboard pick (skipping disabled), and Esc dismiss
+    cbox = canvas.bounding_box()
+    last_w = next((m["w"] for m in reversed(snap["log"]) if m.get("t") == "size"), None) or next(m["open"]["w"] for m in reversed(snap["log"]) if "open" in m)
+    last_h = next((m["h"] for m in reversed(snap["log"]) if m.get("t") == "size"), None) or next(m["open"]["h"] for m in reversed(snap["log"]) if "open" in m)
+    sel_x = max(0.0, (last_w - 760.0) / 2.0) + 22.0 + 80.0
+    sel_y = 154.0 + 19.0
+    click_x = cbox["x"] + sel_x * (cbox["width"] / last_w)
+    click_y = cbox["y"] + sel_y * (cbox["height"] / last_h)
+    page.mouse.click(click_x, click_y)
+    listbox = page.locator("[data-preview-select][role='listbox']")
+    expect(listbox).to_be_visible()
+    expect(listbox.locator("[data-preview-select-group]")).to_have_text(["Workspace", "Automation"])
+    expect(listbox.get_by_role("option", name="Owner (managed)", exact=True)).to_have_attribute("aria-disabled", "true")
+    expect(listbox.get_by_role("option", name="Editor", exact=True)).to_have_attribute("aria-selected", "true")
+    shot("select-open")
+
+    acks_before = mock(hub, token)["acks"]
+    listbox.get_by_role("option", name="Viewer", exact=True).click()
+    expect(listbox).to_have_count(0)
+    page.wait_for_timeout(1200)
+    after_mouse = mock(hub, token)
+    if after_mouse["select"]["value"] != 1 or not any(m.get("t") == "select_choose" and m.get("index") == 1 for m in after_mouse["log"]):
+        fail(f"{tag}: mouse select did not choose Viewer: {after_mouse['select']}")
+    if after_mouse["acks"] <= acks_before:
+        fail(f"{tag}: updated PNG frame was not acknowledged after mouse select")
+    ok(f"{tag}: native <select> mouse pick updates value to Viewer and acks frame")
+
+    # Keyboard reopen (Space while select keeps focus), ArrowDown skips disabled Owner -> Reviewer, Enter chooses
+    page.keyboard.press("Space")
+    expect(listbox).to_be_visible()
+    expect(listbox.get_by_role("option", name="Viewer", exact=True)).to_have_attribute("aria-selected", "true")
+    page.keyboard.press("ArrowDown")
+    page.keyboard.press("Enter")
+    expect(listbox).to_have_count(0)
+    page.wait_for_timeout(1200)
+    after_key = mock(hub, token)
+    if after_key["select"]["value"] != 3 or not any(m.get("t") == "select_choose" and m.get("index") == 3 for m in after_key["log"]):
+        fail(f"{tag}: keyboard select did not skip disabled and choose Reviewer: {after_key['select']}")
+    ok(f"{tag}: native <select> keyboard pick skips disabled and updates value to Reviewer")
+
+    # Esc closes popup, sends select_close, preserves value and keeps panel open
+    n_esc = len(after_key["log"])
+    page.keyboard.press("Space")
+    expect(listbox).to_be_visible()
+    page.keyboard.press("Escape")
+    expect(listbox).to_have_count(0)
+    expect(panel).to_be_visible()
+    after_esc = mock(hub, token)
+    if not any(m.get("t") == "select_close" for m in after_esc["log"][n_esc:]) or after_esc["select"]["value"] != 3:
+        fail(f"{tag}: Esc did not dismiss select cleanly: {after_esc['log'][n_esc:]}")
+    ok(f"{tag}: native <select> Esc dismisses cleanly without closing panel")
 
     if not narrow or full:
         # picking an element and commenting on it
-        panel.get_by_role("button", name="选一个元素来评论").click()
+        panel.get_by_role("button", name="选择页面元素进行评论").click()
         expect(page.locator("[data-preview-picking]")).to_be_visible()
         page.wait_for_timeout(1500)
         shot("picking")
         box = canvas.bounding_box()
         page.mouse.click(box["x"] + box["width"] * 0.8, box["y"] + box["height"] * 0.5)
-        line = page.locator("[data-line-box]")
+        line = page.get_by_role("dialog", name="你的评论")
         expect(line).to_be_visible()
         expect(line).to_contain_text("button.save")
         line.locator("textarea").fill("把按钮改成主色，和别处一致")
         shot("comment-box")
-        line.get_by_role("button", name="添加").click()
-        card = page.locator("[data-comment-card]").first
-        expect(card).to_contain_text("button.save")
-        expect(card).to_contain_text("/settings")
+        line.get_by_role("button", name="保存评论").click()
+        chip = page.get_by_role("button", name="1 条评论")
+        expect(chip).to_be_visible()
+        chip.click()
+        popover = page.locator("[data-comment-popover]")
+        expect(popover).to_contain_text("button.save")
+        expect(popover).to_contain_text("/settings")
         ok(f"{tag}: a picked element becomes a comment above the message box")
         shot("commented")
+        page.keyboard.press("Escape")
 
         # a screenshot into the message box
         panel.get_by_role("button", name="截图").click()
         page.get_by_role("menuitem", name="可见区域").click()
-        expect(page.get_by_text("截图已加到消息里")).to_be_visible()
+        expect(page.get_by_text("截图已添加到消息中")).to_be_visible()
         ok(f"{tag}: a screenshot lands in the message box")
         shot("screenshot")
 
@@ -209,13 +273,13 @@ def run(browser, base, hub, token, size, theme, shots, full):
         fail(f"{tag}: start asked {start}")
     ok(f"{tag}: Start runs the confirmed entry in the session's workspace, and the page shows once it answers")
 
-    for mode, text, name in (("none", "还没有开发服务器", "empty"), ("old", "更新这台电脑后才能预览", "old")):
+    for mode, text, name in (("none", "暂无开发服务器", "empty"), ("old", "更新这台电脑后才能预览", "old")):
         open_panel(mode)
         expect(panel).to_contain_text(text)
         ok(f"{tag}: {name}")
         shot(name)
     open_panel("nobrowser")
-    expect(panel).to_contain_text("MacBook 上没有能用来预览的浏览器")
+    expect(panel).to_contain_text("MacBook 上未找到可用于预览的浏览器")
     ok(f"{tag}: no browser on the computer")
     shot("nobrowser")
     mock(hub, token, "?mode=1")
@@ -227,7 +291,7 @@ def phone_touch(browser, base, hub, token, shots, w=390, h=844, theme="light"):
     keyboard stays down and the page keeps its size; a tap clicks the page and focuses the field once the finger lifts.
     Only taps and CDP touches here: one mouse event would make the page treat this as a computer with a mouse."""
     tag = f"phone {w}/{theme}"
-    mock(hub, token, "?mode=1")
+    mock(hub, token, "?mode=1&origin=0")
     ctx = browser.new_context(viewport={"width": w, "height": h}, device_scale_factor=3, is_mobile=True, has_touch=True,
                               user_agent=UA, locale="zh-CN")
     ctx.add_init_script(IOS_KEYBOARD)
@@ -303,7 +367,7 @@ def phone_touch(browser, base, hub, token, shots, w=390, h=844, theme="light"):
     ok(f"{tag}: a finger's scroll scrolls the page; the keyboard stays down and the page keeps its height ({h0})")
     shot("scrolled")
 
-    pick = panel.get_by_role("button", name="选一个元素来评论")
+    pick = panel.get_by_role("button", name="选择页面元素进行评论")
     pick.tap()
     banner = page.locator("[data-preview-picking]")
     expect(banner).to_be_visible()
@@ -346,6 +410,157 @@ def phone_touch(browser, base, hub, token, shots, w=390, h=844, theme="light"):
     ctx.close()
 
 
+def run_direct(browser, base, hub, token, size, theme, shots, full):
+    """Isolated preview origin mode (docs/web/preview.md): direct iframe by default, native <select> inside iframe,
+    same-port navigation & reload without replaying the one-time code, manual switch in the secondary menu, automatic
+    fallback on verified unreachable postMessage / grant failure, auth_failed retry once, and Pick switching to stream."""
+    tag = f"direct {size}/{theme}"
+    narrow = size == "narrow"
+    ctx = browser.new_context(viewport=SIZES[size], device_scale_factor=2, has_touch=narrow, locale="zh-CN")
+    ctx.grant_permissions(["clipboard-read", "clipboard-write"])
+    page = ctx.new_page()
+    page.set_default_timeout(20000)
+    page.goto(base + "/overview?token=" + token)
+    page.wait_for_function("localStorage.getItem('persona.token')")
+    page.evaluate(f"localStorage.setItem('persona.theme', '{theme}')")
+    panel = page.locator("[data-preview-panel]")
+    iframe = page.locator("iframe[data-preview-iframe]")
+    canvas = page.locator("[data-preview-canvas]")
+
+    def shot(name):
+        if shots:
+            page.wait_for_timeout(400)
+            page.screenshot(path=os.path.join(shots, f"preview-{size}-{theme}-{name}.png"))
+
+    def open_direct(origin_mode):
+        mock(hub, token, f"?mode=1&origin=1&origin_mode={origin_mode}&clear=1")
+        page.evaluate("sessionStorage.clear()")
+        page.goto(f"{base}/s/{MID}/{SID}")
+        for _ in range(20):
+            page.get_by_role("button", name="更多").first.click()
+            item = page.get_by_role("menuitem", name="预览")
+            try:
+                item.wait_for(timeout=1000)
+            except PlaywrightTimeout:
+                page.keyboard.press("Escape")
+                page.wait_for_timeout(150)
+                continue
+            item.click()
+            try:
+                panel.wait_for(timeout=3000)
+                break
+            except PlaywrightTimeout:
+                continue
+        else:
+            fail(f"{tag}: the ⋯ menu has no Preview")
+        expect(panel).to_be_visible()
+
+    def drawn():
+        page.wait_for_function("(() => { const c = document.querySelector('[data-preview-canvas]'); return c && c.width > 1 && getComputedStyle(c).opacity !== '0'; })()", timeout=40000)
+
+    # 1. Direct view by default when hub advertises preview_origin
+    open_direct("ok")
+    expect(iframe).to_be_visible()
+    expect(canvas).to_have_count(0)
+    frame = page.frame_locator("iframe[data-preview-iframe]")
+    expect(frame.locator("h1")).to_have_text("Good morning")
+
+    # Verify cross-origin isolation & safe iframe attributes
+    attrs = page.evaluate("""(() => {
+      const f = document.querySelector('iframe[data-preview-iframe]');
+      return { src: f.getAttribute('src') || '', sandbox: f.getAttribute('sandbox') || '', ref: f.getAttribute('referrerpolicy') || '', hubOrigin: location.origin };
+    })()""")
+    if not attrs["src"] or attrs["src"].startswith(attrs["hubOrigin"]):
+        fail(f"{tag}: direct iframe was not hosted on a separate origin: {attrs}")
+    sb = attrs["sandbox"].split()
+    if "allow-scripts" not in sb or "allow-same-origin" not in sb or any(t.startswith("allow-top-navigation") for t in sb):
+        fail(f"{tag}: unexpected iframe sandbox: {attrs['sandbox']}")
+    if attrs["ref"] != "no-referrer":
+        fail(f"{tag}: expected referrerpolicy=no-referrer, got {attrs['ref']}")
+    if panel.get_by_role("button", name="后退").count() != 0 or panel.get_by_role("button", name="前进").count() != 0:
+        fail(f"{tag}: Back/Forward buttons should be hidden in direct mode")
+    ok(f"{tag}: direct iframe renders on isolated origin with safe sandbox and no-referrer")
+    shot("direct")
+
+    # 2. Address bar navigation, native <select> inside direct iframe, and reload without code replay
+    addr = page.locator("[data-preview-address]")
+    addr.click()
+    addr.fill("/settings")
+    addr.press("Enter")
+    expect(frame.locator("h1")).to_have_text("Settings")
+    frame.locator("#role").select_option("1")
+    expect(frame.locator(".role-note b")).to_have_text("Viewer")
+    snap = mock(hub, token)
+    grants = [m for m in snap["log"] if "grant" in m]
+    if len(grants) != 1 or any("open" in m for m in snap["log"]):
+        fail(f"{tag}: expected 1 grant and 0 stream opens after same-port navigation, got {snap['log']}")
+    panel.get_by_role("button", name="刷新").click()
+    expect(frame.locator("h1")).to_have_text("Settings")
+    expect(canvas).to_have_count(0)
+    ok(f"{tag}: direct address navigation, native <select>, and reload work without replaying grant code")
+
+    # 3. Manual mode switching in the preview bar secondary menu
+    more = panel.get_by_role("button", name="更多预览选项")
+    more.click()
+    to_stream = page.get_by_role("menuitem", name="通过电脑查看")
+    expect(to_stream).to_be_visible()
+    if full and theme == "light":
+        shot("direct-menu")
+    to_stream.click()
+    expect(iframe).to_have_count(0)
+    drawn()
+    expect(page.locator("[data-preview-bar='notice']")).to_have_count(0)
+    expect(panel.get_by_role("button", name="后退")).to_be_visible()
+    ok(f"{tag}: manual switch to computer stream works without fallback notice")
+
+    more.click()
+    to_direct = page.get_by_role("menuitem", name="直接查看")
+    expect(to_direct).to_be_visible()
+    to_direct.click()
+    expect(iframe).to_be_visible()
+    expect(frame.locator("h1")).to_have_text("Settings")
+    expect(canvas).to_have_count(0)
+    ok(f"{tag}: manual switch back to direct iframe works")
+
+    if full and theme == "light":
+        # Pick element in direct mode switches to stream with explanation and enters picking mode
+        panel.get_by_role("button", name="选择页面元素进行评论").click()
+        expect(page.locator("[data-preview-bar='notice']")).to_contain_text("已切换到通过电脑查看，以便选择页面元素。")
+        expect(page.locator("[data-preview-picking]")).to_be_visible()
+        drawn()
+        ok(f"{tag}: Pick element in direct mode switches to stream with notice and activates picking")
+
+        # auth_failed retries grant once and stays direct
+        open_direct("auth_retry")
+        expect(iframe).to_be_visible()
+        expect(frame.locator("h1")).to_have_text("Good morning")
+        expect(canvas).to_have_count(0)
+        retry_grants = [m for m in mock(hub, token)["log"] if "grant" in m]
+        if len(retry_grants) != 2:
+            fail(f"{tag}: expected 2 grants on auth_failed retry, got {retry_grants}")
+        ok(f"{tag}: auth_failed retries grant once and stays in direct mode")
+
+        # Grant failure falls back automatically with notice
+        open_direct("grant_fail")
+        expect(iframe).to_have_count(0)
+        drawn()
+        expect(page.locator("[data-preview-bar='notice']")).to_contain_text("无法直接显示这个页面，已改为通过电脑显示。")
+        ok(f"{tag}: grant failure automatically falls back to stream with notice")
+
+    # 4. Verified unreachable postMessage automatically falls back to stream with notice
+    open_direct("unreachable")
+    expect(iframe).to_have_count(0)
+    drawn()
+    notice = page.locator("[data-preview-bar='notice']")
+    expect(notice).to_be_visible()
+    expect(notice).to_contain_text("无法直接显示这个页面，已改为通过电脑显示。")
+    ok(f"{tag}: unreachable postMessage automatically falls back to stream with notice")
+    shot("direct-fallback")
+
+    mock(hub, token, "?mode=1&origin=0&origin_mode=ok")
+    ctx.close()
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("base")
@@ -359,8 +574,10 @@ def main():
         os.makedirs(a.shots, exist_ok=True)
     with sync_playwright() as p:
         browser = p.chromium.launch(executable_path=a.executable) if a.executable else p.chromium.launch(channel=a.channel)
-        for size, theme in (("wide", "light"), ("wide", "dark"), ("narrow", "light")):
+        for size, theme in (("wide", "light"), ("wide", "dark"), ("narrow", "light"), ("narrow", "dark")):
             run(browser, a.base, a.hub, a.token, size, theme, a.shots, full=size == "wide")
+        for size, theme in (("wide", "light"), ("wide", "dark"), ("narrow", "light"), ("narrow", "dark")):
+            run_direct(browser, a.base, a.hub, a.token, size, theme, a.shots, full=size == "wide")
         phone_touch(browser, a.base, a.hub, a.token, a.shots)
         browser.close()
     print("PASS web preview", flush=True)

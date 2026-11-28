@@ -31,6 +31,7 @@ const oldHubJSON = `{
   "lark": {"account": 2},
   "lark_gate": [{"method": "POST", "path": "/x", "action": "allow"}],
   "connector_gate": [],
+  "connector_auto_confirm": [],
   "github": {"proxy": "http://[fd00::20]:3128"},
   "imessage": {"machine": "mac"},
   "google": {"client_id": "example.apps.googleusercontent.com"},

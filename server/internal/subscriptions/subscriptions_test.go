@@ -724,3 +724,349 @@ func TestDeleteRemovesSeenKeysAndItems(t *testing.T) {
 		t.Fatalf("get after delete: %v", err)
 	}
 }
+
+func TestRunNowPrioritizedAheadOfEarlierScheduledSubscriptions(t *testing.T) {
+	t.Run("off_subscription_run_now_beats_scheduled", func(t *testing.T) {
+		e := newEnv(t)
+		src := noticesSource()
+		src.MaxCallsPerHour = ptr(1)
+		e.conn.setSources([]connector.CatalogSource{src})
+
+		// Create offSub first at an earlier CreatedAt so it precedes schedSub in ListSubscriptions order;
+		// offSub has NextRunAt == nil while schedSub has an overdue non-nil NextRunAt.
+		offSub := e.create(itemsRecipe())
+		e.clock.advance(time.Second)
+		schedSub := e.turnOn(e.create(itemsRecipe()))
+		e.clock.advance(5 * time.Minute)
+		if _, err := e.svc.RunNow(e.ctx, offSub.ID, Actor{ID: "device:phone"}); err != nil {
+			t.Fatalf("RunNow: %v", err)
+		}
+		calls := e.conn.callCount()
+		e.svc.RunDue(e.ctx)
+		if got := e.conn.callCount() - calls; got != 1 {
+			t.Fatalf("calls = %d, want 1", got)
+		}
+		if got := e.get(offSub.ID); got.LastRunAt == nil {
+			t.Fatalf("RunNow off subscription was starved behind scheduled subscription: off=%+v sched=%+v", got, e.get(schedSub.ID))
+		}
+		if got := e.get(schedSub.ID); got.LastRunAt != nil {
+			t.Fatalf("scheduled subscription ran ahead of explicit RunNow: %+v", got)
+		}
+	})
+
+	t.Run("later_next_run_now_beats_earlier_scheduled", func(t *testing.T) {
+		e := newEnv(t)
+		src := noticesSource()
+		src.MaxCallsPerHour = ptr(1)
+		e.conn.setSources([]connector.CatalogSource{src})
+
+		// Create laterAsked first at an earlier CreatedAt so it precedes earlierSched in ListSubscriptions,
+		// then turn earlierSched on first so earlierSched.NextRunAt < laterAsked.NextRunAt.
+		laterAsked := e.create(itemsRecipe())
+		e.clock.advance(time.Second)
+		earlierSched := e.turnOn(e.create(itemsRecipe())) // NextRunAt = T0 + 1s
+		e.clock.advance(2 * time.Minute)
+		laterAsked = e.turnOn(laterAsked) // NextRunAt = T0 + 2m
+		e.clock.advance(5 * time.Minute)  // both due; earlierSched.NextRunAt < laterAsked.NextRunAt
+		if _, err := e.svc.RunNow(e.ctx, laterAsked.ID, Actor{ID: "device:phone"}); err != nil {
+			t.Fatalf("RunNow: %v", err)
+		}
+		calls := e.conn.callCount()
+		e.svc.RunDue(e.ctx)
+		if got := e.conn.callCount() - calls; got != 1 {
+			t.Fatalf("calls = %d, want 1", got)
+		}
+		if got := e.get(laterAsked.ID); got.LastRunAt == nil {
+			t.Fatalf("RunNow subscription with later NextRunAt was demoted behind scheduled one: asked=%+v sched=%+v", got, e.get(earlierSched.ID))
+		}
+		if got := e.get(earlierSched.ID); got.LastRunAt != nil {
+			t.Fatalf("earlier scheduled subscription ran ahead of explicit RunNow: %+v", got)
+		}
+	})
+}
+
+func TestRateLimitPauseAndHourlyBudgetKeepLaterResume(t *testing.T) {
+	t.Run("longer_pause_not_shortened_by_hourly_budget", func(t *testing.T) {
+		e := newEnv(t)
+		src := noticesSource()
+		src.MaxCallsPerHour = ptr(2)
+		e.conn.setSources([]connector.CatalogSource{src})
+
+		a := e.turnOn(e.create(itemsRecipe()))
+		var err error
+		if a, err = e.svc.Update(e.ctx, a.ID, Patch{Revision: a.Revision, IntervalSeconds: ptr(7200)}, Actor{ID: "device:phone"}); err != nil {
+			t.Fatalf("update interval: %v", err)
+		}
+		// Make a due now and execute call #1 at t0; its next scheduled run is 2h away while hourly budget frees at t0 + 60m.
+		if _, err := e.svc.RunNow(e.ctx, a.ID, Actor{ID: "device:phone"}); err != nil {
+			t.Fatalf("RunNow a: %v", err)
+		}
+		t0 := e.clock.Now()
+		e.svc.RunDue(e.ctx)
+		if got := e.get(a.ID); got.LastRunAt == nil {
+			t.Fatalf("first call did not run: %+v", got)
+		}
+
+		// Advance 50m so the hourly budget will free in 10m (t0 + 60m) while a is not due yet,
+		// then have call #2 (b or c) hit a 2-hour rate_limited pause (t0 + 170m).
+		e.clock.advance(50 * time.Minute)
+		b := e.turnOn(e.create(itemsRecipe()))
+		c := e.turnOn(e.create(itemsRecipe()))
+		e.conn.setAnswer(func(connector.CatalogQuery) (string, error) {
+			return "", &rpc.Error{Code: wire.ConnectorErrorCodeRateLimited, Message: "slow down", Data: json.RawMessage(`{"retry_after":7200}`)}
+		})
+		e.svc.RunDue(e.ctx)
+
+		wantPause := t0.Add(50*time.Minute + 2*time.Hour)
+		gotB := e.get(b.ID)
+		gotC := e.get(c.ID)
+		if gotB.State != StateRateLimited || gotC.State != StateRateLimited {
+			t.Fatalf("expected both rate_limited: b=%+v c=%+v", gotB, gotC)
+		}
+		if (gotB.LastRunAt == nil) == (gotC.LastRunAt == nil) {
+			t.Fatalf("expected one of b/c to hit 429 and the other to be deferred by gate: b=%+v c=%+v", gotB, gotC)
+		}
+		for _, s := range []Subscription{gotB, gotC} {
+			if s.PausedUntil == nil || !s.PausedUntil.Equal(wantPause) {
+				t.Fatalf("sub %s PausedUntil = %v, want %v (shortened by hourly budget)", s.ID, s.PausedUntil, wantPause)
+			}
+			if s.NextRunAt == nil || !s.NextRunAt.Equal(wantPause) {
+				t.Fatalf("sub %s NextRunAt = %v, want %v (shortened by hourly budget)", s.ID, s.NextRunAt, wantPause)
+			}
+		}
+	})
+
+	t.Run("longer_hourly_budget_moves_next_run_without_inflating_paused_until", func(t *testing.T) {
+		e := newEnv(t)
+		src := noticesSource()
+		src.MaxCallsPerHour = ptr(2)
+		e.conn.setSources([]connector.CatalogSource{src})
+
+		a := e.turnOn(e.create(itemsRecipe()))
+		t0 := e.clock.Now()
+		// Call #1 at t0; budget frees at t0 + 60m.
+		e.svc.RunDue(e.ctx)
+		if got := e.get(a.ID); got.LastRunAt == nil {
+			t.Fatalf("first call did not run: %+v", got)
+		}
+
+		// 1m later, call #2 hits a short 5m rate_limited pause while budget frees in 59m (t0 + 60m).
+		e.clock.advance(time.Minute)
+		b := e.turnOn(e.create(itemsRecipe()))
+		c := e.turnOn(e.create(itemsRecipe()))
+		e.conn.setAnswer(func(connector.CatalogQuery) (string, error) {
+			return "", &rpc.Error{Code: wire.ConnectorErrorCodeRateLimited, Message: "slow down", Data: json.RawMessage(`{"retry_after":300}`)}
+		})
+		e.svc.RunDue(e.ctx)
+
+		wantBudget := t0.Add(time.Hour)
+		gotB := e.get(b.ID)
+		gotC := e.get(c.ID)
+		var hit429, deferred Subscription
+		switch {
+		case gotB.LastRunAt == nil && gotC.LastRunAt != nil:
+			deferred, hit429 = gotB, gotC
+		case gotC.LastRunAt == nil && gotB.LastRunAt != nil:
+			deferred, hit429 = gotC, gotB
+		default:
+			t.Fatalf("expected one subscription to hit 429 and one deferred by gate: b=%+v c=%+v", gotB, gotC)
+		}
+		if deferred.State != StateRateLimited {
+			t.Fatalf("deferred state = %q, want %q", deferred.State, StateRateLimited)
+		}
+		if deferred.NextRunAt == nil || !deferred.NextRunAt.Equal(wantBudget) {
+			t.Fatalf("deferred NextRunAt = %v, want %v", deferred.NextRunAt, wantBudget)
+		}
+		// PausedUntil must reflect the connector's 5m pause, not the 59m hourly budget.
+		wantPause := t0.Add(time.Minute + 5*time.Minute)
+		if deferred.PausedUntil == nil || !deferred.PausedUntil.Equal(wantPause) {
+			t.Fatalf("deferred PausedUntil = %v, want %v (pause only)", deferred.PausedUntil, wantPause)
+		}
+
+		// After the 5m rate-limit pause expires at t0+6m, hit429 wakes up while the hourly budget
+		// is still full until t0+60m: stale rate-limit state/error/PausedUntil must clear.
+		e.clock.advance(5 * time.Minute)
+		e.svc.RunDue(e.ctx)
+		afterPause := e.get(hit429.ID)
+		if afterPause.PausedUntil != nil {
+			t.Fatalf("expired pause left stale PausedUntil = %v when deferred by hourly budget", afterPause.PausedUntil)
+		}
+		if afterPause.State != StateOK {
+			t.Fatalf("expired pause left stale state = %q, want %q", afterPause.State, StateOK)
+		}
+		if afterPause.Error != nil {
+			t.Fatalf("expired pause left stale error = %+v, want nil", afterPause.Error)
+		}
+		if afterPause.NextRunAt == nil || !afterPause.NextRunAt.Equal(wantBudget) {
+			t.Fatalf("afterPause NextRunAt = %v, want %v", afterPause.NextRunAt, wantBudget)
+		}
+	})
+}
+
+func TestRunNowWhilePausedDoesNotCommitRepeatedlyAndRunsAfterPause(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		onSub  bool
+		budget bool // defer by hourly budget (full && !paused) instead of 429 pause
+	}{
+		{name: "paused_on", onSub: true},
+		{name: "paused_off", onSub: false},
+		{name: "budget_full_off", onSub: false, budget: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newEnv(t)
+			var changed int
+			e.svc = New(Options{
+				Store:      e.store,
+				Connectors: e.conns,
+				Clock:      e.clock,
+				Location:   func() *time.Location { return time.UTC },
+				Lang:       func() i18n.Lang { return i18n.En },
+				Changed: func(Subscription, bool) {
+					e.mu.Lock()
+					changed++
+					e.mu.Unlock()
+				},
+			})
+			if tc.budget {
+				src := noticesSource()
+				src.MaxCallsPerHour = ptr(1)
+				e.conn.setSources([]connector.CatalogSource{src})
+			}
+
+			_ = e.turnOn(e.create(itemsRecipe()))
+			e.clock.advance(time.Second)
+			target := e.create(itemsRecipe())
+			if tc.onSub {
+				target = e.turnOn(target)
+			}
+
+			if !tc.budget {
+				// Put connector into a 10-minute rate-limit pause via the first subscription.
+				e.conn.setAnswer(func(connector.CatalogQuery) (string, error) {
+					return "", &rpc.Error{Code: wire.ConnectorErrorCodeRateLimited, Message: "slow down", Data: json.RawMessage(`{"retry_after":600}`)}
+				})
+			}
+			e.svc.RunDue(e.ctx)
+
+			// User clicks RunNow on target while the connector is held back by limits.
+			e.clock.advance(time.Minute)
+			e.mu.Lock()
+			changedBeforeRunNow := changed
+			e.mu.Unlock()
+			if _, err := e.svc.RunNow(e.ctx, target.ID, Actor{ID: "device:phone"}); err != nil {
+				t.Fatalf("RunNow: %v", err)
+			}
+			e.svc.RunDue(e.ctx)
+			e.mu.Lock()
+			changedAfterFirst := changed
+			e.mu.Unlock()
+			if changedAfterFirst <= changedBeforeRunNow {
+				t.Fatalf("expected initial deferred RunDue to commit and emit Changed: before=%d after=%d", changedBeforeRunNow, changedAfterFirst)
+			}
+
+			// Subsequent ticks while still held back must not keep committing or broadcasting Changed.
+			for range 3 {
+				e.clock.advance(30 * time.Second)
+				e.svc.RunDue(e.ctx)
+			}
+			e.mu.Lock()
+			gotChanged := changed
+			e.mu.Unlock()
+			if gotChanged != changedAfterFirst {
+				t.Fatalf("RunNow while limited emitted %d extra Changed events", gotChanged-changedAfterFirst)
+			}
+
+			// Re-clicking RunNow while still deferred re-defers cleanly without resuming tick spam.
+			if _, err := e.svc.RunNow(e.ctx, target.ID, Actor{ID: "device:phone"}); err != nil {
+				t.Fatalf("second RunNow: %v", err)
+			}
+			e.svc.RunDue(e.ctx)
+			e.mu.Lock()
+			changedAfterReclick := changed
+			e.mu.Unlock()
+			for range 2 {
+				e.clock.advance(30 * time.Second)
+				e.svc.RunDue(e.ctx)
+			}
+			e.mu.Lock()
+			gotChangedAfterReclick := changed
+			e.mu.Unlock()
+			if gotChangedAfterReclick != changedAfterReclick {
+				t.Fatalf("re-clicked RunNow while limited emitted %d extra Changed events", gotChangedAfterReclick-changedAfterReclick)
+			}
+
+			// Once the limit lifts, the deferred RunNow must run (even for an off subscription).
+			e.conn.setAnswer(func(connector.CatalogQuery) (string, error) { return notices(1, 2, 3), nil })
+			if tc.budget {
+				e.clock.advance(time.Hour)
+			} else {
+				e.clock.advance(10 * time.Minute)
+			}
+			e.svc.RunDue(e.ctx)
+			sub, runs, err := e.svc.Get(e.ctx, target.ID)
+			if err != nil {
+				t.Fatalf("Get: %v", err)
+			}
+			if sub.LastRunAt == nil || len(runs) != 1 || runs[0].Trigger != TriggerNow || sub.LastNewCount != 3 {
+				t.Fatalf("deferred RunNow did not execute after limit lifted: sub=%+v runs=%+v", sub, runs)
+			}
+		})
+	}
+}
+
+// If a rate-limit-deferred RunNow is satisfied earlier by another run (e.g. budget raised and
+// schedule runs early), the stale deferred RunNow entry must be cleared rather than firing later.
+func TestEarlyScheduledRunClearsDeferredRunNow(t *testing.T) {
+	e := newEnv(t)
+	src := noticesSource()
+	src.MaxCallsPerHour = ptr(1)
+	e.conn.setSources([]connector.CatalogSource{src})
+
+	first := e.turnOn(e.create(itemsRecipe()))
+	e.clock.advance(time.Second)
+	target := e.turnOn(e.create(itemsRecipe()))
+	// Exhaust the 1/hour budget via first; target is deferred until t0 + 1h.
+	e.svc.RunDue(e.ctx)
+	if got := e.get(first.ID); got.LastRunAt == nil {
+		t.Fatalf("first did not run: %+v", got)
+	}
+
+	// User clicks RunNow on target while budget is full: s.asked[target.ID] is deferred to t0 + 1h.
+	e.clock.advance(time.Minute)
+	if _, err := e.svc.RunNow(e.ctx, target.ID, Actor{ID: "device:phone"}); err != nil {
+		t.Fatalf("RunNow: %v", err)
+	}
+	e.svc.RunDue(e.ctx)
+
+	// Raise the connector budget and trigger an earlier scheduled run via Update (e.g. switching destination/recipe)
+	// after 5 minutes (well before the deferred t0 + 1h timestamp).
+	src.MaxCallsPerHour = ptr(10)
+	e.conn.setSources([]connector.CatalogSource{src})
+	e.clock.advance(5 * time.Minute)
+	cur := e.get(target.ID)
+	r := itemsRecipe()
+	updated, err := e.svc.Update(e.ctx, cur.ID, Patch{Revision: cur.Revision, Recipe: &r, IntervalSeconds: ptr(7200)}, Actor{ID: "device:phone"})
+	if err != nil {
+		t.Fatalf("Update target: %v", err)
+	}
+	e.svc.RunDue(e.ctx)
+	_, runsAfterEarly, err := e.svc.Get(e.ctx, updated.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if len(runsAfterEarly) != 1 {
+		t.Fatalf("expected 1 early run, got %d: %+v", len(runsAfterEarly), runsAfterEarly)
+	}
+
+	// Advancing past the old deferred hour (while scheduled NextRunAt is 2h out) must NOT run target again.
+	e.clock.advance(time.Hour)
+	e.svc.RunDue(e.ctx)
+	_, runsLater, err := e.svc.Get(e.ctx, updated.ID)
+	if err != nil {
+		t.Fatalf("Get later: %v", err)
+	}
+	if len(runsLater) != 1 {
+		t.Fatalf("stale deferred RunNow fired after an earlier run already satisfied it: runs=%+v", runsLater)
+	}
+}

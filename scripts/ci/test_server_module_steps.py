@@ -67,6 +67,7 @@ ci_run_step() {
                     self.assertEqual(where["Builds without the mail module"], "node")
                     self.assertEqual(where["Builds without the speech modules"], "core-node")
                     self.assertEqual(where["Core-only hub smoke"], "build")
+                    self.assertEqual(where["Core-only install from packages"], "core-other")
                     self.assertEqual(where["Builds without each module"], "build")
                     self.assertEqual(where["Non-root extension container isolation"], "other")
                     for label, lane in (("Builds without the node modules", "node"),

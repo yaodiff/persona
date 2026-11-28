@@ -70,9 +70,7 @@ func connectProxy(t *testing.T, targets ...string) (*Proxy, func() []string) {
 	var mu sync.Mutex
 	var dialed []string
 	p := &Proxy{
-		connectWait:   time.Second,
-		connectBudget: 200 * time.Millisecond,
-		Upstream:      func(*url.URL) (*url.URL, error) { return nil, nil },
+		Upstream: func(*url.URL) (*url.URL, error) { return nil, nil },
 		Resolve: func(context.Context, string) ([]net.IP, error) {
 			ips := make([]net.IP, len(targets))
 			for i := range targets {
@@ -94,15 +92,22 @@ func connectProxy(t *testing.T, targets ...string) (*Proxy, func() []string) {
 			return (&net.Dialer{}).DialContext(ctx, network, addr)
 		},
 	}
-	if err := p.Start(); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(p.Close)
+	startConnectProxy(t, p)
 	return p, func() []string {
 		mu.Lock()
 		defer mu.Unlock()
 		return slices.Clone(dialed)
 	}
+}
+
+func startConnectProxy(t *testing.T, p *Proxy) {
+	t.Helper()
+	p.connectWait = time.Second
+	p.connectBudget = 200 * time.Millisecond
+	if err := p.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(p.Close)
 }
 
 func connectTunnel(t *testing.T, proxy, target string) net.Conn {
@@ -294,7 +299,7 @@ func TestConnectIdleClientResumesWithoutReplay(t *testing.T) {
 				p := &Proxy{connectWait: 20 * time.Millisecond}
 				began := time.Now()
 				near, far, err := p.prepareConnect(context.Background(), near, &connectPlan{
-					Conn: far, key: "api.example.com:443", target: "192.0.2.1:443", remaining: []string{"[2001:db8::1]:443"},
+					Conn: far, target: "192.0.2.1:443", remaining: []string{"[2001:db8::1]:443"},
 				})
 				if err != nil {
 					t.Fatal(err)

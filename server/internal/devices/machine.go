@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/apierr"
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/devicewire"
@@ -26,6 +27,7 @@ import (
 	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
+	"github.com/nwverse/persona/server/internal/transcript"
 	"github.com/nwverse/persona/server/internal/update"
 )
 
@@ -119,14 +121,14 @@ type Machine struct {
 	kick      chan struct{}
 	// deploying: the manager is sending this machine the hub's node build (deploy.go); deployErr: why the last try
 	// failed. deployRun ties each waiter to one run's outcome, including one the card does not retain.
-	deploying       bool
-	deployErr       string
-	deployPhase     string
-	deploySource    string
-	deployVersion   string
-	deployRun       *deployRun
-	deployPreflight *nodeDeployPreflight
-	updateHandoff   bool // grace expired while waiting for idle: no new headless turns until the update settles
+	deploying     bool
+	deployErr     string
+	deployPhase   string
+	deploySource  string
+	deployVersion string
+	deployRun     *deployRun
+	deployWatch   *nodeDeployWatch
+	updateHandoff bool // grace expired while waiting for idle: no new headless turns until the update settles
 	// via is how the connection runs (local | ssh | tailcat | link | service | hub), path how tailcat's packets go.
 	via, path                  string
 	directFailed, switchedBack time.Time
@@ -136,7 +138,11 @@ type Machine struct {
 	reconnectGrace             time.Duration // shown as it was this long after its node disconnected (warm.go; tests: shorter)
 	reloadUntil                time.Time     // a resident announced exec; never extends display/reconnect grace
 	storeWait                  time.Duration // how long a node event waits on the store (nodeStoreWait; tests: shorter)
-	engineMu                   sync.Mutex
+	// stateWriterOnce/stateWriter move state.put Store writes onto one ordered writer goroutine per Machine
+	// (machine_state_writer.go), so a stalled Store cannot hold the node's rpc read loop.
+	stateWriterOnce sync.Once
+	stateWriter     *nodeStateWriter
+	engineMu        sync.Mutex
 	// eventRetire admits an ordinary event callback or retires its connection; never lets a retired event follow the replacement.
 	eventRetire sync.Mutex
 	link        *mgrLink      // kind link: the link Persona Link keeps open, nil while there is none
@@ -252,11 +258,14 @@ func (m *Machine) snapshot() proto.Machine {
 	// The build its platform resolves to (packages.go: the hub's own, or the newest release this manager drives), and
 	// why none can be sent; before m.mu, as they read the hub's handover.
 	version, noPackage := d.hubVersion(), error(nil)
-	if m.cfg.Kind != "local" { // the hub's own machine runs the hub's binary: nothing to look up
+	// A local stdio process uses the manager's binary. Its resident relay,
+	// when present, can run a separate build and needs package lookup.
+	if m.cfg.Kind != "local" || info.NodeUpdate && nodeHas(info, nodeproto.NodeUpdate) {
 		version, noPackage = d.nodeTarget(info), d.packageBlocked(info)
 	}
 	clipboardOn := d.clipboardOn(m.cfg.ID)
 	fileTransferOn := d.fileTransferOn(m.cfg.ID)
+	orcaChats := orcaChatStartsField(choice, d.orcaChatStartsOn(m.cfg.ID))
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	engines := []proto.Engine{} // what the node found: none while offline
@@ -316,10 +325,11 @@ func (m *Machine) snapshot() proto.Machine {
 		Transport: m.via, TailcatPath: m.path, Tailcat: m.cfg.TailcatAddr != "",
 		Engine: engine, Engines: engines, EngineHosts: choice.Hosts, EngineDefault: choice.Default,
 		EngineSuggested: suggested, EngineSetsUnsupported: setsUnsupported, Link: link, System: d.metrics.system(m.cfg.ID),
-		Clipboard:    m.clipboardStateLocked(clipboardOn),
-		FileTransfer: m.fileTransferState(fileTransferOn),
-		ClaudePlugin: m.info.ClaudePlugin,
-		LinkSwitch:   linkSwitch,
+		Clipboard:      m.clipboardStateLocked(clipboardOn),
+		FileTransfer:   m.fileTransferState(fileTransferOn),
+		OrcaChatStarts: orcaChats,
+		ClaudePlugin:   m.info.ClaudePlugin,
+		LinkSwitch:     linkSwitch,
 	}
 }
 
@@ -370,7 +380,7 @@ func (m *Machine) command(ctx context.Context) *exec.Cmd {
 	// abroad at ~15 KB/s, 2026-10-31) an 87 KB page took 5.6 s and a 500-item page passed the hub's 30 s deadline;
 	// on a LAN it costs next to nothing.
 	return exec.CommandContext(ctx, "ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", "-o", "Compression=yes",
-		"-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3", host, bin+" node --stdio")
+		"-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3", "--", host, bin+" node --stdio")
 }
 
 // localNode is the program the node of the hub's computer runs as (docs/server/server.md "Programs"): persona-node
@@ -451,6 +461,15 @@ func (m *Machine) open(ctx context.Context, via string) (*nodePipe, error) {
 		ac := &activityConn{Conn: c, now: m.timings.now}
 		ac.touch()
 		return &nodePipe{r: ac, w: ac, lastErr: func() string { return "" }, close: func() { _ = c.Close() }, activity: ac}, nil
+	}
+	if via == "ssh" && m.nodeCmd == nil {
+		host := m.cfg.SSHHost
+		if host == "" {
+			host = m.cfg.ID
+		}
+		if err := validateSSHHost(host); err != nil {
+			return nil, err
+		}
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	cmd := m.command(ctx)
@@ -621,15 +640,28 @@ func (m *Machine) callOnce(ctx context.Context, method string, params any, out a
 		}
 		params = next
 	}
-	if devicewire.IsSessionStart(method) && !nodeHas(info, nodeproto.SessionStartSpeed) {
+	if devicewire.IsSessionStart(method) && (!nodeHas(info, nodeproto.SessionStartSpeed) || !nodeHas(info, nodeproto.SessionStartServiceTier)) {
 		raw, _ := json.Marshal(params)
 		var fields struct {
-			Speed string `json:"speed"`
+			Speed       string `json:"speed"`
+			ServiceTier string `json:"service_tier"`
 		}
 		_ = json.Unmarshal(raw, &fields)
-		if proto.FasterSpeed(strings.TrimSpace(fields.Speed)) {
+		if (fields.ServiceTier != "" && !nodeHas(info, nodeproto.SessionStartServiceTier)) ||
+			(proto.FasterSpeed(strings.TrimSpace(fields.Speed)) && !nodeHas(info, nodeproto.SessionStartSpeed)) {
 			// An older node would drop the explicit, billable choice and start at the launcher's own speed.
 			return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "hub-machine.node_no_session_start_speed")}
+		}
+	}
+	if devicewire.IsSessionStart(method) && !nodeHas(info, nodeproto.SessionStartModelAliases) {
+		raw, _ := json.Marshal(params)
+		var fields struct {
+			ModelAliases map[string]string `json:"model_aliases"`
+		}
+		_ = json.Unmarshal(raw, &fields)
+		if len(fields.ModelAliases) != 0 {
+			// An older node would drop the per-start aliases and run the launcher's models.
+			return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "hub-machine.node_no_model_aliases")}
 		}
 	}
 	if devicewire.IsSessionStart(method) && !nodeHas(info, nodeproto.StartGoal) {
@@ -913,15 +945,24 @@ func (m *Machine) forgetSeqLocked(id string) {
 
 // setSessions keeps the node's session list (the hub gets it as the node sent it, devices.event).
 func (m *Machine) setSessions(list []proto.Session) {
-	for i := range list {
-		list[i].MachineID = m.cfg.ID
-	}
+	m.takeRows(list)
 	m.mu.Lock()
 	m.sessions = list
 	m.sessionsListed = true
 	m.sessionRevision++
 	m.lastSeen = time.Now().UTC()
 	m.mu.Unlock()
+}
+
+// takeRows makes a node's listed rows the manager's, in place, before they are kept: on this machine, and each title
+// one a list can carry (transcript.ListTitle, #16343). A node from before that cut sends whatever its agents stored as
+// a title, a whole opening prompt among them; every reader of the kept list (the assistant, the archive, the list the
+// hub and the apps get) then has the cut one.
+func (m *Machine) takeRows(list []proto.Session) {
+	for i := range list {
+		list[i].MachineID = m.cfg.ID
+		list[i].Title = transcript.ListTitle(list[i].Title)
+	}
 }
 
 func (m *Machine) sessionList() []proto.Session {
@@ -984,6 +1025,12 @@ func (m *Machine) onEvent(event string, params json.RawMessage) {
 	}
 	m.noteClosed(event, params)
 	switch event {
+	case nodeproto.EventUpdateDraining:
+		m.nodeUpdateDraining(params)
+		return
+	case nodeproto.EventRestarting:
+		m.nodeUpdateHandover(params)
+		return
 	case nodeproto.EventUpdatePreflightFailed:
 		m.nodeUpdatePreflightFailed(params)
 		return
@@ -1038,24 +1085,12 @@ func (m *Machine) onEvent(event string, params json.RawMessage) {
 			devicewire.ShareCreationLog(m.d.logf, "", "manager_persist", "invalid_state")
 			return
 		}
-		received, committed := "received_without_receipt", "committed_without_receipt"
+		received := "received_without_receipt"
 		if p.State.CreationID != "" && p.State.Incarnation != "" {
-			received, committed = "received_with_receipt", "committed_with_receipt"
+			received = "received_with_receipt"
 		}
 		devicewire.ShareCreationLog(m.d.logf, p.SessionID, "manager_persist", received)
-		if s, ok := m.d.opts.Store.(nodeStateStore); ok {
-			// Written here, in order (the latest put of a session wins), but bounded: a store that does not answer must
-			// not hold the node's read loop, and with it every reply and event of the node (nodeStoreWait).
-			ctx, cancel := m.storeCtx()
-			if err := s.PutNodeSession(ctx, m.cfg.ID, p.SessionID, p.State); err != nil {
-				devicewire.ShareCreationLog(m.d.logf, p.SessionID, "manager_persist", "store_error")
-			} else {
-				devicewire.ShareCreationLog(m.d.logf, p.SessionID, "manager_persist", committed)
-			}
-			cancel()
-		} else {
-			devicewire.ShareCreationLog(m.d.logf, p.SessionID, "manager_persist", "store_unavailable")
-		}
+		m.persistNodeState(p.SessionID, p.State)
 		return // the manager's alone
 	case proto.EventModeSet:
 		m.onModeSet(params)
@@ -1065,6 +1100,9 @@ func (m *Machine) onEvent(event string, params json.RawMessage) {
 		return // the manager's alone
 	case "claude.dirs":
 		m.rememberClaudeDirs(params)
+	case proto.EventEnginesChanged: // what the node found of its engines changed since node.info (node/orcaengine.go)
+		m.onEnginesChanged(params)
+		return
 	case "claude.plugin": // the Persona plugin for Claude Code there changed (node/claudeplugin.go)
 		var st proto.ClaudePlugin
 		if json.Unmarshal(params, &st) == nil && st.State != "" {
@@ -1137,6 +1175,15 @@ func (m *Machine) onRequest(ctx context.Context, method string, params json.RawM
 			}
 		}
 		return map[string]any{"sessions": out}, nil
+	case "usage.features": // what this manager keeps of the usage a node meters (usage_projects.go)
+		// temp_dirs: a temporary folder by its path, resolved like any directory (#16827), not only as :temp.
+		return map[string]any{"dirs": true, "temp_dirs": true}, nil
+	case "usage.resplit.status": // the last week split by directory once (usage_resplit.go)
+		return m.d.usageResplitStatus(ctx, m.cfg.ID, params, time.Now())
+	case "usage.resplit":
+		sctx, cancel := m.storeCtx()
+		defer cancel()
+		return m.d.putUsageResplit(sctx, m.cfg.ID, params, time.Now())
 	case "usage.backfill.status": // the token usage backfill (usage_backfill.go)
 		return m.d.usageBackfillStatus(ctx, m.cfg.ID, params, time.Now())
 	case "usage.backfill":
@@ -1190,10 +1237,10 @@ func (m *Machine) passOn(ctx context.Context, method string, params json.RawMess
 	if len(params) > maxForward {
 		return nil, errTooLarge
 	}
-	var out json.RawMessage
 	key := m.d.requestKey()
-	err := m.d.opts.Hub.Call(ctx, devicewire.MethodRequest, devicewire.NodeCall{MachineID: m.cfg.ID, Method: method, Params: params,
-		Request: key}, &out)
+	out, err := buswire.Call(ctx, m.d.opts.Hub, devicewire.RequestMethod, devicewire.NodeCall{
+		MachineID: m.cfg.ID, Method: method, Params: params, Request: key,
+	})
 	if err != nil {
 		if ctx.Err() != nil { // the node's connection ended (ctx is its): the hub's part ends too
 			_ = m.d.opts.Hub.Notify(devicewire.EventRequestEnd, devicewire.RequestEnd{MachineID: m.cfg.ID, Request: key})

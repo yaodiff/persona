@@ -21,6 +21,7 @@ import (
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/lazyre"
+	"github.com/nwverse/persona/server/internal/modapi"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -98,6 +99,8 @@ type Task struct {
 	RunIf  *routineCheck `json:"run_if,omitempty"`
 	// factsText is the run's facts as the model is given them (briefing.go); set on the copy a run is made from, never stored.
 	factsText string
+	// Contributions belong to this run snapshot and never enter the stored routine.
+	routineContributions []modapi.RoutineContribution
 	// kbDir is the knowledge directory the run's hint names (a daily run with the knowledge base on); set on the copy, never stored.
 	kbDir string
 	// The conversation it came from (on MachineID), runs go into it; empty = the task's own conversation.
@@ -127,6 +130,9 @@ type Task struct {
 	// Space is the space of the conversation that set it up (e.g. "health", docs/assistant/health.md): a run that starts a conversation
 	// starts it there. "" is the assistant's own.
 	Space string `json:"space,omitempty"`
+	// Delivery routes a finished run's result into a specific channel thread (e.g. a Feishu group topic)
+	// and binds that thread back to the execution conversation for follow-up replies.
+	Delivery *TaskDelivery `json:"delivery,omitempty"`
 	// StartGrant: the owner let this schedule's own rounds start some kinds of task without the plan card (#8045,
 	// schedule_grant.go). The hub's: only the owner's Start on the card of one of its rounds adds to it; no app body and
 	// no tool sets or widens it, and a change of the prompt or of where it runs drops it.
@@ -798,11 +804,16 @@ func (s *Service) toolScheduleFollowup(ctx context.Context, machine, sessionID s
 		Inbox           *string         `json:"inbox"` // left out: a new follow-up puts nothing in the Inbox, one rescheduled keeps its setting
 		Until           json.RawMessage `json:"until"`
 		// The task's own model configuration (schedule_model.go): nil leaves it as it is, "" clears that part.
-		Launcher *string `json:"launcher"`
-		Model    *string `json:"model"`
-		Effort   *string `json:"effort"`
+		Launcher *string         `json:"launcher"`
+		Model    *string         `json:"model"`
+		Effort   *string         `json:"effort"`
+		Delivery json.RawMessage `json:"delivery"`
 	}
 	if err := json.Unmarshal(args, &a); err != nil {
+		return "", err
+	}
+	delivery, hasDelivery, err := deliveryRaw(a.Delivery)
+	if err != nil {
 		return "", err
 	}
 	if err := s.validateScheduleTodo(ctx, sessionID, a.TodoID); err != nil {
@@ -868,7 +879,7 @@ func (s *Service) toolScheduleFollowup(ctx context.Context, machine, sessionID s
 	needsOwn := hasTaskModel(a.Launcher, a.Model, a.Effort)
 	// A one-off ignores until, even a bad one. An interval task takes it; scheduleOwn applies it when this run is
 	// rescheduling its own task (including a one-off this call turns into an interval).
-	if out, id, ok, err := s.scheduleOwn(ctx, sessionID, a.Title, a.Prompt, prompt, a.At, at, every, rule, push, inbox, a.FreshEachRun, a.Until, a.Launcher, a.Model, a.Effort, a.TodoID); ok || err != nil {
+	if out, id, ok, err := s.scheduleOwn(ctx, sessionID, a.Title, a.Prompt, prompt, a.At, at, every, rule, push, inbox, a.FreshEachRun, a.Until, a.Launcher, a.Model, a.Effort, a.TodoID, delivery, hasDelivery); ok || err != nil {
 		if err == nil && id != "" {
 			err = s.setTaskModel(ctx, id, a.Launcher, a.Model, a.Effort)
 		}
@@ -876,7 +887,7 @@ func (s *Service) toolScheduleFollowup(ctx context.Context, machine, sessionID s
 	}
 	space, _ := s.selfSpace(ctx, sessionID) // not listed: the assistant's own, as before the health space
 	t := Task{ID: "fu_" + randomHex(4), Title: strings.TrimSpace(a.Title), Prompt: prompt, Repeat: repeatOnce, At: at.UTC(), Enabled: true,
-		MachineID: machine, Space: space, CreatedBy: "assistant", CreatedAt: now.UTC()}
+		MachineID: machine, Space: space, Delivery: delivery, CreatedBy: "assistant", CreatedAt: now.UTC()}
 	if every > 0 || rule.spec != nil {
 		if rule.spec != nil {
 			t.Repeat, t.Cron, t.At = repeatCron, rule.expr, time.Time{}
@@ -950,7 +961,7 @@ func (s *Service) toolScheduleFollowup(ctx context.Context, machine, sessionID s
 // repeats stays as it is (a changed prompt is taken). A task deleted while its run was going stays deleted: the run is
 // told so, nothing is scheduled (#4792), unless this conversation deleted it itself (#9090). A one-off given a cron rule (`cron`, zero spec for none) runs on it from now on. ok is false when this conversation's latest run isn't one of the task's
 // (rawPrompt is what was asked, before stripScheduleHeader), or the title and prompt are another task's.
-func (s *Service) scheduleOwn(ctx context.Context, sessionID, title, rawPrompt, prompt, atArg string, at time.Time, every int, cron cronRule, push, inbox *string, freshEachRun *bool, untilRaw json.RawMessage, launcher, model, effort, todoID *string) (string, string, bool, error) {
+func (s *Service) scheduleOwn(ctx context.Context, sessionID, title, rawPrompt, prompt, atArg string, at time.Time, every int, cron cronRule, push, inbox *string, freshEachRun *bool, untilRaw json.RawMessage, launcher, model, effort, todoID *string, delivery *TaskDelivery, hasDelivery bool) (string, string, bool, error) {
 	if sessionID == "" {
 		return "", "", false, nil
 	}
@@ -1018,6 +1029,9 @@ func (s *Service) scheduleOwn(ctx context.Context, sessionID, title, rawPrompt, 
 	}
 	if inbox != nil { // left out: it keeps its setting
 		t.Inbox = *inbox
+	}
+	if hasDelivery { // left out: it keeps its delivery anchor
+		t.Delivery = delivery
 	}
 	var out string
 	switch {
@@ -1267,11 +1281,16 @@ func (s *Service) toolScheduleRoutine(ctx context.Context, machine, self string,
 		Until        json.RawMessage `json:"until"`
 		RunIf        json.RawMessage `json:"run_if"`
 		// The task's own model configuration (schedule_model.go): nil leaves it as it is, "" clears that part.
-		Launcher *string `json:"launcher"`
-		Model    *string `json:"model"`
-		Effort   *string `json:"effort"`
+		Launcher *string         `json:"launcher"`
+		Model    *string         `json:"model"`
+		Effort   *string         `json:"effort"`
+		Delivery json.RawMessage `json:"delivery"`
 	}
 	if err := json.Unmarshal(args, &a); err != nil {
+		return "", err
+	}
+	delivery, hasDelivery, err := deliveryRaw(a.Delivery)
+	if err != nil {
 		return "", err
 	}
 	if err := s.validateScheduleTodo(ctx, self, a.TodoID); err != nil {
@@ -1347,7 +1366,7 @@ func (s *Service) toolScheduleRoutine(ctx context.Context, machine, self string,
 	}
 	needsOwn := hasTaskModel(a.Launcher, a.Model, a.Effort)
 	changesRun := needsOwn || a.Time != "" || a.Weekdays != nil || a.Cron != "" || a.Until != nil ||
-		a.FreshEachRun != nil || a.Push != nil || a.Inbox != nil || a.Report != nil || a.RunIf != nil || a.TodoID != nil || a.PageID != nil
+		a.FreshEachRun != nil || a.Push != nil || a.Inbox != nil || a.Report != nil || a.RunIf != nil || a.TodoID != nil || a.PageID != nil || hasDelivery
 	title := strings.TrimSpace(a.Title)
 	requiresOwner := func(t Task) bool {
 		enables := a.Enabled != nil && *a.Enabled && !t.Enabled
@@ -1474,6 +1493,9 @@ func (s *Service) toolScheduleRoutine(ctx context.Context, machine, self string,
 	}
 	if a.FreshEachRun != nil {
 		t.FreshEachRun = *a.FreshEachRun
+	}
+	if hasDelivery {
+		t.Delivery = delivery
 	}
 	if t.PageID != "" {
 		t.Push = pushAsked
@@ -1746,12 +1768,13 @@ func (s *Service) Run(ctx context.Context) {
 		s.logf("recover interrupted task starts: %v", err)
 	}
 	s.recoverSendsOut(recoverCtx) // sends of more for accepted tasks the manager before this one left out (tasks_sends_out.go)
-	s.recoverApprovalJournals(recoverCtx)
+	s.recoverManagerApprovalJournals()
 	s.recoverIdleArchiveAudit(recoverCtx)
 	cancel()
 	go s.delayedWaitsRecoveryLoop(ctx)     // usage-limit retries and task receipt rechecks left by the previous manager
 	go s.failedStartBatchRecoveryLoop(ctx) // deferred leader failures, including when every failed to-do is closed
 	go s.taskCloseLoop(ctx)                // the agents of finished tasks (tasks_close.go)
+	go s.projectReviewLoop(ctx)            // owner input and task events to the configured review session (project_review.go)
 	go s.superviseLoop(ctx)                // the tasks the main conversation follows up (supervise_signals.go)
 	go s.workLoop(ctx)                     // due wakes and retries, cards past their day, missed turns (agents_work_tick.go)
 	go s.replyLoop(ctx)                    // questions the user looked at and left unanswered (agents_reply.go)
@@ -2195,7 +2218,7 @@ func (s *Service) runTask(t Task, due, now time.Time, manual, retried bool) (pro
 	if err != nil {
 		// Task/model admission precedes normal fact preparation; its failure still needs this run's fixed facts.
 		if t.Facts || t.Report {
-			t.factsText = s.runFacts(ctx, t, time.Now())
+			s.prepareRoutineFacts(ctx, &t, time.Now())
 		}
 		return s.failTaskRun(ctx, t, run, err, false)
 	}
@@ -2270,7 +2293,7 @@ func (s *Service) runTask(t Task, due, now time.Time, manual, retried bool) (pro
 	if kb {
 		t.kbDir = s.kb.dir // the hint names where the knowledge base is, not the default
 	}
-	t.factsText = s.runFacts(ctx, t, time.Now()) // the run's facts, worked out once (north_star.go)
+	s.prepareRoutineFacts(ctx, &t, time.Now()) // the run's facts, worked out once (north_star.go)
 	t, trainingDay := s.workoutPromptNow(ctx, t)
 	if trainingDay != "" {
 		if ref, ok := s.trainingChat(ctx, trainingDay); ok {
@@ -2303,6 +2326,7 @@ func (s *Service) runTask(t Task, due, now time.Time, manual, retried bool) (pro
 			unsent := err != nil // model preparation has not sent the task's message
 			if err == nil {
 				s.noteRound(m.ID, t.SessionID, t.ID, t.runGrantBasis, time.Now()) // before it is sent: its turn may plan at once (schedule_grant.go)
+				s.clearConversationOriginDevice(t.SessionID)
 				if err = s.call(ctx, m.ID, DeviceAssistantSend, params, nil); err != nil {
 					s.endRound(m.ID, t.SessionID, t.ID)
 				}
@@ -2448,6 +2472,7 @@ func (s *Service) resumeOwn(ctx context.Context, machine, sid string, params map
 	if err := s.validateTaskSelections(ctx, machine, sid, params, promptSelections); err != nil {
 		return err
 	}
+	s.clearConversationOriginDevice(sid)
 	err := s.call(ctx, machine, DeviceAssistantSend, params, nil)
 	if _, asked := params["config_dir"]; asked && (nodeOutdated(err) || profileRefused(err)) {
 		delete(params, "config_dir")
@@ -2638,7 +2663,8 @@ func (s *Service) startScheduledRun(run ScheduleRun, t Task, m *Device) {
 	delete(s.sched.waitTold, t.ID) // it runs again: a later wait on the user is news again
 	s.sched.mu.Unlock()
 	if t.Facts || t.Report {
-		s.briefSent(t.ID, run.SessionID, run.Retried)
+		s.briefSent(run)
+		s.writeRoutineContributionNotice(run, t)
 	}
 	if !t.pushesOnlyAsked() {
 		s.noteReportTurn(run.SessionID) // its answer is pushed however quick it was (#3438)
@@ -3001,11 +3027,18 @@ const turnPollInterval = 2 * time.Second
 // it was seen working, a changed last item also means it ended: an immediate failure (a bad model) is idle before
 // the first poll sees it working.
 func (s *Service) waitTurnEnd(ctx context.Context, machine, sid string) (ended, ran bool) {
+	return s.waitTurnEndOnReady(ctx, machine, sid, nil)
+}
+
+func (s *Service) waitTurnEndOnReady(ctx context.Context, machine, sid string, onReady func()) (ended, ran bool) {
 	poll := turnPollInterval
 	if s.turnPoll > 0 {
 		poll = s.turnPoll
 	}
 	before, beforeOK := s.lastItemID(ctx, machine, sid)
+	if onReady != nil {
+		onReady()
+	}
 	idle := 0
 	for {
 		select {
@@ -3432,6 +3465,12 @@ func (s *Service) scheduleRoutes() {
 			apierr.Write(w, http.StatusBadRequest, err)
 			return
 		}
+		delivery, _, err := deliveryIn(raw)
+		if err != nil {
+			apierr.Write(w, http.StatusBadRequest, err)
+			return
+		}
+		delete(raw, "delivery")
 		now := time.Now()
 		end, hasUntil, clearUntil, err := untilIn(raw["until"], now, s.location(r.Context()))
 		if err != nil {
@@ -3464,7 +3503,7 @@ func (s *Service) scheduleRoutes() {
 		if _, rich := raw["structured_prompt"]; rich {
 			t.PromptSelections = true
 		}
-		t.SessionID, t.Push, t.Inbox, t.RunIf = "", push, inbox, runIf
+		t.SessionID, t.Push, t.Inbox, t.RunIf, t.Delivery = "", push, inbox, runIf, delivery
 		if err := editTaskState(&t, in, raw, now); err != nil {
 			writeTaskStateError(w, err)
 			return
@@ -3523,6 +3562,12 @@ func (s *Service) scheduleRoutes() {
 		_, hasRunIf := raw["run_if"]
 		delete(raw, "run_if")
 		delete(raw, "until") // not a time.Time: "30m" and a local clock time would not unmarshal
+		delivery, hasDelivery, err := deliveryIn(raw)
+		if err != nil {
+			apierr.Write(w, http.StatusBadRequest, err)
+			return
+		}
+		delete(raw, "delivery")
 		ignoreTaskStateNote(raw)
 		mayBeMain := s.mayBeMainNow(r.Context())
 		sc, err := s.lockedSchedule(r.Context())
@@ -3584,6 +3629,9 @@ func (s *Service) scheduleRoutes() {
 			return
 		} else if has { // and its inbox setting
 			t.Inbox = mode
+		}
+		if hasDelivery { // and its thread delivery anchor
+			t.Delivery = delivery
 		}
 		if v, ok := raw["facts"]; ok { // and its facts: set only when the body has them
 			if err := json.Unmarshal(v, &t.Facts); err != nil {

@@ -16,6 +16,7 @@ import persona.core.contracts.api.LarkMember
 import persona.core.contracts.api.LarkMention
 import persona.core.contracts.api.MailTransport
 import persona.core.contracts.api.OutboxMessage
+import persona.core.contracts.generated.InboxStoredSources
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flowOf
 
@@ -45,7 +46,13 @@ interface InboxRepository : persona.core.contracts.api.InboxRepository {
         error("Persona entry is not connected")
     }
     suspend fun askPersona(request: InboxPersonaRequest) = askPersona(request.itemId, request.action)
-    suspend fun personaContext(itemId: String): String? = null
+
+    /**
+     * The item's `context` from `GET /api/v1/inbox/{id}` with the mail clipping claim beside it (#15995); null only
+     * when no text could be read or restored. Callers that feed the text to the persona use [PersonaContext.text];
+     * the stored-mail page also reads [PersonaContext.mailClipping].
+     */
+    suspend fun personaContext(itemId: String): PersonaContext? = null
 
     /**
      * A reply in the user's voice drafted by the hub (`POST /api/v1/inbox/{id}/draft`); [instruction] may be empty.
@@ -165,6 +172,8 @@ data class InboxSnapshot(
     val machines: Map<String, String> = emptyMap(),
     /** How triage stands: new items waiting outside the list (#1773); null from an older hub. */
     val triage: InboxTriage? = null,
+    /** Every retained built-in source, including completed history; null from an old or mixed-version hub (unknown). */
+    val storedSources: InboxStoredSources? = null,
     /** How many refreshes have succeeded. A new count says the records are the hub's whole list, even when it is empty. */
     val refreshes: Int = 0,
 )

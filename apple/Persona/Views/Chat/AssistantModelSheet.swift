@@ -238,9 +238,9 @@ nonisolated enum AssistantModelChoice {
     /// The short name the composer button shows for the effective setup: the picked/configured model, else the
     /// launcher's own model, else just the launcher.
     static func displayName(_ e: Effective, response: APIClient.LaunchersResponse?) -> String? {
-        let id = e.model?.emptyAsNil
-            ?? response?.launchers.first { $0.name == e.launcher }?.model?.emptyAsNil
-        return id.flatMap { SessionModes.modelName($0) } ?? e.launcher
+        let matched = response?.launchers.first { $0.name == e.launcher }
+        let id = e.model?.emptyAsNil ?? matched?.model?.emptyAsNil
+        return id.flatMap { SessionModes.modelName($0) } ?? matched?.title ?? Launcher.builtinTitle(name: e.launcher)
     }
 }
 

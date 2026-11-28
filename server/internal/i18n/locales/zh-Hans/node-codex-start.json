@@ -3,6 +3,7 @@
   "command_line_too_long": "Codex 首条消息及启动参数需要 {units} 个 UTF-16 单元，超过 Windows 的 {limit} 上限。消息未发送，请缩短首条消息。",
   "no_box": "Codex 已经在电脑上的新标签里打开了，但 {seconds} 秒内没看到它的输入框。",
   "no_box_here": "Codex 已经在你选的窗格里启动了，但 {seconds} 秒内没看到它的输入框。窗格保持原样。",
+  "not_logged_in": "电脑上的 Codex 还没登录：它打开后停在登录界面，Agent 没有启动。在那台电脑的终端里运行 codex login 登录，再重新启动 Agent。",
   "paste_unconfirmed": "未能确认首条消息已进入 Codex 输入框（{view}），没有按回车。",
   "session_cleanup_failed": "启动失败的窗格已关闭，但未能归档其会话：{reason}"
 }

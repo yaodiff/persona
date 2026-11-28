@@ -17,6 +17,7 @@ export interface HubDevelopmentProgress {
   step: string;
   step_index: number;
   step_total: number;
+  steps?: string[];
   elapsed_seconds: number;
   item_label?: string;
   item_done?: number;
@@ -28,6 +29,9 @@ export interface HubDevelopmentProgress {
 }
 
 export interface HubUpdateStatus {
+  can_cancel?: boolean;
+  cancelling?: boolean;
+  supports_preview?: boolean;
   source?: "release" | "beta" | "web-dev";
   development?: {
     configured: boolean;
@@ -93,7 +97,7 @@ export interface HubUpdateRecord {
   to_build: number;
   started?: string;
   ended?: string;
-  result: string; // updated | rolled_back | failed | held
+  result: string; // updated | rolled_back | failed | cancelled | held
   reason?: string;
   auto: boolean;
 }
@@ -129,21 +133,19 @@ export const skills = (manager?: string) => api<{ machine_id: string; machine?: 
 /** Titles shared by the sidebar notice and the Settings progress row. */
 export function workingUpdateTitle(s: HubUpdateStatus): string | undefined {
   switch (s.state) {
+    case "resolving":
+      return t("lib-hub-update.state_checking");
     case "applying_backup":
-      return t("lib-hub-update.state_applying_backup");
     case "building":
-      return t("lib-hub-update.state_building");
     case "backing_up":
-      return t("lib-hub-update.state_backing_up");
     case "downloading":
-      return t("lib-hub-update.state_downloading");
+    case "confirming":
+      return t(`lib-hub-update.state_${s.state}`);
     case "waiting_idle":
       return s.busy.length ? t("lib-hub-update.state_waiting_busy", { count: s.busy.length }) : t("lib-hub-update.state_waiting_idle");
     case "installing":
     case "restarting":
       return t("lib-hub-update.state_restarting");
-    case "confirming":
-      return t("lib-hub-update.state_confirming");
   }
 }
 
@@ -196,20 +198,7 @@ export function hubNotice(s: HubUpdateStatus | null | undefined, dismissed: read
   }) ?? null;
 }
 
-export function hubNoticeText(n: HubNotice): string {
-  switch (n.kind) {
-    case "updating":
-      return t("lib-hub-update.notice_updating", { what: n.what });
-    case "rolled_back":
-      return n.why; // the hub's own words
-    case "auto_on":
-      return t("lib-hub-update.notice_auto_on");
-    case "available":
-      return t("lib-hub-update.notice_available", { version: n.version });
-    case "new_image":
-      return t("lib-hub-update.notice_new_image", { version: n.version });
-  }
-}
+export { hubNoticeText } from "./hub-notice-text";
 
 const DISMISSED_KEY = "persona.hubNotice.dismissed";
 

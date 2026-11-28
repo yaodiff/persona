@@ -1,5 +1,8 @@
 {
   "assistant": "アシスタント",
+  "external": "外部",
+  "settings": "設定",
+  "tab_bar": "主なページ",
   "sidebar": "サイドバー",
   "switch_page": "ページの切り替え",
   "waiting_label_other": "{label}、要対応{count}件"

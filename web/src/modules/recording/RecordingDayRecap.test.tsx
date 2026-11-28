@@ -744,4 +744,3 @@ describe("an open day's recap", () => {
     expect(requests).toHaveLength(count);
   });
 });
-

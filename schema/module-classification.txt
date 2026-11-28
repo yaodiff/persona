@@ -64,6 +64,7 @@ go server/cmd/persona-node core
 go server/cmd/persona-projects core
 go server/cmd/personad core
 go server/internal/acceptloop core
+go server/internal/agentprompt core
 go server/internal/agentref core
 go server/internal/agentref/agentrefadapt core
 go server/internal/agents core
@@ -88,6 +89,7 @@ go server/internal/assistant/fleetcount core
 go server/internal/assistant/fleetcount/fleetcountadapt core
 go server/internal/assistant/fleetcount/fleetcounttest core
 go server/internal/assistant/fleetview core
+go server/internal/assistant/kblark core
 go server/internal/assistant/kernel core
 go server/internal/assistant/kernel/seam core
 go server/internal/assistant/repository core
@@ -108,6 +110,7 @@ go server/internal/buildtags core
 go server/internal/buildtags/printtags core
 go server/internal/builtinext core
 go server/internal/bus core
+go server/internal/buswire core
 go server/internal/cachewarm core
 go server/internal/channel core
 go server/internal/channel/conformance core
@@ -143,6 +146,7 @@ go server/internal/domainkit/opt core
 go server/internal/domainkit/outcome core
 go server/internal/domainkit/slot core
 go server/internal/errreport core
+go server/internal/exportfile core
 go server/internal/extension core
 go server/internal/extension/conformance core
 go server/internal/extension/denohost core
@@ -208,6 +212,7 @@ go server/internal/node/clipshare core
 go server/internal/node/diskmap core
 go server/internal/node/imessageport core
 go server/internal/node/iphoneport core
+go server/internal/node/larkgateport core
 go server/internal/node/machdiag core
 go server/internal/node/nodekit core
 go server/internal/node/screenport core
@@ -235,8 +240,11 @@ go server/internal/proto core
 go server/internal/proxyproto core
 go server/internal/pushcrypto core
 go server/internal/quota core
+go server/internal/recordingcli core
 go server/internal/recordingwire core
 go server/internal/recordinghost core
+go server/internal/recordingspeakers core
+go server/internal/recordingspeakers/recordingspeakersadapt core
 go server/internal/relay core
 go server/internal/relayproto core
 go server/internal/remoteimage core
@@ -288,7 +296,7 @@ go server/scripts/fleetsoak core
 go server/scripts/pushrec core
 
 # Module code still in core paths.
-go server/internal/transcribelive voice
+go server/scripts/transcribelive voice
 go server/internal/lark lark
 go server/internal/screen core
 go server/internal/protectedapps computer-use
@@ -398,14 +406,18 @@ web web/src/sharing core
 web web/src/showcase core
 web web/src/showcase/images core
 web web/src/showcase/v6 core
+web web/src/test core
+web web/src/text-lookup core
 web web/src/ui core
 web web/src/ui/brands core
+web web/src/ui/font-assets core
 web web/src/ui/model-panel core
 web web/src/ui/stream core
 web web/src/views core
 web web/src/views/agents core
 web web/src/views/assistant core
 web web/src/views/chat core
+web web/src/views/execution core
 web web/src/views/extensions core
 web web/src/views/inbox core
 web web/src/views/knowledge knowledge-ui

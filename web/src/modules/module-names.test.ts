@@ -1,7 +1,7 @@
 // The shell's closed lists name no feature module (#13434, #13430 section 6; docs/web/web.md "Modules"): a module's page,
 // sidebar entry and Settings tab come from the module host, so a module's id, route base or sidebar key appearing in the
 // Route union, the sidebar's built-in pages or the Settings tabs means it was wired by hand again. Fails on a new one.
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { BUILTIN_PAGE_COLORS } from "../lib/sidebar-icons";
 import { NAV_PAGES } from "../lib/persona-nav";
@@ -60,7 +60,10 @@ describe("each module's namespaces", () => {
     for (const m of MODULES) {
       for (const ns of m.i18nNamespaces ?? []) {
         expect(ns === m.id || ns.startsWith(`${m.id}-`), `${m.id}: ${ns}`).toBe(true);
-        for (const lang of langs) expect(readdirSync(new URL(`i18n/locales/${lang}/`, src)), `${lang}/${ns}.json`).toContain(`${ns}.json`);
+        for (const lang of langs) {
+          const files = [`i18n/locales/${lang}/${ns}.json`, `modules/${m.id}/locales/${lang}/${ns}.json`];
+          expect(files.filter((path) => existsSync(new URL(path, src))), `${lang}/${ns}.json`).toHaveLength(1);
+        }
       }
       // and none of them is on the first screen: they load with the module
       const startup = JSON.parse(read("i18n/startup-namespaces.json")) as string[];

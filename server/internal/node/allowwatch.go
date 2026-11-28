@@ -25,6 +25,8 @@ var (
 	allowWatchFor    = 3 * time.Minute
 )
 
+const allowReadErrorLimit = 3
+
 type allowWatch struct {
 	pane string
 	gen  int64
@@ -53,23 +55,48 @@ func (n *Node) watchAllow(session, pane string) {
 	gen := w.gen
 	w.m[session] = &allowWatch{pane: pane, gen: gen}
 	w.mu.Unlock()
-	go n.followAllow(session, pane, gen)
+	go n.followAllow(session, pane, gen, allowSettle, allowFollowEvery, allowWatchFor)
 }
 
-func (n *Node) followAllow(session, pane string, gen int64) {
-	end := time.Now().Add(allowWatchFor)
-	wait := allowSettle
+func (n *Node) followAllow(session, pane string, gen int64, settle, every, lifetime time.Duration) {
+	ctx, stop := context.WithTimeout(context.Background(), lifetime)
+	defer stop()
+	wait := settle
+	emptyReads, readErrors := 0, 0
 	for {
-		time.Sleep(wait)
-		wait = allowFollowEvery
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		text, err := n.dialogScreen(ctx, pane)
-		cancel()
-		head := ""
-		if err == nil {
-			head = screen.DialogHead(text)
+		var found string
+		var readErr error
+		select {
+		case <-ctx.Done():
+		case <-time.After(wait):
+			readCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			text, err := n.dialogScreen(readCtx, pane)
+			cancel()
+			readErr = err
+			if err == nil {
+				found = screen.DialogHead(text)
+			}
 		}
-		over := err != nil || head == "" || time.Now().After(end)
+		wait = every
+		switch {
+		case readErr != nil:
+			readErrors++
+			emptyReads = 0
+		case found == "":
+			emptyReads++
+			readErrors = 0
+		default:
+			emptyReads, readErrors = 0, 0
+		}
+		var endReason string
+		switch {
+		case ctx.Err() != nil:
+			endReason = "watch expired"
+		case readErrors >= allowReadErrorLimit:
+			endReason = "watch stopped after repeated pane read failures"
+		case emptyReads >= 2:
+			endReason = "the dialog is gone"
+		}
 		w := &n.allowed
 		w.mu.Lock()
 		cur := w.m[session]
@@ -78,23 +105,26 @@ func (n *Node) followAllow(session, pane string, gen int64) {
 			return
 		}
 		was := cur.head
-		if over {
+		head := was
+		if endReason != "" {
 			delete(w.m, session)
-		} else {
-			cur.head = head
+			head = ""
+		} else if found != "" {
+			cur.head, head = found, found
 		}
 		w.mu.Unlock()
-		if was != head || over && was != "" {
-			if over {
-				n.logf("allow on %s: the dialog is gone", pane)
-			} else if was == "" {
-				n.logf("allow on %s not taken: %q still holds the terminal", pane, clipDialog(head, 80))
-			}
-			if n.events != nil {
-				n.events.poke(true) // a list rebuild carries it to the manager, which makes the screen card
-			}
+		if readErr != nil && ctx.Err() == nil {
+			n.logf("allow on %s: pane read failed (%d/%d): %v", pane, readErrors, allowReadErrorLimit, readErr)
 		}
-		if over {
+		if endReason != "" && (was != "" || readErrors >= allowReadErrorLimit) {
+			n.logf("allow on %s: %s", pane, endReason)
+		} else if was == "" && head != "" {
+			n.logf("allow on %s not taken: %q still holds the terminal", pane, clipDialog(head, 80))
+		}
+		if was != head && n.events != nil {
+			n.events.poke(true) // a list rebuild carries it to the manager, which makes the screen card
+		}
+		if endReason != "" {
 			return
 		}
 	}

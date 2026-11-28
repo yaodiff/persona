@@ -3,7 +3,7 @@
   "no": "否",
   "empty": "（空）",
   "field_line": "{label}：{value}",
-  "would_push": "真实对话里会打开详情页「{title}」",
-  "would_pop": "真实对话里会返回上一页",
-  "would_open": "真实对话里会在 App 内打开「{target}」"
+  "would_push": "在真实对话中，这里会打开详情页「{title}」。",
+  "would_pop": "在真实对话中，这里会返回上一页。",
+  "would_open": "在真实对话中，这里会在 App 内打开「{target}」。"
 }

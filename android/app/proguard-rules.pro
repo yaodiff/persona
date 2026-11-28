@@ -37,7 +37,9 @@
 -keepnames class persona.core.designsystem.MarkdownRenderer
 -keepnames class persona.core.hub.HttpChatComposerService
 -keepnames class persona.feature.agents.AgentsViewModel
+-keepnames class persona.feature.files.DocumentText
 -keepnames class persona.feature.files.Notebooks
+-keepnames class persona.feature.files.Xlsx
 -keepnames class persona.feature.inbox.LarkInboxRepository
 
 # Looked up by name on a failed tasks call (TasksStore.reloadTodos and isLegacySpacesRoute in core/domain).
@@ -53,3 +55,6 @@
 -keep class com.jcraft.jsch.jce.** { <init>(); }
 -keep class com.jcraft.jsch.CipherNone, com.jcraft.jsch.DH*, com.jcraft.jsch.UserAuthNone, com.jcraft.jsch.UserAuthPublicKey { <init>(); }
 -keep class persona.core.hub.tunnel.TinkX25519, persona.core.hub.tunnel.TinkEd25519 { <init>(); }
+
+# Keep distinct GlanceAppWidget class names so R8 horizontal class merging never collides GlanceAppWidgetManager.getGlanceIds(javaClass).
+-keepnames class * extends androidx.glance.appwidget.GlanceAppWidget

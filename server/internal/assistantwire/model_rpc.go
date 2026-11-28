@@ -1,6 +1,10 @@
 package assistantwire
 
-import "encoding/json"
+import (
+	"encoding/json"
+
+	"github.com/nwverse/persona/server/internal/buswire"
+)
 
 // Model calls by extensions (#6102, docs/extensions/extensions.md "Model calls"): an extension granted the models scope calls
 // model.complete; the manager hands it to the assistant with the extension's id (ExtensionComplete), and the
@@ -23,6 +27,17 @@ const (
 	// scope: each has a purpose extension.<id> in Settings › Models.
 	PluginsModels = "plugins.models"
 )
+
+var (
+	ExtensionIdentityMethod       = buswire.Method[buswire.None, ExtensionIdentityResult]{Name: MethodExtensionIdentity}
+	ModelsExtensionCompleteMethod = buswire.Method[ExtensionComplete, ModelCompleteResult]{Name: MethodModelsExtensionComplete}
+	ModelsPurposeCompleteMethod   = buswire.Method[PurposeComplete, ModelCompleteResult]{Name: MethodModelsPurposeComplete}
+)
+
+// ExtensionIdentityResult reports support for stable extension ownership.
+type ExtensionIdentityResult struct {
+	Supported bool `json:"supported"`
+}
 
 // Error codes of model.complete besides permission_denied, invalid_params and assistant_offline.
 const (

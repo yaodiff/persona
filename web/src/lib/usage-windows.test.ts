@@ -1,9 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { initI18n } from "../i18n";
 import { balanceAccounts, balanceEmpty, balanceText } from "./usage-balance";
-import { countdown, fullest, groupByProvider, isBalanceAccount, isPinnableUsageAccount, liveAccounts, parsePinnedUsageAccounts, planNote, protectReserve, providerTitle, remainingPercent, remainingText, remainingTone, resetLabel, sampleAge, selectSidebarUsageAccounts, sortedWindows, sortForCard, sourceNames, tightestRemaining, timelinePosition, topAccounts, windowKey, windowMinutes, type UsageAccount, type UsageWindow } from "./usage-windows";
-import { isAccountPaused, isWindowPaused, providerTimeline, stripProviderPrefix, unifiedTimeline, windowHeadroom } from "./usage-timeline";
 import { accountPace, pace } from "./usage-pace";
+import { formatPlanLabel, groupByProvider, planNote, providerTitle, remainingText, sortedWindows, sortForCard, timelinePosition } from "./usage-popover";
+import { isAccountPaused, isWindowPaused, providerTimeline, stripProviderPrefix, unifiedTimeline, windowHeadroom } from "./usage-timeline";
+import { countdown, fullest, isBalanceAccount, isPinnableUsageAccount, liveAccounts, parsePinnedUsageAccounts, parseUsageWindowPinId, PINNED_USAGE_ACCOUNTS_KEY, protectReserve, remainingPercent, remainingTone, resetLabel, resetPinnedUsageAccounts, sampleAge, selectSidebarUsageAccounts, selectSidebarUsageItems, setPinnedUsageAccounts, sidebarWindowTitle, sourceNames, tightestRemaining, togglePinnedUsageAccount, topAccounts, usageWindowPinId, windowKey, windowMinutes, type UsageAccount, type UsageWindow } from "./usage-windows";
 
 const NOW = new Date(2026, 10, 5, 10, 0, 0).getTime(); // local time, so same-day checks do not depend on the zone
 const at = (ms: number) => new Date(NOW + ms).toISOString();
@@ -275,13 +276,21 @@ describe("accounts with several sources and per-model windows (#2595)", () => {
     expect(sourceNames(account({ sources: ["Relay", "Team pool"] }))).toEqual(["Relay", "Team pool"]);
     expect(sourceNames(account())).toEqual([]); // an older hub says nothing about it
   });
-  it("shows the plan unless the name has it", () => {
+  it("shows the normalized plan unless the name has it", () => {
     expect(planNote(account({ name: "Codex Pro", plan: "pro" }))).toBe("");
     expect(planNote(account({ name: "work seat", plan: "Pro" }))).toBe("Pro");
+    expect(planNote(account({ name: "work seat", plan: "max" }))).toBe("Max");
+    expect(planNote(account({ name: "work seat", plan: "claude_max_20x" }))).toBe("Claude Max 20x");
+    expect(planNote(account({ name: "work seat", plan: "api" }))).toBe("API");
+    expect(planNote(account({ name: "work seat", plan: "Pro+" }))).toBe("Pro+");
+    expect(formatPlanLabel("enterprise")).toBe("Enterprise");
+    expect(formatPlanLabel("xAI")).toBe("xAI");
     expect(planNote(account({ plan: " " }))).toBe("");
   });
-  it("tells windows of one length apart by model", () => {
+  it("tells windows of one length apart by model, group, and title", () => {
     expect(windowKey(win("7d", 10080, 1))).not.toBe(windowKey({ ...win("7d", 10080, 1), model: "Fable" }));
+    expect(windowKey({ ...win("7d", 10080, 1), group: "Pool A" })).not.toBe(windowKey({ ...win("7d", 10080, 1), group: "Pool B" }));
+    expect(windowKey({ ...win("5h", 300, 1), group: "Pool A", title: "Burst" })).not.toBe(windowKey({ ...win("5h", 300, 1), group: "Pool A", title: "Steady" }));
   });
 });
 
@@ -364,15 +373,187 @@ describe("pinned sidebar usage accounts (#12418)", () => {
     const fallback = selectSidebarUsageAccounts(live(), ["gone-1", "gone-2"]);
     expect(fallback.custom).toBe(false);
     expect(fallback.bars.map((a) => a.id)).toEqual(["codex", "claude"]);
-    expect(fallback.balances.map((a) => a.id)).toEqual(["ds"]);
+    expect(fallback.balances).toEqual([live()[3]]);
+  });
+});
+
+describe("pinned individual usage windows (#13870)", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+    resetPinnedUsageAccounts();
+  });
+
+  const bal = (id: string, amount: string): UsageAccount => ({ id, provider: "deepseek", name: "DeepSeek", windows: [], sampled_at: at(-60_000), balance: { amount, currency: "CNY" } });
+  const agyGemini5h: UsageWindow = { ...win("5h", 300, 82, 3 * H), model: "Gemini Models" };
+  const agyGemini7d: UsageWindow = { ...win("7d", 10080, 25, 48 * H), model: "Gemini Models" };
+  const agyClaude7d: UsageWindow = { ...win("7d", 10080, 10, 72 * H), model: "Claude and GPT models" };
+  const codex5h: UsageWindow = win("5h", 300, 85, 2 * H);
+  const codex7d: UsageWindow = win("7d", 10080, 30, 50 * H);
+
+  const live = (): UsageAccount[] => [
+    { id: "codex", provider: "codex", name: "Codex Pro", windows: [codex5h, codex7d], sampled_at: at(-60_000) },
+    { id: "agy", provider: "agy", name: "Antigravity", windows: [agyGemini5h, agyGemini7d, agyClaude7d], sampled_at: at(-60_000) },
+    bal("ds", "12.34"),
+  ];
+
+  it("encodes and parses window pin IDs cleanly, including special characters and malformed inputs", () => {
+    const id = usageWindowPinId("agy", agyGemini7d);
+    expect(id).toBe("window:agy:7d:10080:Gemini Models");
+    expect(parseUsageWindowPinId(id)).toEqual({ accountId: "agy", windowKey: windowKey(agyGemini7d) });
+
+    const planId = usageWindowPinId("codex", codex7d);
+    expect(planId).toBe("window:codex:7d:10080:");
+    expect(parseUsageWindowPinId(planId)).toEqual({ accountId: "codex", windowKey: windowKey(codex7d) });
+
+    const withColons = usageWindowPinId("acct:1/2", { ...win("7d", 10080, 10), model: "google:gemini-2.5" });
+    expect(parseUsageWindowPinId(withColons)).toEqual({ accountId: "acct:1/2", windowKey: "7d:10080:google:gemini-2.5" });
+
+    expect(parseUsageWindowPinId("agy")).toBeNull();
+    expect(parseUsageWindowPinId("window::7d:10080:")).toBeNull();
+    expect(parseUsageWindowPinId("window:agy:")).toBeNull();
+    expect(parseUsageWindowPinId("window:%E0%A4%A:7d:10080:")).toBeNull();
+  });
+
+  it("formats concise sidebar window titles without duplicating identical account and model names", () => {
+    expect(sidebarWindowTitle({ name: "Antigravity" }, agyGemini7d)).toBe("Antigravity · Gemini Models");
+    expect(sidebarWindowTitle({ name: "Codex Pro" }, codex7d)).toBe("Codex Pro");
+    expect(sidebarWindowTitle({ name: "Gemini" }, { model: "gemini" })).toBe("Gemini");
+  });
+
+  it("selects a single pinned window such as agy gemini 7d instead of the account's fullest window", () => {
+    const pinId = usageWindowPinId("agy", agyGemini7d);
+    const picked = selectSidebarUsageItems(live(), [pinId]);
+    expect(picked.custom).toBe(true);
+    expect(picked.items).toHaveLength(1);
+    expect(picked.items[0]).toMatchObject({ kind: "window", key: pinId, account: { id: "agy" }, window: agyGemini7d });
+  });
+
+  it("preserves mixed pin order across multiple windows, legacy account pins, and prepaid balances", () => {
+    const agyGem7d = usageWindowPinId("agy", agyGemini7d);
+    const codex7dPin = usageWindowPinId("codex", codex7d);
+    const agyClaudePin = usageWindowPinId("agy", agyClaude7d);
+    const picked = selectSidebarUsageItems(live(), [agyGem7d, "ds", codex7dPin, "codex", agyClaudePin]);
+    expect(picked.custom).toBe(true);
+    expect(picked.items.map((item) => [item.kind, item.key])).toEqual([
+      ["window", agyGem7d],
+      ["balance", "ds"],
+      ["window", codex7dPin],
+      ["account", "codex"],
+      ["window", agyClaudePin],
+    ]);
+  });
+
+  it("keeps surviving pins when a pinned window disappears and falls back to automatic when all pinned windows vanish", () => {
+    const missingWindow = usageWindowPinId("agy", { ...win("7d", 10080, 0), model: "Retired Model" });
+    const liveWindow = usageWindowPinId("codex", codex7d);
+
+    const partial = selectSidebarUsageItems(live(), [missingWindow, liveWindow]);
+    expect(partial.custom).toBe(true);
+    expect(partial.items.map((i) => i.key)).toEqual([liveWindow]);
+
+    const fallback = selectSidebarUsageItems(live(), [missingWindow]);
+    expect(fallback.custom).toBe(false);
+    expect(fallback.items.map((i) => [i.kind, i.key])).toEqual([
+      ["account", "codex"],
+      ["account", "agy"],
+      ["balance", "ds"],
+    ]);
+  });
+
+  it("keeps in-memory pin state intact without reverting to stale storage when localStorage writes throw", () => {
+    let stored: string | null = JSON.stringify(["codex"]);
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => (key === PINNED_USAGE_ACCOUNTS_KEY ? stored : null),
+      setItem: () => { throw new Error("QuotaExceededError"); },
+      removeItem: () => { throw new Error("SecurityError"); },
+    });
+
+    const agyGem7d = usageWindowPinId("agy", agyGemini7d);
+    expect(togglePinnedUsageAccount(agyGem7d)).toEqual(["codex", agyGem7d]);
+    // Subsequent toggle reads in-memory state rather than reverting to stale stored '["codex"]'
+    expect(togglePinnedUsageAccount("ds")).toEqual(["codex", agyGem7d, "ds"]);
+    expect(togglePinnedUsageAccount("codex")).toEqual([agyGem7d, "ds"]);
+    // Even if storage changes behind the scenes while volatile, in-memory state stays authoritative for the tab
+    stored = JSON.stringify(["codex"]);
+    expect(togglePinnedUsageAccount(agyGem7d)).toEqual(["ds"]);
+    expect(resetPinnedUsageAccounts()).toEqual([]);
+    expect(setPinnedUsageAccounts([agyGem7d])).toEqual([agyGem7d]);
+  });
+
+  it("works in memory when localStorage is undefined or getItem throws", () => {
+    const agyGem7d = usageWindowPinId("agy", agyGemini7d);
+    expect(togglePinnedUsageAccount(agyGem7d)).toEqual([agyGem7d]);
+    expect(togglePinnedUsageAccount("codex")).toEqual([agyGem7d, "codex"]);
+    expect(resetPinnedUsageAccounts()).toEqual([]);
+
+    vi.stubGlobal("localStorage", {
+      getItem: () => { throw new Error("SecurityError"); },
+      setItem: () => { throw new Error("SecurityError"); },
+      removeItem: () => { throw new Error("SecurityError"); },
+    });
+    expect(togglePinnedUsageAccount(agyGem7d)).toEqual([agyGem7d]);
+    expect(togglePinnedUsageAccount(agyGem7d)).toEqual([]);
+  });
+
+  it("falls back to in-memory state without throwing when the global localStorage getter throws SecurityError", () => {
+    const originalDescriptor = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+    const agyGem7d = usageWindowPinId("agy", agyGemini7d);
+    let getterCalls = 0;
+    Object.defineProperty(globalThis, "localStorage", {
+      configurable: true,
+      get() {
+        getterCalls += 1;
+        throw new DOMException("Storage access is blocked", "SecurityError");
+      },
+    });
+    try {
+      // First toggle exercises both readPinnedRaw() and setPinnedUsageAccounts() against the throwing getter
+      expect(togglePinnedUsageAccount(agyGem7d)).toEqual([agyGem7d]);
+      expect(getterCalls).toBeGreaterThanOrEqual(2);
+      expect(togglePinnedUsageAccount("codex")).toEqual([agyGem7d, "codex"]);
+      expect(togglePinnedUsageAccount(agyGem7d)).toEqual(["codex"]);
+      expect(resetPinnedUsageAccounts()).toEqual([]);
+      expect(setPinnedUsageAccounts([agyGem7d])).toEqual([agyGem7d]);
+      expect(togglePinnedUsageAccount("ds")).toEqual([agyGem7d, "ds"]);
+      expect(resetPinnedUsageAccounts()).toEqual([]);
+    } finally {
+      if (originalDescriptor) Object.defineProperty(globalThis, "localStorage", originalDescriptor);
+      else Reflect.deleteProperty(globalThis, "localStorage");
+    }
   });
 });
 
 describe("provider cards and the reset timeline (#13173)", () => {
   const acct = (id: string, name: string, provider: string, windows: UsageWindow[], sampled = at(-60_000)): UsageAccount => ({ id, name, provider, windows, sampled_at: sampled });
-  it("lists the 5h window, then 7d, then the rest, per-model allowances last", () => {
+  it("lists the 5h window, then 7d, then the rest, grouping extension groups and per-model pools without interleaving", () => {
     const a = acct("a", "A", "claude", [{ ...win("7d", 10080, 1, 3 * H), model: "Fable" }, win("1d", 1440, 1, H), win("7d", 10080, 1, 5 * H), win("5h", 300, 1, H)]);
     expect(sortedWindows(a).map((w) => `${w.label}${w.model ? "*" : ""}`)).toEqual(["5h", "7d", "1d", "7d*"]);
+
+    const agy = acct("agy", "Antigravity", "antigravity", [
+      { ...win("5h", 300, 10, 2 * H), model: "Claude and GPT models" },
+      { ...win("5h", 300, 20, 3 * H), model: "Gemini Models" },
+      { ...win("7d", 10080, 30, 48 * H), model: "Claude and GPT models" },
+      { ...win("7d", 10080, 40, 72 * H), model: "Gemini Models" },
+    ]);
+    expect(sortedWindows(agy).map((w) => `${w.model}:${w.label}`)).toEqual([
+      "Claude and GPT models:5h",
+      "Claude and GPT models:7d",
+      "Gemini Models:5h",
+      "Gemini Models:7d",
+    ]);
+
+    const ext = acct("ext", "Gateway", "claude", [
+      { ...win("7d", 10080, 40, 48 * H), group: "Coding Pool", title: "Weekly" },
+      { ...win("5h", 300, 20, 2 * H), group: "Reasoning Pool", title: "Burst" },
+      { ...win("5h", 300, 10, 1 * H), group: "Coding Pool", title: "Short" },
+    ]);
+    // Preserves extension group order and relative window order inside each group
+    expect(sortedWindows(ext).map((w) => `${w.group}:${w.title}`)).toEqual([
+      "Coding Pool:Weekly",
+      "Coding Pool:Short",
+      "Reasoning Pool:Burst",
+    ]);
   });
   it("sorts a card's accounts by the 7d reset, soonest first, those without one last, then case-insensitive name and id", () => {
     const a1 = acct("1", "Zed", "claude", [win("5h", 300, 1, H), win("7d", 10080, 1, 48 * H)]);
@@ -404,6 +585,16 @@ describe("provider cards and the reset timeline (#13173)", () => {
     expect(rows.map((r) => r.account.id)).toEqual(["b", "a"]);
     expect(rows[1].lanes.map((l) => [l.label, l.long, Number(l.end.toFixed(4)), l.remainingMs])).toEqual([["5h", false, 0.0375, 2 * H], ["7d", true, 0.45 + (24 / 144) * 0.55 > 0 ? Number((0.45 + (24 / 144) * 0.55).toFixed(4)) : 0, 48 * H]]);
     expect(rows[0].lanes[0].end).toBe(1); // beyond 7 days runs to the end of the axis
+  });
+  it("moves a rollout past its stale deadline out of account timelines and pinned sidebar items", () => {
+    const windows = [win("5h", 300, 30, H)];
+    const live = acct("seat", "Seat", "codex", windows);
+    const file = { ...acct("file", "Codex", "codex", windows, at(-H)), reading_source: "rollout" as const, stale_at: at(-H / 2) };
+    const readings = liveAccounts([live, file], NOW);
+    expect(providerTimeline(readings, NOW).map((r) => r.account.id)).toEqual(["seat"]);
+    const { items, custom } = selectSidebarUsageItems(readings, ["file", usageWindowPinId("file", windows[0])]);
+    expect(custom).toBe(false);
+    expect(items.map((item) => item.account.id)).toEqual(["seat"]);
   });
   it("merges multi-model windows of the same kind into one lane taking the earliest reset, while dropping missing/ended resets", () => {
     const empty = acct("e", "Empty", "claude", [win("5h", 300, 1), win("7d", 10080, 1, -H)]);

@@ -103,8 +103,8 @@ func TestAcceptStoreFailureIsNotAccepted(t *testing.T) {
 	st.mu.Lock()
 	st.failSetting = errors.New("database unavailable")
 	st.mu.Unlock()
-	if ok, err := r.s.acceptTryFromBrief(ctx, "todo_v1", asked); ok.taken || !errors.Is(err, errAcceptStore) {
-		t.Fatalf("acceptTryFromBrief with the asks unreadable = %v, %v; want errAcceptStore", ok, err)
+	if ok, err := r.s.acceptReviewRound(ctx, "todo_v1", asked); ok.taken || !errors.Is(err, errAcceptStore) {
+		t.Fatalf("acceptReviewRound with the asks unreadable = %v, %v; want errAcceptStore", ok, err)
 	}
 	if code := route(r.s); code != http.StatusServiceUnavailable {
 		t.Fatalf("the web button with the asks unreadable: %d, want 503", code)

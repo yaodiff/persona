@@ -5,6 +5,7 @@ import (
 	jsonv2 "encoding/json/v2"
 	"errors"
 	"net/http"
+	"net/url"
 	"slices"
 
 	"github.com/nwverse/persona/server/internal/apierr"
@@ -22,7 +23,7 @@ type externalSourceStore interface {
 	UpdateExternalBinding(context.Context, assistantwire.ExternalBindingID, assistantwire.ExternalBindingInput) (assistantwire.ExternalBinding, error)
 	DeleteExternalBinding(context.Context, assistantwire.ExternalBindingID) error
 	LookupExternalBindings(context.Context, []assistantwire.ExternalRef) (assistantwire.ExternalBindingLookup, error)
-	ExternalSourceSummary(context.Context, assistantwire.ExternalProvider, *assistantwire.ExternalChannelID) (assistantwire.ExternalSourceSummary, error)
+	ExternalSourceSummary(context.Context, assistantwire.ExternalProvider, *assistantwire.ExternalChannelID, bool) (assistantwire.ExternalSourceSummary, error)
 	ExternalSourcePolicies(context.Context, []assistantwire.ExternalRef, assistantwire.ExternalBindingID) ([]assistantwire.ExternalScopedPolicy, *assistantwire.ExternalBinding, error)
 	PutExternalSourcePolicy(context.Context, assistantwire.ExternalScopedPolicy) error
 }
@@ -186,7 +187,26 @@ func (x externalSourceRoutes) lookup(w http.ResponseWriter, r *http.Request, sto
 }
 
 func (x externalSourceRoutes) summary(w http.ResponseWriter, r *http.Request, store externalSourceStore) {
-	q := r.URL.Query()
+	q, err := url.ParseQuery(r.URL.RawQuery)
+	if err != nil {
+		writeExternalSourceError(w, http.StatusBadRequest, "invalid_external_query")
+		return
+	}
+	var includeDone bool
+	if values, present := q["include_done"]; present {
+		if len(values) != 1 {
+			writeExternalSourceError(w, http.StatusBadRequest, "invalid_include_done")
+			return
+		}
+		switch values[0] {
+		case "true", "1":
+			includeDone = true
+		case "false", "0":
+		default:
+			writeExternalSourceError(w, http.StatusBadRequest, "invalid_include_done")
+			return
+		}
+	}
 	var provider assistantwire.ExternalProvider
 	if q.Has("provider") {
 		p, err := externalbindingadapt.Provider(assistantwire.ExternalProvider(q.Get("provider")))
@@ -207,7 +227,7 @@ func (x externalSourceRoutes) summary(w http.ResponseWriter, r *http.Request, st
 		}
 		channel = &path[0].Channel
 	}
-	summary, err := store.ExternalSourceSummary(r.Context(), provider, channel)
+	summary, err := store.ExternalSourceSummary(r.Context(), provider, channel, includeDone)
 	if err != nil {
 		x.storeError(w, err)
 		return

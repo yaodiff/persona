@@ -12,6 +12,7 @@ import (
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/bus"
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -20,7 +21,7 @@ import (
 )
 
 func init() {
-	handleBus(devicewire.MethodReplayHeldStart, (*Hub).busReplayHeldStart)
+	handleTypedBusWithDecoder(devicewire.ReplayHeldStartMethod, decodeReplayHeldStart, (*Hub).busReplayHeldStart)
 }
 
 type heldStartReplayKey struct{}
@@ -107,8 +108,7 @@ func (h *Hub) tryHoldStart(ctx context.Context, w http.ResponseWriter, r *http.R
 	}
 	hctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	defer cancel()
-	var reply devicewire.HoldStartReply
-	err = h.callBusAsIs(hctx, owner, devicewire.MethodHoldStart, req, &reply)
+	reply, err := buswire.Call(hctx, h.managerCaller(owner), devicewire.HoldStartMethod, req)
 	if err != nil {
 		var re *rpc.Error
 		if errors.As(err, &re) {
@@ -128,19 +128,24 @@ func (h *Hub) tryHoldStart(ctx context.Context, w http.ResponseWriter, r *http.R
 	return true
 }
 
+// decodeReplayHeldStart keeps the role check ahead of decoding and the same error for missing or malformed params.
+func decodeReplayHeldStart(c *busConn, raw json.RawMessage) (devicewire.ReplayHeldStartRequest, error) {
+	var req devicewire.ReplayHeldStartRequest
+	if c.ident.Role != bus.RoleManager {
+		return req, &rpc.Error{Code: "forbidden", Message: "only managers can replay held starts"}
+	}
+	if err := json.Unmarshal(raw, &req); err != nil || req.Call.MachineID == "" || req.Call.OpID == "" {
+		return req, &rpc.Error{Code: bus.CodeInvalidParams, Message: "call.machine_id and call.op_id are required"}
+	}
+	return req, nil
+}
+
 // busReplayHeldStart replays a held new-Agent start through the hub's real startSessionWith validation and launch path
 // once its computer reconnects, or completes post-start todo handoff linkage when the node already created the session
 // for Call.OpID (#10674).
-func (h *Hub) busReplayHeldStart(ctx context.Context, c *busConn, raw json.RawMessage) (any, error) {
-	if c.ident.Role != bus.RoleManager {
-		return nil, &rpc.Error{Code: "forbidden", Message: "only managers can replay held starts"}
-	}
-	var req devicewire.ReplayHeldStartRequest
-	if err := json.Unmarshal(raw, &req); err != nil || req.Call.MachineID == "" || req.Call.OpID == "" {
-		return nil, &rpc.Error{Code: "invalid_params", Message: "call.machine_id and call.op_id are required"}
-	}
+func (h *Hub) busReplayHeldStart(ctx context.Context, c *busConn, req devicewire.ReplayHeldStartRequest) (devicewire.ReplayHeldStartReply, error) {
 	if err := h.ownsMachine(c, req.Call.MachineID); err != nil {
-		return nil, err
+		return devicewire.ReplayHeldStartReply{}, err
 	}
 	var p sessionStartRequest
 	if err := json.Unmarshal(req.Call.Params, &p); err != nil {
@@ -189,7 +194,7 @@ func (h *Hub) busReplayHeldStart(ctx context.Context, c *busConn, raw json.RawMe
 	}
 	synReq.Header.Set("X-Persona-Op-Id", req.Call.OpID)
 	rec := &bufferedResponse{header: http.Header{}, lang: lang}
-	h.startSessionWith(rec, synReq, p, false)
+	h.startSessionWith(rec, synReq, p, false, false) // a held start played again is the owner's own; no "via" mark is kept with it
 
 	body := rec.body.Bytes()
 	status := rec.status

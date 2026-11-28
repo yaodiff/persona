@@ -42,28 +42,28 @@ try {
     await page.goto(shell);
     const toolbar = page.locator("[data-terminal-toolbar]");
     await toolbar.waitFor();
-    const single = page.getByRole("radio", { name: "Single pane", exact: true });
+    const single = page.getByRole("radio", { name: "Single terminal", exact: true });
         await page.waitForFunction(() => [...document.querySelectorAll(".xterm-rows")].some((e) => e.textContent.includes("git status")));
     assert.equal(await single.getAttribute("aria-checked"), "true");
     await page.screenshot({ path: join(shots, `${tag}-toolbar.png`) });
-    const actions = toolbar.getByRole("button", { name: "Pane actions", exact: true });
+    const actions = toolbar.getByRole("button", { name: "Terminal actions", exact: true });
     await actions.focus();
     await page.keyboard.press("Enter");
-    await page.getByRole("menuitem", { name: /Close this pane/ }).waitFor();
+    await page.getByRole("menuitem", { name: /Close this terminal/ }).waitFor();
     await page.locator("[data-menu]").evaluateAll(async (els) => Promise.all(els.flatMap((el) => el.getAnimations()).map((a) => a.finished)));
     await page.screenshot({ path: join(shots, `${tag}-menu.png`) });
     // A real xterm textarea regaining focus must keep N, I and Backspace even with the menu open.
     const input = page.locator('[data-surface="shown"] textarea.xterm-helper-textarea').last();
     await input.focus(); await page.keyboard.press("n"); await page.keyboard.press("i"); await page.keyboard.press("Backspace");
     assert.equal(posts.length, 0); assert.equal(await page.getByRole("menu").count(), 1);
-    await toolbar.getByRole("button", { name: "Pane actions", exact: true }).focus();
+    await toolbar.getByRole("button", { name: "Terminal actions", exact: true }).focus();
     await page.keyboard.press("i");
     assert.equal(await page.evaluate(() => navigator.clipboard.readText()), "w1:p2");
-    await toolbar.getByRole("button", { name: "Pane actions", exact: true }).click();
+    await toolbar.getByRole("button", { name: "Terminal actions", exact: true }).click();
     await page.keyboard.press("n");
     await page.getByRole("menuitem", { name: /Split down/ }).waitFor();
     await page.keyboard.press("Escape");
-    await toolbar.getByRole("button", { name: "Pane actions", exact: true }).click();
+    await toolbar.getByRole("button", { name: "Terminal actions", exact: true }).click();
     await page.keyboard.press("Backspace");
     await page.getByRole("menuitem", { name: /^Close(?:\s|$)/ }).waitFor();
     assert.equal(posts.length, 0); await page.keyboard.press("Escape");
@@ -93,15 +93,12 @@ try {
     assert.ok(geometry.scroll <= geometry.width + 1 && geometry.right <= width + 1, JSON.stringify(geometry));
     assert.deepEqual(posts.slice(-2).map((p) => p.body), [{ pane: "w1:p2", direction: "right" }, { pane: "w1:p2", direction: "down" }]);
     const localFeedback = await page.evaluate(() => window.__paneFeedback);
-    // The session-browser row uses the same menu as the sidebar and must have no pane controls.
+    // History lists ended sessions, which have no terminal actions menu.
     await page.goto(`${base}/terminal`);
-    const row = page.locator('main a[href^="/s/"]').first();
+    const row = page.locator('[data-history-row] a[href^="/s/"]').first();
     await row.waitFor(); await row.click({ button: "right" });
-    const menu = page.getByRole("menu"); await menu.waitFor();
-    const text = await menu.innerText();
-    for (const label of ["New pane", "Split right", "Split down", "Close pane", "Copy pane ID"]) assert.ok(!text.includes(label), text);
-    await page.locator("[data-menu]").evaluateAll(async (els) => Promise.all(els.flatMap((el) => el.getAnimations()).map((a) => a.finished)));
-    await page.screenshot({ path: join(shots, `${tag}-session-menu.png`) });
+    assert.equal(await page.getByRole("menu").count(), 0);
+    await page.screenshot({ path: join(shots, `${tag}-history.png`) });
     assert.deepEqual(errors, []);
     results.push({ tag, geometry, feedback, localFeedback, checks: "split failure/success, scoped N/I/Backspace, clipboard, close cancel, session menu, no overflow" });
     console.log(`PASS ${tag}`);

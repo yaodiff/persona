@@ -10,6 +10,8 @@
   "push_not_page": "扩展要打开的 {ui} 不是一整页（只能打开 extension_page 或 nav_page）",
   "open_not_source": "扩展要打开的 persona: 链接不是这一条的来源（只有收件箱条目的界面能开 persona://inbox/<这一条>/source）",
   "open_not_https": "扩展要打开的不是 https 链接",
+  "open_not_prompt": "扩展只能把自己的快捷提示放进助手的输入框",
+  "open_not_settings": "扩展只能预填自己设置里的普通配置项（不能包含密钥、条目列表、其他字段、格式错误或过大的内容）",
   "no_machine": "没有这台机器",
   "no_item": "收件箱里没有这一条",
   "not_its_item": "这一条不是这个扩展的连接器收进来的",

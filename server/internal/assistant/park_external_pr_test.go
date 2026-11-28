@@ -422,3 +422,144 @@ func TestExternalPRParkReceiptAndReviewRecoverTogether(t *testing.T) {
 		t.Fatalf("supervisor change replaced the source wake identity: %q", key)
 	}
 }
+
+func TestExternalPRParkWakesOnMergeConflict(t *testing.T) {
+	for _, association := range []string{"current", "earlier", "no association"} {
+		for _, event := range []string{"terminal", "terminal_or_review"} {
+			t.Run(association+"/"+event, func(t *testing.T) {
+				s, _, task := newSupervisedService(t)
+				holdDigest(s)
+				ctx := context.Background()
+				if association != "no association" {
+					s.setTaskStage(ctx, task.ID, "review", externalPRSource)
+				}
+				if association == "earlier" {
+					s.setTaskStage(ctx, task.ID, "review", "https://github.com/example/app/pull/99")
+				}
+				args := externalPRParkArgs(externalPRSource)
+				args["evidence"].(map[string]any)["pr_event"] = event
+				if _, err := reviewErr(s, task.ID, args); err != nil {
+					t.Fatal(err)
+				}
+				now := time.Now().UTC().Truncate(time.Second)
+
+				// Open without conflicts stays parked.
+				s.deploy.forge = &prsForge{byNumber: map[int]TodoPRStatus{
+					12: {State: "open", HeadOID: "head-clean", Conflicts: false},
+					99: {State: "open", HeadOID: "other-head"},
+				}}
+				s.sweepPRStatuses(ctx, now)
+				if got := todoNow(s, task.ID); got.Supervision.State != reviewParked || pendingReviewSignal(s, task.ID) {
+					t.Fatalf("clean open PR woke external park: state=%q pending=%v", got.Supervision.State, pendingKinds(s, task.ID))
+				}
+
+				// Conflicting without head OID stays parked.
+				s.deploy.forge = &prsForge{byNumber: map[int]TodoPRStatus{
+					12: {State: "open", Conflicts: true},
+					99: {State: "open", HeadOID: "other-head"},
+				}}
+				s.sweepPRStatuses(ctx, now.Add(deployRecheck))
+				if got := todoNow(s, task.ID); got.Supervision.State != reviewParked || pendingReviewSignal(s, task.ID) {
+					t.Fatalf("conflict without head woke external park: state=%q pending=%v", got.Supervision.State, pendingKinds(s, task.ID))
+				}
+
+				// Open with conflicts + head wakes the external park once, without duplicating sigPRConflict.
+				s.deploy.forge = &prsForge{byNumber: map[int]TodoPRStatus{
+					12: {State: "open", HeadOID: "head-conflict-1", Conflicts: true},
+					99: {State: "open", HeadOID: "other-head"},
+				}}
+				s.sweepPRStatuses(ctx, now.Add(2*deployRecheck))
+				got := todoNow(s, task.ID)
+				if got.Supervision.State != reviewPending || !slices.Equal(pendingKinds(s, task.ID), []string{sigReview}) {
+					t.Fatalf("conflicting bound PR did not wake once via sigReview: state=%q pending=%v", got.Supervision.State, pendingKinds(s, task.ID))
+				}
+				receipt := externalPRReceipt(t, got)
+				if receipt["conflicts"] != true || receipt["head_oid"] != "head-conflict-1" {
+					t.Fatalf("conflict receipt missing fields: %v", receipt)
+				}
+				signals := watchSignals(got, nil, now.Add(2*deployRecheck))
+				if len(signals) != 1 {
+					t.Fatalf("expected one review signal: %v", signals)
+				}
+				entry, ok := s.digestEntry(ctx, signals[0], "")
+				if !ok || !strings.Contains(entry.Detail, "merge conflicts") || !strings.Contains(entry.Detail, "head-conflict-1") || !strings.Contains(entry.Detail, externalPRSource) || strings.Contains(entry.Detail, "pullrequestreview-0") {
+					t.Fatalf("conflict wake detail = %q (ok=%v)", entry.Detail, ok)
+				}
+
+				// Repeated sweep on the same conflicting head must not emit a duplicate sigPRConflict.
+				s.sweepPRStatuses(ctx, now.Add(3*deployRecheck))
+				if !slices.Equal(pendingKinds(s, task.ID), []string{sigReview}) {
+					t.Fatalf("repeated sweep on same conflicting head added duplicate signal: %v", pendingKinds(s, task.ID))
+				}
+			})
+		}
+	}
+}
+
+func TestExternalPRParkConflictRespectsAgentRoutingAndFallback(t *testing.T) {
+	for _, association := range []string{"current", "no association"} {
+		for _, agentOnline := range []bool{true, false} {
+			name := fmt.Sprintf("%s/agent_online_%t", association, agentOnline)
+			t.Run(name, func(t *testing.T) {
+				agent := proto.Session{
+					SessionID: "agent-ext-park", MachineID: "box", Cwd: "/code/app", Agent: "claude", Title: "worker",
+					Status: proto.StatusIdle, State: proto.StateIdle, UpdatedAt: time.Now(),
+				}
+				s, f, task := newBoundPRTask(t, &memStore{}, agent)
+				turnPREventsRouteOn(t, s)
+				ctx := context.Background()
+				if association == "no association" {
+					s.reports.mu.Lock()
+					delete(s.reports.stages, task.ID)
+					s.reports.mu.Unlock()
+					s.todos.mu.Lock()
+					row := s.todos.todos[task.ID]
+					row.PRURL, row.PRs, row.PRStatus, row.OtherPRs = "", nil, nil, nil
+					s.todos.mu.Unlock()
+				}
+				if !agentOnline {
+					f.devices = []Device{
+						{ID: "server", Name: "server", Online: true, Reachable: true},
+						{ID: "box", Name: "box", Online: false, Reachable: false},
+					}
+				}
+				if _, err := reviewErr(s, task.ID, externalPRParkArgs(externalPRSource)); err != nil {
+					t.Fatal(err)
+				}
+				now := time.Now().UTC().Truncate(time.Second)
+				s.deploy.forge = &prsForge{byNumber: map[int]TodoPRStatus{
+					12: {State: "open", HeadOID: "head-ext-1", Conflicts: true},
+				}}
+				before := len(sentToAgent(f))
+				s.sweepPRStatuses(ctx, now)
+				got := todoNow(s, task.ID)
+				if agentOnline {
+					if sent := sentToAgent(f)[before:]; len(sent) != 1 || !strings.Contains(sent[0], "Event: pr_conflict") || !strings.Contains(sent[0], "head-ext-1") {
+						t.Fatalf("expected 1 routed conflict to Agent, got %q", sent)
+					}
+					if got.Supervision.State != reviewParked || len(pendingKinds(s, task.ID)) != 0 {
+						t.Fatalf("routed conflict unexpectedly woke supervisor: state=%q pending=%v", got.Supervision.State, pendingKinds(s, task.ID))
+					}
+					// Repeated sweep on the same head must dedup without sending or waking supervisor.
+					s.sweepPRStatuses(ctx, now.Add(deployRecheck))
+					if len(sentToAgent(f))-before != 1 || todoNow(s, task.ID).Supervision.State != reviewParked || len(pendingKinds(s, task.ID)) != 0 {
+						t.Fatalf("repeated sweep leaked send or supervisor wake: sends=%d state=%q pending=%v", len(sentToAgent(f))-before, todoNow(s, task.ID).Supervision.State, pendingKinds(s, task.ID))
+					}
+					return
+				}
+				// Agent offline: fallback must wake external park once via sigReview, without duplicate sigPRConflict.
+				if len(sentToAgent(f))-before != 0 {
+					t.Fatalf("offline Agent unexpectedly received sends")
+				}
+				if got.Supervision.State != reviewPending || !slices.Equal(pendingKinds(s, task.ID), []string{sigReview}) {
+					t.Fatalf("fallback did not wake external park cleanly: state=%q pending=%v", got.Supervision.State, pendingKinds(s, task.ID))
+				}
+				// Repeated sweep on same head does not add a duplicate sigPRConflict.
+				s.sweepPRStatuses(ctx, now.Add(deployRecheck))
+				if !slices.Equal(pendingKinds(s, task.ID), []string{sigReview}) {
+					t.Fatalf("fallback repeated sweep added duplicate wake: %v", pendingKinds(s, task.ID))
+				}
+			})
+		}
+	}
+}

@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { registerTestMailbox } from "../../test/mailbox-fixture";
 import { act, StrictMode, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -78,7 +79,26 @@ afterEach(() => {
   history.replaceState(null, "", "/");
 });
 
+registerTestMailbox();
+
 describe("AI reply drafts", () => {
+  it("replaces stale bot copy with the configured sender and binds it to Send", async () => {
+    const lark = item({ source: "larkcli", connector: { thread: "larkcli:chat:oc_example", can_reply: true, reply_to: "Old bot description" } });
+    let identity = "bot";
+    request.mockImplementation(async (path) => path === "/assistant/outbound-messages" ? { identity } : lark);
+    await open(lark);
+    const copy = (sender: string) => t("inbox-inboxdialogs.lark_sender_" + sender, { chat: lark.title });
+    expect(document.querySelector("[role=dialog]")?.textContent).toContain(copy("bot"));
+    identity = "user";
+    await act(async () => window.dispatchEvent(new Event("focus")));
+    expect(document.querySelector("[role=dialog]")?.textContent).toContain(copy("user"));
+    expect(document.querySelector("[role=dialog]")?.textContent).not.toContain("Old bot description");
+    await click(t("inbox-inboxdialogs.send"));
+    expect(request).toHaveBeenCalledWith(itemPath(lark.id) + "/reply", expect.objectContaining({
+      json: expect.objectContaining({ expected_sender_identity: "user" }),
+    }));
+  });
+
   it("opens the AI twin's archived conversation on its computer and keeps the item address", async () => {
     const draft = item({ agent: { state: "drafted", draft: "Generated reply", machine_id: "remote", session_id: "inbox-chat" } });
     history.replaceState(null, "", `/inbox/${encodeURIComponent(draft.id)}?manager=owner-a`);

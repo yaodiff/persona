@@ -719,7 +719,7 @@ flipped in the same PR (section 6) and the derived `paused` field (section 5) dr
 The Apple, Android and web recording clients (section 8 records their consequence), the wire (JSON shapes stay byte-identical;
 the one addition is the derived `paused` field on responses, additive), prompts (they stay under `server/internal/prompts/`),
 `recordinghost.Host`'s 75 methods (a separate narrowing, #13407), the hub's meeting glue (`hub/meeting_*.go`) and
-`internal/transcribelive`.
+`server/scripts/transcribelive`.
 
 ## Superseded text (kept for the record)
 

@@ -492,7 +492,7 @@ func TestSessionStartPiUsesTheWorkAgent(t *testing.T) {
 
 // The hub decides what to do with a permission mode or effort by proto.WorkAgentTypes and proto.NoModeAgentTypes
 // (assistant/launcher_modes.go, #7559): it drops them for the agents a start goes through without (work agents) and
-// refuses them for the ones the node refuses (traex, omp). Both lists must say what start here does with an effort.
+// refuses unsupported choices. TRAE CLI keeps an effort even though it takes no Persona permission mode.
 func TestStartModeAgentTypesMatchTheNode(t *testing.T) {
 	kinds := []string{piAgent, cursorAgent, agyAgent, traexAgent, ompAgent}
 	for _, k := range append(append([]string{}, proto.WorkAgentTypes...), proto.NoModeAgentTypes...) {
@@ -507,24 +507,28 @@ func TestStartModeAgentTypesMatchTheNode(t *testing.T) {
 			f.reply("tab.create", map[string]any{"tab": map[string]any{"tab_id": "w1:t2"}, "root_pane": map[string]any{"pane_id": "w1:p2"}})
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
+			startLine := "HERDR_AGENT="
+			if kind == traexAgent {
+				startLine = "model_reasoning_effort=high"
+			}
 			f.after(func(c herdrCall) {
-				if c.Method == "pane.send_input" && strings.Contains(c.String(), "HERDR_AGENT=") {
+				if c.Method == "pane.send_input" && strings.Contains(c.String(), startLine) {
 					cancel() // the start went through to the agent's command: that is all this asks
 				}
 			})
 			_, err := n.start(ctx, home, kind, "do the thing", "", "", "", "high", "", "", kind)
 			typed := f.trace("pane.send_input")
-			ran := slices.ContainsFunc(typed, func(c string) bool { return strings.Contains(c, "HERDR_AGENT=") })
+			ran := slices.ContainsFunc(typed, func(c string) bool { return strings.Contains(c, startLine) })
 			// Refused: an error before anything was typed. Went through: the agent's command was typed.
 			refused := err != nil && len(typed) == 0
 			work, none := proto.IsWorkAgentType(kind), proto.IsNoModeAgentType(kind)
 			switch {
 			case work == none:
 				t.Fatalf("%s: in proto.WorkAgentTypes %v, in proto.NoModeAgentTypes %v: want exactly one", kind, work, none)
-			case none && !refused:
-				t.Fatalf("%s with an effort: the node did not refuse it (%v), but proto.NoModeAgentTypes lists it", kind, err)
-			case work && (refused || !ran):
-				t.Fatalf("%s with an effort: the node did not start it (%v), but proto.WorkAgentTypes lists it", kind, err)
+			case kind == ompAgent && !refused:
+				t.Fatalf("%s with an effort: the node did not refuse it (%v)", kind, err)
+			case (work || kind == traexAgent) && (refused || !ran):
+				t.Fatalf("%s with an effort: the node did not start it (%v)", kind, err)
 			}
 		})
 	}

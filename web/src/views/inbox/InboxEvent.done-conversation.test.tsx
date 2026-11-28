@@ -52,7 +52,7 @@ afterEach(() => {
 });
 
 const conversationLinks = () => [...host.querySelectorAll("button")].filter((b) => (b.textContent ?? "").startsWith("处理对话"));
-const openActions = () => [...host.querySelectorAll("button")].map((b) => b.textContent?.trim() ?? "").filter((x) => x === "说一句" || x === "再试一次");
+const openActions = () => [...host.querySelectorAll("button")].map((b) => b.textContent?.trim() ?? "").filter((x) => x === "补充说明" || x === "再试一次");
 
 describe("已处理条目的详情：处理对话入口与开放动作", () => {
   it("a done item with a known now keeps the words and the conversation link on one line, with no open actions", () => {
@@ -75,7 +75,7 @@ describe("已处理条目的详情：处理对话入口与开放动作", () => {
   it("an older done item the manager filed keeps its legacy words and puts the link on the same line", () => {
     act(() => root.render(<EventBody item={done({ done_by: "manager", handling: handling("done") })} onSource={() => {}} />));
     const line = host.querySelector("[data-event-handling='done']")!;
-    expect(line.textContent).toContain("助手处理了");
+    expect(line.textContent).toContain("已由助手处理");
     expect(line.contains(conversationLinks()[0])).toBe(true);
     expect(host.querySelector("[data-event-manager-done]")).toBeNull();
   });
@@ -83,7 +83,7 @@ describe("已处理条目的详情：处理对话入口与开放动作", () => {
   it("an older done item with no now and no conversation keeps its old presentation", () => {
     act(() => root.render(<EventBody item={done({ done_by: "manager", handling: handling("done") })} onSource={() => {}} />));
     act(() => root.render(<EventBody item={done({ done_by: "manager", handling: undefined })} onSource={() => {}} />));
-    expect(host.querySelector("[data-event-manager-done]")?.textContent).toBe("助手处理了");
+    expect(host.querySelector("[data-event-manager-done]")?.textContent).toBe("已由助手处理");
     expect(conversationLinks()).toEqual([]);
     act(() => root.render(<EventBody item={done({ done_by: "user", handling: undefined })} onSource={() => {}} />));
     expect(host.querySelector("[data-event-manager-done]")).toBeNull();
@@ -98,7 +98,7 @@ describe("已处理条目的详情：处理对话入口与开放动作", () => {
     for (const [state, urgent] of [["waiting", false], ["looking", false], ["looking", true], ["agent", false]] as const) {
       act(() => root.render(<EventBody item={done({ id: `d-${state}-${urgent}`, urgent, handling: handling(state) })} onSource={() => {}} />));
       const text = host.textContent ?? "";
-      for (const live of ["等对方回复", "AI 正在看", "Agent 在做", "AI 正在准备建议"]) expect(text, `${state}/${urgent}`).not.toContain(live);
+      for (const live of ["等待对方回复", "AI 正在查看", "Agent 处理中", "AI 正在准备建议"]) expect(text, `${state}/${urgent}`).not.toContain(live);
       expect(conversationLinks(), `${state}/${urgent}`).toHaveLength(1);
     }
   });
@@ -106,21 +106,21 @@ describe("已处理条目的详情：处理对话入口与开放动作", () => {
   it("keeps the manager's words on a done item whose handling still says waiting", () => {
     act(() => root.render(<EventBody item={done({ done_by: "manager", handling: handling("waiting") })} onSource={() => {}} />));
     const text = host.textContent ?? "";
-    expect(text).toContain("助手处理了");
-    expect(text).not.toContain("等对方回复");
+    expect(text).toContain("已由助手处理");
+    expect(text).not.toContain("等待对方回复");
     expect(conversationLinks()).toHaveLength(1);
   });
 
   it("an open item still gets both the link and 说一句", () => {
     act(() => root.render(<EventBody item={done({ done_at: undefined, done_by: undefined, handling: handling("waiting") })} onSource={() => {}} />));
     expect(conversationLinks()).toHaveLength(1);
-    expect(openActions()).toContain("说一句");
+    expect(openActions()).toContain("补充说明");
   });
 
   it("an open failed item gets 再试一次 and no 说一句", () => {
     act(() => root.render(<EventBody item={done({ done_at: undefined, done_by: undefined, handling: handling("failed", { error: "超时" }) })} onSource={() => {}} />));
     expect(conversationLinks()).toHaveLength(1);
     expect(openActions()).toContain("再试一次");
-    expect(openActions()).not.toContain("说一句");
+    expect(openActions()).not.toContain("补充说明");
   });
 });

@@ -190,14 +190,15 @@ func permissionCall(ix proto.Interaction, items []proto.Item) (string, int) {
 
 func (s *Service) finishExternalPlan(p *pending) {
 	s.fleet.mu.Lock()
-	if s.fleet.interactions[p.ix.ID] != p || p.claimed {
+	if s.fleet.interactions[p.ix.ID] != p || p.prepared != nil || p.claimed {
 		s.fleet.mu.Unlock()
-		return // the phone answered (its answer is the history's) or this card was replaced while the read was in flight
+		return // the phone answered, a newer card replaced this one, or a prepared coordinator owns it
 	}
 	delete(s.fleet.interactions, p.ix.ID)
 	if p.orphaned != nil {
 		p.orphaned.Stop()
 	}
+	p.stopReminderLocked()
 	s.fleet.mu.Unlock()
 	s.recordEnd(p.ix.ID, "dismissed", &proto.Resolution{Dismiss: true, AnsweredBy: proto.AnsweredByTerminal})
 	select {

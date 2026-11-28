@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/extwire"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -78,16 +79,16 @@ func (h *Hub) forgetManagerState(id string) {
 	f := &h.reported
 	f.mu.Lock()
 	delete(f.lives, id)
-	var gone []string
+	var gone []proto.Interaction
 	for ixID, ix := range f.interactions {
 		if ix.Manager == id {
-			gone = append(gone, ixID)
+			gone = append(gone, ix)
 			delete(f.interactions, ixID)
 		}
 	}
 	f.mu.Unlock()
-	for _, ixID := range gone {
-		h.broadcast(map[string]any{"type": "interaction_resolved", "id": ixID})
+	for _, ix := range gone {
+		h.broadcastInteractionResolved(ix, interactionResolvedEvent(ix))
 	}
 	h.forgetMachineEntries(id) // what it reported of its machines (machine_entries.go)
 }
@@ -168,10 +169,8 @@ func (h *Hub) managerTools(ctx context.Context, id string) []proto.Tool {
 	if fresh || h.busConnOf(id) == nil {
 		return tools
 	}
-	var res struct {
-		Tools []proto.Tool `json:"tools"`
-	}
-	if err := h.callBus(ctx, id, assistantwire.MethodTools, nil, &res); err != nil {
+	res, err := buswire.Call(ctx, h.managerCaller(id), assistantwire.ToolsMethod, assistantwire.SessionRef{})
+	if err != nil {
 		h.logf("assistant: [%s] tools: %v", id, err)
 		return tools
 	}

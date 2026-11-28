@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="chat_botmux_via">Sent from %1$s</string>
+    <string name="chat_botmux_triggered">Triggered</string>
+    <string name="chat_botmux_sent">Sent to Lark</string>
+    <string name="chat_botmux_sent_final">Final reply in Lark</string>
+    <string name="chat_botmux_bot">%1$s (bot)</string>
+    <string name="chat_botmux_quoted">Quoted a message</string>
+    <string name="chat_botmux_topic">Topic had earlier messages</string>
+    <plurals name="chat_botmux_attachments">
+        <item quantity="one">%1$d attachment</item>
+        <item quantity="other">%1$d attachments</item>
+    </plurals>
+    <string name="chat_botmux_voice">Voice</string>
+    <string name="chat_botmux_truncated">Cut short</string>
+    <string name="chat_botmux_original">Original</string>
+    <string name="chat_botmux_hide_original">Hide original</string>
+    <string name="chat_botmux_card_reply">Replied with a Lark card. Its words weren\'t recorded.</string>
+    <string name="chat_botmux_decode">Show as in Lark</string>
+    <string name="chat_botmux_decode_note">Messages and replies as they read in Lark. Off: the transcript\'s raw text, as the agent got it.</string>
+</resources>

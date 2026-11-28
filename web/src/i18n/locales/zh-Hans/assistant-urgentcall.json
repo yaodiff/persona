@@ -1,14 +1,14 @@
 {
   "call": "加急来电：{title}",
-  "answered": "已接",
-  "answered_for": "已接 · {duration}",
-  "missed": "未接",
-  "missed_twice": "未接（打了 2 次）",
+  "answered": "已接听",
+  "answered_for": "已接听 · {duration}",
+  "missed": "未接听",
+  "missed_twice": "未接听（响铃 2 次）",
   "declined": "已拒接",
   "cancelled": "已在别处处理",
-  "ringing": "正在响",
-  "you_asked": "你让它打的",
-  "why": "为什么打给你",
-  "outcome": "结果",
-  "transcript": "通话文字"
+  "ringing": "响铃中",
+  "you_asked": "由你主动设置来电提醒",
+  "why": "来电原因",
+  "outcome": "通话结果",
+  "transcript": "通话记录"
 }

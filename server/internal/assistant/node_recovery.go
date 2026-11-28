@@ -153,6 +153,9 @@ func (s *Service) nodeOfflineSince(machine string) (time.Time, bool) {
 // nodeRecoveryOfflineAfter or rebooted since it was last online, it runs a
 // recovery sweep for affected tasks.
 func (s *Service) NodeConnected(ctx context.Context, machine string) {
+	if machine != "" {
+		s.invalidateLauncherListCache(machine)
+	}
 	s.nodeConnectedAt(ctx, machine, time.Now())
 }
 

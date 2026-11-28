@@ -2,9 +2,9 @@
   "title": "Pin 消息",
   "recheck": "查看最新列表",
   "reload": "重新加载",
-  "loading": "加载 Pin 消息",
-  "empty_title": "还没有 Pin 消息",
-  "empty_hint": "把指针移到聊天里的消息上，点「Pin」。",
+  "loading": "正在加载 Pin 消息",
+  "empty_title": "暂无 Pin 消息",
+  "empty_hint": "将鼠标悬停在聊天消息上，点击「Pin」即可添加。",
   "total_other": "{count} 条 Pin",
   "retry": "重试",
   "me": "我",
@@ -14,5 +14,5 @@
   "remove": "移除 Pin",
   "view_in_chat": "在聊天中查看",
   "encrypted": "加密消息",
-  "added_by": "{name} 添加"
+  "added_by": "由 {name} 添加"
 }

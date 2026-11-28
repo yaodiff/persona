@@ -50,14 +50,20 @@ internal fun rememberChatRowActionPreparation(
     val localImages = remember(chrome.files, chrome.hubScope, key.machineId, session?.cwd, localCacheDir) {
         chrome.files?.let { LocalMarkdownImages(it, chrome.hubScope, key.machineId, session?.cwd.orEmpty(), localCacheDir) }
     }
-    val rawTurnFix = (projection.lines.lastOrNull() as? ChatLine.ApiError)
-        ?.takeIf { it.info.toolSearchUnsupported }?.let { TurnErrorFix.ToolSearchUnsupported }
+    val rawTurnFix = remember(projection.lines) {
+        (projection.lines.lastOrNull() as? ChatLine.ApiError)
+            ?.takeIf { it.info.toolSearchUnsupported }?.let { TurnErrorFix.ToolSearchUnsupported }
+    }
     val turnFix = if (renderStyle == ChatRenderStyle.Assistant) {
-        if (session?.turnErrorCode.isNullOrBlank()) rawTurnFix else TurnErrorFix.of(session?.turnErrorCode)
+        if (session?.turnErrorCode.isNullOrBlank()) rawTurnFix else TurnErrorFix.of(session.turnErrorCode)
     } else null
-    val exhausted = exhaustedRecovery(projection.lines, session?.modelFallback)
-    val retryId = retryLine(projection.lines, pending,
-        !readOnly && canSend && session?.turnErrorCode != FALLBACK_UNAVAILABLE, exhausted = exhausted != null, turnFix = turnFix)
+    val exhausted = remember(projection.lines, session?.modelFallback) {
+        exhaustedRecovery(projection.lines, session?.modelFallback)
+    }
+    val retryAllowed = !readOnly && canSend && session?.turnErrorCode != FALLBACK_UNAVAILABLE
+    val retryId = remember(projection.lines, pending, retryAllowed, exhausted != null, turnFix) {
+        retryLine(projection.lines, pending, retryAllowed, exhausted = exhausted != null, turnFix = turnFix)
+    }
     val pathPresence = remember(chrome.files, key, session?.cwd, chrome.onOpenPath != null) {
         val files = chrome.files
         val cwd = session?.cwd.orEmpty().ifBlank { "~" }

@@ -36,4 +36,29 @@ class DeviceCredentialsStateTest {
         unsupported.loadDevices()
         assertEquals(SettingsUiText.Res(R.string.settings_devices_load_failed), unsupported.state.value.message)
     }
+
+    @Test fun groupPairedDevicesMatchesTaxonomyAndSortsCurrentOnlineRecent() {
+        val paired = PairedDevices(
+            devices = listOf(
+                PairedDevice("phone-old", "Old Phone", "phone", "full", lastSeen = "2026-11-01T10:00:00Z"),
+                PairedDevice("phone-live", "Live Phone", "phone", "full", lastSeen = "2026-10-01T10:00:00Z"),
+                PairedDevice("phone-me", "This Phone", "phone", "full", lastSeen = "2026-09-01T10:00:00Z"),
+                PairedDevice("web-1", "Browser", "web", "full", lastSeen = "2026-11-05T10:00:00Z"),
+                PairedDevice("link-off", "Link Off", "link", "link", lastSeen = "2026-11-06T10:00:00Z"),
+                PairedDevice("link-on", "Link On", "link", "link", lastSeen = "2026-11-01T10:00:00Z"),
+                PairedDevice("scoped-1", "Scoped", "web", "scoped", lastSeen = "2026-11-06T10:00:00Z"),
+            ),
+            currentId = "phone-me",
+            onlineIds = setOf("phone-live", "link-on"),
+        )
+        val groups = groupPairedDevices(paired)
+        assertEquals(
+            listOf(DeviceGroupKind.Devices, DeviceGroupKind.Browsers, DeviceGroupKind.Links, DeviceGroupKind.Integrations),
+            groups.map { it.kind },
+        )
+        assertEquals(listOf("phone-me", "phone-live", "phone-old"), groups[0].devices.map { it.id })
+        assertEquals(listOf("web-1"), groups[1].devices.map { it.id })
+        assertEquals(listOf("link-on", "link-off"), groups[2].devices.map { it.id })
+        assertEquals(listOf("scoped-1"), groups[3].devices.map { it.id })
+    }
 }

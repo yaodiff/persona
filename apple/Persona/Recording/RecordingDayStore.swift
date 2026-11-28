@@ -269,9 +269,9 @@ nonisolated extension RecordingDayRecord {
 
     /// How the phone settles a chunk it doesn't hold, before keeping anything of it: one an erase reached is dropped,
     /// one after the day's audio deadline is lost; nil to keep it.
-    func settlement(for chunk: RecordingDayChunk, now: Date, recordingDays: Int?) -> RecordingDaySidecar.Settled? {
+    func settlement(for chunk: RecordingDayChunk, now: Date, audioDays: Int?) -> RecordingDaySidecar.Settled? {
         if erasedSeqs.contains(chunk.seq) || erasures.contains(where: { chunk.overlaps($0.from, $0.to) }) { return .erased }
-        if let deadline = audioDeadline(recordingDays: recordingDays), now >= deadline { return .lost }
+        if let deadline = audioDeadline(audioDays: audioDays), now >= deadline { return .lost }
         return nil
     }
 
@@ -441,14 +441,14 @@ nonisolated extension RecordingDayRecord {
     }
 
     /// The phone's deadline for the day's audio (docs/assistant/day-recap.md「Retention and privacy」): the earliest of
-    /// 3 days after its final recap, 7 days after its day, and the hub's `recording_days` after its day (each counted
+    /// 3 days after its final recap, 7 days after its day, and the hub's `audio_days` after its day (each counted
     /// from the day's midnight in its zone). Audio is deleted then, and a chunk that arrives later is settled as lost.
-    /// nil while none can be told (a date this device can't read and no final recap).
-    func audioDeadline(recordingDays: Int?) -> Date? {
+    /// Forever (`0`) adds no deadline. nil while none can be told (a date this device can't read and no final recap).
+    func audioDeadline(audioDays: Int?) -> Date? {
         var deadlines: [Date] = []
         if let end = dayEnd {
             deadlines.append(end.addingTimeInterval(RecordingDayContract.audioMaxDays * Self.secondsPerDay))
-            if let recordingDays { deadlines.append(end.addingTimeInterval(Double(recordingDays) * Self.secondsPerDay)) }
+            if let audioDays, audioDays > 0 { deadlines.append(end.addingTimeInterval(Double(audioDays) * Self.secondsPerDay)) }
         }
         if let recap = recapFinalAt {
             deadlines.append(recap.addingTimeInterval(RecordingDayContract.audioDaysAfterRecap * Self.secondsPerDay))
@@ -874,8 +874,8 @@ nonisolated final class RecordingDayStore: @unchecked Sendable {
     private let queue = DispatchQueue(label: "persona.recording-day-store", qos: .utility)
     private let dayChanges = RecordingDayBroadcast<UUID>()
     private let requestChanges = RecordingDayBroadcast<Void>()
-    /// The hub's `recording_days` once known (`useRecordingDays`), for the audio deadline.
-    private let recordingDays = OSAllocatedUnfairLock<Int?>(initialState: nil)
+    /// The hub's `audio_days` once known (`useAudioDays`), for the audio deadline.
+    private let audioDays = OSAllocatedUnfairLock<Int?>(initialState: nil)
 
     // Only touched on `queue`.
     private var cache: [UUID: RecordingDayRecord] = [:]
@@ -953,9 +953,9 @@ nonisolated final class RecordingDayStore: @unchecked Sendable {
     private func journalURL(_ id: UUID) -> URL { folder(id).appendingPathComponent(Self.journalFile) }
     private var requestsURL: URL { root.appendingPathComponent(Self.requestsFile) }
 
-    /// The hub's `recording_days` (nil until known): a day's audio deadline counts it. Callable from any thread.
-    func useRecordingDays(_ days: Int?) {
-        recordingDays.withLock { $0 = days }
+    /// The hub's `audio_days` (nil until known; 0 is forever): a day's audio deadline counts it. Callable from any thread.
+    func useAudioDays(_ days: Int?) {
+        audioDays.withLock { $0 = days }
     }
 
     // MARK: Receiver side (synchronous, any queue but the main one)
@@ -1173,7 +1173,7 @@ nonisolated final class RecordingDayStore: @unchecked Sendable {
         // deleted it on purpose).
         guard record.chunks[header.seq] == nil else { return .duplicate }
         var chunk = RecordingDayChunk(header: header, receivedAt: now())
-        let settled = record.settlement(for: chunk, now: chunk.receivedAt, recordingDays: recordingDays.withLock { $0 })
+        let settled = record.settlement(for: chunk, now: chunk.receivedAt, audioDays: audioDays.withLock { $0 })
         if let settled {
             chunk.settle(settled)
         } else {
@@ -2123,7 +2123,7 @@ nonisolated enum RecordingDaySyncState: String, Sendable, Equatable, CaseIterabl
     case pending
     /// The hub has everything transcribed so far.
     case synced
-    /// The hub keeps no text of the day any more (past `recording_days`, or deleted there).
+    /// The hub keeps no text of the day any more (past `recording_text_days`, or deleted there).
     case expired
 }
 

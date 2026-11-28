@@ -1,10 +1,10 @@
 {
-  "show_diagram": "看图",
-  "show_source": "看源码",
+  "show_diagram": "查看图表",
+  "show_source": "查看源码",
   "zoom": "放大",
   "copy_code": "复制代码",
   "copy": "复制",
-  "diagram": "图",
+  "diagram": "图表",
   "zoom_out": "缩小",
   "zoom_in": "放大",
   "fit": "适应视图"

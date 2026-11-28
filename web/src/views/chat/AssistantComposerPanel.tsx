@@ -3,7 +3,7 @@
 // both the first-screen and idle tiers.
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ComponentProps } from "react";
 import { api, credentialOwner, subscribeCredentialOwner } from "../../lib/api";
-import { workspaceDetail, workspaceMatches, workspaceTitle } from "../../lib/mentions";
+import { workspaceContext, workspaceDetail, workspaceMatches, workspaceTitle } from "../../lib/mentions-panel";
 import { loadMentionRepositories, repositoryMentionRows, type MentionRepository } from "../../lib/mentions-repositories";
 import { machineWithHub } from "../../lib/mesh";
 import { useStore } from "../../lib/store";
@@ -133,7 +133,7 @@ function AssistantComposerPanelInner({
         const q = query.toLowerCase();
         const name = machineName ?? ((id: string) => machineWithHub(id, machines));
         for (const w of workspaceMatches(workspaces ?? [], q, name)) {
-          out.push({ kind: "workspace", id: `workspace:${w.id}`, name: workspaceTitle(w), detail: workspaceDetail(w, name), workspace: w });
+          out.push({ kind: "workspace", id: `workspace:${w.id}`, name: workspaceTitle(w), detail: workspaceDetail(w, name), workspace: w, toContext: () => workspaceContext(w, name) });
         }
       }
       if (wantRepositories) {

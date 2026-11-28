@@ -6,6 +6,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/nwverse/persona/server/internal/nodeproto"
 )
 
 func TestBetaFeedIsIndependentAndPinsImmutableTag(t *testing.T) {
@@ -50,10 +52,31 @@ func TestCheckChannelRejectsStableAndBetaMixups(t *testing.T) {
 				_, _ = w.Write([]byte(test.manifest))
 			}))
 			defer srv.Close()
-			_, err := CheckChannel(context.Background(), srv.Client(), srv.URL+test.base, test.channel)
+			_, err := CheckChannel(context.Background(), srv.Client(), srv.URL+test.base, test.channel, nodeproto.EditionFull)
 			if (err == nil) != test.valid {
 				t.Fatalf("channel validation %v", err)
 			}
 		})
+	}
+}
+
+func TestCheckChannelReadsTheCoreFeed(t *testing.T) {
+	stableFile := `{"name":"personad-darwin-arm64.gz","size":1,"sha256":"` + strings.Repeat("0", 64) + `","binary_sha256":"` + strings.Repeat("0", 64) + `"}`
+	manifest := `{"version":"0.7.0","build":1,"channel":"release","edition":"core","files":{"darwin-arm64":` + stableFile + `}}`
+	var asked string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		asked = r.URL.Path
+		if asked != "/dl/core-latest.json" {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write([]byte(manifest))
+	}))
+	defer srv.Close()
+	if _, err := CheckChannel(context.Background(), srv.Client(), srv.URL+"/dl", ChannelStable, nodeproto.EditionCore); err != nil {
+		t.Fatal(err)
+	}
+	if asked != "/dl/core-latest.json" {
+		t.Fatalf("core channel check asked for %s", asked)
 	}
 }

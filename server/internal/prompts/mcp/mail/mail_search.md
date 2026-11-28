@@ -1,4 +1,4 @@
-Search mail. Returns message summaries (uid, subject, from, date, snippet). Use account_id from mail_accounts; omit it to search every account's inbox at once. For Gmail the query uses Gmail search syntax (from:, subject:, has:attachment, newer_than:7d); other providers search the full text on their server. Some servers do not search at all (NetEase 163 finds nothing for any word): when the server finds nothing, subjects, senders and recipients are matched instead (every word must appear, case does not matter; bodies are not searched), a stretch of the newest mail at a time, and the result says which before_uid looks further back.{{template "shared/mcp_language" .}}
+Search mail summaries. Use account_id from mail_accounts. Single-account results include uid_validity for mail_move. Gmail accepts its own search syntax; others search full text. On no hits, scan recent headers for all words (case-insensitive) in subject, sender or recipients. Follow before_uid to scan older mail.{{template "shared/mcp_language" .}}
 
 ```json
 {
@@ -6,15 +6,14 @@ Search mail. Returns message summaries (uid, subject, from, date, snippet). Use 
   "properties": {
     "account_id": {
       "type": "string",
-      "description": "Account id from mail_accounts; omit to search all inboxes"
+      "description": "Omit for all inboxes"
     },
     "mailbox": {
       "type": "string",
-      "description": "Mailbox name, default INBOX"
+      "description": "Default INBOX"
     },
     "query": {
-      "type": "string",
-      "description": "Search text or Gmail query"
+      "type": "string"
     },
     "limit": {
       "type": "integer",
@@ -22,7 +21,7 @@ Search mail. Returns message summaries (uid, subject, from, date, snippet). Use 
     },
     "before_uid": {
       "type": "integer",
-      "description": "Return messages with UID lower than this, for paging"
+      "description": "Page below this UID"
     }
   },
   "additionalProperties": false

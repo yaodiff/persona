@@ -2,18 +2,18 @@
 // core/ModuleKBDetail.tsx): Rename and Hand to Agent beside "Ask Persona", the latest hand-off first, then its facts,
 // private mark, minutes (or an all-day recording's recap), live view, conversation, asks and photos after the entry's
 // own facts, and its transcript after the code directories. docs/assistant/meeting-minutes.md, docs/assistant/day-recap.md.
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ModuleKBDetailProps } from "../../core/module-host";
 import { sessionTitle } from "../../lib/format";
 import { conversationRoute } from "../../lib/inbox";
 import { dayTitle, formatAt } from "../../lib/kb";
-import { recordingView, transcriptLineId, type RecordingView } from "./recording-view";
+import { recordingView, type RecordingView } from "./recording-view";
 import { machineWithHub } from "../../lib/mesh";
 import { href, onLinkClick, type Route } from "../../lib/router";
 import { useStore } from "../../lib/store";
-import { Button, cx } from "../../ui/atoms";
+import { Button } from "../../ui/atoms";
 import { scrollBehavior } from "../../ui/stream/motion";
-import { Card, Marked, SectionTitle } from "../../views/knowledge/KBParts";
+import { Card } from "../../views/knowledge/KBParts";
 import { t } from "../../i18n";
 import { hasMaterial, meetingRunning } from "./meeting-thread";
 import { RecordingAsks } from "./RecordingAsks";
@@ -22,6 +22,8 @@ import { RecordingDayRecap } from "./RecordingDayRecap";
 import { RecordingHandoffDialog, RecordingHandoffRow, useRecordingHandoff, type MeetingHandoff } from "./RecordingHandoff";
 import { RecordingLiveView } from "./RecordingLiveView";
 import { RecordingMinutes } from "./RecordingMinutes";
+import { DeleteSpeakersConfirmDialog, RecordingSpeakersDialog, useRecordingSpeakers } from "./RecordingSpeakersDialog";
+import { RecordingTranscript } from "./RecordingTranscript";
 import { RecordingPhotos } from "./RecordingPhotos";
 import { namedBy, RecordingRenameDialog } from "./RecordingRename";
 
@@ -29,9 +31,16 @@ export function RecordingDetail({ kind, id, query, detail: d, entry: e, auth, cu
   const [renaming, setRenaming] = useState(false);
   // Hand to Agent (#8852): open, with the failed hand-off tried again when it came from its row.
   const [handing, setHanding] = useState<{ again?: MeetingHandoff } | null>(null);
+  // Speakers (#17675): naming dialog and delete confirmation, closed whenever the opened recording changes.
+  const [namingSpeakers, setNamingSpeakers] = useState(false);
+  const [deletingSpeakers, setDeletingSpeakers] = useState(false);
   const [highlighted, setHighlighted] = useState("");
   const highlightTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   useEffect(() => () => clearTimeout(highlightTimer.current), []);
+  useEffect(() => {
+    setNamingSpeakers(false);
+    setDeletingSpeakers(false);
+  }, [id]);
 
   const jumpToTranscript = (lineId: string) => {
     const line = document.getElementById(lineId);
@@ -45,12 +54,14 @@ export function RecordingDetail({ kind, id, query, detail: d, entry: e, auth, cu
     highlightTimer.current = setTimeout(() => setHighlighted(""), 2000);
   };
 
-  const rec = d ? recordingView(d.kind, d.meta, d.segments) : null;
+  const rec = useMemo(() => d ? recordingView(d.kind, d.meta, d.segments) : null, [d]);
   // The meeting conversation (#3862): its private mark, room and follow-up, on a hub that lists meeting_conversation;
   // its photos too where the hub lists meeting_photos (after a change of the photos the minutes may have lost a deleted
   // photo's items or be made again: read them, and again on the next poll, reconnect or event if that read fails).
   const reloadDetail = useCallback(() => reload(), [reload]);
   const meeting = useRecordingMeeting(d, rec, auth, current, manager, reloadDetail);
+  // Hub-separated meeting speakers (#17674, #17675): local-first naming, merging, unmerging and clearing.
+  const speakersCtrl = useRecordingSpeakers(d, auth, current, manager, reloadDetail);
   // Hand to Agent (#8852): a meeting or note that is over and has something to hand, for someone with an Agent to take
   // it; its latest hand-off shows at the top of the page whether or not another can be made now.
   const handoff = useRecordingHandoff(d?.meta);
@@ -98,11 +109,13 @@ export function RecordingDetail({ kind, id, query, detail: d, entry: e, auth, cu
         /> : <RecordingMinutes
           detail={d}
           rec={rec}
+          speakers={speakersCtrl.speakers}
           auth={auth}
           current={current}
           refresh={reload}
           onSaved={onSaved}
           onJump={jumpToTranscript}
+          highlighted={highlighted}
           photos={meeting.photos}
         />}
         {/* While a room meeting records (phase 2): its topics and newest live lines, above its conversation. */}
@@ -113,7 +126,23 @@ export function RecordingDetail({ kind, id, query, detail: d, entry: e, auth, cu
         <RecordingPhotos rec={rec} photos={meeting.photos} highlighted={highlighted} />
       </>
     ),
-    tail: rec && <Transcript rec={rec} query={query} highlighted={highlighted} />,
+    tail: rec && (
+      <RecordingTranscript
+        key={JSON.stringify([id, rec.trimmedAt])}
+        rec={rec}
+        recordingId={id}
+        query={query}
+        highlighted={highlighted}
+        onJump={jumpToTranscript}
+        speakers={speakersCtrl.speakers}
+        speakersBusy={speakersCtrl.busy}
+        onOpenSpeakers={() => {
+          speakersCtrl.clearError();
+          setNamingSpeakers(true);
+        }}
+        onDeleteSpeakers={() => setDeletingSpeakers(true)}
+      />
+    ),
     dialogs: (
       <>
         {handing && d && rec && (
@@ -139,6 +168,43 @@ export function RecordingDetail({ kind, id, query, detail: d, entry: e, auth, cu
             onDone={() => {
               void reload().catch(() => {});
               onSaved();
+            }}
+          />
+        )}
+        {namingSpeakers && d && rec && speakersCtrl.speakers?.state === "ready" && (
+          <RecordingSpeakersDialog
+            open={namingSpeakers}
+            onClose={() => setNamingSpeakers(false)}
+            speakers={speakersCtrl.speakers}
+            detail={d}
+            rec={rec}
+            busy={speakersCtrl.busy}
+            lastUndo={speakersCtrl.lastUndo}
+            error={speakersCtrl.error}
+            onEdit={speakersCtrl.edit}
+            onUndo={speakersCtrl.undo}
+            onAskDelete={() => {
+              setNamingSpeakers(false);
+              setDeletingSpeakers(true);
+            }}
+            onJumpSample={(lineId) => {
+              jumpToTranscript(lineId);
+              setNamingSpeakers(false);
+            }}
+          />
+        )}
+        {deletingSpeakers && d && (
+          <DeleteSpeakersConfirmDialog
+            open={deletingSpeakers}
+            busy={speakersCtrl.busy}
+            onClose={() => setDeletingSpeakers(false)}
+            onConfirm={() => {
+              void speakersCtrl.clear().then((ok) => {
+                if (ok) {
+                  setDeletingSpeakers(false);
+                  setNamingSpeakers(false);
+                }
+              });
             }}
           />
         )}
@@ -205,33 +271,5 @@ function AttendingSession({ session }: { session?: RecordingView["attendingSessi
     <a href={href(route)} onClick={(ev) => onLinkClick(ev, route)} title={label} className="min-w-0 truncate font-medium text-accent-ink hover:underline">
       {label}
     </a>
-  );
-}
-
-/** The whole transcript, a line per segment at its clock time; bookmarks inline. */
-function Transcript({ rec, query, highlighted }: { rec: RecordingView; query?: string; highlighted: string }) {
-  return (
-    <section>
-      <SectionTitle title={t("recording.transcript")} count={rec.lines.filter((l) => !l.bookmark).length} />
-      <Card>
-        {/* Trimmed: the bookmarks (in its metadata) are all that is left of it. */}
-        {(rec.trimmedAt || !rec.lines.length) && <p className="px-4 py-2.5 text-[12.5px] text-ink-3">{t(rec.trimmedAt ? "recording.transcript_expired" : "recording.transcript_empty")}</p>}
-        <ol className="px-4 py-1.5">
-          {rec.lines.map((l, i) => (
-            <li key={i} id={transcriptLineId(l.seconds, l.bookmark)} tabIndex={-1} className={cx("flex gap-3 rounded-control py-1.5 text-[13px] leading-relaxed transition-colors", highlighted === transcriptLineId(l.seconds, l.bookmark) && "bg-accent-tint")}>
-              <span className={cx("w-[60px] shrink-0 pt-px text-[11.5px] tabular-nums", l.bookmark ? "font-semibold text-accent-ink" : "text-ink-3")}>{l.clock}</span>
-              {l.bookmark ? (
-                <span className="min-w-0 flex-1 font-medium text-accent-ink">
-                  {t("recording.bookmark")}
-                  {l.text ? ` · ${l.text}` : ""}
-                </span>
-              ) : (
-                <span className="min-w-0 flex-1 text-ink select-text">{query ? <Marked text={l.text} query={query} /> : l.text}</span>
-              )}
-            </li>
-          ))}
-        </ol>
-      </Card>
-    </section>
   );
 }

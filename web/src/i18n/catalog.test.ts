@@ -7,8 +7,9 @@
 // don't count; a line that has to keep CJK text (it matches what someone else writes, like a hub's output) says
 // `i18n-ignore` in a comment.
 import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { join, relative } from "node:path";
+import { basename, join, relative } from "node:path";
 import ts from "typescript";
+import { catalogFiles } from "../../i18n-catalogs";
 import { describe, expect, it } from "vitest";
 import { adminCatalog } from "../admin/catalog";
 import { FALLBACK_LANG, LANG_NAMES, LANGS, SOURCE_LANG } from "./index";
@@ -36,8 +37,9 @@ function catalogs(): Record<string, Record<string, Catalog>> {
   const out: Record<string, Record<string, Catalog>> = {};
   for (const lang of LANGS) {
     out[lang] = {};
-    for (const f of readdirSync(join(LOCALES, lang)).filter((f) => f.endsWith(".json") && !f.startsWith("_")).sort()) {
-      out[lang][f.replace(/\.json$/, "")] = JSON.parse(readFileSync(join(LOCALES, lang, f), "utf8"));
+    const meta = join(LOCALES, lang, "_meta.json");
+    for (const f of [...catalogFiles(meta, "client"), ...catalogFiles(meta, "admin")]) {
+      out[lang][basename(f, ".json")] = JSON.parse(readFileSync(f, "utf8"));
     }
   }
   return out;
@@ -240,6 +242,16 @@ describe("catalogs", () => {
         expect([...got.keys()].sort(), `${lang}/${ns}.json keys`).toEqual([...want.keys()].sort());
         for (const [k, ps] of want) expect(got.get(k), `${lang}/${ns}.json "${k}" placeholders`).toEqual(ps);
       }
+    }
+  });
+
+  it("keeps workspace template tokens literal in field hints across languages", () => {
+    for (const lang of LANGS) {
+      const hints = all[lang]["workspace-naming"];
+      const tokens = (key: string) => hints[key].match(/\{[\w-]+\}/g)?.sort();
+      expect(tokens("help_base_directory")).toEqual(["{home}"]);
+      expect(tokens("help_task_directory_template")).toEqual(["{mmdd}", "{task-id}", "{task-slug}", "{yyyy}"]);
+      expect(tokens("help_branch_template")).toEqual(["{base-branch}", "{repo}"]);
     }
   });
 

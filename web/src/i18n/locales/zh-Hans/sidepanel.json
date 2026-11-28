@@ -15,5 +15,5 @@
   "task": "任务",
   "agent": "Agent",
   "sides": "分支会话",
-  "subagent": "子智能体"
+  "subagent": "子 Agent"
 }

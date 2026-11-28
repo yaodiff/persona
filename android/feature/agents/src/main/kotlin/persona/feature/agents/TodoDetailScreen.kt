@@ -2,6 +2,7 @@ package persona.feature.agents
 
 import persona.core.domain.tasks.acceptedAtRest
 import persona.core.domain.tasks.deliveredAwaitingReview
+import persona.core.domain.tasks.restStatus
 import persona.core.domain.tasks.shownState
 import persona.core.domain.tasks.showsJustFinished
 import persona.core.domain.tasks.waitsForOwner
@@ -325,7 +326,8 @@ fun TodoDetailScreen(
                             } else if (todo.deliveredAwaitingReview(sessionLookup)) {
                                 JTag(stringResource(R.string.agents_todos_section_awaiting_review), status = Status.Unread)
                             } else {
-                                JTag(state.label)
+                                val restStatus = todo.restStatus(sessionLookup, now.toEpochMilli())
+                                if (restStatus != null) TodoRestStatusTag(restStatus) else JTag(state.label)
                             }
                             // iOS: "Status · N agents · created X".
                             Text(
@@ -449,6 +451,12 @@ fun TodoDetailScreen(
                         // What done means for a task the main conversation supervises, and where its review stands (#3124).
                         ReviewChecklist(todo)
                     }
+                }
+            }
+
+            todo.wait?.let { wait ->
+                item(key = "wait") {
+                    TodoWaitSection(wait, now, onOpenTodo)
                 }
             }
 

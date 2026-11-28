@@ -57,7 +57,9 @@ func runtimeSessionCall(t *testing.T, hub *runtimeHub, method string, params any
 // node's, from the transcript, and the runtime pushes only live text for it.
 func TestRuntimeSessionInATranscript(t *testing.T) {
 	n, hub := runtimeNode(t)
-	path := sdkTranscript(t, n, sdkSession, "the build is fixed")
+	const reply = "The guide explains BOTMUX_NOTHING_TO_SEND here."
+	path := sdkTranscript(t, n, sdkSession, reply)
+	appendLine(t, path, `{"type":"assistant","uuid":"report","timestamp":"2026-11-04T10:00:06Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"report","name":"SubagentHandback","input":{"message":"BOTMUX_NOTHING_TO_SEND"}}]}}`)
 	host := dialRuntime(t, n, paseoHello())
 	if f, _ := host.helloR["features"].([]any); !slices.Contains(f, any("transcript")) {
 		t.Fatalf("features %v", host.helloR["features"])
@@ -71,9 +73,12 @@ func TestRuntimeSessionInATranscript(t *testing.T) {
 	s := got["paseo-a1"]
 	st, _ := os.Stat(path)
 	if s.Title != "Fix the build" || s.Status != proto.StatusWorking || s.Agent != "claude" || s.AgentLabel != "" ||
-		s.LastText != "the build is fixed" || s.Rev != st.Size() || s.PermissionMode != "acceptEdits" || s.Effort != "high" ||
+		s.Rev != st.Size() || s.PermissionMode != "acceptEdits" || s.Effort != "high" ||
 		s.SourceKind != proto.SourceRuntime || s.SpaceKind != "paseo" {
 		t.Fatalf("listed as %+v", s)
+	}
+	if s.LastText != reply {
+		t.Fatalf("last text = %q, want previous reply %q", s.LastText, reply)
 	}
 	if _, twice := got[sdkSession]; twice {
 		t.Fatal("the transcript's own row is listed beside the runtime's")
@@ -89,7 +94,7 @@ func TestRuntimeSessionInATranscript(t *testing.T) {
 		History string       `json:"history"`
 	}
 	_ = json.Unmarshal(raw, &page)
-	if len(page.Items) != 2 || page.Items[1].Text != "the build is fixed" || page.History == "" {
+	if len(page.Items) != 3 || page.Items[1].Text != reply || page.Items[2].Text != "BOTMUX_NOTHING_TO_SEND" || page.History == "" {
 		t.Fatalf("page %s", raw)
 	}
 	if len(host.got("session.items")) != 0 {
@@ -106,7 +111,7 @@ func TestRuntimeSessionInATranscript(t *testing.T) {
 	}
 
 	// Watched: the node tails the transcript; the runtime only streams live text (transcript: true).
-	runtimeSessionCall(t, hub, "session.watch", map[string]any{"session_id": "paseo-a1", "since_seq": 2})
+	runtimeSessionCall(t, hub, "session.watch", map[string]any{"session_id": "paseo-a1", "since_seq": 3})
 	waitFor(t, "the runtime told to stream", func() bool { return len(host.got("session.watch")) == 1 })
 	var w map[string]any
 	_ = json.Unmarshal(host.got("session.watch")[0], &w)
@@ -150,6 +155,22 @@ func TestRuntimeSessionInATranscript(t *testing.T) {
 	runtimeSessionCall(t, hub, "session.unwatch", map[string]any{"session_id": "paseo-a1"})
 	if len(host.got("session.unwatch")) != 1 || n.runtimes.isWatched("paseo-a1") {
 		t.Fatal("unwatch not passed on")
+	}
+}
+
+func TestRuntimeTranscriptKeepsReportedWordsWhenOnlySentinelWasWritten(t *testing.T) {
+	n, _ := runtimeNode(t)
+	sdkTranscript(t, n, sdkSession, "BOTMUX_NOTHING_TO_SEND")
+	host := dialRuntime(t, n, paseoHello())
+	const id, reply = "paseo-a1", "The build passed."
+	if err := host.peer.Notify("runtime.sessions", map[string]any{"sessions": []map[string]any{{
+		"session_id": id, "transcript": sdkSession, "status": "idle", "last_text": reply,
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "listed with its transcript", func() bool { return listed(t, n)[id].Rev > 0 })
+	if got := listed(t, n)[id].LastText; got != reply {
+		t.Fatalf("last text = %q, want runtime reply %q", got, reply)
 	}
 }
 

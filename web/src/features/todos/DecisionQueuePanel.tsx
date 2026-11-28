@@ -6,13 +6,17 @@
 import { useEffect, useMemo, useState } from "react";
 import { t } from "../../i18n";
 import { errorText } from "../../lib/api";
+import { safeWebURL } from "../../lib/format";
 import {
+  fetchTodoDecisionGroups,
   openAsk,
   submitTodoDecisionsBatch,
   type Todo,
   type TodoDecisionBatchItem,
   type TodoDecisionBatchResponse,
   type TodoDecisionBatchResult,
+  type TodoDecisionGroup,
+  type TodoDecisionGroupsResponse,
 } from "../../lib/todos";
 import { Button, cx, Dialog } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
@@ -64,6 +68,32 @@ export interface DecisionQueuePanelProps {
   onClose: () => void;
   onRefresh?: () => void | Promise<void>;
   onSubmitBatch?: (items: readonly TodoDecisionBatchItem[]) => Promise<TodoDecisionBatchResponse>;
+  onFetchGroups?: (signal?: AbortSignal) => Promise<TodoDecisionGroupsResponse>;
+}
+
+interface ClusteredDecisionGroup {
+  key: string;
+  cause_kind: string;
+  label: string;
+  url?: string;
+  todos: Todo[];
+}
+
+function safeExternalUrl(raw?: string): string | undefined {
+  return safeWebURL(raw);
+}
+
+function causeKindLabel(kind: string): string | null {
+  switch (kind) {
+    case "shared_blocker":
+      return t("todos.decision_queue_cause_shared_blocker");
+    case "same_pr":
+      return t("todos.decision_queue_cause_same_pr");
+    case "same_direction":
+      return t("todos.decision_queue_cause_same_direction");
+    default:
+      return null;
+  }
 }
 
 export function DecisionQueuePanel({
@@ -72,6 +102,7 @@ export function DecisionQueuePanel({
   onClose,
   onRefresh,
   onSubmitBatch = submitTodoDecisionsBatch,
+  onFetchGroups = fetchTodoDecisionGroups,
 }: DecisionQueuePanelProps) {
   // Explicit per-item choice (never pre-populated with any recommendation).
   const [choices, setChoices] = useState<Map<string, DecisionDraftChoice>>(() => new Map());
@@ -82,8 +113,9 @@ export function DecisionQueuePanel({
   const [requestError, setRequestError] = useState<string | null>(null);
   const [resultsById, setResultsById] = useState<Map<string, TodoDecisionBatchResult>>(() => new Map());
   const [lastSummary, setLastSummary] = useState<{ succeeded: number; failed: number } | null>(null);
+  const [serverGroups, setServerGroups] = useState<TodoDecisionGroup[] | null>(null);
 
-  // Reset transient state when the dialog opens fresh.
+  // Reset transient state and fetch server-computed same-cause groups when the dialog opens fresh.
   useEffect(() => {
     if (!open) return;
     setChoices(new Map());
@@ -92,7 +124,20 @@ export function DecisionQueuePanel({
     setRequestError(null);
     setResultsById(new Map());
     setLastSummary(null);
-  }, [open]);
+    setServerGroups(null);
+
+    const ac = new AbortController();
+    void onFetchGroups(ac.signal)
+      .then((res) => {
+        if (ac.signal.aborted) return;
+        const list = Array.isArray(res?.groups) ? res.groups : [];
+        setServerGroups(list.length > 0 ? list : null);
+      })
+      .catch(() => {
+        if (!ac.signal.aborted) setServerGroups(null);
+      });
+    return () => ac.abort();
+  }, [open, onFetchGroups]);
 
   const settledIds = useMemo(() => {
     const out = new Set<string>();
@@ -161,6 +206,58 @@ export function DecisionQueuePanel({
   const clearChecked = () => {
     setCheckedIds(new Set());
   };
+
+  const toggleGroupChecked = (groupTodos: readonly Todo[]) => {
+    const activeGroupIds = groupTodos.filter((td) => !settledIds.has(td.id)).map((td) => td.id);
+    if (activeGroupIds.length === 0) return;
+    setCheckedIds((prev) => {
+      const next = new Set(prev);
+      const allSelected = activeGroupIds.every((id) => next.has(id));
+      for (const id of activeGroupIds) {
+        if (allSelected) next.delete(id);
+        else next.add(id);
+      }
+      return next;
+    });
+  };
+
+  const clusteredGroups = useMemo<ClusteredDecisionGroup[] | null>(() => {
+    if (!serverGroups || serverGroups.length === 0 || items.length === 0) return null;
+    const byId = new Map(items.map((td) => [td.id, td]));
+    const assigned = new Set<string>();
+    const out: ClusteredDecisionGroup[] = [];
+    for (const g of serverGroups) {
+      const todos: Todo[] = [];
+      for (const id of g.todo_ids ?? []) {
+        if (assigned.has(id)) continue;
+        const td = byId.get(id);
+        if (td) {
+          assigned.add(id);
+          todos.push(td);
+        }
+      }
+      if (todos.length > 0) {
+        out.push({
+          key: g.key,
+          cause_kind: g.cause_kind,
+          label: g.label?.trim() || t("todos.decision_queue_group_other"),
+          url: safeExternalUrl(g.url),
+          todos,
+        });
+      }
+    }
+    if (out.length === 0) return null;
+    const remaining = items.filter((td) => !assigned.has(td.id));
+    if (remaining.length > 0) {
+      out.push({
+        key: "standalone:unlisted",
+        cause_kind: "standalone",
+        label: t("todos.decision_queue_group_other"),
+        todos: remaining,
+      });
+    }
+    return out;
+  }, [serverGroups, items]);
 
   const applySharedReplyToChecked = () => {
     const text = sharedReply.trim();
@@ -324,176 +421,241 @@ export function DecisionQueuePanel({
           </p>
         )}
 
-        {/* Decision items list */}
+        {/* Decision items list (clustered by server same-cause groups when available, else flat fallback) */}
         {items.length === 0 ? (
           <p data-testid="decision-queue-empty" className="py-6 text-center text-meta text-ink-3">
             {t("todos.decision_queue_empty")}
           </p>
         ) : (
-          <div className="max-h-96 space-y-2 overflow-y-auto pr-0.5">
-            {items.map((td) => {
-              const ask = openAsk(td);
-              const result = resultsById.get(td.id);
-              const settled = Boolean(result?.ok);
-              const choice = choices.get(td.id);
-              const checked = checkedIds.has(td.id);
-              const options = (ask?.options ?? []).filter(
-                (o) => o && typeof o.label === "string" && o.label.trim().length > 0,
-              );
-              const questionText = ask?.question?.trim() || ask?.verdict || "";
-              const recommendLabel = ask?.recommend?.trim() || "";
-              const willUseSharedReply =
-                !settled && !choice && checked && sharedReply.trim().length > 0;
+          <div className="max-h-96 space-y-2.5 overflow-y-auto pr-0.5">
+            {(() => {
+              const renderItem = (td: Todo) => {
+                const ask = openAsk(td);
+                const result = resultsById.get(td.id);
+                const settled = Boolean(result?.ok);
+                const choice = choices.get(td.id);
+                const checked = checkedIds.has(td.id);
+                const options = (ask?.options ?? []).filter(
+                  (o) => o && typeof o.label === "string" && o.label.trim().length > 0,
+                );
+                const questionText = ask?.question?.trim() || ask?.verdict || "";
+                const recommendLabel = ask?.recommend?.trim() || "";
+                const willUseSharedReply =
+                  !settled && !choice && checked && sharedReply.trim().length > 0;
 
-              return (
-                <div
-                  key={td.id}
-                  data-testid="decision-queue-item"
-                  data-todo-id={td.id}
-                  data-settled={settled ? "true" : undefined}
-                  className={cx(
-                    "rounded-control border p-3 transition-opacity",
-                    settled
-                      ? "border-green/30 bg-inset/60 opacity-60"
-                      : result && !result.ok
-                        ? "border-red/40 bg-surface"
-                        : choice || willUseSharedReply
-                          ? "border-accent/50 bg-accent-tint/20"
-                          : "border-line bg-surface",
-                  )}
-                >
-                  <div className="flex items-start gap-2.5">
-                    <input
-                      type="checkbox"
-                      data-testid="decision-queue-check"
-                      data-todo-id={td.id}
-                      aria-label={t("todos.decision_queue_select_item", { title: td.title })}
-                      checked={checked}
-                      disabled={submitting || settled}
-                      onChange={() => toggleChecked(td.id)}
-                      className="mt-0.5 size-4 shrink-0 cursor-pointer accent-accent disabled:opacity-40"
-                    />
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="min-w-0 truncate text-meta font-semibold text-ink">
-                          {td.title}
-                        </span>
-                        {settled && (
-                          <span
-                            data-testid="decision-queue-item-ok"
-                            className="inline-flex shrink-0 items-center gap-1 text-submeta font-medium whitespace-nowrap text-green"
+                return (
+                  <div
+                    key={td.id}
+                    data-testid="decision-queue-item"
+                    data-todo-id={td.id}
+                    data-settled={settled ? "true" : undefined}
+                    className={cx(
+                      "rounded-control border p-3 transition-opacity",
+                      settled
+                        ? "border-green/30 bg-inset/60 opacity-60"
+                        : result && !result.ok
+                          ? "border-red/40 bg-surface"
+                          : choice || willUseSharedReply
+                            ? "border-accent/50 bg-accent-tint/20"
+                            : "border-line bg-surface",
+                    )}
+                  >
+                    <div className="flex items-start gap-2.5">
+                      <input
+                        type="checkbox"
+                        data-testid="decision-queue-check"
+                        data-todo-id={td.id}
+                        aria-label={t("todos.decision_queue_select_item", { title: td.title })}
+                        checked={checked}
+                        disabled={submitting || settled}
+                        onChange={() => toggleChecked(td.id)}
+                        className="mt-0.5 size-4 shrink-0 cursor-pointer accent-accent disabled:opacity-40"
+                      />
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="min-w-0 truncate text-meta font-semibold text-ink">
+                            {td.title}
+                          </span>
+                          {settled && (
+                            <span
+                              data-testid="decision-queue-item-ok"
+                              className="inline-flex shrink-0 items-center gap-1 text-submeta font-medium whitespace-nowrap text-green"
+                            >
+                              <Icon name="check" size={12} stroke={2.4} />
+                              {t("todos.decision_queue_item_submitted")}
+                            </span>
+                          )}
+                        </div>
+
+                        {questionText && (
+                          <p className="mt-1 text-submeta leading-snug text-ink-2">
+                            {questionText}
+                          </p>
+                        )}
+
+                        {/* Mode A: explicit option buttons (never pre-selected) */}
+                        {!settled && options.length > 0 && (
+                          <div className="mt-2 flex flex-wrap items-center gap-1.5" role="group" aria-label={td.title}>
+                            {options.map((opt) => {
+                              const selected =
+                                choice?.kind === "option" && choice.value === opt.label;
+                              const isRecommended =
+                                Boolean(recommendLabel) && opt.label === recommendLabel;
+                              return (
+                                <button
+                                  key={opt.label}
+                                  type="button"
+                                  data-testid="decision-queue-option"
+                                  data-todo-id={td.id}
+                                  data-option={opt.label}
+                                  aria-pressed={selected}
+                                  disabled={submitting}
+                                  title={opt.leads_to || opt.label}
+                                  onClick={() => toggleOption(td.id, opt.label)}
+                                  className={cx(
+                                    "touch-hit inline-flex max-w-full items-center gap-1.5 rounded-control border px-2.5 py-1 text-submeta font-medium whitespace-nowrap transition-colors focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50",
+                                    selected
+                                      ? "border-accent bg-accent text-white"
+                                      : "border-line bg-inset text-ink hover:border-line-strong hover:bg-hover",
+                                  )}
+                                >
+                                  <span className="truncate">{opt.label}</span>
+                                  {isRecommended && (
+                                    <span
+                                      data-testid="decision-queue-recommended-badge"
+                                      className={cx(
+                                        "rounded-chip px-1 text-xs font-normal whitespace-nowrap",
+                                        selected
+                                          ? "bg-white/20 text-white"
+                                          : "bg-orange-tint text-attention",
+                                      )}
+                                    >
+                                      {t("todos.decision_queue_recommended")}
+                                    </span>
+                                  )}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        )}
+
+                        {/* Recommendation hint when there are no structured option buttons */}
+                        {!settled && options.length === 0 && recommendLabel && (
+                          <p className="mt-1.5 text-submeta text-ink-3">
+                            {t("assistant-brief.recommend", { option: recommendLabel })}
+                          </p>
+                        )}
+
+                        {/* Staged custom reply pill (Mode B) */}
+                        {!settled && choice?.kind === "reply" && (
+                          <div
+                            data-testid="decision-queue-item-reply"
+                            className="mt-2 flex items-center justify-between gap-2 rounded-control border border-accent/30 bg-inset px-2.5 py-1 text-submeta text-ink"
                           >
-                            <Icon name="check" size={12} stroke={2.4} />
-                            {t("todos.decision_queue_item_submitted")}
+                            <span className="min-w-0 truncate">
+                              {t("todos.decision_queue_reply_preview", { reply: choice.value })}
+                            </span>
+                            <button
+                              type="button"
+                              aria-label={t("todos.decision_queue_clear_choice")}
+                              disabled={submitting}
+                              onClick={() => clearItemChoice(td.id)}
+                              className="touch-hit shrink-0 text-ink-3 hover:text-ink"
+                            >
+                              <Icon name="x" size={12} />
+                            </button>
+                          </div>
+                        )}
+
+                        {/* Pending shared reply preview when checked + shared reply typed */}
+                        {willUseSharedReply && (
+                          <p
+                            data-testid="decision-queue-item-shared-preview"
+                            className="mt-1.5 truncate text-submeta text-accent-ink"
+                          >
+                            {t("todos.decision_queue_shared_preview", { reply: sharedReply.trim() })}
+                          </p>
+                        )}
+
+                        {/* Per-item server error feedback */}
+                        {result && !result.ok && (
+                          <p
+                            role="alert"
+                            data-testid="decision-queue-item-error"
+                            className="mt-1.5 text-submeta text-red"
+                          >
+                            {result.error || t("todos.decision_queue_item_failed")}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              };
+
+              if (!clusteredGroups) {
+                return items.map(renderItem);
+              }
+
+              return clusteredGroups.map((group) => {
+                const activeGroupTodos = group.todos.filter((td) => !settledIds.has(td.id));
+                const allGroupChecked =
+                  activeGroupTodos.length > 0 && activeGroupTodos.every((td) => checkedIds.has(td.id));
+                const kindTag = causeKindLabel(group.cause_kind);
+                return (
+                  <section
+                    key={group.key}
+                    data-testid="decision-queue-group"
+                    data-group-key={group.key}
+                    data-cause-kind={group.cause_kind}
+                    className="space-y-1.5 rounded-control border border-line/80 bg-inset/40 p-2"
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-2 px-1 py-0.5">
+                      <div className="flex min-w-0 flex-1 items-center gap-1.5">
+                        <input
+                          type="checkbox"
+                          data-testid="decision-queue-group-select"
+                          data-group-key={group.key}
+                          aria-label={t("todos.decision_queue_select_group", { label: group.label })}
+                          checked={allGroupChecked}
+                          disabled={submitting || activeGroupTodos.length === 0}
+                          onChange={() => toggleGroupChecked(group.todos)}
+                          className="size-3.5 shrink-0 cursor-pointer accent-accent disabled:opacity-40"
+                        />
+                        {kindTag && (
+                          <span className="shrink-0 rounded-chip bg-surface px-1.5 py-0.5 text-submeta font-medium whitespace-nowrap text-ink-3 shadow-hairline">
+                            {kindTag}
+                          </span>
+                        )}
+                        {group.url ? (
+                          <a
+                            href={group.url}
+                            target="_blank"
+                            rel="noreferrer noopener"
+                            data-testid="decision-queue-group-link"
+                            className="inline-flex min-w-0 items-center gap-1 truncate text-submeta font-semibold text-accent-ink hover:underline"
+                          >
+                            <span className="truncate">{group.label}</span>
+                            <Icon name="external" size={11} stroke={2} className="shrink-0" />
+                          </a>
+                        ) : (
+                          <span className="min-w-0 truncate text-submeta font-semibold text-ink-2">
+                            {group.label}
                           </span>
                         )}
                       </div>
-
-                      {questionText && (
-                        <p className="mt-1 text-submeta leading-snug text-ink-2">
-                          {questionText}
-                        </p>
-                      )}
-
-                      {/* Mode A: explicit option buttons (never pre-selected) */}
-                      {!settled && options.length > 0 && (
-                        <div className="mt-2 flex flex-wrap items-center gap-1.5" role="group" aria-label={td.title}>
-                          {options.map((opt) => {
-                            const selected =
-                              choice?.kind === "option" && choice.value === opt.label;
-                            const isRecommended =
-                              Boolean(recommendLabel) && opt.label === recommendLabel;
-                            return (
-                              <button
-                                key={opt.label}
-                                type="button"
-                                data-testid="decision-queue-option"
-                                data-todo-id={td.id}
-                                data-option={opt.label}
-                                aria-pressed={selected}
-                                disabled={submitting}
-                                title={opt.leads_to || opt.label}
-                                onClick={() => toggleOption(td.id, opt.label)}
-                                className={cx(
-                                  "touch-hit inline-flex max-w-full items-center gap-1.5 rounded-control border px-2.5 py-1 text-submeta font-medium whitespace-nowrap transition-colors focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50",
-                                  selected
-                                    ? "border-accent bg-accent text-white"
-                                    : "border-line bg-inset text-ink hover:border-line-strong hover:bg-hover",
-                                )}
-                              >
-                                <span className="truncate">{opt.label}</span>
-                                {isRecommended && (
-                                  <span
-                                    data-testid="decision-queue-recommended-badge"
-                                    className={cx(
-                                      "rounded-chip px-1 text-xs font-normal whitespace-nowrap",
-                                      selected
-                                        ? "bg-white/20 text-white"
-                                        : "bg-orange-tint text-attention",
-                                    )}
-                                  >
-                                    {t("todos.decision_queue_recommended")}
-                                  </span>
-                                )}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      )}
-
-                      {/* Recommendation hint when there are no structured option buttons */}
-                      {!settled && options.length === 0 && recommendLabel && (
-                        <p className="mt-1.5 text-submeta text-ink-3">
-                          {t("assistant-brief.recommend", { option: recommendLabel })}
-                        </p>
-                      )}
-
-                      {/* Staged custom reply pill (Mode B) */}
-                      {!settled && choice?.kind === "reply" && (
-                        <div
-                          data-testid="decision-queue-item-reply"
-                          className="mt-2 flex items-center justify-between gap-2 rounded-control border border-accent/30 bg-inset px-2.5 py-1 text-submeta text-ink"
-                        >
-                          <span className="min-w-0 truncate">
-                            {t("todos.decision_queue_reply_preview", { reply: choice.value })}
-                          </span>
-                          <button
-                            type="button"
-                            aria-label={t("todos.decision_queue_clear_choice")}
-                            disabled={submitting}
-                            onClick={() => clearItemChoice(td.id)}
-                            className="touch-hit shrink-0 text-ink-3 hover:text-ink"
-                          >
-                            <Icon name="x" size={12} />
-                          </button>
-                        </div>
-                      )}
-
-                      {/* Pending shared reply preview when checked + shared reply typed */}
-                      {willUseSharedReply && (
-                        <p
-                          data-testid="decision-queue-item-shared-preview"
-                          className="mt-1.5 truncate text-submeta text-accent-ink"
-                        >
-                          {t("todos.decision_queue_shared_preview", { reply: sharedReply.trim() })}
-                        </p>
-                      )}
-
-                      {/* Per-item server error feedback */}
-                      {result && !result.ok && (
-                        <p
-                          role="alert"
-                          data-testid="decision-queue-item-error"
-                          className="mt-1.5 text-submeta text-red"
-                        >
-                          {result.error || t("todos.decision_queue_item_failed")}
-                        </p>
-                      )}
+                      <span
+                        data-testid="decision-queue-group-count"
+                        className="shrink-0 rounded-chip bg-surface px-1.5 py-0.5 text-submeta font-medium text-ink-3 tabular-nums shadow-hairline"
+                      >
+                        {group.todos.length}
+                      </span>
                     </div>
-                  </div>
-                </div>
-              );
-            })}
+                    <div className="space-y-1.5">{group.todos.map(renderItem)}</div>
+                  </section>
+                );
+              });
+            })()}
           </div>
         )}
 

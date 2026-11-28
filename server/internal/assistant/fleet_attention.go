@@ -51,19 +51,20 @@ func linkAttention(l i18n.Lang, agents []fleetInput, ixs []proto.Interaction, to
 // and its items are fleetcountadapt's: the cards are read oldest first, those of the same time by id, so that the card
 // that stands for an agent does not depend on the order they were read in.
 func (r *fleetRound) linkAttention(l i18n.Lang, agents []fleetInput, ixs []proto.Interaction, told map[string]bool) link.Attention {
-	r.fillLink(agents, ixs, told)
+	r.fillLink(agents, ixs, told, nil)
 	defer r.letLinkGo()
 	return r.link.Link(string(l), sessionTitle)
 }
 
 // fillLink puts a round's agents and cards into the fleet Persona Link's summary is decided on, the cards oldest first
-// and those of the same time by id (linkAttention), told which cards are the owner's.
-func (r *fleetRound) fillLink(agents []fleetInput, ixs []proto.Interaction, told map[string]bool) {
+// and those of the same time by id (linkAttention), told which cards are the owner's. The counts view also takes
+// quiet tasks' agents for its Persona card count.
+func (r *fleetRound) fillLink(agents []fleetInput, ixs []proto.Interaction, told map[string]bool, quiet []fleetInput) {
 	r.cards = append(r.cards[:0], ixs...)
 	slices.SortStableFunc(r.cards, func(a, b proto.Interaction) int {
 		return cmp.Or(a.CreatedAt.Compare(b.CreatedAt), cmp.Compare(a.ID, b.ID))
 	})
-	r.fill(&r.link, agents, r.cards, told)
+	r.fill(&r.link, agents, r.cards, told, quiet)
 }
 
 // letLinkGo lets the round's lists go until the next one.

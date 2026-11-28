@@ -8,5 +8,11 @@ import (
 type HubTranscript struct {
 	Rev      int64                     `json:"rev"`
 	Pass     string                    `json:"pass"` // HubPassLive | HubPassFinal
+	Timing   TranscriptTiming          `json:"timing,omitempty"`
 	Segments []kbwire.RecordingSegment `json:"segments"`
+}
+
+// EffectiveTiming returns h.Timing when known, or TimingSpread for older transcripts without timing.
+func (h HubTranscript) EffectiveTiming() TranscriptTiming {
+	return h.Timing.Effective()
 }

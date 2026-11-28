@@ -19,7 +19,7 @@ describe("capabilityRow", () => {
       tools: { state: "ok", tools: [{ id: "docker", version: "27.3.1" }, { id: "git", version: "" }] },
     });
     expect(row).toMatchObject({ name: "Studio Mac", presence: "online", system: "macOS 26.1 · arm64", model: "Mac mini", cores: 10, memory: 32 * GB, diskFree: 200 * GB, engines: ["herdr 0.9.5"] });
-    expect(row.runtimes).toEqual({ state: "ok", value: [{ id: "claude", name: "Claude Code", entries: ["claude", "Team relay"] }, { id: "codex", name: "Codex", entries: ["codex"] }] });
+    expect(row.runtimes).toEqual({ state: "ok", value: [{ id: "claude", name: "Claude Code", entries: ["Claude Code", "Team relay"] }, { id: "codex", name: "Codex", entries: ["Codex"] }] });
     expect(row.tools.state === "ok" && toolsText(row.tools.value)).toBe("Docker 27.3.1 · Git");
     expect(row.reach).not.toBe("");
   });
@@ -27,15 +27,15 @@ describe("capabilityRow", () => {
   it("says why tools and runtimes are missing", () => {
     const off = capabilityRow({ machine: mac({ online: false }), machines: [] });
     expect(off.presence).toBe("offline");
-    expect(off.tools).toEqual({ state: "unavailable", text: "连上后才能看到" });
+    expect(off.tools).toEqual({ state: "unavailable", text: "连接后显示" });
     expect(capabilityRow({ machine: mac(), machines: [] }).tools).toEqual({ state: "loading" });
-    expect(capabilityRow({ machine: mac(), machines: [], tools: { state: "failed", failure: { kind: "node_outdated", text: "" } } }).tools).toEqual({ state: "unavailable", text: "这台电脑的 Persona 太旧，更新后可见" });
-    expect(capabilityRow({ machine: mac(), machines: [], tools: { state: "failed", failure: { kind: "hub_outdated", text: "" } } }).tools).toEqual({ state: "unavailable", text: "hub 太旧，更新后可见" });
+    expect(capabilityRow({ machine: mac(), machines: [], tools: { state: "failed", failure: { kind: "node_outdated", text: "" } } }).tools).toEqual({ state: "unavailable", text: "更新这台电脑上的 Persona 后即可查看" });
+    expect(capabilityRow({ machine: mac(), machines: [], tools: { state: "failed", failure: { kind: "hub_outdated", text: "" } } }).tools).toEqual({ state: "unavailable", text: "更新 hub 后即可查看" });
     expect(capabilityRow({ machine: mac(), machines: [], launchers: null }).runtimes.state).toBe("unavailable");
   });
 
   it("groups one runtime's named entries", () => {
-    expect(runtimeGroups([{ name: "codex", agent: "codex" }, { name: "codex-local", display_name: "Codex (local)", agent_type: "codex" }])).toEqual([{ id: "codex", name: "Codex", entries: ["codex", "Codex (local)"] }]);
+    expect(runtimeGroups([{ name: "codex", agent: "codex" }, { name: "codex-local", display_name: "Codex (local)", agent_type: "codex" }])).toEqual([{ id: "codex", name: "Codex", entries: ["Codex", "Codex (local)"] }]);
   });
 
   it("tells OS families", () => {
@@ -59,9 +59,9 @@ describe("rankTargets", () => {
     const r = rankTargets(source, candidates);
     expect(r.map((x) => [x.machine.id, x.eligible])).toEqual([["mini", true], ["nas", false], ["new", false], ["hot", false]]);
     expect(r.find((x) => x.machine.id === "nas")?.reason).toBe("离线");
-    expect(r.find((x) => x.machine.id === "new")?.reason).toBe("还没确认或还没连上");
+    expect(r.find((x) => x.machine.id === "new")?.reason).toBe("尚未确认或尚未连接");
     expect(r.find((x) => x.machine.id === "hot")?.reason).toBe("内存 94%");
-    expect(r[0].reason).toBe("同一系统 · 内存空闲 22 GB");
+    expect(r[0].reason).toBe("同一系统 · 空闲内存 22 GB");
   });
 
   it("ranks by fewer alerts, then more free memory, then the same system, then the source's tools", () => {
@@ -69,7 +69,7 @@ describe("rankTargets", () => {
     const busy = { machine: linux({ id: "busy", name: "Busy" }), metrics: sample("busy", 8 * GB, 64 * GB, { disk_used: 85, disk_total: 100 }) };
     const small = { machine: mac({ id: "small", name: "Small" }), metrics: sample("small", 8 * GB, 16 * GB) };
     expect(rankTargets(source, [busy, small, big]).map((x) => x.machine.id)).toEqual(["big", "small", "busy"]);
-    expect(rankTargets(source, [busy]).at(0)?.reason).toBe("Linux · 内存空闲 56 GB · 磁盘 85%");
+    expect(rankTargets(source, [busy]).at(0)?.reason).toBe("Linux · 空闲内存 56 GB · 磁盘 85%");
 
     const a = { machine: linux({ id: "a", name: "A" }), metrics: sample("a", 8 * GB, 16 * GB) };
     const b = { machine: mac({ id: "b", name: "B" }), metrics: sample("b", 8 * GB, 16 * GB) };
@@ -80,7 +80,7 @@ describe("rankTargets", () => {
     const d = { machine: mac({ id: "d", name: "D" }), metrics: sample("d", 8 * GB, 16 * GB), tools };
     const ranked = rankTargets(source, [c, d], { sourceTools: tools });
     expect(ranked.map((x) => x.machine.id)).toEqual(["d", "c"]);
-    expect(ranked[1].reason).toContain("没有 Xcode");
+    expect(ranked[1].reason).toContain("缺少 Xcode");
   });
 
   it("picks nothing when no computer is eligible", () => {

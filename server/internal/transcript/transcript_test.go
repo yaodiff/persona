@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -194,13 +195,86 @@ func TestOtherEnginesPreserveContextResourceLabels(t *testing.T) {
 	}
 }
 
-// /compact (typed, or sent by Persona to an idle assistant conversation) is a notice, not a message: it must not count
-// as activity either, or a compacted conversation would turn up unread.
+// /compact (typed, or sent by Persona with instructions to compact an assistant conversation) is a notice, not a
+// message: it must not count as a user turn or activity either, or a compacted conversation would turn up unread.
 func TestCompactCommandIsANotice(t *testing.T) {
 	items, meta := parse(t, `{"type":"user","uuid":"u1","timestamp":"2026-11-01T07:00:00Z","message":{"role":"user","content":"<command-name>/compact</command-name>\n            <command-message>compact</command-message>\n            <command-args></command-args>"}}`)
 	it := only(t, items)
-	if it.Role != "system" || it.Kind != proto.KindNotice || it.Text != "压缩上下文" || !meta.LastActivity.IsZero() {
-		t.Fatalf("got %+v, activity %v", it, meta.LastActivity)
+	if it.Role != "system" || it.Kind != proto.KindNotice || it.Text != "压缩上下文" || !meta.LastActivity.IsZero() || meta.Turns != 0 {
+		t.Fatalf("got %+v, activity %v, turns %d", it, meta.LastActivity, meta.Turns)
+	}
+}
+
+func TestCompactCommandWithInstructionsIsANotice(t *testing.T) {
+	command := func(args string) string {
+		return "<command-name>/compact</command-name>\n<command-message>compact</command-message>\n<command-args>" + args + "</command-args>"
+	}
+	marshalLine := func(t *testing.T, v map[string]any) string {
+		t.Helper()
+		b, err := json.Marshal(v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	cases := []struct {
+		name string
+		line string
+	}{
+		{
+			name: "zh-Hans managed instructions",
+			line: marshalLine(t, map[string]any{
+				"type": "user", "uuid": "u1", "timestamp": "2026-11-01T07:00:00Z",
+				"message": map[string]any{"role": "user", "content": command(prompts.RenderCompactInstructions("zh-Hans"))},
+			}),
+		},
+		{
+			name: "en managed instructions",
+			line: marshalLine(t, map[string]any{
+				"type": "user", "uuid": "u2", "timestamp": "2026-11-01T07:00:00Z",
+				"message": map[string]any{"role": "user", "content": command(prompts.RenderCompactInstructions("en"))},
+			}),
+		},
+		{
+			name: "ja managed instructions",
+			line: marshalLine(t, map[string]any{
+				"type": "user", "uuid": "u3", "timestamp": "2026-11-01T07:00:00Z",
+				"message": map[string]any{"role": "user", "content": command(prompts.RenderCompactInstructions("ja"))},
+			}),
+		},
+		{
+			name: "block array with persona-context and instructions",
+			line: marshalLine(t, map[string]any{
+				"type": "user", "uuid": "u4", "timestamp": "2026-11-01T07:00:00Z",
+				"message": map[string]any{
+					"role": "user",
+					"content": []map[string]any{
+						{"type": "text", "text": "<persona-context>\nsnapshot\n</persona-context>"},
+						{"type": "text", "text": command(prompts.RenderCompactInstructions("zh-Hans"))},
+					},
+				},
+			}),
+		},
+		{
+			name: "system local_command with custom focus",
+			line: marshalLine(t, map[string]any{
+				"type": "system", "subtype": "local_command", "uuid": "s1", "timestamp": "2026-11-01T07:00:00Z",
+				"content": command("focus on auth tests"),
+			}),
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			items, meta := parse(t, tc.line)
+			it := only(t, items)
+			if it.Role != "system" || it.Kind != proto.KindNotice || it.Text != CompactNotice {
+				t.Fatalf("got %+v, want system notice %q", it, CompactNotice)
+			}
+			if !meta.LastActivity.IsZero() || meta.Turns != 0 || meta.FirstUser != "" || meta.TurnOpen {
+				t.Fatalf("unexpected meta mutation: activity=%v turns=%d firstUser=%q turnOpen=%v",
+					meta.LastActivity, meta.Turns, meta.FirstUser, meta.TurnOpen)
+			}
+		})
 	}
 }
 
@@ -591,6 +665,33 @@ func TestQueueOperations(t *testing.T) {
 	ParseLine(9, []byte(`{"type":"queue-operation","operation":"popAll","content":"B"}`), &m)
 	if len(m.Queue) != 0 {
 		t.Fatalf("queue after popAll = %v", m.Queue)
+	}
+}
+
+func TestQueueOperationPopOne(t *testing.T) {
+	var m Meta
+	for i, l := range []string{
+		`{"type":"queue-operation","operation":"enqueue","content":"first"}`,
+		`{"type":"queue-operation","operation":"enqueue","content":"second"}`,
+		`{"type":"queue-operation","operation":"enqueue","content":"third"}`,
+		`{"type":"queue-operation","operation":"popOne","content":"second"}`,
+	} {
+		ParseLine(i+1, []byte(l), &m)
+	}
+	if len(m.Queue) != 2 || m.Queue[0] != "first" || m.Queue[1] != "third" {
+		t.Fatalf("queue after matching popOne = %v", m.Queue)
+	}
+	ParseLine(5, []byte(`{"type":"queue-operation","operation":"popOne"}`), &m)
+	if len(m.Queue) != 1 || m.Queue[0] != "third" {
+		t.Fatalf("queue after empty-content popOne = %v", m.Queue)
+	}
+	ParseLine(6, []byte(`{"type":"queue-operation","operation":"popOne","content":"third"}`), &m)
+	if len(m.Queue) != 0 {
+		t.Fatalf("queue after last popOne = %v", m.Queue)
+	}
+	ParseLine(7, []byte(`{"type":"queue-operation","operation":"popOne","content":"missing"}`), &m)
+	if len(m.Queue) != 0 {
+		t.Fatalf("queue after popOne on empty queue = %v", m.Queue)
 	}
 }
 

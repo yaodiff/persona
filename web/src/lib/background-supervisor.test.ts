@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { backgroundSupervisorTitle, isBackgroundSupervisor, reviewedInBackground, REVIEW_BY_BACKGROUND } from "./background-supervisor";
+import { asBackgroundSupervisorCard, backgroundSupervisorTitle, isBackgroundSupervisor, isBackgroundSupervisorInteraction, reviewedInBackground, REVIEW_BY_BACKGROUND } from "./background-supervisor";
 import { autoConversations, autoOrigin, matchesOrigin, recentConversations, unlistedConversations } from "./conversation-origins";
 import type { FeedItem } from "./feed";
-import type { Session } from "./types";
+import type { Interaction, Session } from "./types";
 
 const conv = (id: string, extra: Partial<Session> = {}) => ({ machine_id: "hub", session_id: id, title: id, cwd: "", status: "idle", ...extra }) as Session;
 
@@ -66,5 +66,46 @@ describe("the background supervisor (#5082)", () => {
     expect(unlistedConversations(held, pushed)).toEqual(["new"]);
     expect(unlistedConversations({ conversations: [] }, [conv("first", { assistant: true, origin: "task" })])).toEqual(["first"]);
     expect(unlistedConversations({ background_supervisor: "new", conversations: [] }, pushed.slice(3))).toEqual([]);
+  });
+
+  it("matches user-facing cards raised by the background supervisor and wraps them with stable identity", () => {
+    const assistant = { main: "main", background_supervisor: "bg" };
+    const ix = (extra: Partial<Interaction> = {}) => ({
+      id: "ix-bg",
+      machine_id: "m1",
+      session_id: "bg",
+      session_title: "assistant",
+      kind: "permission",
+      tool_name: "Bash",
+      created_at: "2026-11-28T00:00:00Z",
+      ...extra,
+    }) as Interaction;
+
+    expect(isBackgroundSupervisorInteraction(assistant, ix())).toBe(true);
+    expect(isBackgroundSupervisorInteraction(assistant, ix({ session_id: "sub", folded_under: "bg" }))).toBe(true);
+    expect(isBackgroundSupervisorInteraction(assistant, ix({ session_id: "side", folded_side: "bg" }))).toBe(true);
+    expect(isBackgroundSupervisorInteraction(assistant, ix({ kind: "question" }))).toBe(true);
+    expect(isBackgroundSupervisorInteraction(assistant, ix({ delegating: true }))).toBe(false);
+    expect(isBackgroundSupervisorInteraction(assistant, ix({ kind: "question", delegating: true }))).toBe(true);
+    expect(isBackgroundSupervisorInteraction(assistant, ix({ manager: "other" }), "default")).toBe(false);
+    expect(isBackgroundSupervisorInteraction(assistant, ix({ manager: "default" }), "default")).toBe(true);
+    expect(isBackgroundSupervisorInteraction({ main: "main" }, ix())).toBe(false);
+    expect(isBackgroundSupervisorInteraction({ main: "bg", background_supervisor: "bg" }, ix())).toBe(false);
+
+    const card = ix();
+    const wrapped = asBackgroundSupervisorCard(card, "main", "hub");
+    expect(wrapped).toMatchObject({
+      id: "ix-bg",
+      machine_id: "m1",
+      session_id: "bg",
+      folded_under: "main",
+      folded_under_machine_id: "hub",
+      session_title: "后台督办",
+    });
+    expect(asBackgroundSupervisorCard(card, "main", "hub")).toBe(wrapped);
+    expect(asBackgroundSupervisorCard(card, "main", "m1").folded_under_machine_id).toBeUndefined();
+
+    const child = ix({ session_id: "sub", folded_under: "bg", session_title: "Child" });
+    expect(asBackgroundSupervisorCard(child, "main", "hub")).toBe(child);
   });
 });

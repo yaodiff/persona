@@ -1,12 +1,12 @@
 // A mail on a hub with mail off (#15995): the text the hub kept with the Inbox item, and one line saying why the
 // whole message is not here. No mail route is asked: they are gone with the module. The item's own page
 // (GET /api/v1/inbox/{id}) and the translation the hub kept (POST /api/v1/translate/mail answers from it) are Core's.
+import { hubServes, moduleFeature } from "../../core/module-host";
 import { useEffect, useState } from "react";
 import { api, isAbort } from "../../lib/api";
 import { clock } from "../../lib/format";
 import { itemPath, itemRequest, type InboxItem } from "../../lib/inbox";
-import { addressText, storedMailClipping, type StoredMailClipping } from "../../lib/mail";
-import { storedMailText } from "../../lib/mail-stored";
+import { addressText, storedMailClipping, type StoredMailClipping, storedMailText } from "../../lib/mail-stored";
 import { hubTranslation, languageName, translateMail, useTranslatePrefs, type MailTranslation } from "../../lib/translate";
 import { t } from "../../i18n";
 import { Button, Loading } from "../../ui/atoms";
@@ -17,6 +17,13 @@ type StoredBody = { kind: "loading" } | { kind: "stored"; text: string; clipping
 
 /** The line after the text: why the rest is not here, and what the hub said about the text being cut short. */
 function notice(clipping: StoredMailClipping): string {
+  if (hubServes(moduleFeature("mail"))) {
+    switch (clipping) {
+      case "clipped": return t("inbox-inboxbodies.saved_clipped");
+      case "whole": return t("inbox-inboxbodies.saved_whole");
+      case "unknown": return t("inbox-inboxbodies.saved");
+    }
+  }
   switch (clipping) {
     case "clipped": return t("inbox-inboxbodies.mail_off_stored_clipped");
     case "whole": return t("inbox-inboxbodies.mail_off_stored_whole");

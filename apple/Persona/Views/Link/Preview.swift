@@ -27,6 +27,8 @@ nonisolated struct PreviewServers: Decodable, Sendable, Equatable {
     var servers: [Server]
     /// The file could not be read (not JSON, too big).
     var error: String?
+    /// The headless browser available on that computer for computer-stream previews; absent when none is installed.
+    var browser: String?
 }
 
 /// What Start answers: the terminal tab the command runs in, and the port to wait for.

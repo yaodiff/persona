@@ -143,6 +143,15 @@ func TestAgyContextResourceHistory(t *testing.T) {
 		{"similar scheme", "Content of persona-context-extra:///snapshot.txt:\n" + context + user, "Content of persona-context-extra:///snapshot.txt:\n" + user},
 		{"quoted label", "Example:\n" + label + user, "Example:\n" + label + user},
 		{"incomplete envelope", label + "<persona-context>unfinished", label + "<persona-context>unfinished"},
+		{"leading resource with literal context tags", label + "<persona-context><persona-context>inner</persona-context>outer</persona-context>" + user, user},
+		{"leading resource with nested prose", label + "<persona-context>outer\n<persona-context>inner</persona-context>\n\nGenerated prose\n</persona-context>\n" + user, user},
+		{"trailing resource", user + "\n\n" + label + context, user},
+		{"trailing resource with literal context tags", user + "\n\n" + label + "<persona-context><persona-context>inner</persona-context>outer</persona-context>", user},
+		{"trailing resource before user prose", user + "\n\n" + label + "<persona-context>generated</persona-context>\n\nMy example: <persona-context>user</persona-context>", user + "\n\nMy example:"},
+		{"resources around user prose", user + "\n\n" + label + context + "\n\nkeep me\n\n" + label + context, user + "\n\nkeep me"},
+		{"trailing view errors", user + "\n\n<persona-view-errors>bad</persona-view-errors>", user},
+		{"malformed trailing URI", user + "\n\nContent of persona-context:// /snapshot.txt:\n" + context, user + "\n\nContent of persona-context:// /snapshot.txt:"},
+		{"quoted trailing label", "Example: " + label + context, "Example: Content of persona-context:///snapshot.txt:"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			content, err := json.Marshal(tc.content)

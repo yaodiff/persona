@@ -97,6 +97,9 @@ func interactionPayloadIn(l i18n.Lang, ix proto.Interaction, machine string) map
 		},
 		"interaction_id": ix.ID, "machine_id": ix.MachineID, "session_id": ix.SessionID,
 	}
+	if !ix.CreatedAt.IsZero() {
+		out["interaction_created_at"] = ix.CreatedAt.UTC().Format(time.RFC3339Nano)
+	}
 	if q, ok := askQuestion(ix); ok {
 		labels := make([]string, len(q.Options))
 		for i, o := range q.Options {

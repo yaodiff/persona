@@ -1,8 +1,12 @@
 import { i18n } from '@kit.LocalizationKit';
 import { Colors } from '../design/Colors';
+import { PhoneStyle } from '../design/PhoneStyle';
+import { Motion } from '../design/Motion';
 import { Tokens } from '../design/Tokens';
 import { tr } from '../design/Strings';
+import { Haptics } from '../platform/Haptics';
 import { nativeEnvironment } from '../platform/NativeEnvironment';
+import { workspaceGridColumns, workspaceGridGutter } from '../core/WorkspaceGrid';
 import { ClientModel } from '../models/ClientModel';
 import { deviceLook } from '../models/DeviceLook';
 import { deviceLookIconAccent } from '../core/DeviceLook';
@@ -64,6 +68,7 @@ struct SubscriptionMeter {
       Stack({alignContent:Alignment.Start}) {
         Row().width('100%').height(this.thickness()).borderRadius(this.thickness()/2).backgroundColor(Colors.control)
         Row().width(this.at(this.window.percent)).height(this.thickness()).borderRadius(this.thickness()/2).backgroundColor(this.window.percent>=80 ? Colors.workingMark : this.accent)
+          .animation(Motion.state(nativeEnvironment.reduceMotion))
         if (Number.isFinite(this.window.protection)) Stack({alignContent:Alignment.TopStart}) {
           ForEach(this.stripes(),(x:number)=>{
             Line().width(this.thickness()).height(this.thickness()).startPoint([0,this.thickness()]).endPoint([this.thickness(),0]).stroke(Colors.workingMark).strokeWidth(0.7).opacity(0.65)
@@ -83,7 +88,7 @@ struct SubscriptionTimeline {
   @Require @Param now:number;
   @Require @Param locale:string;
   @Local private plotWidth:number=0;
-  private weekColor():ResourceColor {return nativeEnvironment.dark ? '#5B9BFF' : '#2E6FD0';}
+  private weekColor(): ResourceColor { return Colors.chartBlue; }
   private x(reset:number):number { return this.plotWidth*usageTimelinePosition((reset-this.now)/3600000); }
   private caption(h:number):string {return h===0 ? words('now') : h<24 ? words('axis_hours',String(h)) : words('axis_days',String(h/24));}
   @Builder lane(reset:number,color:ResourceColor,height:number) {
@@ -101,7 +106,7 @@ struct SubscriptionTimeline {
     }.height(15).width('100%')
   }
   @Builder legend(title:string,color:ResourceColor) {
-    Row({space:4}) { Row().width(16).height(6).borderRadius(3).backgroundColor(color); Text(title).fontSize(12).maxFontScale(Tokens.interfaceScaleFor(12)).fontColor(Colors.secondary).maxLines(1) }
+    Row({space:4}) { Row().width(16).height(6).borderRadius(Tokens.radiusCapsule).backgroundColor(color); Text(title).fontSize(Tokens.typeLabel).maxFontScale(Tokens.interfaceScaleFor(Tokens.typeLabel)).fontColor(Colors.secondary).maxLines(1) }
   }
   build(){
     Column({space:4}) {
@@ -127,7 +132,7 @@ struct SubscriptionTimeline {
               .position({x:Math.min(Math.max(0,this.plotWidth-1),this.plotWidth*usageTimelinePosition(h)),y:0})},(h:number)=>String(h))
             Column() {this.lane(a.planReset(300,this.now),Colors.teal,6);this.lane(a.planReset(10080,this.now),this.weekColor(),9)}.width('100%')
           }.layoutWeight(1).height(30)
-        }.width('100%').height(30).backgroundColor(index%2===0 ? Colors.subtle : Color.Transparent).borderRadius(6)
+        }.width('100%').height(30).backgroundColor(index%2===0 ? Colors.subtle : Color.Transparent).borderRadius(Tokens.radiusBadge)
           .accessibilityGroup(true).accessibilityText([a.name,Number.isFinite(a.planReset(300,this.now)) ? '5h '+resetLabel(a.planReset(300,this.now),this.now,this.locale) : '',
             Number.isFinite(a.planReset(10080,this.now)) ? '7d '+resetLabel(a.planReset(10080,this.now),this.now,this.locale) : ''].filter((s:string)=>!!s).join(', '))
       },(a:SubscriptionAccount)=>a.id)
@@ -142,11 +147,14 @@ export struct MachineSubscriptionCards {
   @Require @Param model:ClientModel;
   @Param active:boolean=true;
   @Local private now:number=Date.now();
+  @Local private gridWidth:number=0;
   private timer:number=-1;
   aboutToAppear():void {this.ticking();}
   aboutToDisappear():void {clearInterval(this.timer);}
   @Monitor('active') ticking():void {clearInterval(this.timer);if(this.active){this.now=Date.now();this.timer=setInterval(()=>{if(this.model.isAppInForeground())this.now=Date.now();},1000);}}
   @Computed get groups():SubscriptionProvider[] {return subscriptionGroups(this.source.accounts,this.now);}
+  @Computed get visibleGroups():SubscriptionProvider[] {return this.groups.filter((g:SubscriptionProvider)=>!this.source.hidden.includes(g.provider));}
+  private cardColumns():number {return workspaceGridColumns(this.gridWidth,nativeEnvironment.fontScale,3);}
   private accent():ResourceColor {
     const palette=deviceLook.palette(this.model.style),dark=nativeEnvironment.dark;
     return deviceLookIconAccent(deviceLook.accentId,this.model.style,dark,dark ? palette.dark : palette.light);
@@ -165,7 +173,7 @@ export struct MachineSubscriptionCards {
     Menu() {
       ForEach(this.groups,(g:SubscriptionProvider)=>{
         MenuItem({content:usageProviderTitle(g.provider,words('other'))}).selected(!this.source.hidden.includes(g.provider)).selectIcon(true).enabled(this.source.filterReady)
-          .onClick(()=>this.source.setShown(this.model,g.provider,this.source.hidden.includes(g.provider))).id('machines.usage.filter.'+g.provider)
+          .onClick(()=>{ Haptics.selection(); this.source.setShown(this.model,g.provider,this.source.hidden.includes(g.provider)); }).id('machines.usage.filter.'+g.provider)
       },(g:SubscriptionProvider)=>g.provider)
     }
   }
@@ -209,27 +217,40 @@ export struct MachineSubscriptionCards {
         Divider().color(Colors.divider).strokeWidth(0.5)
         SubscriptionTimeline({accounts:g.accounts.filter((a:SubscriptionAccount)=>Number.isFinite(a.planReset(300,this.now)) || Number.isFinite(a.planReset(10080,this.now))),now:this.now,locale:this.locale()})
       }
-    }.alignItems(HorizontalAlign.Start).width('100%').padding(14).backgroundColor(Colors.surface).borderRadius(14).id('usage.card.'+g.provider)
+    }.alignItems(HorizontalAlign.Start).width('100%').padding(14).backgroundColor(Colors.surface).borderRadius(PhoneStyle.cardRadius)
+      .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(nativeEnvironment.dark),radius:PhoneStyle.cardRadius})
+      .shadow(PhoneStyle.cardElevation(nativeEnvironment.dark)).id('usage.card.'+g.provider)
   }
   @Builder filterIcon() {
     Stack() {
       Circle().width('100%').height('100%').fill(this.source.hidden.length ? this.accent() : Color.Transparent).stroke(this.accent()).strokeWidth(1.6)
       Column({space:1.7}) {
         ForEach([10,7,3.5],(width:number)=>{
-          Row().width(width).height(1.4).borderRadius(1).backgroundColor(this.source.hidden.length ? Colors.onAction : this.accent())
+          Row().width(width).height(1.4).borderRadius(Tokens.radiusCapsule).backgroundColor(this.source.hidden.length ? Colors.onAction : this.accent())
         },(width:number)=>String(width))
       }
     }.width(Tokens.interfaceFontVp(20,nativeEnvironment.fontScale)).height(Tokens.interfaceFontVp(20,nativeEnvironment.fontScale)).accessibilityLevel('no')
   }
   build(){
-    Column({space:8}) {
+    Column({space:10}) {
       Row() {
         Text(words('heading')).fontSize(13).maxFontScale(Tokens.interfaceScaleFor(13)).fontWeight(600).fontColor(Colors.secondary).maxLines(1).layoutWeight(1)
         Button({type:ButtonType.Circle}) {this.filterIcon()}
           .width(Tokens.interfaceFontVp(20,nativeEnvironment.fontScale)).height(Tokens.interfaceFontVp(20,nativeEnvironment.fontScale)).padding(0)
-          .responseRegion({x:-12,y:-12,width:44,height:44}).backgroundColor(Color.Transparent).accessibilityText(words('filter')).bindMenu(this.filter).id('machines.usage.filter')
+          .responseRegion({x:-12,y:-12,width:44,height:44}).backgroundColor(Color.Transparent).accessibilityText(words('filter'))
+          .onClick(() => Haptics.tap()).bindMenu(this.filter).id('machines.usage.filter')
       }.width('100%').padding({left:4,right:4})
-      ForEach(this.groups.filter((g:SubscriptionProvider)=>!this.source.hidden.includes(g.provider)),(g:SubscriptionProvider)=>{this.card(g)},(g:SubscriptionProvider)=>g.cardKey())
-    }.width('100%').alignItems(HorizontalAlign.Start).padding({top:8}).id('machines.usage')
+      if (this.cardColumns() > 1 && this.visibleGroups.length > 1) {
+        GridRow({columns:this.cardColumns(),gutter:{x:workspaceGridGutter(this.cardColumns()),y:workspaceGridGutter(this.cardColumns())}}) {
+          ForEach(this.visibleGroups,(g:SubscriptionProvider)=>{
+            GridCol({span:1}) { this.card(g) }
+          },(g:SubscriptionProvider)=>g.cardKey())
+        }.width('100%')
+      } else {
+        ForEach(this.visibleGroups,(g:SubscriptionProvider)=>{this.card(g)},(g:SubscriptionProvider)=>g.cardKey())
+      }
+    }.width('100%').alignItems(HorizontalAlign.Start).padding({top:8})
+      .onAreaChange((_:Area,area:Area)=>{ const w=Number(area.width); if (Number.isFinite(w) && w>0 && Math.abs(w-this.gridWidth)>0.5) this.gridWidth=w; })
+      .id('machines.usage')
   }
 }

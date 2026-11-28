@@ -4,8 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"maps"
 	"math/rand/v2"
+	"net/http"
+	"net/http/httptest"
+	"reflect"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -147,6 +151,162 @@ func TestUsageWindowsKeepsDistinctAntigravityWindows(t *testing.T) {
 	if got := answer(local, remote); len(got) != 2 || mostUsed(got[0]) != 38 || got[0].Stale || got[0].Problem != "" ||
 		got[0].Windows[0].Model != "gemini" || len(got[1].Windows) != 1 || got[1].Windows[0].Model != claude.Model {
 		t.Fatalf("an older fresh reading should replace the stale model-scoped window: %+v", got)
+	}
+}
+
+func TestAntigravityGenericIdleSibling(t *testing.T) {
+	now := time.Date(2026, 11, 5, 9, 0, 0, 0, time.UTC)
+	week := now.Add(7 * 24 * time.Hour)
+	for _, tc := range []struct {
+		name, scope, fiveHour  string
+		geminiOffset, localAge time.Duration
+		wantUsed               float64
+	}{
+		{"epoch filtered", "Claude/GPT", `{"label":"5h","used_percent":80,"resets_at":"1970-01-01T00:00:00Z"},`, 0, 0, 0},
+		{"missing with unmatched Gemini", "Claude / GPT", "", time.Second, 0, 0},
+		{"both idle", "Claude/GPT", `{"label":"5h","used_percent":0,"resets_at":null},`, 0, 0, 0},
+		{"nil resets prefer newer local", "Claude/GPT", `{"label":"5h","used_percent":8},`, 0, 0, 0},
+		{"nil resets prefer external on tie", "Claude/GPT", `{"label":"5h","used_percent":8},`, 0, time.Minute, 8},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			seatName := "Antigravity · " + tc.scope
+			gate := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				fmt.Fprintf(w, `{"accounts":[
+					{"id":"seat-c","provider":"antigravity","name":%q,"sampled_at":%q,"windows":[
+						%s{"label":"1d","used_percent":97,"resets_at":"2026-11-05T08:59:59Z"},
+						{"label":"7d","used_percent":42,"resets_at":%q}]},
+					{"id":"seat-g","provider":"antigravity","name":"Antigravity · Gemini","windows":[
+						{"label":"7d","used_percent":76,"resets_at":%q}]}]}`,
+					seatName, now.Add(-time.Minute).Format(time.RFC3339), tc.fiveHour, week.Add(time.Millisecond).Format(time.RFC3339Nano),
+					week.Add(tc.geminiOffset).Format(time.RFC3339))
+			}))
+			defer gate.Close()
+			var gateway usageGateways
+			gateway.init(UsageConfig{Sources: []UsageSourceConfig{{ID: "pool", Name: "Gateway", Type: "generic", URL: gate.URL, Key: "k"}}}, func() {}, t.Logf)
+			gateway.pollDue(t.Context(), now)
+
+			claude7, gemini7 := uw("7d", 10080, 45, week), uw("7d", 10080, 79, week)
+			claude7.Model, gemini7.Model = "Claude and GPT models", "Gemini Models"
+			idle := proto.UsageWindow{Label: "5h", WindowMinutes: 300, Model: claude7.Model}
+			node := local("agy", "Antigravity", now.Add(-tc.localAge), gemini7, idle, claude7)
+			node.Machines = []string{"Computer"}
+			cache := mergeUsageAccounts(append(gateway.accounts(now), node), now)
+			if len(cache) != 3 {
+				t.Fatalf("expected a native sample and two gateway seats: %+v", cache)
+			}
+			before, err := json.Marshal(cache)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := usageWindowsAnswer(cache, nil, now)["accounts"].([]proto.UsageAccount)
+			after, err := json.Marshal(cache)
+			if err != nil || string(before) != string(after) {
+				t.Fatalf("display changed poll cache: %s -> %s (%v)", before, after, err)
+			}
+			rows := map[string]proto.UsageAccount{}
+			for _, a := range got {
+				rows[a.Name] = a
+			}
+			c := rows[seatName]
+			if c.ID == "" || !slices.ContainsFunc(cache, func(a proto.UsageAccount) bool { return a.ID == c.ID && a.Ref == "pool:seat-c" }) ||
+				!c.Local || !slices.Equal(c.Sources, []string{"Gateway"}) || !slices.Equal(c.Machines, node.Machines) {
+				t.Fatalf("Claude/GPT seat lost identity or sources: %+v", c)
+			}
+			if len(c.Windows) != 2 || c.Windows[0].WindowMinutes != 300 || c.Windows[0].ResetsAt != nil || c.Windows[0].UsedPercent != tc.wantUsed ||
+				c.Windows[1].WindowMinutes != 10080 || c.Windows[1].ResetsAt == nil || c.Windows[1].ResetsAt.Unix() != week.Unix() {
+				t.Fatalf("expected one idle 5h and one active 7d window: %+v", c.Windows)
+			}
+			g := rows["Antigravity · Gemini"]
+			if len(g.Windows) != 1 || g.Windows[0].ResetsAt == nil || !g.Windows[0].ResetsAt.Equal(week.Add(tc.geminiOffset)) {
+				t.Fatalf("wrong Gemini window: %+v", g)
+			}
+			if tc.geminiOffset == 0 {
+				if !g.Local || len(got) != 2 {
+					t.Fatalf("expected only the two matched seats: %+v", got)
+				}
+			} else if rest := rows[node.Name]; g.Local || len(got) != 3 || len(rest.Windows) != 1 || !reflect.DeepEqual(rest.Windows[0], gemini7) {
+				t.Fatalf("only unmatched Gemini should remain on the native row: %+v", got)
+			}
+		})
+	}
+}
+
+func TestAntigravitySiblingCollisions(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0).UTC()
+	week, day := now.Add(7*24*time.Hour), now.Add(24*time.Hour)
+	makeNode := func(origin string, wins ...proto.UsageWindow) proto.UsageAccount {
+		a := local("agy", "Antigravity", now, wins...)
+		a.Origin = origin
+		for i := range a.Windows {
+			a.Windows[i].Model = "Claude and GPT models"
+		}
+		return a
+	}
+	seat := func(id string, wins ...proto.UsageWindow) proto.UsageAccount {
+		return gw("Gateway", id, "antigravity", "Antigravity · Claude/GPT", now, wins...)
+	}
+	idle := proto.UsageWindow{WindowMinutes: 300, Label: "5h"}
+	w7, w1 := uw("7d", 10080, 32, week), uw("1d", 1440, 23, day)
+	node := makeNode("computer/0", idle, w1, w7)
+	for _, tc := range []struct {
+		name           string
+		in             []proto.UsageAccount
+		localRemaining []int // durations on the first local source
+		foldedWeek     bool
+	}{
+		{"two seats share reset", []proto.UsageAccount{node, seat("a", w1, w7), seat("b", w7)}, []int{300, 1440, 10080}, false},
+		{"one scope hits two seats on different durations", []proto.UsageAccount{node, seat("a", w1), seat("b", w7)}, []int{300, 1440, 10080}, false},
+		{"two local sources share one seat", []proto.UsageAccount{node, makeNode("computer/1", idle, w1), seat("a", w7, w1)}, []int{300, 1440, 10080}, false},
+		{"different timed resets block idle sibling", []proto.UsageAccount{node, seat("a", w7, uw("1d", 1440, 28, day.Add(time.Second)))}, []int{300, 1440}, true},
+		{"active external slot and idle local slot", []proto.UsageAccount{node, seat("a", w7, uw("5h", 300, 28, now.Add(time.Hour)))}, []int{300, 1440}, true},
+		{"different reset second", []proto.UsageAccount{node, seat("a", uw("7d", 10080, 33, week.Add(time.Second)))}, []int{300, 1440, 10080}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			answer := func(in []proto.UsageAccount) []proto.UsageAccount {
+				return usageWindowsAnswer(mergeUsageAccounts(in, now), nil, now)["accounts"].([]proto.UsageAccount)
+			}
+			got := answer(tc.in)
+			if len(got) != len(tc.in) {
+				t.Fatalf("lost a conflicting row: %+v", got)
+			}
+			for _, a := range got {
+				if a.Origin == node.Origin {
+					var durations []int
+					for _, w := range a.Windows {
+						durations = append(durations, w.WindowMinutes)
+					}
+					if !slices.Equal(durations, tc.localRemaining) {
+						t.Fatalf("remaining local slots = %v", durations)
+					}
+				} else if len(a.Sources) > 0 {
+					if a.Local != tc.foldedWeek {
+						t.Fatalf("unexpected local association: %+v", a)
+					}
+					for _, src := range tc.in {
+						if src.Ref != a.Ref {
+							continue
+						}
+						if len(src.Windows) != len(a.Windows) {
+							t.Fatalf("extra external sibling: %+v", a)
+						}
+						for _, w := range src.Windows {
+							if !slices.Contains(a.Windows, w) {
+								t.Fatalf("lost external window %+v from %+v", w, a)
+							}
+						}
+					}
+				}
+			}
+			reordered := slices.Clone(tc.in)
+			slices.Reverse(reordered)
+			for i, a := range reordered {
+				reordered[i].Windows = slices.Clone(a.Windows)
+				slices.Reverse(reordered[i].Windows)
+			}
+			if other := answer(reordered); !reflect.DeepEqual(got, other) {
+				t.Fatalf("order changed result: %+v vs %+v", got, other)
+			}
+		})
 	}
 }
 
@@ -487,6 +647,43 @@ func TestUsagePollKeepsCodexSamplesWithoutMatchingKeysApart(t *testing.T) {
 		if len(source) != 1 || ids[source[0]] != a.ID {
 			t.Errorf("new quota cycle changed the source's row ID: %+v", a)
 		}
+	}
+}
+
+func TestUsagePollPreservesStaleCodexRollout(t *testing.T) {
+	now := time.Date(2026, 11, 27, 10, 0, 0, 0, time.UTC)
+	sampled := now.Add(-31 * time.Minute)
+	reset := now.Add(4 * time.Hour)
+	machine := func(name, accountKey string, readingSource proto.UsageReadingSource, at time.Time, used float64) usageSource {
+		return usageSource{id: name, online: true, ask: func(context.Context) (proto.UsageSnapshot, error) {
+			return proto.UsageSnapshot{Enabled: true, Accounts: []proto.UsageNodeAccount{{
+				AccountKey: accountKey,
+				UsageAccount: proto.UsageAccount{Provider: "codex", Name: "Codex Pro", ReadingSource: readingSource,
+					SampledAt: at, Windows: []proto.UsageWindow{uw("5h", 300, used, reset)}},
+			}}}, nil
+		}}
+	}
+	sources := []usageSource{machine("Machine A", "account-a", "", now, 13), machine("Machine B", "", "rollout", sampled, 47)}
+	var u usageWindowsHub
+	got := u.poll(t.Context(), sources, now)
+	if len(got) != 2 {
+		t.Fatalf("expected separate live and historical rows, got %+v", got)
+	}
+	live, old := got[0], got[1] // live accounts are sorted before stale readings
+	if live.ReadingSource != "" || live.Stale || !slices.Equal(live.Machines, []string{"Machine A"}) ||
+		old.ReadingSource != "rollout" || !old.Stale || !old.SampledAt.Equal(sampled) ||
+		!slices.Equal(old.Machines, []string{"Machine B"}) || len(old.Windows) != 1 || old.Windows[0].UsedPercent != 47 {
+		t.Fatalf("expected a live account and Machine B's original stale rollout, got %+v", got)
+	}
+
+	// An unambiguously matching extension seat still absorbs local readings for all clients.
+	u.gateways = func(time.Time) []proto.UsageAccount {
+		return []proto.UsageAccount{{Provider: "codex", Name: "Seat", Pass: true, Sources: []string{"Pool"},
+			SampledAt: now, Windows: []proto.UsageWindow{uw("5h", 300, 13, reset)}}}
+	}
+	got = u.poll(t.Context(), sources, now.Add(usageHubFresh+time.Second))
+	if len(got) != 1 || !got[0].Pass || got[0].ReadingSource != "" || !slices.Equal(got[0].Machines, []string{"Machine A", "Machine B"}) {
+		t.Fatalf("expected one extension account for the matching local readings, got %+v", got)
 	}
 }
 
@@ -839,5 +1036,615 @@ func TestMergeUsageAccountsDoesNotClobberHealthyPoolOnSharedModelReset(t *testin
 	}
 	if !healthyFound {
 		t.Fatalf("poll: healthy A0 Claude pool was not preserved intact: %+v", polled)
+	}
+}
+
+func TestMergeUsageAccountsAntigravityNamedAccountAndPlan(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0).UTC()
+	fiveG, weekG := now.Add(2*time.Hour), now.Add(3*24*time.Hour)
+	fiveC, weekC := now.Add(3*time.Hour), now.Add(4*24*time.Hour)
+	mw := func(label string, minutes int, used float64, resets time.Time, model string) proto.UsageWindow {
+		w := uw(label, minutes, used, resets)
+		w.Model = model
+		return w
+	}
+	legacyWins := []proto.UsageWindow{
+		mw("5h", 300, 20, fiveG, "Gemini Models"),
+		mw("7d", 10080, 30, weekG, "Gemini Models"),
+		mw("5h", 300, 5, fiveC, "Claude and GPT models"),
+		mw("7d", 10080, 10, weekC, "Claude and GPT models"),
+	}
+	namedWins := []proto.UsageWindow{
+		mw("5h", 300, 25, fiveG, "Gemini Models"),
+		mw("7d", 10080, 35, weekG, "Gemini Models"),
+		mw("5h", 300, 5, fiveC, "Claude and GPT models"),
+		mw("7d", 10080, 10, weekC, "Claude and GPT models"),
+	}
+
+	// Row ID stays stable when a native agy account gains its real name and plan.
+	legacyOnly := mergeUsageAccounts([]proto.UsageAccount{{
+		Provider: "agy", Name: "Antigravity", Local: true, Origin: "node-a/0", Machines: []string{"node-a"},
+		SampledAt: now.Add(-2 * time.Minute), Windows: legacyWins,
+	}}, now)
+	namedOnly := mergeUsageAccounts([]proto.UsageAccount{{
+		Provider: "agy", Name: "alice@example.com", Plan: "Google AI Ultra", Local: true, Origin: "node-b/0", Machines: []string{"node-b"},
+		SampledAt: now.Add(-time.Minute), Windows: namedWins,
+	}}, now)
+	if len(legacyOnly) != 1 || len(namedOnly) != 1 || legacyOnly[0].ID != namedOnly[0].ID {
+		t.Fatalf("expected stable row ID across unnamed and named agy samples: legacy=%+v named=%+v", legacyOnly, namedOnly)
+	}
+
+	// Rolling upgrade across two machines: whichever sample is newer, merged row preserves the account name and plan.
+	for _, tc := range []struct {
+		name     string
+		legacyAt time.Time
+		namedAt  time.Time
+		wantUsed float64
+	}{
+		{"named newer than legacy", now.Add(-4 * time.Minute), now.Add(-time.Minute), 25},
+		{"legacy newer than named", now.Add(-time.Minute), now.Add(-4 * time.Minute), 20},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := mergeUsageAccounts([]proto.UsageAccount{
+				{Provider: "agy", Name: "Antigravity", Local: true, Origin: "node-a/0", Machines: []string{"node-a"}, SampledAt: tc.legacyAt, Windows: legacyWins},
+				{Provider: "agy", Name: "alice@example.com", Plan: "Google AI Ultra", Local: true, Origin: "node-b/0", Machines: []string{"node-b"}, SampledAt: tc.namedAt, Windows: namedWins},
+			}, now)
+			if len(got) != 1 {
+				t.Fatalf("expected 1 merged account, got %d: %+v", len(got), got)
+			}
+			acct := got[0]
+			if acct.Provider != "antigravity" || acct.Name != "alice@example.com" || acct.Plan != "Google AI Ultra" {
+				t.Fatalf("unexpected merged identity: %+v", acct)
+			}
+			if !slices.Equal(acct.Machines, []string{"node-a", "node-b"}) {
+				t.Fatalf("expected both machines, got %v", acct.Machines)
+			}
+			if acct.ID != legacyOnly[0].ID {
+				t.Fatalf("merged ID changed from %q to %q", legacyOnly[0].ID, acct.ID)
+			}
+			var gotGemini5h float64
+			for _, w := range acct.Windows {
+				if w.Label == "5h" && w.Model == "Gemini Models" {
+					gotGemini5h = w.UsedPercent
+				}
+			}
+			if gotGemini5h != tc.wantUsed {
+				t.Fatalf("expected newest 5h Gemini used=%v, got %v", tc.wantUsed, gotGemini5h)
+			}
+		})
+	}
+
+	// External Antigravity reconciliation folds matching windows and retains the local account name and plan on unmatched pools.
+	localNamed := proto.UsageAccount{
+		Provider: "agy", Name: "alice@example.com", Plan: "Google AI Ultra", Local: true, Origin: "node-a/0", Machines: []string{"node-a"},
+		SampledAt: now, Windows: []proto.UsageWindow{mw("7d", 10080, 35, weekG, "Gemini Models"), mw("7d", 10080, 10, weekC, "Claude and GPT models")},
+	}
+	extGemini := proto.UsageAccount{
+		Provider: "antigravity", Name: "Antigravity · Gemini", Pass: true, Origin: "ext#0", Sources: []string{"External"},
+		SampledAt: now.Add(-time.Minute), Windows: []proto.UsageWindow{uw("7d", 10080, 30, weekG)},
+	}
+	reconciled := reconcileAntigravityUsage(mergeUsageAccounts([]proto.UsageAccount{localNamed, extGemini}, now), now)
+	if len(reconciled) != 2 {
+		t.Fatalf("expected external row + remaining local pool, got %d: %+v", len(reconciled), reconciled)
+	}
+	var gotLocal, gotExt *proto.UsageAccount
+	for i := range reconciled {
+		if reconciled[i].Pass {
+			gotExt = &reconciled[i]
+		} else {
+			gotLocal = &reconciled[i]
+		}
+	}
+	if gotExt == nil || gotLocal == nil || gotExt.Windows[0].UsedPercent != 35 {
+		t.Fatalf("external row did not reconcile with named local account: ext=%+v local=%+v", gotExt, gotLocal)
+	}
+	if gotLocal.Name != "alice@example.com" || gotLocal.Plan != "Google AI Ultra" || len(gotLocal.Windows) != 1 || gotLocal.Windows[0].Model != "Claude and GPT models" {
+		t.Fatalf("remaining local pool lost account identity: %+v", gotLocal)
+	}
+
+	// Two distinct named Antigravity accounts remain separate even when their reset timestamps match to the second
+	// (for example, members of a shared Google One family pool) or when AccountKeys differ, and preserve deterministic IDs.
+	sharedResetA := proto.UsageAccount{
+		Provider: "agy", Name: "alice@example.com", Plan: "Google AI Ultra", CodexAccountKey: "agy-key-alice",
+		Local: true, Origin: "node-a/0", Machines: []string{"node-a"}, SampledAt: now.Add(-time.Minute),
+		Windows: []proto.UsageWindow{mw("5h", 300, 12, fiveG, "Gemini Models"), mw("7d", 10080, 40, weekG, "Gemini Models")},
+	}
+	sharedResetB := proto.UsageAccount{
+		Provider: "agy", Name: "bob@example.com", Plan: "Google AI Ultra", CodexAccountKey: "agy-key-bob",
+		Local: true, Origin: "node-b/0", Machines: []string{"node-b"}, SampledAt: now,
+		Windows: []proto.UsageWindow{mw("5h", 300, 12, fiveG, "Gemini Models"), mw("7d", 10080, 40, weekG, "Gemini Models")},
+	}
+	forwardShared := mergeUsageAccounts([]proto.UsageAccount{sharedResetA, sharedResetB}, now)
+	reverseShared := mergeUsageAccounts([]proto.UsageAccount{sharedResetB, sharedResetA}, now)
+	if len(forwardShared) != 2 || len(reverseShared) != 2 {
+		t.Fatalf("expected 2 separate accounts on shared reset times, got %+v / %+v", forwardShared, reverseShared)
+	}
+	byName := map[string]proto.UsageAccount{}
+	for _, acct := range forwardShared {
+		byName[acct.Name] = acct
+	}
+	if !slices.Equal(byName["alice@example.com"].Machines, []string{"node-a"}) || !slices.Equal(byName["bob@example.com"].Machines, []string{"node-b"}) {
+		t.Fatalf("distinct Antigravity accounts merged machines: %+v", forwardShared)
+	}
+	for _, acct := range reverseShared {
+		if acct.ID != byName[acct.Name].ID {
+			t.Fatalf("input order changed ID for %s: %q vs %q", acct.Name, acct.ID, byName[acct.Name].ID)
+		}
+	}
+
+	// Same Antigravity account across two machines merges even when all windows are untouched (nil ResetsAt).
+	idleSame := mergeUsageAccounts([]proto.UsageAccount{
+		{
+			Provider: "agy", Name: "alice@example.com", Plan: "Google AI Ultra", CodexAccountKey: "agy-key-alice",
+			Local: true, Origin: "node-a/0", Machines: []string{"node-a"}, SampledAt: now.Add(-2 * time.Minute),
+			Windows: []proto.UsageWindow{{Label: "5h", WindowMinutes: 300, UsedPercent: 0, Model: "Gemini Models"}},
+		},
+		{
+			Provider: "agy", Name: "alice@example.com", Plan: "Google AI Ultra", CodexAccountKey: "agy-key-alice",
+			Local: true, Origin: "node-b/0", Machines: []string{"node-b"}, SampledAt: now,
+			Windows: []proto.UsageWindow{{Label: "5h", WindowMinutes: 300, UsedPercent: 0, Model: "Gemini Models"}},
+		},
+	}, now)
+	if len(idleSame) != 1 || !slices.Equal(idleSame[0].Machines, []string{"node-a", "node-b"}) {
+		t.Fatalf("expected idle same-account Antigravity samples to merge across machines, got %+v", idleSame)
+	}
+}
+
+func TestMergeUsageAccountsDeduplicatesLocalIntoPassExtension(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0).UTC()
+	five := now.Add(2 * time.Hour)
+	week := now.Add(3 * 24 * time.Hour)
+	p95, p90 := 95.0, 90.0
+
+	makeExt := func(sampled time.Time) proto.UsageAccount {
+		w5 := uw("5h", 300, 25, five)
+		w5.Group, w5.Title, w5.Note, w5.ProtectPercent = "Primary", "5-hour", "Rolling", &p95
+		w7 := uw("7d", 10080, 40, week)
+		w7.Group, w7.Title, w7.Note, w7.ProtectPercent = "Weekly", "7-day", "Plan", &p90
+		return proto.UsageAccount{
+			Provider:  "codex",
+			Name:      "Work Codex",
+			Plan:      "Pro",
+			Headline:  "Active seat",
+			Pass:      true,
+			Origin:    "ext-src#0",
+			Sources:   []string{"Extension"},
+			SampledAt: sampled,
+			Windows:   []proto.UsageWindow{w5, w7},
+		}
+	}
+
+	t.Run("fresh local and pass extension with matching resets merge", func(t *testing.T) {
+		localAcct := proto.UsageAccount{
+			Provider:        "codex",
+			Name:            "Codex Pro",
+			Plan:            "pro",
+			Local:           true,
+			Origin:          "workstation/0",
+			Machines:        []string{"workstation"},
+			CodexAccountKey: "acct-alpha",
+			SampledAt:       now.Add(-time.Minute),
+			Windows:         []proto.UsageWindow{uw("5h", 300, 28, five.Add(15*time.Second)), uw("7d", 10080, 42, week.Add(-10*time.Second))},
+		}
+		ext := makeExt(now.Add(-4 * time.Minute))
+		wantID := usageRowID("codex", "extension|ext-src#0")
+
+		for _, pair := range [][]proto.UsageAccount{{localAcct, ext}, {ext, localAcct}} {
+			got := mergeUsageAccounts(pair, now)
+			if len(got) != 1 {
+				t.Fatalf("want 1 merged account, got %d: %+v", len(got), got)
+			}
+			a := got[0]
+			if a.ID != wantID || !a.Pass || a.Name != "Work Codex" || a.Plan != "Pro" || a.Headline != "Active seat" {
+				t.Fatalf("extension identity or metadata lost: %+v", a)
+			}
+			if !a.Local || !slices.Equal(a.Machines, []string{"workstation"}) || !slices.Equal(a.Sources, []string{"Extension"}) {
+				t.Fatalf("combined local and extension sources missing: %+v", a)
+			}
+			if a.Stale || !a.SampledAt.Equal(now.Add(-time.Minute)) || a.StaleAt == nil || !a.StaleAt.Equal(now.Add(-time.Minute+usageHubStaleAfter)) {
+				t.Fatalf("expected fresher local sample time and non-stale state: %+v", a)
+			}
+			if len(a.Windows) != 2 || a.Windows[0].UsedPercent != 28 || a.Windows[1].UsedPercent != 42 ||
+				a.Windows[0].Group != "Primary" || a.Windows[0].Title != "5-hour" || a.Windows[0].Note != "Rolling" || a.Windows[0].ProtectPercent != &p95 ||
+				a.Windows[1].Group != "Weekly" || a.Windows[1].Title != "7-day" || a.Windows[1].Note != "Plan" || a.Windows[1].ProtectPercent != &p90 {
+				t.Fatalf("expected fresher percentages with preserved extension window metadata: %+v", a.Windows)
+			}
+		}
+		if ext.Windows[0].UsedPercent != 25 || ext.Windows[1].UsedPercent != 40 {
+			t.Fatalf("mergeUsageAccounts mutated caller extension slice: %+v", ext.Windows)
+		}
+	})
+
+	t.Run("fresher extension keeps extension numbers while absorbing local machine", func(t *testing.T) {
+		localAcct := proto.UsageAccount{
+			Provider:        "codex",
+			Name:            "Codex Pro",
+			Plan:            "pro",
+			Local:           true,
+			Origin:          "workstation/0",
+			Machines:        []string{"workstation"},
+			CodexAccountKey: "acct-alpha",
+			SampledAt:       now.Add(-10 * time.Minute),
+			Windows:         []proto.UsageWindow{uw("5h", 300, 19, five.Add(20*time.Second)), uw("7d", 10080, 33, week.Add(-20*time.Second))},
+		}
+		ext := makeExt(now.Add(-2 * time.Minute))
+		got := mergeUsageAccounts([]proto.UsageAccount{localAcct, ext}, now)
+		if len(got) != 1 {
+			t.Fatalf("want 1 merged account, got %d: %+v", len(got), got)
+		}
+		a := got[0]
+		if a.Stale || !a.SampledAt.Equal(now.Add(-2*time.Minute)) || a.StaleAt == nil || !a.StaleAt.Equal(now.Add(-2*time.Minute+usageGatewayStaleAfter)) {
+			t.Fatalf("expected fresher extension timestamp and stale_at: %+v", a)
+		}
+		if a.Windows[0].UsedPercent != 25 || a.Windows[1].UsedPercent != 40 || !a.Local || !slices.Equal(a.Machines, []string{"workstation"}) {
+			t.Fatalf("expected extension windows with local machine attached: %+v", a)
+		}
+	})
+
+	t.Run("stale local with future 7d reset merges into live extension without turning stale", func(t *testing.T) {
+		localStale := proto.UsageAccount{
+			Provider:        "codex",
+			Name:            "Codex Pro",
+			Plan:            "pro",
+			Local:           true,
+			Origin:          "workstation/0",
+			Machines:        []string{"workstation"},
+			CodexAccountKey: "acct-alpha",
+			SampledAt:       now.Add(-4 * time.Hour),
+			Windows: []proto.UsageWindow{
+				uw("5h", 300, 88, now.Add(-time.Hour)), // expired before now: dropped during live filtering
+				uw("7d", 10080, 31, week),              // still resets in the future
+			},
+		}
+		ext := makeExt(now.Add(-4 * time.Minute))
+		extWeek := week.Add(5 * time.Second)
+		ext.Windows[1].ResetsAt = &extWeek
+
+		got := mergeUsageAccounts([]proto.UsageAccount{localStale, ext}, now)
+		if len(got) != 1 {
+			t.Fatalf("want stale local merged into live extension, got %d: %+v", len(got), got)
+		}
+		a := got[0]
+		if a.ID != usageRowID("codex", "extension|ext-src#0") || a.Name != "Work Codex" || a.Stale {
+			t.Fatalf("merged stale local should not make fresh extension row stale: %+v", a)
+		}
+		if !a.SampledAt.Equal(now.Add(-4*time.Minute)) || a.StaleAt == nil || !a.StaleAt.Equal(now.Add(-4*time.Minute+usageGatewayStaleAfter)) {
+			t.Fatalf("expected extension sample time and stale_at: %+v", a)
+		}
+		if len(a.Windows) != 2 || a.Windows[0].UsedPercent != 25 || a.Windows[1].UsedPercent != 40 || a.Windows[1].Title != "7-day" {
+			t.Fatalf("expected fresh extension 5h and 7d windows intact: %+v", a.Windows)
+		}
+		if !a.Local || !slices.Equal(a.Machines, []string{"workstation"}) || !slices.Equal(a.Sources, []string{"Extension"}) {
+			t.Fatalf("expected combined sources: %+v", a)
+		}
+	})
+
+	t.Run("fresh local replaces stale failed extension reading", func(t *testing.T) {
+		localFresh := proto.UsageAccount{
+			Provider:        "codex",
+			Name:            "Codex Pro",
+			Local:           true,
+			Origin:          "workstation/0",
+			Machines:        []string{"workstation"},
+			CodexAccountKey: "acct-alpha",
+			SampledAt:       now.Add(-time.Minute),
+			Windows:         []proto.UsageWindow{uw("5h", 300, 44, five), uw("7d", 10080, 51, week)},
+		}
+		extStale := makeExt(now.Add(-10 * time.Minute))
+		extStale.Stale = true
+		extStale.Problem = "unreachable"
+
+		got := mergeUsageAccounts([]proto.UsageAccount{localFresh, extStale}, now)
+		if len(got) != 1 {
+			t.Fatalf("want 1 merged account, got %d: %+v", len(got), got)
+		}
+		a := got[0]
+		if a.Stale || a.Problem != "" || !a.SampledAt.Equal(now.Add(-time.Minute)) || a.Windows[0].UsedPercent != 44 || a.Windows[1].UsedPercent != 51 {
+			t.Fatalf("fresh local should refresh stale failed extension row: %+v", a)
+		}
+		if a.ID != usageRowID("codex", "extension|ext-src#0") || a.Name != "Work Codex" || a.Windows[0].Title != "5-hour" {
+			t.Fatalf("extension identity or window metadata lost: %+v", a)
+		}
+	})
+
+	t.Run("poll end-to-end deduplicates stale local codex node against live extension", func(t *testing.T) {
+		var hub usageWindowsHub
+		hub.gateways = func(time.Time) []proto.UsageAccount {
+			return []proto.UsageAccount{makeExt(now.Add(-4 * time.Minute))}
+		}
+		node := usageSource{id: "m1", name: "Workstation", online: true, ask: func(context.Context) (proto.UsageSnapshot, error) {
+			return proto.UsageSnapshot{Enabled: true, Accounts: []proto.UsageNodeAccount{{
+				AccountKey: "acct-alpha",
+				UsageAccount: proto.UsageAccount{
+					Provider:  "codex",
+					Name:      "Codex Pro",
+					Plan:      "pro",
+					SampledAt: now.Add(-4 * time.Hour),
+					Windows:   []proto.UsageWindow{uw("7d", 10080, 31, week.Add(-3*time.Second))},
+				},
+			}}}, nil
+		}}
+		polled := hub.poll(context.Background(), []usageSource{node}, now)
+		got := usageWindowsAnswer(polled, nil, now)["accounts"].([]proto.UsageAccount)
+		if len(got) != 1 || got[0].Name != "Work Codex" || got[0].Stale || !got[0].Local ||
+			!slices.Equal(got[0].Machines, []string{"Workstation"}) || !slices.Equal(got[0].Sources, []string{"Extension"}) {
+			t.Fatalf("expected 1 merged live account from poll+answer, got %+v", got)
+		}
+	})
+
+	t.Run("unmatched local sibling does not get numbered after matched sibling absorbs into extension", func(t *testing.T) {
+		matchedLocal := proto.UsageAccount{
+			Provider: "codex", Name: "Codex Pro", Local: true, Origin: "node-a/0", Machines: []string{"node-a"},
+			CodexAccountKey: "acct-alpha", SampledAt: now.Add(-2 * time.Hour),
+			Windows: []proto.UsageWindow{uw("7d", 10080, 30, week)},
+		}
+		otherLocal := proto.UsageAccount{
+			Provider: "codex", Name: "Codex Pro", Local: true, Origin: "node-b/0", Machines: []string{"node-b"},
+			CodexAccountKey: "acct-beta", SampledAt: now.Add(-time.Minute),
+			Windows: []proto.UsageWindow{uw("7d", 10080, 55, week.Add(24*time.Hour))},
+		}
+		ext := makeExt(now.Add(-2 * time.Minute))
+
+		got := mergeUsageAccounts([]proto.UsageAccount{matchedLocal, otherLocal, ext}, now)
+		if len(got) != 2 {
+			t.Fatalf("want 2 accounts, got %d: %+v", len(got), got)
+		}
+		if got[0].Name != "Codex Pro" || !slices.Equal(got[0].Machines, []string{"node-b"}) {
+			t.Fatalf("unmatched local account should keep clean name without suffix: %+v", got[0])
+		}
+		if got[1].Name != "Work Codex" || !got[1].Local || !slices.Equal(got[1].Machines, []string{"node-a"}) {
+			t.Fatalf("matched extension account unexpected: %+v", got[1])
+		}
+	})
+}
+
+func TestMergeUsageAccountsRefusesAmbiguousOrDistinctPassMerges(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0).UTC()
+	five := now.Add(2 * time.Hour)
+	week := now.Add(3 * 24 * time.Hour)
+
+	passCodex := func(origin, name string, wins ...proto.UsageWindow) proto.UsageAccount {
+		return proto.UsageAccount{
+			Provider:  "codex",
+			Name:      name,
+			Pass:      true,
+			Origin:    origin,
+			Sources:   []string{"Extension"},
+			SampledAt: now.Add(-2 * time.Minute),
+			Windows:   wins,
+		}
+	}
+
+	t.Run("two extension accounts sharing reset time stay unmerged", func(t *testing.T) {
+		localAcct := proto.UsageAccount{
+			Provider: "codex", Name: "Codex Pro", Local: true, Origin: "node-a/0", Machines: []string{"node-a"},
+			CodexAccountKey: "acct-alpha", SampledAt: now.Add(-4 * time.Hour),
+			Windows: []proto.UsageWindow{uw("7d", 10080, 30, week)},
+		}
+		seatA := passCodex("ext#0", "Seat A", uw("7d", 10080, 35, week))
+		seatB := passCodex("ext#1", "Seat B", uw("7d", 10080, 60, week.Add(20*time.Second)))
+
+		got := mergeUsageAccounts([]proto.UsageAccount{localAcct, seatA, seatB}, now)
+		if len(got) != 3 {
+			t.Fatalf("ambiguous extension seats must not merge with local sample: got %d: %+v", len(got), got)
+		}
+		for _, a := range got {
+			if a.Pass && (a.Local || len(a.Machines) != 0) {
+				t.Fatalf("ambiguous pass row must not receive local machines: %+v", a)
+			}
+		}
+	})
+
+	t.Run("two conflicting local codex keys sharing reset time stay unmerged", func(t *testing.T) {
+		localA := proto.UsageAccount{
+			Provider: "codex", Name: "Codex Pro", Local: true, Origin: "node-a/0", Machines: []string{"node-a"},
+			CodexAccountKey: "acct-a", SampledAt: now.Add(-time.Minute),
+			Windows: []proto.UsageWindow{uw("7d", 10080, 20, week)},
+		}
+		localB := proto.UsageAccount{
+			Provider: "codex", Name: "Codex Pro", Local: true, Origin: "node-b/0", Machines: []string{"node-b"},
+			CodexAccountKey: "acct-b", SampledAt: now.Add(-time.Minute),
+			Windows: []proto.UsageWindow{uw("7d", 10080, 50, week)},
+		}
+		seat := passCodex("ext#0", "Seat A", uw("7d", 10080, 22, week))
+
+		got := mergeUsageAccounts([]proto.UsageAccount{localA, localB, seat}, now)
+		if len(got) != 3 {
+			t.Fatalf("conflicting local accounts must not merge into one pass row: got %d: %+v", len(got), got)
+		}
+	})
+
+	t.Run("two local homes on one machine sharing reset time stay unmerged", func(t *testing.T) {
+		homeA := proto.UsageAccount{
+			Provider: "codex", Name: "Codex Pro", Local: true, Origin: "node-a/source/home-a", Machines: []string{"node-a"},
+			SampledAt: now.Add(-time.Minute), Windows: []proto.UsageWindow{uw("7d", 10080, 10, week)},
+		}
+		homeB := proto.UsageAccount{
+			Provider: "codex", Name: "Codex Pro", Local: true, Origin: "node-a/source/home-b", Machines: []string{"node-a"},
+			SampledAt: now.Add(-time.Minute), Windows: []proto.UsageWindow{uw("7d", 10080, 40, week)},
+		}
+		seat := passCodex("ext#0", "Seat A", uw("7d", 10080, 12, week))
+
+		got := mergeUsageAccounts([]proto.UsageAccount{homeA, homeB, seat}, now)
+		if len(got) != 3 {
+			t.Fatalf("two local homes on one machine must not merge into one pass row: got %d: %+v", len(got), got)
+		}
+	})
+
+	t.Run("different reset times stay separate", func(t *testing.T) {
+		localAcct := proto.UsageAccount{
+			Provider: "codex", Name: "Codex Pro", Local: true, Origin: "node-a/0", Machines: []string{"node-a"},
+			CodexAccountKey: "acct-alpha", SampledAt: now.Add(-time.Minute),
+			Windows: []proto.UsageWindow{uw("7d", 10080, 20, week)},
+		}
+		for _, delta := range []time.Duration{61 * time.Second, 2 * time.Hour} {
+			ext := passCodex("ext#0", "Other Codex", uw("7d", 10080, 20, week.Add(delta)))
+			got := mergeUsageAccounts([]proto.UsageAccount{localAcct, ext}, now)
+			if len(got) != 2 {
+				t.Fatalf("delta %v must keep accounts separate: got %d: %+v", delta, len(got), got)
+			}
+		}
+	})
+
+	t.Run("conflicting 5h reset blocks merge and disambiguates matching seat", func(t *testing.T) {
+		localAcct := proto.UsageAccount{
+			Provider: "codex", Name: "Codex Pro", Local: true, Origin: "node-a/0", Machines: []string{"node-a"},
+			CodexAccountKey: "acct-alpha", SampledAt: now.Add(-5 * time.Minute),
+			Windows: []proto.UsageWindow{uw("5h", 300, 15, five), uw("7d", 10080, 30, week)},
+		}
+		wrongSeat := passCodex("ext#0", "Wrong Seat", uw("5h", 300, 50, five.Add(2*time.Hour)), uw("7d", 10080, 30, week))
+		if got := mergeUsageAccounts([]proto.UsageAccount{localAcct, wrongSeat}, now); len(got) != 2 {
+			t.Fatalf("conflicting 5h window must prevent merge even with matching 7d reset: %+v", got)
+		}
+
+		rightSeat := passCodex("ext#1", "Right Seat", uw("5h", 300, 18, five.Add(5*time.Second)), uw("7d", 10080, 32, week.Add(5*time.Second)))
+		got := mergeUsageAccounts([]proto.UsageAccount{localAcct, wrongSeat, rightSeat}, now)
+		if len(got) != 2 {
+			t.Fatalf("5h window should disambiguate matching seat: got %d: %+v", len(got), got)
+		}
+		if got[0].Name != "Wrong Seat" || got[0].Local || got[1].Name != "Right Seat" || !got[1].Local || !slices.Equal(got[1].Machines, []string{"node-a"}) {
+			t.Fatalf("unexpected disambiguated merge result: %+v", got)
+		}
+	})
+
+	t.Run("model window conflicts and model-only local accounts do not merge into pass plan rows", func(t *testing.T) {
+		localModel := uw("7d", 10080, 10, week)
+		localModel.Model = "fast"
+		extModel := uw("7d", 10080, 15, week.Add(2*time.Hour))
+		extModel.Model = "fast"
+
+		localPlan := proto.UsageAccount{
+			Provider: "claude", Name: "Claude Max", Local: true, Origin: "node-a/0", Machines: []string{"node-a"},
+			SampledAt: now.Add(-time.Minute), Windows: []proto.UsageWindow{uw("7d", 10080, 20, week), localModel},
+		}
+		extPlan := proto.UsageAccount{
+			Provider: "claude", Name: "Work Claude", Pass: true, Origin: "ext#0", Sources: []string{"Extension"},
+			SampledAt: now.Add(-time.Minute), Windows: []proto.UsageWindow{uw("7d", 10080, 20, week), extModel},
+		}
+		if got := mergeUsageAccounts([]proto.UsageAccount{localPlan, extPlan}, now); len(got) != 2 {
+			t.Fatalf("conflicting shared model window must prevent merge: %+v", got)
+		}
+
+		poolA := uw("7d", 10080, 10, week)
+		poolA.Model = "Pool A"
+		poolB := uw("7d", 10080, 20, week)
+		poolB.Model = "Pool B"
+		modelOnlyLocal := proto.UsageAccount{
+			Provider: "custom", Name: "Custom", Local: true, Origin: "node-a/0", Machines: []string{"node-a"},
+			SampledAt: now.Add(-time.Minute), Windows: []proto.UsageWindow{poolA, poolB},
+		}
+		splitExt := proto.UsageAccount{
+			Provider: "custom", Name: "Custom · Pool A", Pass: true, Origin: "ext#0", Sources: []string{"Extension"},
+			SampledAt: now.Add(-time.Minute), Windows: []proto.UsageWindow{uw("7d", 10080, 10, week)},
+		}
+		if got := mergeUsageAccounts([]proto.UsageAccount{modelOnlyLocal, splitExt}, now); len(got) != 2 {
+			t.Fatalf("model-only local account must not merge into a pass split row: %+v", got)
+		}
+	})
+
+	t.Run("composite pass row with duplicate plan window lengths never merges", func(t *testing.T) {
+		localAcct := proto.UsageAccount{
+			Provider: "codex", Name: "Codex Pro", Local: true, Origin: "node-a/0", Machines: []string{"node-a"},
+			CodexAccountKey: "acct-alpha", SampledAt: now.Add(-time.Minute),
+			Windows: []proto.UsageWindow{uw("7d", 10080, 20, week)},
+		}
+		composite := passCodex("ext#0", "Combined Pool", uw("7d", 10080, 20, week), uw("7d", 10080, 80, week.Add(24*time.Hour)))
+		if got := mergeUsageAccounts([]proto.UsageAccount{localAcct, composite}, now); len(got) != 2 {
+			t.Fatalf("composite pass row with duplicate plan window minutes must not merge: %+v", got)
+		}
+	})
+
+	t.Run("non-local gateway, balance, and other-provider rows stay separate", func(t *testing.T) {
+		gwRow := proto.UsageAccount{
+			Provider: "codex", Name: "Relay Seat", Ref: "gw1:a", Origin: "gw1:a", Sources: []string{"Relay"},
+			SampledAt: now.Add(-time.Minute), Windows: []proto.UsageWindow{uw("7d", 10080, 20, week)},
+		}
+		extCodex := passCodex("ext#0", "Work Codex", uw("7d", 10080, 20, week))
+		if got := mergeUsageAccounts([]proto.UsageAccount{gwRow, extCodex}, now); len(got) != 2 {
+			t.Fatalf("non-local gateway row must not merge into pass row: %+v", got)
+		}
+
+		balanceRow := proto.UsageAccount{
+			Provider: "codex", Name: "Prepaid", Local: true, Ref: "balance:l1", Origin: "balance:l1",
+			SampledAt: now.Add(-time.Minute), Balance: &proto.UsageBalance{Amount: "12.34", Currency: "USD"},
+		}
+		if got := mergeUsageAccounts([]proto.UsageAccount{balanceRow, extCodex}, now); len(got) != 2 {
+			t.Fatalf("balance row must not merge into pass row: %+v", got)
+		}
+
+		localCodex := proto.UsageAccount{
+			Provider: "codex", Name: "Codex Pro", Local: true, Origin: "node-a/0", Machines: []string{"node-a"},
+			CodexAccountKey: "acct-alpha", SampledAt: now.Add(-time.Minute), Windows: []proto.UsageWindow{uw("7d", 10080, 20, week)},
+		}
+		extClaude := proto.UsageAccount{
+			Provider: "claude", Name: "Work Claude", Pass: true, Origin: "ext#0", Sources: []string{"Extension"},
+			SampledAt: now.Add(-time.Minute), Windows: []proto.UsageWindow{uw("7d", 10080, 20, week)},
+		}
+		if got := mergeUsageAccounts([]proto.UsageAccount{localCodex, extClaude}, now); len(got) != 2 {
+			t.Fatalf("different providers sharing reset time must not merge: %+v", got)
+		}
+	})
+}
+
+func TestMergeUsageAccountsPreservesIdleEpochZeroResetWindows(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0).UTC()
+	five, week := now.Add(2*time.Hour), now.Add(3*24*time.Hour)
+	epoch := time.Unix(0, 0).UTC()
+
+	extClaude := proto.UsageAccount{
+		Provider:  "antigravity",
+		Name:      "Antigravity Claude/GPT",
+		Plan:      "Ultra",
+		Ref:       "src:agy-3p",
+		Origin:    "src:agy-3p",
+		Sources:   []string{"Antigravity"},
+		SampledAt: now,
+		Windows: []proto.UsageWindow{
+			uw("5h", 300, 0, epoch),
+			uw("7d", 10080, 0, epoch),
+		},
+	}
+	extGemini := proto.UsageAccount{
+		Provider:  "antigravity",
+		Name:      "Antigravity Gemini",
+		Plan:      "Ultra",
+		Ref:       "src:agy-gemini",
+		Origin:    "src:agy-gemini",
+		Sources:   []string{"Antigravity"},
+		SampledAt: now,
+		Windows: []proto.UsageWindow{
+			uw("5h", 300, 8, five),
+			uw("7d", 10080, 15, week),
+		},
+	}
+	localAgy := proto.UsageAccount{
+		Provider:  "agy",
+		Name:      "Antigravity",
+		Local:     true,
+		Origin:    "host-a/0",
+		Machines:  []string{"host-a"},
+		SampledAt: now,
+		Windows: []proto.UsageWindow{
+			{Label: "5h", WindowMinutes: 300, UsedPercent: 0, Model: "Claude and GPT models"},
+			{Label: "7d", WindowMinutes: 10080, UsedPercent: 0, Model: "Claude and GPT models"},
+			{Label: "5h", WindowMinutes: 300, UsedPercent: 8, ResetsAt: &five, Model: "Gemini Models"},
+			{Label: "7d", WindowMinutes: 10080, UsedPercent: 15, ResetsAt: &week, Model: "Gemini Models"},
+		},
+	}
+
+	merged := mergeUsageAccounts([]proto.UsageAccount{extClaude, extGemini, localAgy}, now)
+	var claudeSeat *proto.UsageAccount
+	for i := range merged {
+		if merged[i].Name == "Antigravity Claude/GPT" {
+			claudeSeat = &merged[i]
+		}
+	}
+	if claudeSeat == nil || len(claudeSeat.Windows) != 2 {
+		t.Fatalf("expected untouched epoch-zero external seat to survive merge, got %+v", merged)
+	}
+	for _, w := range claudeSeat.Windows {
+		if w.ResetsAt != nil || w.UsedPercent != 0 {
+			t.Fatalf("expected nil ResetsAt on untouched epoch-zero window, got %+v", w)
+		}
 	}
 }

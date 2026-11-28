@@ -20,6 +20,7 @@ import {
   type GitReview, type GitReviewFile, type ReviewScope, type ReviewTarget,
 } from "../../lib/session-review";
 import { useFsLive } from "../../lib/use-fs-live";
+import { useStore } from "../../lib/store";
 import { Button, cx, IconButton, Loading, Menu, toast, useMenu } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import type { MenuItem } from "../../ui/menu-model";
@@ -34,11 +35,13 @@ const besideChat = () => typeof matchMedia === "undefined" || matchMedia("(min-w
 
 const targetKey = (session: string) => `persona.review.target:${session}`;
 
-function storedTarget(session: string, scope?: ReviewScope): ReviewTarget {
-  if (scope) return { scope };
+function storedTarget(session: string, scope?: ReviewScope, base?: string, target?: string, live?: boolean): ReviewTarget {
+  if (scope) return { scope, ...(base ? { base } : {}), ...(target ? { target } : {}), ...(live ? { live } : {}) };
   try {
     const v = JSON.parse(localStorage.getItem(targetKey(session)) ?? "null") as ReviewTarget | null;
-    if (v && (v.scope === "uncommitted" || v.scope === "branch" || (v.scope === "commit" && v.base))) return v;
+    if (v && (v.scope === "uncommitted" || v.scope === "branch" || v.scope === "turn" || (v.scope === "commit" && v.base))) {
+      return v.scope === "turn" ? { scope: "turn" } : v;
+    }
   } catch {
     // another build's value
   }
@@ -50,15 +53,18 @@ type LoadRequest = { owner: GitReview; generation: number };
 
 /** `opened`: the panel as last opened (lib/panel.ts): an opening while the panel is already up (a changed-files card's
  *  Review or file) brings its `scope` and `at` with it. */
-export function ReviewPanel({ mid, sid, cwd, scope, at, opened, onClose }: { mid: string; sid: string; cwd: string; scope?: ReviewScope; at?: ReviewSpot; opened?: object; onClose: () => void }) {
+export function ReviewPanel({ mid, sid, cwd, scope, base, target: targetHash, live, at, opened, onClose }: { mid: string; sid: string; cwd: string; scope?: ReviewScope; base?: string; target?: string; live?: boolean; at?: ReviewSpot; opened?: object; onClose: () => void }) {
   const session = `${mid}/${sid}`;
-  const [target, setTargetState] = useState<ReviewTarget>(() => storedTarget(session, scope));
+  const [target, setTargetState] = useState<ReviewTarget>(() => storedTarget(session, scope, base, targetHash, live));
   const lastOpened = useRef(opened);
   useEffect(() => {
     if (opened === lastOpened.current) return;
     lastOpened.current = opened;
-    if (scope && scope !== "commit") setTargetState((t) => (t.scope === scope ? t : { scope }));
-  }, [opened, scope]);
+    if (scope) {
+      const next: ReviewTarget = { scope, ...(base ? { base } : {}), ...(targetHash ? { target: targetHash } : {}), ...(live ? { live } : {}) };
+      setTargetState((t) => (t.scope === next.scope && t.base === next.base && t.target === next.target && t.live === next.live ? t : next));
+    }
+  }, [opened, scope, base, targetHash, live]);
   const setTarget = (t: ReviewTarget) => {
     setTargetState(t);
     try {
@@ -79,6 +85,10 @@ export function ReviewPanel({ mid, sid, cwd, scope, at, opened, onClose }: { mid
   const [busy, setBusy] = useState("");
   const [help, setHelp] = useState(false);
   const [inside, setInside] = useState(false);
+  const liveTurn = useStore((state) => {
+    const status = (state.sessions[mid] ?? []).find((row) => row.session_id === sid)?.status;
+    return status === "working" || status === "blocked";
+  });
   const caches = useRef(new Map<string, LineCache>());
   const files = useRef(new Map<string, string[] | null>());
   const fileReads = useRef(new Map<string, Promise<string[] | null>>());
@@ -100,7 +110,8 @@ export function ReviewPanel({ mid, sid, cwd, scope, at, opened, onClose }: { mid
     if (target.scope === "commit" && !target.base) return;
     const ac = new AbortController();
     setLoading(true);
-    loadReview(mid, cwd, target, ac.signal)
+    const request = target.scope === "turn" ? { ...target, session: sid, ...((target.live || liveTurn) && !target.target ? { live: true } : {}) } : target;
+    loadReview(mid, cwd, request, ac.signal)
       .then((r) => {
         if (ac.signal.aborted || generation !== reviewGeneration.current) return;
         currentReview.current = r;
@@ -133,7 +144,7 @@ export function ReviewPanel({ mid, sid, cwd, scope, at, opened, onClose }: { mid
     };
     // `res` is the temporary owner still displayed during this transition, not a reason to start another summary.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mid, cwd, target.scope, target.base, reloads]);
+  }, [mid, sid, cwd, target.scope, target.base, target.target, target.session, target.live, liveTurn, reloads]);
 
   // the agent goes on working: say the files moved, read them again when asked (not under the reader's eyes)
   useFsLive(mid, cwd, [], true, (c) => c.git && setStale(true));
@@ -405,7 +416,7 @@ export function ReviewPanel({ mid, sid, cwd, scope, at, opened, onClose }: { mid
         ) : res && res.files.length === 0 ? (
           <Clean res={res} onScope={(s) => setTarget({ scope: s })} />
         ) : res ? (
-          <ReviewProvider view={view} page={`${session}:${target.scope}:${res.base.hash ?? ""}:${reloads}`} fetch={fetch} nativeCaches={caches.current}>
+          <ReviewProvider view={view} page={`${session}:${target.scope}:${res.base.hash ?? ""}:${res.target?.hash ?? ""}:${reloads}`} fetch={fetch} nativeCaches={caches.current}>
             <div className={cx("@container flex flex-col gap-3 px-3 pt-3 pb-4 transition-opacity", loading && "opacity-60")} data-review-files="">
               <ReviewToolbar view={view} onHelp={() => setHelp(true)} />
               {!key && <p className="rounded-control bg-field px-3 py-2 text-[12px] text-ink-3">{t("review.read_only")}</p>}
@@ -436,8 +447,8 @@ function noteOf(f: GitReviewFile | undefined): string | undefined {
   return undefined;
 }
 
-/** The three scopes, and what the files are compared with: HEAD, where the branch left the default branch, a commit
- *  (picked from the recent ones). */
+/** The scopes, and what the files are compared with: HEAD, where the branch left the default branch, a commit
+ *  (picked from the recent ones), or the latest turn checkpoint. */
 function ScopeBar({ mid, cwd, target, res, onChange }: { mid: string; cwd: string; target: ReviewTarget; res: GitReview | null; onChange: (t: ReviewTarget) => void }) {
   const menu = useMenu();
   const [commits, setCommits] = useState<GitCommit[] | null>(null);
@@ -463,7 +474,13 @@ function ScopeBar({ mid, cwd, target, res, onChange }: { mid: string; cwd: strin
         ? base?.ref
           ? t("review.against_branch", { ref: base.ref, sha: base.short ?? "" })
           : ""
-        : "";
+        : target.scope === "turn"
+          ? res?.scope === "turn" && res.target?.working
+            ? t("review.turn_live", { sha: base?.short ?? "HEAD" })
+            : res?.scope === "turn" && res.target?.short
+              ? t("review.turn_done", { sha: res.target.short })
+              : t("review.reading")
+          : "";
   const items: MenuItem[] = commits
     ? commits.map((c, i) => ({
         key: c.hash,
@@ -484,6 +501,7 @@ function ScopeBar({ mid, cwd, target, res, onChange }: { mid: string; cwd: strin
         options={[
           ["uncommitted", t("review.uncommitted")],
           ["branch", t("review.branch")],
+          ["turn", t("review.this_turn")],
           ["commit", t("review.since")],
         ]}
         onChange={(s) => {
@@ -525,7 +543,9 @@ function Clean({ res, onScope }: { res: GitReview; onScope: (s: ReviewScope) => 
       ? [t("review.clean_uncommitted"), t("review.clean_uncommitted_detail")]
       : res.scope === "branch"
         ? [t("review.clean_branch", { ref: res.base.ref ?? "" }), t("review.clean_branch_detail")]
-        : [t("review.clean_since", { sha: res.base.short ?? "" }), undefined];
+        : res.scope === "turn"
+          ? [t("review.clean_turn"), t("review.clean_turn_detail")]
+          : [t("review.clean_since", { sha: res.base.short ?? "" }), undefined];
   return (
     <Empty
       icon="check"
@@ -548,9 +568,10 @@ function Failed({ failure, cwd, target, onRetry, onScope }: { failure: Failure; 
       return <Empty icon="branch" title={t("review.no_default_branch")} detail={t("review.no_default_branch_detail")} action={<Button onClick={() => onScope("uncommitted")}>{t("review.review_uncommitted")}</Button>} />;
     case "no_merge_base":
       return <Empty icon="branch" title={t("review.no_merge_base")} detail={failure.message} action={<Button onClick={() => onScope("uncommitted")}>{t("review.review_uncommitted")}</Button>} />;
+    case "no_checkpoint":
+      return <Empty icon="commit" title={t("review.no_checkpoint")} detail={t("review.no_checkpoint_detail")} action={<Button onClick={() => onScope("uncommitted")}>{t("review.review_uncommitted")}</Button>} />;
     case "bad_base":
       return <Empty icon="commit" title={target.scope === "commit" ? t("review.bad_commit") : t("review.bad_base")} detail={failure.message} action={<Button onClick={() => onScope("uncommitted")}>{t("review.review_uncommitted")}</Button>} />;
   }
   return <Empty icon="info" title={t("review.failed")} detail={failure.message} action={<Button icon="retry" onClick={onRetry}>{t("review.retry")}</Button>} />;
 }
-

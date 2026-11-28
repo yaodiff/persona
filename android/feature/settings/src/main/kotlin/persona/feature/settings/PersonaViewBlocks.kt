@@ -125,7 +125,11 @@ object PersonaViewBlocks {
     fun quiet(view: ExtensionView): ExtensionView = view.copy(search = null, filter = null, refreshAfter = null, state = null,
         sections = view.sections.map { section ->
             section.copy(more = null, items = section.items.filter { it.type !in setOf("button", "field", "segmented") }
-                .map { if (it.action != null || it.button != null) it.copy(action = null, button = null) else it })
+                .map { item ->
+                    if (item.action != null || item.button != null || item.markers.orEmpty().any { it.action != null })
+                        item.copy(action = null, button = null, markers = item.markers?.map { it.copy(action = null) })
+                    else item
+                })
         })
 
     /**
@@ -151,7 +155,8 @@ object PersonaViewBlocks {
         val words = cardWords()
         remember(block, words) { parse(language, code, words) }?.let { PersonaViewBlock(it) }
     }, block = { key, raw, complete -> AssistantBlock(key, raw, complete) }, live = { id -> AssistantLiveCard(id) },
-        picture = { language, raw, complete, index -> AssistantPictureBlock(language, raw, complete, index) })
+        picture = { language, raw, complete, index -> AssistantPictureBlock(language, raw, complete, index) },
+        toolView = { view -> PersonaViewBlock(remember(view) { quiet(view) }) })
 
     private data class Block(val language: String, val code: String)
 }

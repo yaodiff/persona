@@ -3,5 +3,11 @@
   "disabled": "このアシスタントのナレッジは無効です。",
   "read_only": "ナレッジベースは読み取り専用です。変更できません。",
   "source_settings_forbidden": "プロジェクトの参照元の設定を変更できるのは所有者だけです。",
-  "unknown_kind": "不明な種類です。projects、chats、people、docs、meetings、events、recordings、topics のいずれかで検索してください。"
+  "unknown_kind": "不明な種類です。projects、chats、people、docs、meetings、events、recordings、topics のいずれかで検索してください。",
+  "parent_self": "プロジェクトを自分自身の下に置くことはできません。",
+  "parent_cycle": "そのプロジェクトはすでにこのプロジェクトの下にあるため、その下には置けません。",
+  "parent_not_found": "その親プロジェクトは存在しないか、別のプロジェクトに統合されたか、プロジェクトではないと設定されています。",
+  "parent_with_merge": "親プロジェクトやマイルストーンの変更は、統合や統合の解除とは別に行ってください。",
+  "milestone_invalid": "マイルストーンが正しくありません。タイトルが必要で、日付は 2026-12-31 の形式、状態は未確認・合格・不合格のいずれかです。",
+  "milestone_not_found": "このマイルストーンはもうこのプロジェクトにありません。"
 }

@@ -1,7 +1,7 @@
 {
-  "label": "@ 飞书里的人",
-  "searching": "正在找…",
-  "not_found": "没有找到「{query}」",
-  "prompt": "输入名字找人",
+  "label": "@ 飞书联系人",
+  "searching": "正在搜索…",
+  "not_found": "未找到「{query}」",
+  "prompt": "输入姓名搜索联系人",
   "keys": "↑↓ 选择 · Enter 填入 · Esc 关闭"
 }

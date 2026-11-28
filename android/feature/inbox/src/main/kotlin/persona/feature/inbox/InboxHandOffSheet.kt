@@ -91,7 +91,7 @@ internal fun InboxHandOffSheet(
         error = null
         scope.launch {
             try {
-                val text = handoffPrompt(res, handOffItem(record, context ?: repository.personaContext(itemId)), instruction)
+                val text = handoffPrompt(res, handOffItem(record, context ?: repository.personaContext(itemId)?.text), instruction)
                 val operation = attempt.operationId(text, target)
                 val session = repository.handOff(InboxHandOffRequest(itemId, text, target?.machineId, target?.sessionId, operation,
                     targetTitle = target?.title))

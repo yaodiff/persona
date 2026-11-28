@@ -14,10 +14,12 @@ import (
 )
 
 // delegationMachineTrust gives s devices with machine at trust. The environment's todo link started a token send to
-// the machine, which reads s.devs (#6545): the devices are swapped only once that send is done.
+// the machine, which reads s.devs (#6545), and its first publish started the backfill's read of the to-dos, whose own
+// publish reads them too (#16344): the devices are swapped only once both are done.
 func delegationMachineTrust(t *testing.T, s *Service, machine, trust string) {
 	t.Helper()
 	tokenSendDone(t, s, machine)
+	waitFor(t, "the backfill's read of the to-dos", s.spaceBackfillScanIdle)
 	d := newFleetDevs()
 	d.add(machine, "Computer").trust = trust
 	s.devs = d

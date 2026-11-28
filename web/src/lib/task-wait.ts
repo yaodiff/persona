@@ -41,6 +41,7 @@ function identity(evidence: ParkEvidence | undefined, waitingOn?: string, reason
 
 /** Earliest known start of this uninterrupted wait, not the task's update or a PR poll. */
 export function waitStart(todo: Todo, now: number): { at?: number; request: boolean } {
+  if (todo.wait != null) return { at: timeMs(todo.wait.since) || undefined, request: true };
   const sup = todo.supervision;
   const p = sup?.parked;
   if (todo.done_at || sup?.state !== "parked" || !p) return { request: false };

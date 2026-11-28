@@ -17,6 +17,7 @@ import { TERMINAL_LABS_FIELD, terminalLabsSource } from "../../lib/labs-terminal
 import { Dialog, Loading } from "../../ui/atoms";
 import { ConfigurationForm } from "./configuration/ConfigurationForm";
 import { Group, Pill, SettingsHint } from "./SettingsParts";
+import { TodosV2AttentionPrefs } from "./TodosV2AttentionPrefs";
 
 export interface LabsModule {
   source: ConfigurationSource;
@@ -33,10 +34,14 @@ const assistantSources = {
 function LabCards({ manager, newIds = [] }: { manager: string; newIds?: readonly LabId[] }) {
   const card = (id: LabId, source: ConfigurationSource) => (
     <div key={source.key} className="mb-6">
-      <ConfigurationForm source={source} fieldBadge={newIds.includes(id) ? {
-        id: id === TERMINAL_LABS_ID ? TERMINAL_LABS_FIELD : id,
-        content: <Pill tone="accent">{t("settings-labs.new_badge")}</Pill>,
-      } : undefined} />
+      <ConfigurationForm
+        source={source}
+        fieldBadge={newIds.includes(id) ? {
+          id: id === TERMINAL_LABS_ID ? TERMINAL_LABS_FIELD : id,
+          content: <Pill tone="accent">{t("settings-labs.new_badge")}</Pill>,
+        } : undefined}
+        afterFields={id === "todos_v2" ? <TodosV2AttentionPrefs manager={manager} /> : undefined}
+      />
     </div>
   );
   return (

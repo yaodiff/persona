@@ -26,6 +26,16 @@ func TestRequestClientParsing(t *testing.T) {
 			t.Fatalf("accepted %q: %+v", value, got)
 		}
 	}
+	for _, value := range []string{"tab-1", "web.session_A+2", "018f2f62-6e4b-7a6f-b5c1-9c2f2d65a901"} {
+		if got := parseRequestClientInstance(value); got != value {
+			t.Fatalf("instance %q: %q", value, got)
+		}
+	}
+	for _, value := range []string{"", "tab/1", "tab\nforged", "tab token=example", strings.Repeat("a", 129)} {
+		if got := parseRequestClientInstance(value); got != "" {
+			t.Fatalf("accepted instance %q: %q", value, got)
+		}
+	}
 }
 
 func TestRequestClientContextAndLogs(t *testing.T) {
@@ -35,13 +45,14 @@ func TestRequestClientContextAndLogs(t *testing.T) {
 			var logs bytes.Buffer
 			h.logger = log.New(&logs, "", 0)
 			handler := logRequests(h, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if got := requestClientOf(r.Context()); got.Platform != "android" || got.Version != "1.2" {
+				if got := requestClientOf(r.Context()); got.Platform != "android" || got.Version != "1.2" || got.Instance != "tab-1" {
 					t.Fatalf("context: %+v", got)
 				}
 				writeErr(w, 401, errors.New("invalid token"))
 			}))
 			r := httptest.NewRequest("GET", path+"?token=example-secret", nil)
 			r.Header.Set("X-Persona-Client", "android/1.2")
+			r.Header.Set("X-Persona-Client-Instance", "tab-1")
 			r.Header.Set("X-Client-Request-Id", "1234abcd")
 			w := httptest.NewRecorder()
 			handler.ServeHTTP(w, r)

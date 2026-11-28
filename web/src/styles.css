@@ -22,6 +22,8 @@
   [data-sidebar-column] {
     flex-shrink: 0;
     border-right: 0;
+    /* Let the resize handle stack above the adjoining main border. */
+    translate: none;
   }
 
   [data-app-shell] > main,
@@ -31,8 +33,13 @@
     border-radius: var(--radius-card);
   }
 
-  [data-app-shell] > main {
+  [data-app-shell] > main,
+  [data-app-shell] > aside {
     background: var(--page);
+  }
+
+  /* not the aside: its resize handle sits in the gutter outside it; its content div clips the corners below */
+  [data-app-shell] > main {
     overflow: clip;
   }
 
@@ -69,7 +76,17 @@
 }
 [data-sidebar-rows] {
   --sidebar-group-bg: var(--canvas);
+}
+[data-sidebar-rows],
+[data-sidebar-scroller] {
   scroll-padding-top: calc(var(--sidebar-sticky-top, 0px) + var(--sidebar-controls-height, 0px) + var(--sidebar-row));
+}
+/* Fade overflowing sidebar row text before the overlay ⋯ button so "..." and "⋯" never read as six dots. */
+[data-sidebar-rows] .group\/row:has(> button[aria-haspopup="menu"]):hover > :is(a, div) .truncate,
+[data-sidebar-rows] .group\/row:has(> button[aria-haspopup="menu"]) > :is(a, div)[aria-current="page"] .truncate {
+  text-overflow: clip;
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent 100%);
+  mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent 100%);
 }
 
 /* Assistant trays (#4656): an open one lets the dock (ChatView's DOCK_MAX) take most of what is visible, the chat above
@@ -104,44 +121,44 @@
 [data-terminal-scheme="light"], :root {
   --assistant-dock-open-max: calc(var(--kb-h) * 0.82);
   --task-count-meter-height: 0.25rem;
-  --page: #fafafb;
-  --canvas: #f1f2f3;
-  --surface: #fff;
-  --inset: #f7f8f9;
-  --hover: #f4f5f6;
-  --hover-2: #e7e9eb;
-  --ink: #1f2124;
-  --ink-2: #62656b;
-  --ink-3: #66696f;
-  --line: #ecedef;
-  --line-strong: #e0e2e5;
-  --field: #f2f2f3;
+  --page: #f7f7f9;
+  --canvas: #f1f1f4;
+  --surface: #ffffff;
+  --inset: #f5f5f7;
+  --hover: #eaeaee;
+  --hover-2: #e2e2e7;
+  --ink: #111113;
+  --ink-2: #505059;
+  --ink-3: #5a5a63;
+  --line: #e4e4e9;
+  --line-strong: #d0d0d8;
+  --field: #efeff3;
   /* A dropdown's arrow (#2314, the select rule below): ui/icons.tsx `chevron` stroked in --ink-3. A background image
      cannot read var(), so the color is written out here; ui/select-chevron.test.tsx keeps it equal to --ink-3. */
-  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2366696f' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%235a5a63' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
   --stripe: #49494913;
   --stripe-bg: #f5f5f5;
   --accent: #0285ff;
-  --accent-ink: #0166cc;
+  --accent-ink: #0160c2;
   /* Semantic status tints stay pale; approvals and Needs you use explicit neutral surfaces.
      Selection and error fills remain neutral, including selected extension themes. */
-  --accent-tint: #e7e9eb;
-  --green: #107638;
+  --accent-tint: #e2e2e7;
+  --green: #0e6e34;
   --green-tint: #e8f5ed;
-  --orange: #a64c00;
+  --orange: #9c4700;
   --orange-tint: #fdf1e5;
-  --red: #bd3038;
-  --red-tint: #f7f8f9;
-  --attention: #8f5c00;
+  --red: #b42b33;
+  --red-tint: #f5f5f7;
+  --attention: #855500;
   --danger-fill: #bd3038;
   /* The AI role (iOS Theme.ai): what the AI runs on its own, such as ultracode's workflow icon (#3428) and a
      workflow run (#3434). */
-  --ai: #5b4fd6;
+  --ai: #5347cc;
   --ai-tint: #efedfb;
   /* where an agent was opened (#2526), the color of its mark at the row's end: a terminal pane or a desktop app's own chat
      (a Lark group's mark is Lark's own) */
-  --source-terminal: #6a46c2;
-  --source-desktop: #0b7285;
+  --source-terminal: #6340b8;
+  --source-desktop: #0a6b7d;
   --tooltip-bg: #25272b;
   --tooltip-fg: #f6f7f8;
   --tooltip-muted: #a5a8ad;
@@ -156,11 +173,11 @@
   --extension-logo-backing: var(--mark-white);
   --extension-meta-size: 11px;
   --mark-black: #000;
-  --shadow-hairline: 0 0 0 1px var(--line);
-  --shadow-btn: 0 0 0 1px var(--line-strong), 0 1px 2px #1018280d;
-  --shadow-card: 0 0 0 1px var(--line), 0 1px 2px #1018280a, 0 2px 6px #10182808;
-  --shadow-raised: 0 0 0 1px var(--line), 0 2px 10px #0000000b;
-  --shadow-overlay: 0 0 0 1px var(--line), 0 8px 28px #0001;
+  --shadow-hairline: 0 0 0 1px #0000000d;
+  --shadow-btn: 0 0 0 1px #00000017;
+  --shadow-card: 0 0 0 1px #0000000a;
+  --shadow-raised: 0 0 0 1px #00000012,0 4px 12px -2px #00000012;
+  --shadow-overlay: 0 0 0 1px #00000014,0 12px 32px -4px #0000001f;
   --shadow-nav-preview: 0 12px 40px #00000014;
   --shadow-inset-field: inset 0 1px 2px #0000001f;
   /* The on/off switch (ui/atoms.tsx Switch, #3675): iOS's green and a translucent grey track (a little darker than iOS's in light), so the off track shows on
@@ -171,45 +188,45 @@
 }
 
 [data-terminal-scheme="dark"], .dark {
-  --page: #17181a;
-  --canvas: #101113;
-  --surface: #232427;
-  --inset: #1f2022;
-  --hover: #2a2b2e;
-  --hover-2: #313236;
-  --ink: #f2f3f4;
-  --ink-2: #a5a8ad;
-  --ink-3: #979aa0;
-  --line: #2e3033;
-  --line-strong: #3a3c40;
-  --field: #2b2c2f;
-  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23979aa0' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+  --page: #111113;
+  --canvas: #0b0b0c;
+  --surface: #161618;
+  --inset: #101012;
+  --hover: #1e1e21;
+  --hover-2: #252529;
+  --ink: #f5f5f7;
+  --ink-2: #a3a3ab;
+  --ink-3: #92929b;
+  --line: #202024;
+  --line-strong: #2e2e33;
+  --field: #1b1b1e;
+  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2392929b' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
   --stripe: #ffffff0e;
   --stripe-bg: #1b1c1e;
   --accent: #3d9aff;
   --accent-ink: #7ec0ff;
-  --accent-tint: #313236;
-  --green: #6dd697;
+  --accent-tint: #252529;
+  --green: #67d894;
   --green-tint: #3dbb7224;
-  --orange: #eea66d;
+  --orange: #f0a66c;
   --orange-tint: #f68f3c24;
-  --red: #ff9499;
-  --red-tint: #1f2022;
-  --attention: #f1b969;
+  --red: #ff929a;
+  --red-tint: #101012;
+  --attention: #f2bb6b;
   --danger-fill: #bd3038;
-  --ai: #9c94ff;
+  --ai: #a39aff;
   --ai-tint: #9c94ff24;
   --source-terminal: #bea3ff;
-  --source-desktop: #6fd3e3;
+  --source-desktop: #64cad9;
   --tooltip-bg: #111214;
   --tooltip-fg: #f2f3f4;
   --tooltip-muted: #a5a8ad;
   --tooltip-border: #2e3033;
-  --shadow-hairline: 0 0 0 1px var(--line);
-  --shadow-btn: 0 0 0 1px var(--line-strong), 0 1px 2px #0000004d;
-  --shadow-card: 0 0 0 1px var(--line), 0 1px 2px #0003, 0 2px 6px #0003;
-  --shadow-raised: 0 0 0 1px var(--line), 0 2px 10px #00000038;
-  --shadow-overlay: 0 0 0 1px var(--line-strong), 0 8px 28px #00000057;
+  --shadow-hairline: 0 0 0 1px rgba(255,255,255,.06);
+  --shadow-btn: 0 0 0 1px rgba(255,255,255,.09);
+  --shadow-card: 0 0 0 1px rgba(255,255,255,.04);
+  --shadow-raised: 0 0 0 1px rgba(255,255,255,.08),0 4px 14px rgba(0,0,0,.45);
+  --shadow-overlay: 0 0 0 1px rgba(255,255,255,.1),0 14px 36px rgba(0,0,0,.65);
   --shadow-nav-preview: 0 12px 40px #00000060;
   --shadow-inset-field: inset 0 1px 2px #0006;
   --switch-on: #30d158;
@@ -252,7 +269,7 @@
    an icon and a short word (#4316). */
 @theme { --breakpoint-xs: 340px; }
 /* The task cards' type scale by role (docs/design/task-cards.md §4.1): the card and row title, the meta line, the chip / label, and secondary meta. The sizes the cards already used, now named; iOS Theme.Font bodyStrong / caption / label. */
-@theme { --text-card-title: 14.5px; --text-meta: 13px; --text-label: 12px; --text-submeta: 11.5px; }
+@theme { --text-card-title: 14.5px; --text-meta: 13px; --text-tree-row: 12.5px; --text-label: 12px; --text-submeta: 11.5px; }
 @theme inline {
   --color-page: var(--page);
   --color-canvas: var(--canvas);
@@ -282,7 +299,6 @@
   --color-danger-fill: var(--danger-fill);
   --color-ai: var(--ai);
   --color-ai-tint: var(--ai-tint);
-  --color-source-terminal: var(--source-terminal);
   --color-source-desktop: var(--source-desktop);
   --color-tooltip-bg: var(--tooltip-bg);
   --color-tooltip-fg: var(--tooltip-fg);
@@ -299,10 +315,11 @@
 
   --radius-chip: 6px;
   --radius-control: 8px;
-  --radius-card: 10px;
+  --radius-card: 14px;
   --radius-nav-preview: 16px;
 
   --ease-out-strong: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-spring: cubic-bezier(0.22, 1.16, 0.36, 1);
   --ease-link: cubic-bezier(0.16, 1, 0.3, 1);
   --sidebar-fold-open: 250ms;
   --sidebar-fold-close: 200ms;
@@ -323,13 +340,13 @@ body {
   font-family: var(--font-sans);
 }
 
-/* ── Keyframes ─────────────────────────────────────────── */
+/* ── Keyframes & Interactive Surfaces ──────────────────── */
 @keyframes shimmer-text{0%{background-position:150%}to{background-position:-50%}}
-@keyframes fade-up{0%{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+@keyframes fade-up{0%{opacity:0;transform:translateY(6px) scale(.992)}to{opacity:1;transform:none}}
 @keyframes fade-in{0%{opacity:0}to{opacity:1}}
 @keyframes eq-bounce{0%,to{transform:scaleY(.35)}50%{transform:scaleY(1)}}
 @keyframes stream-in{0%{opacity:0;filter:blur(4px)}to{opacity:1;filter:blur()}}
-@keyframes pop-in{0%{opacity:0;transform:scale(.95)}to{opacity:1;transform:scale(1)}}
+@keyframes pop-in{0%{opacity:0;transform:translateY(-2px) scale(.96)}to{opacity:1;transform:none}}
 /* Spinners turn 100 times per cycle (lib/busy-motion.ts SPIN_TURNS): a looping CSS animation sends React's root listener an
    animationiteration event, and the page a style recalc, every cycle; at 100 turns that is once a minute or so, not every
    turn. --busy-cycles tells the reduced-motion rule below how many turns one cycle is. */
@@ -337,18 +354,23 @@ body {
 @property --busy-cycles { syntax: "<number>"; inherits: false; initial-value: 1; }
 @keyframes indeterminate{0%{transform:translateX(-100%)}to{transform:translateX(300%)}}
 @keyframes pixel-on{0%,to{opacity:.15}18%,42%{opacity:1}62%{opacity:.15}}
-
+.card-interactive { transition: box-shadow .15s, background-color .15s, transform .15s var(--ease-out-strong); }
+@media (hover: hover) {
+  .card-interactive:hover:not(:focus-visible,:has(:focus-visible),:has(a:focus-visible)) { box-shadow: var(--shadow-btn); }
+  .dark .card-interactive:hover { background-color: var(--hover); }
+}
+.card-interactive:active { transform: scale(.994); }
 
 /* ── Persona additions ──────────────────────────────────── */
-[data-terminal-scheme="light"], :root { --status-needs: var(--attention); --status-working: var(--orange); --status-waiting: color-mix(in srgb, var(--status-working) 55%, var(--ink-3)); --status-unread: var(--green); --status-idle: var(--ink-3); --user-bubble: #dceaff; --neutral-bubble: #f0f1f3; --term-magenta: #a347ba; --term-cyan: #0f8a9c; --term-bg: #1b1c1f; --term-fg: #e6e7e9; }
-[data-terminal-scheme="dark"], .dark { --user-bubble: #1d3557; --neutral-bubble: #2c2d31; --term-magenta: #c678dd; --term-cyan: #4fb6c4; --term-bg: #141517; --term-fg: #e6e7e9; }
+[data-terminal-scheme="light"], :root { --status-needs: var(--attention); --status-working: var(--orange); --status-waiting: color-mix(in srgb, var(--status-working) 55%, var(--ink-3)); --status-unread: var(--green); --status-idle: var(--ink-3); --user-bubble: #dceaff; --neutral-bubble: #e8e8ed; --term-magenta: #a347ba; --term-cyan: #0f8a9c; --term-bg: #1b1c1f; --term-fg: #e6e7e9; }
+[data-terminal-scheme="dark"], .dark { --user-bubble: #1d3557; --neutral-bubble: #222226; --term-magenta: #c678dd; --term-cyan: #4fb6c4; --term-bg: #141517; --term-fg: #e6e7e9; }
 ::highlight(persona-comment) { background-color: color-mix(in srgb, var(--accent) 20%, transparent); }
 ::highlight(persona-comment-flash) { background-color: color-mix(in srgb, var(--accent) 36%, transparent); }
 /* The chat's trace (aligned with cindy's defaults, #1963): tool rows and their chevrons, the work group's rail, thought
    text, diff counts and the running status bar's accent. */
-:root { --tool-ink: #525252; --tool-rail: #ddd6cb; --thinking-ink: #a3a3a3; --diff-add-fg: #22863a; --diff-del-fg: #b31d28; --diff-add-bg: #e6ffec; --diff-del-bg: #ffebe9; --diff-add-word: #abf2bc; --diff-del-word: #ffcecb; --status-accent: var(--accent-ink); --tool-hover: #ececec; }
-.dark { --tool-ink: #a3a3a3; --tool-rail: #404040; --thinking-ink: #737373; --diff-add-fg: #7ee787; --diff-del-fg: #ff7b72; --diff-add-bg: #2ea04326; --diff-del-bg: #f8514926; --diff-add-word: #2ea04366; --diff-del-word: #f8514966; --status-accent: var(--accent-ink); --tool-hover: #333436; }
-@theme inline { --color-tool-ink: var(--tool-ink); --color-tool-rail: var(--tool-rail); --color-thinking-ink: var(--thinking-ink); --color-diff-add-fg: var(--diff-add-fg); --color-diff-del-fg: var(--diff-del-fg); --color-diff-add-bg: var(--diff-add-bg); --color-diff-del-bg: var(--diff-del-bg); --color-diff-add-word: var(--diff-add-word); --color-diff-del-word: var(--diff-del-word); --color-status-accent: var(--status-accent); --color-tool-hover: var(--tool-hover); }
+:root { --tool-ink: #525252; --tool-rail: #ddd6cb; --thinking-ink: #a3a3a3; --diff-add-fg: #22863a; --diff-del-fg: #b31d28; --diff-add-bg: #e6ffec; --diff-del-bg: #ffebe9; --diff-add-word: #abf2bc; --diff-del-word: #ffcecb; --tool-hover: #ececec; }
+.dark { --tool-ink: #a3a3a3; --tool-rail: #404040; --thinking-ink: #737373; --diff-add-fg: #7ee787; --diff-del-fg: #ff7b72; --diff-add-bg: #2ea04326; --diff-del-bg: #f8514926; --diff-add-word: #2ea04366; --diff-del-word: #f8514966; --tool-hover: #333436; }
+@theme inline { --color-tool-ink: var(--tool-ink); --color-tool-rail: var(--tool-rail); --color-thinking-ink: var(--thinking-ink); --color-diff-add-fg: var(--diff-add-fg); --color-diff-del-fg: var(--diff-del-fg); --color-diff-add-bg: var(--diff-add-bg); --color-diff-del-bg: var(--diff-del-bg); --color-diff-add-word: var(--diff-add-word); --color-diff-del-word: var(--diff-del-word); --color-tool-hover: var(--tool-hover); }
 /* The least a sidebar agent row's title keeps behind a tab's or an agent's name (Sidebar ROW_TITLE_MIN): about 4.5
    characters of its 13px text, at the page's text size. */
 :root { --row-title-min: calc(13px * 4.5 * var(--text-scale, 1)); }
@@ -374,12 +396,17 @@ body {
    teal is under 3:1 on a light card, so the legend always writes the numbers. Same values as the apps' UsageColor. */
 :root { --usage-input: #2a78d6; --usage-output: #eb6834; --usage-cache-write: #6250d6; --usage-cache-read: #1baf7a; }
 .dark { --usage-input: #3987e5; --usage-output: #d95926; --usage-cache-write: #9085e9; --usage-cache-read: #199e70; }
+/* Token usage by project (#16530): development projects take the accent, non-development ones (folders, the home
+   folder, the assistant) this cyan, apart from the kinds' teal; at least 3:1 on a card in both schemes. Same values as
+   the apps' UsageColor.projectOther. */
+:root { --project-other: #0f7f8f; }
+.dark { --project-other: #4bbfcc; }
 /* The user's own messages: iOS Agents' pale blue (apple/Shared/Design/Styles/Glass.swift, ColorSpec.blue, #2672);
    a message relayed from another conversation and a tool's inline detail keep the neutral gray. */
 @theme inline { --color-user-bubble: var(--user-bubble); --color-neutral-bubble: var(--neutral-bubble); --color-status-waiting: var(--status-waiting); }
 @keyframes breathe{0%,to{opacity:1;transform:scale(1)}50%{opacity:.45;transform:scale(.82)}}
-@keyframes slide-up{0%{opacity:0;transform:translateY(12px) scale(.985)}to{opacity:1;transform:none}}
-@keyframes slide-in-right{0%{opacity:0;transform:translateX(16px)}to{opacity:1;transform:none}}
+@keyframes slide-up{0%{opacity:0;transform:translateY(10px) scale(.98)}to{opacity:1;transform:none}}
+@keyframes slide-in-right{0%{opacity:0;transform:translateX(14px)}to{opacity:1;transform:none}}
 /* a Feishu message a Pin jumped to: lit, then gone */
 @keyframes pin-flash{0%,35%{opacity:.9}to{opacity:0}}
 /* a chat row an in-conversation search went to (ChatView, Android ChatSearchHighlight): ringed, then gone */
@@ -426,7 +453,26 @@ body { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; 
 /* In the base layer: unlayered, it beat every utility, so `scrollbar-none` rows kept a thin, always-on bar (#1381). */
 @layer base { * { scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent; } }
 /* A row that scrolls sideways without a bar (still by wheel, trackpad and touch); WebKit before 18.2 needs the pseudo. */
+/* Keep the native horizontal scrollbar. Fade the trailing chips only while more can scroll into view. */
+@supports (animation-timeline: scroll(self x)) {
+  .integrations-chip-scroll {
+    animation: integrations-chip-edge auto steps(1, end);
+    animation-timeline: scroll(self x);
+  }
+  @keyframes integrations-chip-edge {
+    from { mask-image: linear-gradient(to right, black calc(100% - 1rem), transparent); }
+    to { mask-image: none; }
+  }
+}
 @utility scrollbar-none { scrollbar-width: none; &::-webkit-scrollbar { display: none; } }
+/* Subtle thin scrollbar for sidebars and directory trees: transparent track, muted thumb. */
+@utility scrollbar-thin {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
+  &::-webkit-scrollbar { width: 6px; height: 6px; }
+  &::-webkit-scrollbar-track { background: transparent; }
+  &::-webkit-scrollbar-thumb { background: var(--line-strong); border-radius: 9999px; }
+}
 /* Conversation chrome: retain the native hit strip and drag behavior, with no opaque track or layout shift.
    Only enhanced browsers fade the thumb; forced colors and unsupported browsers keep the native bar. */
 :root { --chat-scrollbar-fade: 220ms; }
@@ -453,6 +499,7 @@ button:disabled { cursor: default; }
   .busy-motion, .busy-motion::before, .busy-motion::after { animation-duration: calc(2.4s * var(--busy-cycles, 1)) !important; animation-iteration-count: infinite !important; }
   /* the breathing dot pulses without shrinking */
   @keyframes breathe { 0%, to { opacity: 1; } 50% { opacity: .45; } }
+  .card-interactive:active { transform: none; }
 }
 
 /* Assistant prose (react-markdown): reading first, no bubble. */
@@ -555,7 +602,7 @@ button:disabled { cursor: default; }
 .dark { --series-1: #3987e5; --series-2: #199e70; --series-3: #9085e9; --series-4: #d55181; }
 /* Extensions' named colors (UI version 6, schema Color): on badges, icons, tiles, chart series and sparks, never on text.
  * Each reads on the surface in its theme (3:1 at least, as an icon); a tile that is on lays it at 14% under the ink. */
-:root { --hue-red: #e3474c; --hue-orange: #e2680a; --hue-amber: #b57a00; --hue-yellow: #9c8500; --hue-green: #189a4d; --hue-teal: #0f8a9c; --hue-blue: #0285ff; --hue-indigo: #5b5bd6; --hue-purple: #9a4fd0; --hue-pink: #d6407f; --hue-gray: #7c8087; }
+:root { --hue-red: #e3474c; --hue-orange: #d25d04; --hue-amber: #b57a00; --hue-yellow: #9c8500; --hue-green: #189a4d; --hue-teal: #0f8a9c; --hue-blue: #0285ff; --hue-indigo: #5b5bd6; --hue-purple: #9a4fd0; --hue-pink: #d6407f; --hue-gray: #7c8087; }
 .dark { --hue-red: #ee5c61; --hue-orange: #f68f3c; --hue-amber: #f0b429; --hue-yellow: #e8d04a; --hue-green: #3dbb72; --hue-teal: #3fb8c8; --hue-blue: #3d9aff; --hue-indigo: #8b8ef0; --hue-purple: #c08af0; --hue-pink: #ef7aa8; --hue-gray: #9a9ea5; }
 /* Health's two rings (#13176, modules/health/HealthToday.tsx): water in a blue and protein in an amber, each at least 40 degrees of hue away from
  * the Activity rings' red #FA114F, green #A6FF00 and cyan #00FFF6 so that nothing here reads as one of them (Apple's guidelines keep those
@@ -656,7 +703,7 @@ select:not([multiple], [size], .appearance-none) {
   --mark-glow: 6px; --mark-glow-mix: 50%; --mark-ring-gap: 1.5px; --mark-ring-mix: 40%; --mark-hollow: 1.5px;
   --mark-spin-dur: .9s;
   --status-offline: var(--ink-3);
-  --seg-track: color-mix(in srgb, var(--ink) 7%, transparent); --seg-dur: 200ms;
+  --seg-track: color-mix(in srgb, var(--ink) 7%, transparent); --seg-dur: 220ms;
 }
 @theme inline { --color-seg-track: var(--seg-track); }
 @theme inline { --color-switch-on: var(--switch-on); --color-switch-off: var(--switch-off); --shadow-knob: var(--shadow-knob); }
@@ -683,7 +730,7 @@ select:not([multiple], [size], .appearance-none) {
 .state-tally { display: inline-flex; align-items: center; gap: 6px; }
 .state-tally > span { display: inline-flex; align-items: center; gap: 5px; font-family: var(--font-mono); font-size: 10.5px; font-variant-numeric: tabular-nums; color: var(--ink-3); }
 /* The segmented control's thumb (ui/Segmented.tsx): one element that slides under the chosen segment. */
-.seg-thumb { position: absolute; top: 0; left: 0; z-index: 0; pointer-events: none; background: var(--surface); box-shadow: var(--shadow-btn); transition: transform var(--seg-dur) var(--ease-out-strong), width var(--seg-dur) var(--ease-out-strong), height var(--seg-dur) var(--ease-out-strong); }
+.seg-thumb { position: absolute; top: 0; left: 0; z-index: 0; pointer-events: none; background: var(--surface); box-shadow: var(--shadow-btn); transition: transform var(--seg-dur) var(--ease-spring), width var(--seg-dur) var(--ease-spring), height var(--seg-dur) var(--ease-spring); }
 .seg-thumb[data-ready="false"] { transition: none; }
 @media (prefers-reduced-motion: reduce) { .seg-thumb { transition: none !important; } }
 
@@ -693,6 +740,243 @@ select:not([multiple], [size], .appearance-none) {
 .range::-webkit-slider-runnable-track { height: 4px; border-radius: 999px; background: linear-gradient(to right, var(--accent) var(--fill, 0%), var(--hover-2) var(--fill, 0%)); }
 .range::-moz-range-track { height: 4px; border-radius: 999px; background: var(--hover-2); }
 .range::-moz-range-progress { height: 4px; border-radius: 999px; background: var(--accent); }
+
+/* ── macOS unified titlebar + 44 px co-linear Apple G2 control bay (#16607) ────────────────────────────────── */
+/* Hub Admin's sidebar under the same titlebar takes the expanded sidebar's inset and drag strip (#16992). */
+@media (width >= 64rem) {
+  [data-app-shell][data-mac-chrome="windowed"] {
+    position: relative;
+  }
+  [data-app-shell] [data-mac-bay-tools],
+  [data-app-shell] [data-mac-bay-tools] * {
+    -webkit-app-region: no-drag;
+    app-region: no-drag;
+  }
+  [data-app-shell][data-mac-bay="expanded"] [data-sidebar-root],
+  [data-admin-shell][data-mac-chrome="windowed"] [data-admin-sidebar] {
+    position: relative;
+    padding-top: 38px;
+  }
+  [data-app-shell][data-mac-bay="expanded"] [data-sidebar-root]::before,
+  [data-admin-shell][data-mac-chrome="windowed"] [data-admin-sidebar]::before {
+    content: "";
+    position: absolute;
+    inset-inline: 0;
+    top: 0;
+    height: 44px;
+    -webkit-app-region: drag;
+  }
+  [data-app-shell][data-mac-bay="rail"] [data-sidebar-rail] {
+    padding-top: 50px;
+    -webkit-app-region: drag;
+  }
+  [data-app-shell][data-mac-bay="rail"] [data-sidebar-rail] > * {
+    -webkit-app-region: no-drag;
+  }
+  [data-app-shell][data-mac-bay="rail"] [data-rail-top-controls] {
+    display: none;
+  }
+  [data-app-shell][data-sidebar-animating="1"][data-mac-chrome="windowed"] [data-sidebar-root] {
+    position: relative;
+    padding-top: 38px;
+  }
+  [data-app-shell][data-sidebar-animating="1"][data-mac-chrome="windowed"] [data-sidebar-rail] {
+    padding-top: 50px;
+  }
+  [data-app-shell][data-sidebar-animating="1"][data-mac-chrome="windowed"] [data-rail-top-controls] {
+    display: none;
+  }
+  [data-app-shell]:is([data-mac-bay="rail"], [data-mac-bay="hidden"]) > main,
+  [data-app-shell][data-sidebar-animating="1"][data-mac-chrome="windowed"] > main {
+    border: 0;
+    border-radius: 0;
+  }
+  [data-app-shell][data-sidebar-animating="1"] [data-sidebar-column] {
+    display: block;
+    overflow: hidden;
+  }
+  [data-app-shell][data-mac-chrome="windowed"] > main > .min-h-0 :is(header.h-14, header[data-terminal-header]),
+  [data-app-shell][data-mac-chrome="windowed"] > aside :is(header.h-14, header[data-terminal-header]) {
+    height: 45px;
+    -webkit-app-region: drag;
+  }
+  [data-app-shell][data-mac-chrome="windowed"] > aside [data-subagent-panel] > header > :first-child {
+    -webkit-app-region: drag;
+  }
+  [data-app-shell][data-mac-chrome="windowed"] > main > .min-h-0 :is(header.h-14, header[data-terminal-header]) :is(button, a, input, select, [role="button"], [data-chat-title]),
+  [data-app-shell][data-mac-chrome="windowed"] > aside :is(header.h-14, header[data-terminal-header]) :is(button, a, input, select, [role="button"], [data-chat-title]),
+  [data-app-shell][data-mac-chrome="windowed"] > aside [data-subagent-panel] > header > :first-child :is(button, a, input, select, [role="button"]),
+  [data-app-shell][data-mac-chrome="windowed"] [role="separator"] {
+    -webkit-app-region: no-drag;
+    app-region: no-drag;
+  }
+  [data-app-shell][data-sidebar-animating="1"][data-mac-chrome="windowed"] > main > .min-h-0 :is(header.h-14, header[data-terminal-header]) {
+    padding-left: var(--mac-header-inset, 1rem);
+  }
+  [data-app-shell][data-mac-bay="rail"] > main > .min-h-0 :is(header.h-14, header[data-terminal-header]) {
+    padding-left: 146px;
+  }
+  [data-app-shell][data-mac-bay="hidden"] > main > .min-h-0 :is(header.h-14, header[data-terminal-header]) {
+    padding-left: 200px;
+  }
+  [data-app-shell]:is([data-mac-bay="rail"], [data-mac-bay="hidden"], [data-sidebar-animating="1"]) > main > .min-h-0 > * > :not(:first-child) :is(header.h-14, header[data-terminal-header]) {
+    padding-left: 1rem;
+  }
+}
+
+/* ── Opt-in Frosted Glass surface style (Settings › Advanced › Appearance, #16607, #16776, #17012) ───────── */
+:root[data-surface-style="liquid-glass"] {
+  --glass-t: 0.75;
+  --glass-blur: calc(6px + var(--glass-t) * 20px);
+  --glass-sat: calc(105% + var(--glass-t) * 35%);
+  --canvas: rgba(244, 245, 248, calc(1 - var(--glass-t)));
+  --page: rgba(247, 247, 249, calc(1 - var(--glass-t) * 0.06));
+  --glass-main-border: rgba(15, 23, 42, 0.08);
+  --glass-main-shadow: 0 2px 12px rgba(15, 23, 42, 0.06), 0 0 0 1px rgba(15, 23, 42, 0.03);
+  --glass-sidebar-shadow: 0 1px 1px rgba(255, 255, 255, calc(var(--glass-t) * 0.36));
+}
+:root.dark[data-surface-style="liquid-glass"] {
+  --canvas: rgba(14, 15, 18, calc(1 - var(--glass-t)));
+  --page: rgba(17, 17, 19, calc(1 - var(--glass-t) * 0.06));
+  --glass-main-border: rgba(255, 255, 255, 0.065);
+  --glass-main-shadow: 0 4px 18px rgba(0, 0, 0, 0.28);
+  --glass-sidebar-shadow: 0 1px 2px rgba(0, 0, 0, calc(var(--glass-t) * 0.30));
+}
+:root[data-surface-style="liquid-glass"][data-desktop-glass="1"],
+:root[data-surface-style="liquid-glass"][data-desktop-glass="1"] body {
+  background: transparent;
+}
+/* Over native NSVisualEffectView, disable Chromium CSS backdrop-filter across the document (main, split panel <aside>, portals, and arbitrary utilities) to prevent vibrancy alpha-clearing ghosting and double-compositing focus flashes (electron#39529). */
+:root[data-surface-style="liquid-glass"][data-desktop-glass="1"] [class*="backdrop-"] {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+:root[data-surface-style="liquid-glass"]:not([data-desktop-glass="1"]) body {
+  background:
+    radial-gradient(circle at 16% 18%, rgba(56, 189, 248, 0.24), transparent 45%),
+    radial-gradient(circle at 86% 14%, rgba(167, 139, 250, 0.20), transparent 46%),
+    linear-gradient(135deg, #e5eaf4 0%, #edf1f8 55%, #e2e8f4 100%);
+}
+:root.dark[data-surface-style="liquid-glass"]:not([data-desktop-glass="1"]) body {
+  background:
+    radial-gradient(circle at 16% 18%, rgba(56, 189, 248, 0.22), transparent 45%),
+    radial-gradient(circle at 86% 14%, rgba(167, 139, 250, 0.20), transparent 46%),
+    linear-gradient(135deg, #0b1120 0%, #141c2f 55%, #0e1526 100%);
+}
+:root[data-surface-style="liquid-glass"] [data-app-shell] :is([data-sidebar-root], [data-sidebar-rail], [data-sidebar-sticky]) {
+  background: transparent;
+}
+:root[data-surface-style="liquid-glass"] [data-sidebar-column] {
+  text-shadow: var(--glass-sidebar-shadow);
+}
+/* Flat, pure alpha-modulated tonal washes for controls on the frosted sidebar & top-left macOS bay (no bevels or drop shadows). */
+@media (width >= 64rem) and (prefers-reduced-transparency: no-preference) {
+  :root[data-surface-style="liquid-glass"] :is([data-sidebar-column], [data-mac-bay-tools]) {
+    --inset: rgba(0, 0, 0, 0.05);
+    --hover: rgba(0, 0, 0, 0.06);
+    --field: rgba(0, 0, 0, 0.075);
+    --hover-2: rgba(0, 0, 0, 0.095);
+    --accent-tint: rgba(0, 0, 0, 0.095);
+    --surface: rgba(255, 255, 255, 0.80);
+    --line: rgba(0, 0, 0, 0.08);
+    --line-strong: rgba(0, 0, 0, 0.14);
+    --shadow-hairline: 0 0 0 1px rgba(0, 0, 0, 0.065);
+    --shadow-btn: 0 0 0 1px rgba(0, 0, 0, 0.085);
+  }
+  :root.dark[data-surface-style="liquid-glass"] :is([data-sidebar-column], [data-mac-bay-tools]) {
+    --inset: rgba(255, 255, 255, 0.06);
+    --hover: rgba(255, 255, 255, 0.075);
+    --field: rgba(255, 255, 255, 0.095);
+    --hover-2: rgba(255, 255, 255, 0.115);
+    --accent-tint: rgba(255, 255, 255, 0.115);
+    --surface: rgba(255, 255, 255, 0.145);
+    --line: rgba(255, 255, 255, 0.08);
+    --line-strong: rgba(255, 255, 255, 0.14);
+    --shadow-hairline: 0 0 0 1px rgba(255, 255, 255, 0.06);
+    --shadow-btn: 0 0 0 1px rgba(255, 255, 255, 0.08);
+  }
+}
+@media (width < 64rem) {
+  :root[data-surface-style="liquid-glass"] [data-sidebar-column] {
+    background: var(--page);
+  }
+}
+:root[data-surface-style="liquid-glass"] .sidebar-group-heading {
+  position: static;
+  background: transparent;
+}
+:root[data-surface-style="liquid-glass"] .sidebar-group-heading[data-edge]::after {
+  display: none;
+}
+:root[data-surface-style="liquid-glass"]:not([data-desktop-glass="1"]) [data-app-shell] {
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
+}
+:root[data-surface-style="liquid-glass"]:not([data-desktop-glass="1"]) [data-app-shell] > main,
+:root[data-surface-style="liquid-glass"]:not([data-desktop-glass="1"]) [data-app-shell] > aside {
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
+}
+:root[data-surface-style="liquid-glass"] [data-app-shell] > main,
+:root[data-surface-style="liquid-glass"] [data-app-shell] > aside {
+  border-color: var(--glass-main-border);
+  box-shadow: var(--glass-main-shadow);
+}
+:root[data-surface-style="liquid-glass"] [data-app-shell]:is([data-mac-bay="rail"], [data-mac-bay="hidden"], [data-sidebar-animating="1"][data-mac-chrome="windowed"]) > main {
+  box-shadow: none;
+  filter: drop-shadow(0 2px 10px rgba(17, 17, 19, 0.055));
+}
+:root.dark[data-surface-style="liquid-glass"] [data-app-shell]:is([data-mac-bay="rail"], [data-mac-bay="hidden"], [data-sidebar-animating="1"][data-mac-chrome="windowed"]) > main {
+  filter: drop-shadow(0 6px 18px rgba(0, 0, 0, 0.34));
+}
+/* While ComposerImageStage elevates the live composer, clear shell filters/clip-path so position:fixed anchors to the viewport cleanly. */
+:root[data-composer-stage="1"] [data-app-shell],
+:root[data-composer-stage="1"] [data-app-shell] > :is(main, aside) {
+  filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+  clip-path: none !important;
+  -webkit-clip-path: none !important;
+}
+@media (prefers-reduced-transparency: reduce) {
+  :root[data-surface-style="liquid-glass"],
+  :root[data-surface-style="liquid-glass"][data-desktop-glass="1"] {
+    background: #f1f1f4;
+    --canvas: #f1f1f4;
+    --page: #f7f7f9;
+    --glass-main-border: var(--line);
+    --glass-main-shadow: none;
+    --glass-sidebar-shadow: none;
+  }
+  :root.dark[data-surface-style="liquid-glass"],
+  :root.dark[data-surface-style="liquid-glass"][data-desktop-glass="1"] {
+    background: #0b0b0c;
+    --canvas: #0b0b0c;
+    --page: #111113;
+    --glass-main-border: var(--line);
+    --glass-main-shadow: none;
+    --glass-sidebar-shadow: none;
+  }
+  :root[data-surface-style="liquid-glass"] body,
+  :root[data-surface-style="liquid-glass"][data-desktop-glass="1"] body,
+  :root[data-surface-style="liquid-glass"]:not([data-desktop-glass="1"]) body,
+  :root.dark[data-surface-style="liquid-glass"]:not([data-desktop-glass="1"]) body {
+    background: var(--page);
+  }
+  :root[data-surface-style="liquid-glass"] [data-app-shell],
+  :root[data-surface-style="liquid-glass"]:not([data-desktop-glass="1"]) [data-app-shell],
+  :root[data-surface-style="liquid-glass"] [data-app-shell] > main,
+  :root[data-surface-style="liquid-glass"]:not([data-desktop-glass="1"]) [data-app-shell] > main,
+  :root[data-surface-style="liquid-glass"] [data-app-shell] > aside,
+  :root[data-surface-style="liquid-glass"]:not([data-desktop-glass="1"]) [data-app-shell] > aside {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+  :root[data-surface-style="liquid-glass"] [data-app-shell]:is([data-mac-bay="rail"], [data-mac-bay="hidden"], [data-sidebar-animating="1"][data-mac-chrome="windowed"]) > main,
+  :root.dark[data-surface-style="liquid-glass"] [data-app-shell]:is([data-mac-bay="rail"], [data-mac-bay="hidden"], [data-sidebar-animating="1"][data-mac-chrome="windowed"]) > main {
+    filter: none;
+  }
+}
 .range::-webkit-slider-thumb { -webkit-appearance: none; width: 18px; height: 18px; margin-top: -7px; border-radius: 50%; background: #fff; box-shadow: var(--shadow-btn); transition: transform 150ms var(--ease-out-strong); }
 .range::-moz-range-thumb { width: 18px; height: 18px; border: 0; border-radius: 50%; background: #fff; box-shadow: var(--shadow-btn); }
 .range:active::-webkit-slider-thumb { transform: scale(1.1); }
@@ -700,3 +984,6 @@ select:not([multiple], [size], .appearance-none) {
 .range:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 2px var(--accent), var(--shadow-btn); }
 .range:focus-visible::-moz-range-thumb { box-shadow: 0 0 0 2px var(--accent), var(--shadow-btn); }
 .range:disabled { opacity: 0.5; cursor: default; }
+
+/* The phone's tab bar (views/PhoneTabBar.tsx) gives its room to the composer while the keyboard is up (lib/viewport.ts). */
+:root[data-kb] [data-phone-tabs] { display: none; }

@@ -10,6 +10,7 @@ import androidx.datastore.preferences.core.emptyPreferences
 import androidx.navigation3.runtime.NavKey
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.serialization.json.JsonObject
 import persona.core.contracts.*
 import persona.core.contracts.api.*
@@ -71,7 +72,9 @@ internal fun agentsDependencies(
         override suspend fun refresh() = Unit
         override suspend fun togglePin(path: String, space: Boolean) = Unit
         override suspend fun toggleMute(path: String, space: Boolean) = Unit
-        override suspend fun markSeen(session: SessionKey, version: String) = Unit
+        override suspend fun markSeen(session: SessionKey, version: String) {
+            preferences.update { it.copy(seen = it.seen + (session.path to version)) }
+        }
     })
     override fun sessions() = repository
     override fun interactions() = center

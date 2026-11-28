@@ -200,11 +200,12 @@ func (s *Recordings) dayRecapWritten(ctx context.Context, e *kb.Engine, r record
 			ctx, cancel := context.WithTimeout(ctx, dayPushWait)
 			defer cancel()
 			err := s.h.Notify(ctx, n) // kept in the outbox while the hub is away
-			if err != nil && s.h.Answered(err) {
+			refused := err != nil && s.h.Answered(err)
+			if refused {
 				s.logf("assistant: day recap push: the hub refused it: %v", err)
 				err = nil
 			}
-			if err == nil {
+			if err == nil && !refused {
 				s.noteCard(ctx, cardDayRecap, n) // once: a push kept for later is tried again until taken
 			}
 			sent(dayPushPhone, err)

@@ -13,10 +13,9 @@ count (`docs/design/PRINCIPLES.md`, "Consistency first" and "Rules are checkable
   that pins it (`pinned_by`, or `null`), the function in the manager that writes it into the counts view (`producer`,
   `{file, symbol}`, or `null` while the view does not carry it; step 7a, D18) and the decisions it waits on
   (`waits_on`). The ids are the plan's (section 3.1): `agents_needs_you` (pinned by `spec/fixtures/needs-you`),
-  `inbox_unread`, `inbox_action`, `todos_needs_you` (pinned by `spec/fixtures/todo-counts`) and `persona_cards`. An id
-  starts with the rule of the clients it replaces; `persona_cards` has none until D9, since iOS and Android count
-  different cards today. A count a decision refined after step 4 lists it in `refined_by` (the plan's D18: a refinement
-  keeps the id): `agents_needs_you` names D11, which leaves sessions whose only cards are held out of it.
+  `inbox_unread`, `inbox_action`, `todos_needs_you` (pinned by `spec/fixtures/todo-counts`) and `persona_cards`
+  (pinned by `spec/fixtures/persona-cards` under D9/D11). A count refined after step 4 lists the decision in
+  `refined_by` (D18). `agents_needs_you` names D11, which excludes sessions whose only cards are held.
 - `surfaces`: one row per place a count is drawn on one client, from the plan's section 2 (the inventory, read at
   e4308ecc23) and checked against the code this table names. A row's id is `<client>.<surface>`.
 
@@ -142,6 +141,9 @@ in `docs/protocol/counts.md`; step 6 of the plan, #15512): `{"version": 1, "case
 - A case whose `input.todo_counts` also names a case of `spec/fixtures/todo-counts` holds, as `counts.todos_needs_you`,
   that list's `needs_you` with no row listed (all of `n` is `more`), and the same test checks it; a case that names none
   is a view from a manager that has not counted its to-dos yet, without `todos_needs_you`.
+- A case whose `input.persona_cards` names a case of `spec/fixtures/persona-cards` contains one `card:<id>` key per
+  eligible Persona card, with the current manager's Agents rows beside it. The same test checks both counts and their
+  totals. A current manager sends a zero when its Persona card tally is empty.
 - A case without `input` shows a shape no fixture case gives: rows past the listed `keys` (`more`), and a manager
   build that does not work a count out (absent, never 0).
 

@@ -22,7 +22,7 @@ import (
 // has to outlive the default wait. The user writing in the conversation takes a waiting question back.
 // All ids are placeholders.
 
-const askUserArgs = `{"questions":[{"question":"Push it to beta?","options":[{"label":"Yes"},{"label":"No"}]}]}`
+const askUserArgs = `{"why_owner":"priority","questions":[{"question":"Push it to beta?","options":[{"label":"Yes"},{"label":"No"}]}]}`
 
 // askUserCard has the main conversation ask with ask_user on s and returns the card it put up, as the real tool made it.
 // The ask is withdrawn when the test ends.

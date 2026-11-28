@@ -117,6 +117,7 @@ const boundary = {
       ImportDeclaration: (n) => check(n, n.source),
       ExportNamedDeclaration: (n) => check(n, n.source),
       ExportAllDeclaration: (n) => check(n, n.source),
+      TSImportType: (n) => check(n, n.source ?? n.argument?.literal),
       ImportExpression: (n) => check(n, n.source),
     };
   },

@@ -1,5 +1,19 @@
 {
   "account_unknown": "邮箱账号“{account}”已不在这个助手上了。",
   "search_incomplete": "未能读取所有邮箱账号的邮件。请检查账号后重试。",
-  "unreachable": "连不上这个邮箱，已经重连过一次还是不行，请稍后再试。"
+  "unreachable": "连不上这个邮箱，已经重连过一次还是不行，请稍后再试。",
+  "move_invalid": "请选择一封邮件，提供其邮箱和 UID 有效期，并指定一个目标邮箱。",
+  "move_same_mailbox": "请为这封邮件选择另一个邮箱。",
+  "move_mailbox_missing": "找不到本次移动涉及的邮箱。",
+  "move_message_missing": "在来源邮箱找不到这封邮件。请刷新邮箱并重新选择邮件。",
+  "move_validity_changed": "邮件服务器已重新分配此邮箱中的邮件编号。请刷新邮箱并重新选择这封邮件。",
+  "move_gmail_archive": "暂不支持 Gmail 的归档操作。你可以选择其他目标邮箱。",
+  "move_unsupported": "此邮件服务器不支持安全地移动单封邮件。",
+  "move_failed": "无法移动这封邮件。请检查两个邮箱后重试。",
+  "move_timeout": "移动开始前，邮件服务器响应超时。请重试。",
+  "move_partial": "邮件已复制到目标邮箱，但无法确认是否已从来源邮箱移除。请刷新两个邮箱，确认邮件所在位置后再试。",
+  "move_unknown": "邮件服务器未确认移动是否完成。请刷新两个邮箱，确认邮件所在位置后再试。",
+  "move_approval_required": "移动邮件需要你批准。",
+  "move_no_subject": "无主题",
+  "move_summary": "将 {account} 中的一封邮件从 {source} 移到 {target}\n主题：{subject}"
 }

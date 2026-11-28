@@ -102,6 +102,10 @@ type managerInfo struct {
 	// the apps draw its counts from the view it tells (counts_view.go). Absent while it is offline: an app keeps the
 	// view it has (D13 of docs/plans/plan-derived-counts.md).
 	CountsView bool `json:"counts_view,omitempty"`
+	// IntegrationsProjectionV1 is the connected assistant's read-only settings projection.
+	IntegrationsProjectionV1 bool `json:"integrations_projection_v1,omitempty"`
+	// ExtensionInfoAccessScoped signals support for per-Assistant extension trust on the live connection.
+	ExtensionInfoAccessScoped bool `json:"extension_info_access_scoped,omitempty"`
 }
 
 // defaultManager is the manager the entries that belong to none go to (Siri, the shortcuts, the assistant page as
@@ -167,6 +171,8 @@ func (h *Hub) managerList(ctx context.Context) ([]managerInfo, error) {
 			m.NeedsUpdate = !slices.Contains(p.Capabilities, assistantwire.CapabilityConfigOwn)
 			m.InboxNeedsYou = needsYou[b.ID]
 			m.CountsView = slices.Contains(p.Capabilities, assistantwire.CapabilityCountsView)
+			m.IntegrationsProjectionV1 = slices.Contains(p.Capabilities, assistantwire.CapabilityIntegrationsProjection)
+			m.ExtensionInfoAccessScoped = slices.Contains(p.Capabilities, assistantwire.CapabilityExtensionInfoAccessScoped)
 		}
 		if m.Builtin {
 			// Not hidden while it is used: the default, a computer of its own, or something in its inbox that needs

@@ -117,7 +117,7 @@ export function useChildSessions(mid: string, sid: string, hasChildren: boolean,
   const pushed = useStore((s) => (enabled && !paged ? foldedChildren(Object.values(s.sessions).flat(), mid, sid) : NONE));
   // a paging hub: one bounded list of this session's children, as list summaries (what a card shows is in one)
   const list = useMemo(
-    () => (enabled && paged && hierarchy && hasChildren ? new SessionList<Session>("/sessions", runtimeIdentity, runtimeOrder, undefined, runtimeRemoval, { summary: true, pageCounts: () => runtimeSessions.usesPageCounts() }) : null),
+    () => (enabled && paged && hierarchy && hasChildren ? new SessionList<Session>("/sessions", runtimeIdentity, runtimeOrder, undefined, runtimeRemoval, { summary: true, pageCounts: () => runtimeSessions.usesPageCounts(), pauseWhenHidden: true }) : null),
     [enabled, paged, hierarchy, hasChildren],
   );
   const page = useSyncExternalStore(list?.subscribe ?? noSubscribe, list?.getSnapshot ?? noSnapshot, list?.getSnapshot ?? noSnapshot);
@@ -129,7 +129,7 @@ export function useChildSessions(mid: string, sid: string, hasChildren: boolean,
       : { machine_id: mid, parent_session_id: parent };
     void list.setFilters(filters).catch(() => {});
     // the hub's hint for any change of the list: a read of what changed since (`since`), only for these rows
-    const off = onHubEvent("sessions_list", () => list.invalidate());
+    const off = onHubEvent("sessions_list", (msg) => list.invalidate(msg));
     return () => {
       off();
       list.reset();

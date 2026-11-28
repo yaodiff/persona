@@ -20,11 +20,16 @@ import { patchDiffs, withoutCutMark } from "../../lib/tool-detail";
 import { changePath, editLines } from "../../lib/turn-changes";
 import { useChatContext } from "./chat-context";
 import { useFullText } from "./FullText";
-import { hasStepDetail, showsResult, StepDetail } from "./StepDetail";
+import { hasStepDetail, showsResult } from "./step-detail-kind";
+import { lazyPage } from "../../lib/lazy-page";
 import { useReveal } from "./search-reveal";
 import { Thumb } from "./Steps";
 import { t } from "../../i18n";
 
+// A plan or questions are drawn only once their step is opened (step-detail-kind.ts says which steps have one), so the
+// detail's chunk loads then, or as the pointer or focus reaches such a row: not on every first screen.
+const StepDetail = lazyPage(() => import("./StepDetail").then((m) => m.StepDetail));
+const preloadStepDetail = () => void StepDetail.preload().catch(() => {});
 // L3 per-step attribution badges load lazily only when a step with telemetry is expanded (#13054).
 const StepTelemetry = lazy(() => import("./StepTelemetry").then((m) => ({ default: m.StepTelemetry })));
 
@@ -487,12 +492,13 @@ function ActionRowView({
   // on a compact layout the duration stays in the hover title, not in the crowded row
   const rowTitle = [p.param?.title, narrow && duration].filter(Boolean).join(" · ") || undefined;
   // A supervision trace is historical: show the original parameters/result, never today's file in the side panel.
-  const detail = open && !trace && hasStepDetail(use);
+  const structured = !trace && hasStepDetail(use);
+  const detail = open && structured;
   const input = open && !detail ? trace ? JSON.stringify(use.tool_input ?? {}, null, 2) : inlineInput(use) : "";
   const output = result && (trace || showsResult(name, result)) ? fullText : "";
   return (
     <div className="flex min-w-0 flex-col" data-action-row={name} data-tool-use={call} data-items={ids.join(" ")}>
-      <button type="button" onClick={activate} aria-expanded={inPlace ? open : undefined} aria-label={label || name} title={rowTitle} className={ROW}>
+      <button type="button" onClick={activate} onPointerEnter={structured ? preloadStepDetail : undefined} onFocus={structured ? preloadStepDetail : undefined} aria-expanded={inPlace ? open : undefined} aria-label={label || name} title={rowTitle} className={ROW}>
         <span role="img" aria-label={running ? t("chat-actionrow.status_running") : error ? t("chat-actionrow.status_error") : t("chat-actionrow.status_done")} className={cx(STATUS_SLOT, error && "text-red")}>
           {running ? <Spinner size={13} /> : <Icon name={error ? "x" : "check"} size={13} />}
         </span>
@@ -546,7 +552,9 @@ function ActionRowView({
           )}
           {detail && (
             <div className="font-sans">
-              <StepDetail use={use} result={result} />
+              <Suspense fallback={null}>
+                <StepDetail use={use} result={result} />
+              </Suspense>
             </div>
           )}
           {COMMAND_TOOLS.has(name) && str((use.tool_input as Record<string, unknown> | undefined)?.description) && <div className="mb-2 font-sans">{str((use.tool_input as Record<string, unknown>).description)}</div>}

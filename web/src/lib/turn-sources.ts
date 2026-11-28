@@ -110,4 +110,3 @@ export function turnSources(steps: readonly Step[]): FoldSource[] | null {
   }
   return out.length ? out.slice(0, MAX_SOURCES) : null;
 }
-

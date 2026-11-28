@@ -21,6 +21,9 @@ func (e *edge) startAgain(binary string) {
 func (e *edge) supervise() error {
 	defer e.stop()
 	for {
+		if e.ctx.Err() != nil {
+			return nil
+		}
 		p := e.current()
 		var msgs <-chan Msg
 		var exited <-chan struct{}
@@ -36,8 +39,14 @@ func (e *edge) supervise() error {
 			return nil
 		case m, ok := <-msgs:
 			if !ok {
+				if e.ctx.Err() != nil {
+					return nil
+				}
 				<-p.exited
 				continue // exited, next round
+			}
+			if e.ctx.Err() != nil {
+				return nil
 			}
 			if err := e.fromActive(p, m); err != nil {
 				return err
@@ -46,6 +55,9 @@ func (e *edge) supervise() error {
 			e.setActive(nil)
 			e.hold()
 			e.clearConfirm()
+			if e.ctx.Err() != nil {
+				return nil
+			}
 			if p.exitCode == RespawnCode {
 				e.logf("hub edge: slot %s asked to be started again", p.name)
 				e.failures = 0
@@ -62,8 +74,14 @@ func (e *edge) supervise() error {
 			e.startAgain(p.binary)
 		case <-e.retry:
 			e.retry = nil
+			if e.ctx.Err() != nil {
+				return nil
+			}
 			np, err := e.startActive(e.retryBinary)
 			if err != nil {
+				if e.ctx.Err() != nil {
+					return nil
+				}
 				e.failures++
 				e.logf("hub edge: the hub did not start: %v", err)
 				if e.failures >= maxFailedStarts {
@@ -74,6 +92,10 @@ func (e *edge) supervise() error {
 			}
 			e.setActive(np)
 		case r := <-e.reqs:
+			if e.ctx.Err() != nil {
+				r.done <- e.ctx.Err()
+				return nil
+			}
 			if p == nil {
 				r.done <- errors.New("no hub is serving right now (it is being started again)")
 				continue
@@ -111,7 +133,7 @@ func (e *edge) fromActive(p *proc, m Msg) error {
 			if errors.Is(err, errUpdateRecovery) {
 				return err
 			}
-			if p.alive() && e.current() == p {
+			if e.ctx.Err() == nil && p.alive() && e.current() == p {
 				p.send(Msg{T: MsgSwitchFailed, Reason: err.Error()})
 			}
 		}
@@ -159,17 +181,31 @@ func (e *edge) switchTo(r switchReq) error {
 	}
 	if err != nil {
 		e.kill(green)
+		if e.ctx.Err() != nil {
+			return e.ctx.Err()
+		}
 		e.logf("hub edge: %s did not start: %v; slot %s goes on", m.Binary, err, nameOf(old))
 		return fmt.Errorf("the new hub did not start: %w", err)
+	}
+	if e.ctx.Err() != nil {
+		e.kill(green)
+		return e.ctx.Err()
 	}
 	progress("handing over")
 	e.hold()
 	e.clearConfirm()
 	e.release(old)
 	e.setActive(nil)
+	if e.ctx.Err() != nil {
+		e.kill(green)
+		return e.ctx.Err()
+	}
 	green.send(Msg{T: MsgActivate})
 	if err := e.await(green, MsgReady, e.o.ActivateWait); err != nil {
 		e.kill(green)
+		if e.ctx.Err() != nil {
+			return e.ctx.Err()
+		}
 		back := m.Prev
 		if m.Kind == KindUpdate && e.o.RestoreUpdate != nil {
 			b, ok, restoreErr := e.o.RestoreUpdate(m.Expect, err)
@@ -181,6 +217,9 @@ func (e *edge) switchTo(r switchReq) error {
 				back = b // the update's files are back as they were: the binary at its path is the old one again
 			}
 		}
+		if e.ctx.Err() != nil {
+			return e.ctx.Err()
+		}
 		if back == "" && old != nil {
 			back = old.binary
 		}
@@ -188,6 +227,9 @@ func (e *edge) switchTo(r switchReq) error {
 		progress("going back")
 		np, berr := e.startActive(back)
 		if berr != nil {
+			if e.ctx.Err() != nil {
+				return e.ctx.Err()
+			}
 			// Nothing serves: the edge's loop starts it again, as after a crash (hold stays on meanwhile).
 			e.logf("hub edge: %s did not start either: %v", back, berr)
 			e.failures++
@@ -219,7 +261,7 @@ func nameOf(p *proc) string {
 func (e *edge) unconfirmed() error {
 	build := e.confirmBuild
 	e.clearConfirm()
-	if e.o.RestoreUpdate == nil {
+	if e.ctx.Err() != nil || e.o.RestoreUpdate == nil {
 		return nil
 	}
 	binary, ok, err := e.o.RestoreUpdate(build, nil)
@@ -227,8 +269,8 @@ func (e *edge) unconfirmed() error {
 		e.logf("hub edge: restoration failed; recovery retained: %v", err)
 		return fmt.Errorf("%w: %w", errUpdateRecovery, err)
 	}
-	if !ok {
-		return nil // confirmed or rolled back meanwhile
+	if !ok || e.ctx.Err() != nil {
+		return nil // confirmed, rolled back, or shutting down meanwhile
 	}
 	e.logf("hub edge: the update to build %d was not confirmed within %s: going back", build, e.o.ConfirmWait)
 	if err := e.switchTo(switchReq{m: Msg{T: MsgSwitch, Binary: binary, Kind: KindRollback}}); err != nil {
@@ -240,6 +282,7 @@ func (e *edge) unconfirmed() error {
 // stop ends the edge: the listeners first (with socket activation, new connections wait in the socket for the next
 // edge), then the serving slot the way a planned stop does.
 func (e *edge) stop() {
+	e.clearConfirm()
 	for _, ln := range e.o.Listeners {
 		_ = ln.Close()
 	}

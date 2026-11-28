@@ -84,7 +84,7 @@ fun InboxItemDetailScreen(repository: InboxRepository, route: InboxItemDetailRou
     var assistantContext by remember(record?.item, contextRevision) { mutableStateOf<String?>(null) }
     LaunchedEffect(repository, record?.item, contextRevision) {
         val current = record ?: return@LaunchedEffect
-        assistantContext = if (current.isAssistantRow) repository.personaContext(current.item.id) else null
+        assistantContext = if (current.isAssistantRow) repository.personaContext(current.item.id)?.text else null
     }
     val open = LocalLarkLinkOpener.current
     val scope = rememberCoroutineScope()

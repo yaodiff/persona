@@ -3,5 +3,5 @@
   "searching_placeholder": "搜索会话、收件箱、终端、目录、空间、机器、页面、文件…",
   "copy_mention": "复制 @路径",
   "indexing": "正在建立索引…",
-  "unreadable": "读不到这个目录的文件"
+  "unreadable": "无法读取该文件夹中的文件"
 }

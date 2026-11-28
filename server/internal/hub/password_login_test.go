@@ -62,10 +62,32 @@ func (s *passwordMemStore) DeviceTokenByHash(_ context.Context, hash string) (*d
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	d, ok := s.tokens[hash]
-	if !ok {
+	if !ok || d.RevokedAt != nil {
 		return nil, nil
 	}
 	return &d, nil
+}
+func (s *passwordMemStore) DeviceTokens(context.Context) ([]db.DeviceToken, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]db.DeviceToken, 0, len(s.tokens))
+	for _, d := range s.tokens {
+		out = append(out, d)
+	}
+	return out, nil
+}
+func (s *passwordMemStore) RevokeDeviceToken(_ context.Context, id string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for hash, d := range s.tokens {
+		if d.ID == id && d.RevokedAt == nil {
+			now := time.Now()
+			d.RevokedAt = &now
+			s.tokens[hash] = d
+			return true, nil
+		}
+	}
+	return false, nil
 }
 func (s *passwordMemStore) TouchDeviceToken(context.Context, string) error { return nil }
 
@@ -172,7 +194,7 @@ func TestPasswordLoginRegistrationAndDevice(t *testing.T) {
 		t.Fatal("password persisted")
 	}
 	state := passwordCall(t, client, "GET", "/api/v1/auth/password/state", nil, 200)
-	if state["enabled"] != true || state["suite"] != passwordpake.Suite {
+	if state["enabled"] != true || state["suite"] != passwordpake.Suite || state["replaces"] != true {
 		t.Fatal(state)
 	}
 	session, proof, err := passwordProof(t, client, password, "")
@@ -335,4 +357,63 @@ func TestPasswordLoginProxyTLS(t *testing.T) {
 	}
 	client.header.Set("Origin", "https://attacker.example")
 	passwordCall(t, client, "POST", "/api/v1/auth/password/start", map[string]any{}, 403)
+}
+
+func TestPasswordLoginReplacesSameKindToken(t *testing.T) {
+	h, _, admin, client := passwordTestHub(t)
+	password := "replace-password-2026"
+	registerClientPassword(t, admin, password, "", false)
+
+	signIn := func(kind, name, replaces string) map[string]any {
+		t.Helper()
+		c, _ := passwordpake.Configuration().Client()
+		ke1, err := c.GenerateKE1([]byte(password))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req := map[string]any{"message": ke1.Serialize(), "name": name, "kind": kind}
+		if replaces != "" {
+			req["replaces"] = replaces
+		}
+		start := passwordCall(t, client, "POST", "/api/v1/auth/password/start", req, 200)
+		m, _ := base64.StdEncoding.DecodeString(start["message"].(string))
+		ke2, err := c.Deserialize.KE2(m)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ke3, _, _, err := c.GenerateKE3(ke2, passwordpake.ClientIdentity, []byte(start["identity"].(string)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return passwordCall(t, client, "POST", "/api/v1/auth/password/finish", map[string]any{"session": start["session"], "message": ke3.Serialize()}, 200)
+	}
+
+	firstWeb := signIn("web", "Browser 1", "")
+	firstPhone := signIn("phone", "Phone 1", "")
+
+	secondWeb := signIn("web", "Browser 2", firstWeb["id"].(string))
+	if secondWeb["replaced"] != firstWeb["id"] {
+		t.Fatalf("expected replaced=%v, got %v", firstWeb["id"], secondWeb)
+	}
+	if _, ok := h.authenticate(context.Background(), firstWeb["token"].(string)); ok {
+		t.Fatal("replaced web token still authenticates")
+	}
+	if _, ok := h.authenticate(context.Background(), secondWeb["token"].(string)); !ok {
+		t.Fatal("new web token should authenticate")
+	}
+
+	// Cross-kind replacement (web trying to replace phone) must not revoke the phone token.
+	thirdWeb := signIn("web", "Browser 3", firstPhone["id"].(string))
+	if thirdWeb["replaced"] != nil {
+		t.Fatalf("cross-kind replace should be ignored: %v", thirdWeb)
+	}
+	if _, ok := h.authenticate(context.Background(), firstPhone["token"].(string)); !ok {
+		t.Fatal("phone token should remain valid")
+	}
+
+	// Long replaces values (> 64 bytes) do not fail /auth/password/start with 400.
+	longWeb := signIn("web", "Browser 4", "dev_"+strings.Repeat("x", 65))
+	if longWeb["token"] == "" {
+		t.Fatalf("long replaces should still issue a token: %v", longWeb)
+	}
 }

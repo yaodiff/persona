@@ -12,7 +12,8 @@ import (
 	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
-// Structural multi-scope coverage guard for bare `task_review accepted` (#13169).
+// Multi-scope coverage guard for legacy bare `task_review accepted` (#13169). Structured task contracts with
+// validated checks use the explicit deferred_scope and follow_up_todo_id fields for handoffs.
 //
 // The wording guard in supervise_accept_guard.go (#12026) catches explicit blocker, closeout-not-done and
 // inconclusive phrasing, but a supervisor can reword leftover scope as a finished handoff ("not touched this round,
@@ -192,7 +193,7 @@ func (s *Service) acceptGuardUncoveredScopes(ctx context.Context, t Todo, note, 
 	return uncovered
 }
 
-// acceptScopeGuardRefusal formats the refusal error naming the uncovered scope(s) and the three valid exits.
+// acceptScopeGuardRefusal formats the refusal error naming the uncovered scope(s) and the valid exits.
 func acceptScopeGuardRefusal(uncovered []string) string {
 	shown := uncovered
 	extra := 0
@@ -209,7 +210,6 @@ func acceptScopeGuardRefusal(uncovered []string) string {
 	}
 	return fmt.Sprintf("bare accepted refused: brief scope not covered (%s). "+
 		"Re-review with verdict needs_user (why_owner, reason, recommend, options, cost_of_waiting), "+
-		"or accepted with user_check: true (the owner verifies before it leaves Needs you), "+
 		"or hand out the uncovered scope as a linked follow-up to-do (part_of / after) and then accept. "+
 		"A question asked only in chat text never reaches Needs you.", list)
 }

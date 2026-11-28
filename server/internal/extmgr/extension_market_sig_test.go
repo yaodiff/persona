@@ -107,7 +107,7 @@ func TestOfficialCatalogCachedEnvelopeAndUnknownPin(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			rec := extension.MarketRecord{ID: "cached", Spec: "github:example/plugins", SigningKey: c.pin, Index: c.raw, FetchedAt: &now, AddedAt: now}
-			out, ix, err := signedIndex(rec, &extension.Fetched{Raw: c.raw}, now)
+			out, ix, err := signedIndex(rec, &extension.Fetched{Raw: c.raw}, now, 0)
 			if (err == nil) != c.valid || (ix != nil) != c.valid {
 				t.Fatalf("cache policy: %v", err)
 			}

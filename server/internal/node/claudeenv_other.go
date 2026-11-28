@@ -30,3 +30,19 @@ func readPaneEnv(pid int) map[string]string {
 	}
 	return pickedEnv(string(env))
 }
+
+// procEnvBytes is pid's environment as it was started, as readPaneEnv reads it: NUL-separated on Linux, the ps -E line
+// on macOS; nil when it cannot be read.
+func procEnvBytes(pid int) []byte {
+	if pid <= 0 {
+		return nil
+	}
+	if runtime.GOOS == "linux" {
+		env, _ := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/environ")
+		return env
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	env, _ := exec.CommandContext(ctx, "ps", "-E", "-ww", "-o", "command=", "-p", strconv.Itoa(pid)).Output()
+	return env
+}

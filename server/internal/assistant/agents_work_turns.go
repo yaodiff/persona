@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/closeout"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/lazyre"
@@ -46,6 +47,40 @@ func (s *Service) retireTodoWork(keys ...[2]string) {
 		s.publishSoon()
 		s.bindRetiredTurn(k, now)
 	}
+}
+
+// retireDetachedRetry takes down a model retry or a legacy retry decision. The caller holds the todo write lock,
+// so the last open link cannot be replaced between the ownership check and retirement.
+func (s *Service) retireDetachedRetry(k [2]string, now time.Time) (*db.SessionWork, string) {
+	s.work.mu.Lock()
+	defer s.work.mu.Unlock()
+	s.work.init()
+	retired := db.SessionWork{MachineID: k[0], SessionID: k[1]}
+	var hiddenCard string
+	if current := s.work.entries[k]; current != nil {
+		retired = *current
+		switch {
+		case current.Work.On == proto.WaitTransient,
+			current.Work.On == proto.WaitUser && current.Retries > 0 && current.Work.ResetsAt == nil:
+			if _, out := s.work.cards[current.InteractionID]; !out {
+				hiddenCard = current.InteractionID // the snapshot ends visible cards; end a still-hidden card in its history
+			}
+			delete(s.work.cards, current.InteractionID)
+			delete(s.work.gone, current.InteractionID)
+			retired.Work = proto.WorkState{TurnAt: current.TurnAt}
+			retired.WakeAt, retired.InteractionID, retired.Retries = nil, "", 0
+		case current.WakeAt != nil || current.InteractionID != "" || current.Work.RetiredAt != nil:
+			return nil, ""
+		}
+	}
+	if s.work.triaging[k] {
+		s.work.generation[k]++
+	}
+	retired.Work.RetiredAt, retired.Work.RetiredTurnAt = &now, nil
+	retired.UpdatedAt = now
+	saved := retired
+	s.work.entries[k] = &saved
+	return &retired, hiddenCard
 }
 
 // bindRetiredTurn attaches the node's own stopped-turn timestamp to a durable
@@ -89,11 +124,11 @@ func (s *Service) workStartedObserved(ctx context.Context, machine, sid string, 
 		s.work.generation[k]++
 	}
 	e, ok := s.work.entries[k]
-	if !ok || e.Work.Phase == proto.WorkWorking && e.Work.RetiredAt == nil {
+	if !ok || e.Work.Phase == proto.WorkWorking && e.Work.RetiredAt == nil || e.Work.RetiredAt != nil && !newTurn {
 		s.work.mu.Unlock()
 		return
 	}
-	e.Work.RetiredAt, e.Work.RetiredTurnAt = nil, nil // a later turn can work on a reopened task
+	e.Work.RetiredAt, e.Work.RetiredTurnAt = nil, nil // a confirmed new turn can work again
 	by := "user"
 	if now.Sub(s.work.sent[k]) < workSentWindow {
 		by = "hub"
@@ -252,9 +287,9 @@ func (s *Service) triageTurn(ctx context.Context, v *workView, machine string, c
 	s.work.mu.Lock()
 	s.work.init()
 	prev, had := s.work.entries[k]
-	if had && prev.Work.RetiredAt != nil && (prev.Work.RetiredTurnAt == nil || sameTurn(c, *prev.Work.RetiredTurnAt) || !c.UpdatedAt.After(*prev.Work.RetiredTurnAt)) {
+	if had && workRetiredForTurn(prev.Work, c.UpdatedAt) {
 		s.work.mu.Unlock()
-		return // the todo ended before this turn settled, or its identity is unknown
+		return // this turn was retired, or the retired turn's identity is unknown
 	}
 	if s.work.triaging[k] {
 		s.work.mu.Unlock()
@@ -311,6 +346,26 @@ func (s *Service) triageTurn(ctx context.Context, v *workView, machine string, c
 	if c.Assistant && (w == nil || w.On != proto.WaitTransient && !(quotaWait && w.On == proto.WaitExternal)) {
 		return // Assistant participates only in mechanical model recovery and quota waits.
 	}
+	personWait := false // its closeout says it stopped on a person, background work or not
+	if err := s.ensureTodosLoaded(ctx); err != nil {
+		return
+	}
+	task, _ := s.openTodoOfAgent(machine, c.SessionID)
+	runtimeWork := false
+	if task.hasTaskRuntime() && (w == nil || backgroundRule(c) && task.WaitState != nil) {
+		w, by, runtimeWork = taskRuntimeWork(task, s.lang(ctx)), "rule", true
+		personWait = w.Phase == proto.WorkBlocked
+	} else if w != nil && backgroundRule(c) {
+		// A closeout that names a person takes precedence over background work and /loop (#14899). Read it with
+		// triage enabled. triageTurnModel reuses the read so the task can settle on the reported wait.
+		_, reply := s.triageRead(ctx, machine, c)
+		if reply == "" {
+			reply = turnReplyText(c.LastText, false) // as triageTurnModel reads it
+		}
+		if co, _, ok := closeout.Parse(reply); ok && closeoutWaitsOnPerson(co) {
+			w, by, personWait = nil, "", true
+		}
+	}
 	if w == nil {
 		mctx, cancel := context.WithTimeout(ctx, 90*time.Second)
 		defer cancel()
@@ -339,8 +394,11 @@ func (s *Service) triageTurn(ctx context.Context, v *workView, machine string, c
 		s.workEvent(machine, c.SessionID, "failed", map[string]any{"error": "todo state unavailable"})
 		return // leave the turn retryable when its task state is unknown
 	}
-	if !closed {
+	if !closed && !runtimeWork {
 		s.actOn(ctx, v, machine, c, &e)
+	}
+	if runtimeWork {
+		s.workWould(k, "")
 	}
 	// Validate the stored conclusion even when no action was possible, e.g.
 	// when the only source for a Codex App thread was read-only history.
@@ -351,11 +409,15 @@ func (s *Service) triageTurn(ctx context.Context, v *workView, machine string, c
 	case answersAsk && continues(e.Work):
 		// Cut off before it answered: the turn that goes on from here is the answer.
 		e.Work.CloseoutAsk, answersAsk = closeoutAskSent, false
-	case !answersAsk && !closed:
+	case !answersAsk && !closed && !task.hasTaskRuntime():
 		s.planCloseoutAsk(ctx, machine, c, &e)
 	}
+	if runtimeWork && !closed && c.ReadOnlyReason == "" && s.triageSwitches(ctx).Wake && e.Wakes < maxWakes(s.triageCfg(ctx)) {
+		now := time.Now()
+		startRuntimeCIWatch(task, &e, now, now.Add(wakeAfter(0, e.Wakes)).UTC())
+	}
 	if e.WakeAt != nil && e.Work.On == proto.WaitExternal && e.Work.ResetsAt == nil {
-		if ciWaitIntent(&e.Work) || e.Work.On == proto.WaitTransient {
+		if !task.hasTaskRuntime() && ciWaitIntent(&e.Work) {
 			ask, reply, _ := s.lastTurnOf(ctx, machine, c.SessionID)
 			startCIWatch(c, &e, time.Now(), ask, reply)
 		}
@@ -384,6 +446,11 @@ func (s *Service) triageTurn(ctx context.Context, v *workView, machine string, c
 		}
 	} else {
 		s.putWork(ctx, e)
+	}
+	if personWait && backgroundRunning(c) {
+		// Its turn end was put off for the background work (taskAgentSettled): settle it now that its state says why
+		// it stopped, so its task gets its receipt, judgment and supervision signal.
+		go s.taskTurnSettled(context.WithoutCancel(ctx), machine, c.SessionID)
 	}
 	if e.Work.Phase == proto.WorkDone {
 		s.work.mu.Lock()
@@ -547,6 +614,12 @@ func limitClock(reset, now time.Time, loc *time.Location) string {
 		return r.Format("15:04")
 	}
 	return r.Format("01-02 15:04")
+}
+
+// backgroundRule: triageRules' state for c, when it gave one, is its background work's or its /loop's: no turn error
+// came before those (triageRules).
+func backgroundRule(c proto.Session) bool {
+	return c.TurnError == "" && (runningInBackground(c) > 0 || c.Loop != nil)
 }
 
 func runningInBackground(c proto.Session) int {

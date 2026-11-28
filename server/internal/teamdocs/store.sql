@@ -28,3 +28,7 @@ CREATE TABLE IF NOT EXISTS teamdocs_revisions (
 
 CREATE INDEX IF NOT EXISTS teamdocs_approved_revision
     ON teamdocs_revisions (project, document, revision DESC) WHERE approved_by IS NOT NULL;
+
+-- Use the same bytewise order for document cursors across database locales.
+CREATE INDEX IF NOT EXISTS teamdocs_document_catalog
+    ON teamdocs_heads (project, document COLLATE "C");

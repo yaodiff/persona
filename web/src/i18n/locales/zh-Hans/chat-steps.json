@@ -1,6 +1,6 @@
 {
   "copy": "复制",
   "view_output": "查看输出",
-  "jump_to_call": "跳到发起的这一步",
+  "jump_to_call": "跳转到发起此操作的步骤",
   "view_image": "查看图片"
 }

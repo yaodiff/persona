@@ -1,12 +1,18 @@
 package assistantwire
 
-import "time"
+import (
+	"time"
+
+	"github.com/nwverse/persona/server/internal/buswire"
+)
 
 // MethodAssistantMemory lists the assistant's memory entries for an extension granted assistant.memory.read
 // (docs/extensions/extensions.md "Assistant memory"): the hub checks the grant and forwards it as it is; the manager,
 // which reaches the assistant's computer, answers it. Read-only, and only the assistant's own space: the health
 // space's memory is never listed.
 const MethodAssistantMemory = "assistant.memory"
+
+var AssistantMemoryMethod = buswire.Method[AssistantMemoryParams, AssistantMemoryResult]{Name: MethodAssistantMemory}
 
 // Bounds of assistant.memory: each entry's content is cut at AssistantMemoryEntryMax bytes, and contents stop being
 // included once a page holds AssistantMemoryTotalMax bytes of them (the entries after it come without content, with

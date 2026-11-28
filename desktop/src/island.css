@@ -9,12 +9,33 @@
   --ink: #ffffff;
   --ink-2: rgb(255 255 255 / 0.62);
   --row-hover: rgb(255 255 255 / 0.1);
+  --ease-out-strong: cubic-bezier(0.23, 1, 0.32, 1);
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; background: transparent; overflow: hidden; user-select: none; -webkit-user-select: none; }
 .symbols { position: absolute; width: 0; height: 0; }
-#island { position: absolute; inset: 0 0 auto 0; height: 100%; background: #000; color: var(--ink); border-radius: 0 0 0.8rem 0.8rem; cursor: default; }
-#island[data-open="yes"] { border-radius: 0 0 1.2rem 1.2rem; }
+@keyframes row-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: none; }
+}
+#island {
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 100%;
+  background: #050506;
+  color: var(--ink);
+  border-radius: 0 0 0.8rem 0.8rem;
+  /* A hairline down the sides and along the bottom, none along the top: that edge is the top of the screen, as the
+     notch's is (#16301). */
+  --edge: rgb(255 255 255 / 0.07);
+  box-shadow: inset 1px 0 var(--edge), inset -1px 0 var(--edge), inset 0 -1px var(--edge);
+  transition: border-radius 180ms var(--ease-out-strong), box-shadow 180ms ease;
+  cursor: default;
+}
+#island[data-open="yes"] {
+  border-radius: 0 0 1.2rem 1.2rem;
+  --edge: rgb(255 255 255 / 0.09);
+}
 .bar { display: flex; align-items: center; height: var(--bar, 2rem); padding: 0 0.9rem; }
 .notch { flex: 1 1 auto; }
 .side { display: inline-flex; align-items: center; gap: 0.3rem; font-size: 0.82rem; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
@@ -23,10 +44,33 @@ html, body { margin: 0; height: 100%; background: transparent; overflow: hidden;
 .side[data-state="unread"], .row[data-state="unread"] { --tone: var(--unread); }
 .mark { width: 0.95rem; height: 0.95rem; flex: none; fill: var(--tone); }
 .side .count { color: var(--tone); }
-.list { display: flex; flex-direction: column; padding: 0.25rem 0.45rem 0.625rem; }
-.row { display: flex; align-items: center; gap: 0.6rem; width: 100%; height: 3rem; flex: none; padding: 0.35rem 0.55rem; border: 0; border-radius: 0.7rem; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+/* Its sides and a row's 0.55rem make the bar's 0.9rem: the rows' symbols sit under the counts' (#16301). */
+.list { display: flex; flex-direction: column; padding: 0.25rem 0.35rem 0.625rem; }
+.row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  width: 100%;
+  height: 3rem;
+  flex: none;
+  padding: 0.35rem 0.55rem;
+  border: 0;
+  border-radius: 0.7rem;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  animation: row-in 180ms var(--ease-out-strong) both;
+  transition: background-color 150ms ease, transform 150ms var(--ease-out-strong);
+}
 .row:hover, .row:focus-visible { background: var(--row-hover); outline: none; }
+.row:active { transform: scale(0.985); }
 .words { display: flex; flex-direction: column; min-width: 0; gap: 0.1rem; }
 .title { font-size: 0.82rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .meta { font-size: 0.74rem; color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .label { color: var(--tone); }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 1ms !important; transition-duration: 1ms !important; }
+  .row:active { transform: none; }
+}

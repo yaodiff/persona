@@ -68,7 +68,7 @@ func TestSearchReindexFindsTheBuiltinManagersDatabase(t *testing.T) {
 // index (a manager from before chat search) is refused and left as it is.
 func TestSearchReindexEmptiesTheIndex(t *testing.T) {
 	ctx := context.Background()
-	url := newDatabase(t)
+	url := newMigratedDatabase(t, db.ManagerSet)
 	d, err := db.Open(ctx, url, db.ManagerSet)
 	if err != nil {
 		t.Fatal(err)

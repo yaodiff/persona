@@ -90,7 +90,7 @@ func TestMCPSearchAllAccountsPaging(t *testing.T) {
 	res := s.Call(context.Background(), ToolSearch, json.RawMessage(`{"limit":2}`), nil)
 	out := resultText(t, res)
 	if res.IsError || !strings.Contains(out, "Three") || !strings.Contains(out, "search one account with account_id") ||
-		strings.Contains(out, "before_uid=") {
+		strings.Contains(out, "before_uid=") || strings.Contains(out, "uid_validity=") {
 		t.Fatalf("all inboxes = %q", out)
 	}
 }

@@ -65,9 +65,11 @@ Tools for the **assistant** (via the hub); descriptions live in `prompts/mcp/bro
 - `browser_run {machine, script, timeout_ms?}`: run a piece of ego JS on that Mac.
   - The node wraps the script before handing it to `ego-browser nodejs` (via stdin):
     - first `taskSpace("persona-<first 8 chars of the chat id>")`, so the same chat always lands in the same task space and refs stay valid across calls;
+    - downloads on the initial tab and tabs opened with `task.newPage()` go to Persona's browser downloads directory (`~/.persona/browser-downloads`);
     - then the user's script, and finally a JSON result;
     - on a throw, the output so far is returned together with the error, so nothing is lost to ego's "throw and lose the output" behavior.
 - `browser_look {machine, page?, full?}`: snapshot text of the current tab, plus a screenshot (`page.screenshot` writes a temp file, the node reads it back and converts to JPEG). Images are handled as with Cua: passed to the model as an image block, and the App draws it in the tool details.
+- `browser_fetch_download {machine, filename}`: retrieve a completed download by its exact filename. Persona returns its path or copies the file to the connected personal computer running the conversation.
 - **Write operations** (`browser_run`): allowed by default; the hub log only records the script's byte count and duration. With the plugin's "confirm on the phone before acting" on, an approval card pops up first.
 - **Cookies are not exposed as a tool**: the model never sees raw cookies and cannot import or export them.
 

@@ -55,8 +55,8 @@ describe("sessionLinkRoute", () => {
 
 describe("sessionLoadError", () => {
   it("says a missing conversation in words", () => {
-    expect(sessionLoadError("transcript for session cafe0001 not found")).toBe("找不到这个会话：可能已经删除，或链接里的 id 不完整");
-    expect(sessionLoadError("node box: subagent a1b2 not found")).toBe("找不到这个会话：可能已经删除，或链接里的 id 不完整");
+    expect(sessionLoadError("transcript for session cafe0001 not found")).toBe("找不到该会话，可能已被删除或链接中的 ID 不完整。");
+    expect(sessionLoadError("node box: subagent a1b2 not found")).toBe("找不到该会话，可能已被删除或链接中的 ID 不完整。");
   });
 
   it("leaves other errors as they are", () => {

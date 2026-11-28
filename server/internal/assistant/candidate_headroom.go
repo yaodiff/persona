@@ -72,11 +72,20 @@ func usageWindowMinutes(w proto.UsageWindow) int {
 }
 
 // windowHeadroom is one window's headroom in percentage points and when it turns positive again; ok is false when the
-// window cannot be judged (no length, no reset time, or a reset time that has passed or lies beyond one window).
+// window cannot be judged (no length, no reset time on a window in use, or a reset time that has passed or lies beyond
+// one window). A window with nothing used and no reset time has not started its clock (Antigravity's per-model pools
+// report no reset until their first use, #17011): it is judged as one that has just reset, its start share.
 func windowHeadroom(w proto.UsageWindow, now time.Time) (pp float64, recovers time.Time, ok bool) {
 	minutes := usageWindowMinutes(w)
-	if minutes <= 0 || w.ResetsAt == nil {
+	if minutes <= 0 {
 		return 0, time.Time{}, false
+	}
+	if w.ResetsAt == nil {
+		if w.UsedPercent != 0 {
+			return 0, time.Time{}, false
+		}
+		p := paceFor(minutes)
+		return p.start * (1 - p.reserve) * 100, now, true
 	}
 	length := time.Duration(minutes) * time.Minute
 	left := w.ResetsAt.Sub(now)
@@ -242,16 +251,6 @@ func accountHeadroom(a proto.UsageAccount, model string, now time.Time) (float64
 	return least, recovers, found
 }
 
-// headroomProvider is the usage provider a launcher's quota is read under (docs/assistant/model-profiles.md "Choosing a
-// candidate"): a launcher in an admission group with a gateway quota_pool reads that pool's provider; any other the
-// agent it runs (launcherProvider: claude, codex, agy → antigravity). "" when unknown: the headroom is unknown.
-func (s *Service) headroomProvider(ctx context.Context, machine, launcher string) string {
-	if pool, ok := s.gatewayPool(ctx, launcher); ok {
-		return canonicalHeadroomProvider(pool.Provider)
-	}
-	return canonicalHeadroomProvider(s.launcherProvider(ctx, machine, launcher))
-}
-
 // usageAccounts is the merged usage accounts; nil without a fleet.
 func (s *Service) usageAccounts(ctx context.Context) []proto.UsageAccount {
 	if s.devs == nil {
@@ -260,10 +259,126 @@ func (s *Service) usageAccounts(ctx context.Context) []proto.UsageAccount {
 	return s.devs.UsageAccounts(ctx)
 }
 
-// candidateHeadroomAt is the headroom of launcher + model on machine, given the accounts read once for a dispatch.
+// candidateHeadroomAt is the headroom of launcher + model on machine, given the accounts read once for a dispatch. The
+// usage provider is the launcher's (docs/assistant/model-profiles.md "Choosing a candidate"): a launcher in an
+// admission group with a gateway quota_pool reads that pool's provider, else an alias of a channel that declares its
+// quota source (execution_channels.go) the channel's, the model counted under the pool the channel names for it; any
+// other the agent it runs (launcherProvider: claude, codex, agy → antigravity); "" is unknown.
+//
+// A launcher with a gateway quota_pool counts only that gateway's accounts (poolAccounts), never a computer's own
+// subscription of the same provider (#17011). When the usage windows say nothing fresh about the provider (a gateway
+// lists accounts whose numbers carry no time window, so they never become usage rows), the account-pool view that
+// already decides detours answers instead: the pool's inventory for a quota_pool launcher, the provider's capacity
+// otherwise (capacityHeadroom).
 func (s *Service) candidateHeadroomAt(ctx context.Context, accounts []proto.UsageAccount, machine, launcher, model string, now time.Time) candidateHeadroom {
-	if len(accounts) == 0 {
-		return candidateHeadroom{} // nothing read: unknown, without looking up the provider
+	pool, pooled := s.gatewayPool(ctx, launcher)
+	provider := canonicalHeadroomProvider(pool.Provider)
+	if !pooled {
+		provider = canonicalHeadroomProvider(s.launcherProvider(ctx, machine, launcher))
 	}
-	return headroomOf(accounts, s.headroomProvider(ctx, machine, launcher), model, now)
+	if provider == "" {
+		return candidateHeadroom{}
+	}
+	if pooled {
+		accounts = poolAccounts(accounts, pool.Source)
+		model = s.channelPoolModel(ctx, launcher, model)
+	}
+	h := headroomOf(accounts, provider, model, now)
+	if h.Known || h.Stale || s.devs == nil {
+		return h
+	}
+	if pooled {
+		return inventoryHeadroom(s.devs.UsageGatewayAccounts(), pool, now)
+	}
+	return capacityHeadroom(s.capacitySnapshot(ctx), provider)
+}
+
+// poolAccounts keeps the usage rows gateway source reported: their gateway reference or origin is scoped by the
+// source's id ("<source>:<account>", "<source>#<n>").
+func poolAccounts(accounts []proto.UsageAccount, source string) []proto.UsageAccount {
+	var out []proto.UsageAccount
+	for _, a := range accounts {
+		if strings.HasPrefix(a.Ref, source+":") || strings.HasPrefix(a.Origin, source+":") || strings.HasPrefix(a.Origin, source+"#") {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
+// noReadingHeadroom is what one schedulable account with no window reading counts: a window that has just reset, the
+// short window's start share (0.17).
+var noReadingHeadroom = paceShort.start * (1 - paceShort.reserve)
+
+// inventoryHeadroom is a gateway pool's headroom from its account list when its accounts carry no window numbers.
+// Pure. Each fresh, enabled account of the pool's provider counts noReadingHeadroom when the gateway can schedule it
+// now, and nothing when it cannot (cooling down, exhausted), recovering at its cooldown end or nearest window reset.
+// Unknown when the pool has no such account or every one is stale.
+func inventoryHeadroom(inv proto.GatewayAccounts, pool GatewayQuotaPool, now time.Time) candidateHeadroom {
+	var out candidateHeadroom
+	matched, stale := 0, 0
+	var recovers *time.Time
+	for _, a := range inv.Accounts {
+		if a.Source != pool.Source || a.Provider != pool.Provider || a.Status == "disabled" {
+			continue
+		}
+		matched++
+		if a.Stale {
+			stale++
+			continue
+		}
+		out.Known = true
+		out.Accounts++
+		cooling := a.CooldownUntil != nil && a.CooldownUntil.After(now)
+		if a.Schedulable && !cooling {
+			out.H += noReadingHeadroom
+			continue
+		}
+		at := inventoryRecovery(a, cooling, now)
+		if at != nil && (recovers == nil || at.Before(*recovers)) {
+			recovers = at
+		}
+	}
+	out.Stale = matched > 0 && stale == matched
+	out.Percent = out.H * 100
+	if out.Known && out.H <= 0 {
+		out.RecoversAt = recovers
+	}
+	return out
+}
+
+// inventoryRecovery is when an account the gateway cannot schedule may take work again: its cooldown end, else its
+// nearest future window reset; nil when no time is known.
+func inventoryRecovery(a proto.GatewayAccount, cooling bool, now time.Time) *time.Time {
+	if cooling {
+		t := *a.CooldownUntil
+		return &t
+	}
+	var soonest *time.Time
+	for _, w := range a.Windows {
+		if w.ResetsAt != nil && w.ResetsAt.After(now) && (soonest == nil || w.ResetsAt.Before(*soonest)) {
+			t := *w.ResetsAt
+			soonest = &t
+		}
+	}
+	return soonest
+}
+
+// capacityHeadroom is a provider's headroom from the account-pool capacity view when no window says more. Pure.
+// Fresh and saturated: known, none, recovering at the nearest recovery. Fresh with schedulable accounts: each counts
+// noReadingHeadroom. Stale or not known: unknown.
+func capacityHeadroom(snap proto.CapacitySnapshot, provider string) candidateHeadroom {
+	p, ok := snap.Provider(provider)
+	if !ok || p.Accounts == 0 {
+		return candidateHeadroom{}
+	}
+	if p.Stale {
+		return candidateHeadroom{Stale: true}
+	}
+	out := candidateHeadroom{Known: true, Accounts: p.Accounts, H: float64(p.Available) * noReadingHeadroom}
+	out.Percent = out.H * 100
+	if out.H <= 0 && p.EarliestRecovery != nil {
+		t := *p.EarliestRecovery
+		out.RecoversAt = &t
+	}
+	return out
 }

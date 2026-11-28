@@ -27,18 +27,19 @@ const NativeStart=new Function('MeetingHubChoice','meetingAudioNetwork','tr','na
 const settle=()=>new Promise(resolve=>setImmediate(resolve));
 
 function fixture(){
-  const network={wifiOnly:true},started=[],dialogs=[],state={generation:1,scope:'hub/personal',service:'Isolated transcription'};
+  const network={wifiOnly:true},started=[],dialogs=[],toasts=[],state={generation:1,scope:'hub/personal',service:'Isolated transcription',recordingAllowed:true};
   const page=new (NativeStart(MeetingHubChoice,network,tr,{setRecordingEvent(){}}))();
   const owner={profile:{id:'test',manager:'personal',hubId:'hub',baseUrl:'https://fixture.invalid',pin:'synthetic'},
     connected:true,demo:false,features:['meeting_conversation','meeting_live_view','meeting_transcription'],
+    isRecordingModuleAllowed:()=>state.recordingAllowed,
     scope:()=>state.scope,connectionGeneration:()=>state.generation,owns:(g,s)=>g===state.generation && s===state.scope};
   Object.assign(page,{model:owner,recordingScope:()=>state.scope,meetingKind:'meeting',meetingTitle:'Synthetic weekly',
     privateMeeting:false,selectedCalendarEvent:'',roomRole:()=>'off',pageAvailable:true,visible:true,confirmVersion:0,selectedAudioOwner:'',
     meetingNetworkReady:true,meetingSpeech:{offered:true,ready:true,mode:'hub',extensionRef:'isolated/asr',serviceName:()=>state.service,retentionDays:14},
     options:()=>({selectedInput:-1}),defaultRecordingTitle:()=>'Synthetic draft',
-    getUIContext:()=>({showAlertDialog:x=>dialogs.push(x)}),loadRecordings:async()=>true,
+    getUIContext:()=>({showAlertDialog:x=>dialogs.push(x),getPromptAction:()=>({showToast:x=>toasts.push(x)})}),loadRecordings:async()=>true,
     recording:{canStart:()=>true,start:async(...args)=>{started.push(args);return true;}}});
-  return {page,state,network,started,dialogs,owner};
+  return {page,state,network,started,dialogs,toasts,owner};
 }
 
 test('both capture buttons use the same single-meeting admission and selecting a cloud service opens no recorder',async()=>{
@@ -56,6 +57,17 @@ test('both capture buttons use the same single-meeting admission and selecting a
   assert.equal(choice.serviceRef,'isolated/asr');assert.equal(choice.serviceName,'Isolated transcription');assert.equal(choice.wifiOnly,true);
   assert.equal(page.pickedHub(),false,'the same choice may not carry into another meeting');
   page.requestRecordingStart();await settle();assert.equal(started.at(-1)[4],undefined);assert.equal(dialogs.length,2);
+});
+
+test('requestRecordingStart refuses cleanly when the Hub recording module is off (#15978)',async()=>{
+  const {page,state,started,dialogs,toasts}=fixture();
+  state.recordingAllowed=false;
+  page.requestRecordingStart();
+  await settle();
+  assert.deepEqual(started,[]);
+  assert.deepEqual(dialogs,[]);
+  assert.equal(toasts.length,1);
+  assert.equal(toasts[0].message,tr('xiaoyi_recording_module_off'));
 });
 
 test('an old, unready, offline, unsupported or uninitialized route and a note capture remain on this device',async()=>{

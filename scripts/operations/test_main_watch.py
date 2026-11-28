@@ -227,6 +227,21 @@ class MainWatchTests(unittest.TestCase):
         subprocess.run(["git", "-C", str(self.checkout), "commit", "-qm", "initial"], check=True)
         return subprocess.check_output(["git", "-C", str(self.checkout), "rev-parse", "HEAD"], text=True).strip()
 
+    def test_fetch_updates_the_baseline_ref_to_the_exact_main_commit(self):
+        head = self.init_repository()
+        origin = self.root / "origin.git"
+        subprocess.run(["git", "-C", str(self.checkout), "branch", "-M", "main"], check=True)
+        subprocess.run(["git", "clone", "-q", "--bare", "--branch", "main", str(self.checkout), str(origin)], check=True)
+        subprocess.run(["git", "-C", str(self.checkout), "remote", "add", "origin", str(origin)], check=True)
+        stale = subprocess.check_output(
+            ["git", "-C", str(self.checkout), "commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", "stale baseline"],
+            text=True).strip()
+        subprocess.run(["git", "-C", str(self.checkout), "update-ref", "refs/remotes/origin/main", stale], check=True)
+
+        self.assertEqual(self.watch.fetch(), head)
+        current = subprocess.check_output(["git", "-C", str(self.checkout), "rev-parse", "origin/main"], text=True).strip()
+        self.assertEqual(current, head)
+
     def test_real_repository_repair_verifies_and_commits_before_publication(self):
         head = self.init_repository()
 

@@ -2,6 +2,7 @@
 // Review of E13 (a chat / mail event's original starts collapsed): the expansion belongs to the item on the history
 // entry, so two items never share it; the item's manager is part of the identity; and either control opens the body
 // while only the header's one closes it again.
+import { installedMailbox, preloadMailbox } from "../../test/installed-mailbox";
 import { act, StrictMode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -131,7 +132,8 @@ describe("the original's expansion belongs to one item", () => {
     expect(originalMounted()).toBe(true);
   });
 
-  it("a mail chain entry opens its uid from the collapsed state, reading only that message", async () => {
+  it.skipIf(!installedMailbox)("a mail chain entry opens its uid from the collapsed state, reading only that message", async () => {
+    await preloadMailbox("Body");
     const mail: InboxItem = {
       id: "mail:a1:1", source: "mail", kind: "mail", account: "a1", account_name: "Mail", title: "A thread", preview: "p", count: 1,
       updated_at: "2026-11-09T04:00:00Z", tier: "action", version: "v", mail: { account_id: "a1", mailbox: "INBOX", uids: [88, 89] },

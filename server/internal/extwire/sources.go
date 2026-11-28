@@ -1,6 +1,10 @@
 package extwire
 
-import "encoding/json"
+import (
+	"encoding/json"
+
+	"github.com/nwverse/persona/server/internal/buswire"
+)
 
 // Moving a source (a mail account) from one manager to another (docs/assistant/managers.md): each manager has its own database
 // and its own secret.key, so the source's sealed secrets cannot be copied as they are. The hub asks the old manager
@@ -21,6 +25,12 @@ const (
 	CodeNoSource     = "no_source"
 	CodeSourceExists = "source_exists"
 	CodeSourceKind   = "source_kind"
+)
+
+var (
+	SourceExportMethod  = buswire.Method[SourceRef, SourceBundle]{Name: MethodSourceExport}
+	SourceImportMethod  = buswire.Method[SourceBundle, SourceRef]{Name: MethodSourceImport}
+	SourceReleaseMethod = buswire.Method[SourceRef, buswire.None]{Name: MethodSourceRelease}
 )
 
 // SourceRef names a source: "mail:<account id>" (the only kind so far).

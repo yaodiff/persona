@@ -1,3 +1,4 @@
 {
-  "places": "所在的目录"
+  "places": "检出目录",
+  "new_agent_in": "在 {name} 中新建 Agent"
 }

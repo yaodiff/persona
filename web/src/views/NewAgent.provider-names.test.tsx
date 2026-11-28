@@ -112,7 +112,7 @@ describe("New agent: provider display names (#5029)", () => {
       ["team-relay", "Team relay"],
     ]);
     // the startup ID is secondary text (#5029): the rail cell's tooltip, small and monospace in the group's header
-    expect(cells.map((c) => c.title)).toEqual(["我的中转 站 (relay-example-com)", "cc_glm", "Team relay (team-relay): 这台电脑的终端里用不了"]);
+    expect(cells.map((c) => c.title)).toEqual(["我的中转 站 (relay-example-com)", "cc_glm", "Team relay (team-relay): 无法在该电脑的终端中使用"]);
     expect(group("我的中转 站")).toBeDefined();
     expect(group("cc_glm")).toBeDefined();
     expect(group("relay-example-com")).toBeUndefined();
@@ -133,8 +133,8 @@ describe("New agent: provider display names (#5029)", () => {
     await flush();
     await openPanel();
     const blocked = group("Team relay")!;
-    expect(blocked.textContent).toContain("这台电脑的终端里用不了");
-    act(() => [...blocked.querySelectorAll("button")].find((b) => b.textContent === "怎么修好")!.click());
+    expect(blocked.textContent).toContain("无法在该电脑的终端中使用");
+    act(() => [...blocked.querySelectorAll("button")].find((b) => b.textContent === "如何修复")!.click());
     const help = q('[data-testid="launcher-blocked-help"]')!;
     expect(help.textContent).toContain("Team relay");
     expect(help.textContent).toContain("team-relay");
@@ -146,7 +146,7 @@ describe("New agent: provider display names (#5029)", () => {
     const [title, id] = [span("Team relay"), span("team-relay")];
     expect([title.textContent, title.className.includes("font-mono")]).toEqual(["Team relay", false]);
     expect([id.textContent, id.className.includes("font-mono")]).toEqual(["team-relay", true]);
-    expect(note.querySelector("button")!.getAttribute("aria-label")).toBe("怎么修好 Team relay");
+    expect(note.querySelector("button")!.getAttribute("aria-label")).toBe("如何修复 Team relay");
   });
 
   // The preset chips' "Title (id)" tooltip is gone: a preset row says its launcher by its title (as every panel row

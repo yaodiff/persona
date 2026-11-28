@@ -23,6 +23,7 @@ import (
 	"github.com/nwverse/persona/server/internal/moduleswitch"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/channel"
 	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/connector/proc"
@@ -33,6 +34,7 @@ import (
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/lazyre"
+	"github.com/nwverse/persona/server/internal/modapi"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
@@ -104,6 +106,9 @@ type ExtensionView struct {
 	// Attached: an extension running on its own that the manager reaches on its sockets (a remote: install), and how it
 	// is connected.
 	Attached *ExtensionAttached `json:"attached,omitempty"`
+	// MarketSignature: how an extension installed from a market was verified (extension_market_keys.go).
+	// State: official | signed | key_removed | unsigned | market_invalid.
+	MarketSignature *MarketSignatureView `json:"market_signature,omitempty"`
 }
 
 // ExtensionAttached is how an attached extension is connected (docs/extensions/extensions.md "Attached extensions").
@@ -138,6 +143,7 @@ var extensionIDPattern = lazyre.New(`^[a-z0-9][a-z0-9_-]{0,31}$`)
 
 // hubExtension is one plugin as the hub runs it now.
 type hubExtension struct {
+	recordUpdatedAt time.Time
 	contributionsMu sync.Mutex
 	contributions   map[string][]extension.ExportedContribution
 
@@ -193,6 +199,8 @@ type extensions struct {
 	// switchMu puts the user's Enabled switches one after another (switchExtension, enableChannel): a pack's switch
 	// reads and writes its record of members (#1830). Taken before any registry operation, never inside one.
 	switchMu sync.Mutex
+	// Keeps concurrent config reconciliation and provider cutover from starting two speech processes.
+	speechApplyMu sync.Mutex
 
 	h    *Manager
 	ctx  context.Context
@@ -224,10 +232,11 @@ type extensions struct {
 	dev devTaps
 	// badges are the plugins' badges on their nav_pages' entries ("<plugin>/<ui>" → extension.Badge; extension_ui.go).
 	badges sync.Map
-	// events and todoEvents keep slow extension programs out of the assistant bus read loop: the knowledge base's and the
-	// todos' queues, apart so that a flood of one does not push out the other's.
+	// events, todoEvents and larkEvents keep slow extension programs out of the assistant bus read loop and sync runs:
+	// separate queues so a flood of one does not push out another's.
 	events     extensionEvents
 	todoEvents extensionEvents
+	larkEvents extensionEvents
 	// filtersSent are the agent filters last handed to the nodes, as JSON (agent_filters.go); nil before the first.
 	filtersSent []byte
 	// invalid are the extensions' ui.invalidate waiting to be told to the apps (extension_ui.go), at most one a second.
@@ -353,7 +362,7 @@ func (ps *extensions) list() []ExtensionView {
 	return out
 }
 
-func (ps *extensions) view(ctx context.Context, p *extension.Extension) ExtensionView {
+func (ps *extensions) summaryView(ctx context.Context, p *extension.Extension) ExtensionView {
 	m := p.Full
 	l := ps.h.contextLang(ctx)
 	v := ExtensionView{ID: p.Record.ID, Name: p.L10n.Name(l, m.Name), Kind: m.Kind(), Version: p.Record.Version, Source: p.Record.Source,
@@ -415,11 +424,6 @@ func (ps *extensions) view(ctx context.Context, p *extension.Extension) Extensio
 		ps.volcView(ctx, p, &v)     // runs, but nothing transcribes or reads aloud without a key (volc_extension.go)
 		ps.imessageView(ctx, p, &v) // no connector until its one Mac is picked (imessage_extension.go)
 	}
-	if ps.h != nil {
-		ps.h.extensionUpgrades().decorate(ctx, &v, p)
-		ps.h.decorateMarketMetadata(ctx, &v, p)
-		ps.h.decorateInstalledLogo(&v, p)
-	}
 	if m.NodeProgram() != nil {
 		v.Nodes = ps.nodes.views(p.Record.ID)
 		// A plugin whose work happens on computers: while the hub runs no process of its own for it (it has none, or
@@ -436,7 +440,18 @@ func (ps *extensions) view(ctx context.Context, p *extension.Extension) Extensio
 			}
 		}
 	}
-	if v.Auth = ps.authView(p, l); v.Auth != nil && ps.h != nil {
+	return v
+}
+
+func (ps *extensions) view(ctx context.Context, p *extension.Extension) ExtensionView {
+	v := ps.summaryView(ctx, p)
+	if ps.h != nil {
+		ps.h.extensionUpgrades().decorate(ctx, &v, p)
+		ps.h.decorateMarketMetadata(ctx, &v, p)
+		v.MarketSignature = ps.h.marketSignatureOf(ctx, p)
+		ps.h.decorateInstalledLogo(&v, p)
+	}
+	if v.Auth = ps.authView(p, ps.h.contextLang(ctx)); v.Auth != nil && ps.h != nil {
 		if line := authWarning(ps.h.contextLang(ctx), v.Auth); line != "" {
 			v.Warnings = append(slices.Clone(v.Warnings), line)
 		}
@@ -477,7 +492,9 @@ func (h *Manager) attachExtensions(ctx context.Context) {
 		h.extensions = newExtensionsWith(h.dataDirOrTemp(), nil, h.logf, h.modules())
 	}
 	ps := h.extensions
+	ps.mu.Lock()
 	ps.h, ps.ctx = h, ctx
+	ps.mu.Unlock()
 	var store extension.Store
 	if s, ok := h.store.(extension.Store); ok {
 		store = s
@@ -492,7 +509,15 @@ func (h *Manager) attachExtensions(ctx context.Context) {
 	reg.PlanCandidates = h.extensionPlanCandidates
 	reg.PlanGuard = h.guardExtensionPlan
 	// The voice extension's key goes with its address (voice_extension.go).
-	reg.BoundSecrets, reg.SecretNeeds = ps.voiceKeyFollowsURL, ps.voiceKeyNeedsURL
+	reg.BoundSecrets = func(p *extension.Extension, old, next json.RawMessage) []string {
+		return append(ps.voiceKeyFollowsURL(p, old, next), directUsageKeysToClear(p, old, next)...)
+	}
+	reg.SecretNeeds = func(p *extension.Extension, name string, config json.RawMessage) error {
+		if err := ps.voiceKeyNeedsURL(p, name, config); err != nil {
+			return err
+		}
+		return directUsageKeyNeedsURL(p, name, config)
+	}
 	reg.SettingsCheck = ps.settingsCheck // settings_check (extension_settings_check.go)
 	var own []string
 	for _, c := range h.connectors.All() {
@@ -521,6 +546,11 @@ func (h *Manager) attachExtensions(ctx context.Context) {
 	}
 	h.addVoiceExtension(ctx, reg, store) // `personad voice`, taking hub.json's entry of it over (voice_extension.go)
 	h.addVolcExtension(ctx, reg, store)  // `personad volc`, off until the owner turns it on (volc_extension.go)
+	// The rows of a module an installed extension may supply wait unread while nothing may serve them: a built-in's
+	// row on a build without it, or any row of a module the modules setting switched off (module_providers.go).
+	for _, m := range modapi.ExtensionModules() {
+		reg.HoldModule(string(m.ID), !h.modules().On(string(m.ID)))
+	}
 	if err := reg.Load(ctx); err != nil {
 		h.logf("plugins: %v", err)
 	}
@@ -553,9 +583,14 @@ func (h *Manager) startExtensions(ctx context.Context) {
 		return
 	}
 	ps := h.extensions
+	ps.mu.Lock()
 	if ps.h == nil {
-		ps.h, ps.ctx = h, ctx
+		ps.h = h
 	}
+	if ps.ctx == nil {
+		ps.ctx = ctx
+	}
+	ps.mu.Unlock()
 	for _, p := range ps.reg.DependencyOrder() {
 		if hp := ps.get(p.Record.ID); hp == nil || hp.pending {
 			ps.apply(ctx, p.Record.ID)
@@ -573,10 +608,7 @@ func (ps *extensions) changed(c extension.Change) {
 	if ps.h != nil && ps.h.opts.TracksChanged != nil {
 		defer ps.h.opts.TracksChanged()
 	}
-	ctx := ps.ctx
-	if ctx == nil {
-		ctx = context.Background()
-	}
+	ctx := ps.runtimeContext(nil)
 	if c.Kind == "config" {
 		ps.settingsMoved(c.ID) // before the restart: the old address is refused from now on
 	}
@@ -602,9 +634,11 @@ func (ps *extensions) changed(c extension.Change) {
 			}
 		}
 	}
-	ps.forgetAuth(c.ID)          // another version, removed, switched, set up again: ask again
-	ps.forgetSecretWords(c.ID)   // a provider's references may name other things now
-	ps.kept.forgetProvider(c.ID) // and give other values, or none
+	ps.forgetAuth(c.ID) // another version, removed, switched, set up again: ask again
+	// The kept values and words go only with the provider, or with its claim on their scheme: an upgrade or a restart
+	// keeps them (secret_kept.go, secret_words.go).
+	ps.keptProviderChanged(ctx, c)
+	ps.wordsProviderChanged(ctx, c)
 	// A removed provider's Always rules for hand-offs go with it (secret_handoff_rules.go).
 	if c.Kind == "removed" {
 		if c.Old != nil && c.Old.Full != nil && ps.h.avatars != nil {
@@ -620,7 +654,7 @@ func (ps *extensions) changed(c extension.Change) {
 		ps.forgetAssistantData(ctx, c.ID) // what the assistant read of its data directory goes with it
 		// What the user let it read of the assistant's sensitive information goes too (#13246): installed again, it
 		// starts as a third party's with no grant.
-		if err := ps.h.callAssistant(ctx, assistantwire.MethodExtensionTrustForget, assistantwire.ExtensionTrustForget{Extension: c.ID}, nil); err != nil {
+		if _, err := buswire.Call(ctx, assistantCaller(ps.h.callAssistant), assistantwire.ExtensionTrustForgetMethod, assistantwire.ExtensionTrustForget{Extension: c.ID}); err != nil {
 			ps.logf("plugin %s removed: its trust was not forgotten: %v", c.ID, err)
 		}
 		if n, err := ps.h.removeHandoffRules(ctx, c.ID, ""); err != nil {
@@ -647,6 +681,9 @@ func (ps *extensions) changed(c extension.Change) {
 	}
 	if ps.h != nil {
 		ps.h.agentFiltersChanged(ctx) // only when they changed (agent_filters.go)
+	}
+	if ps.h != nil && textLookupTouched(c.Old, c.ID, ps.reg) {
+		ps.h.textLookupChanged() // the apps ask GET /api/v1/text-lookup again
 	}
 	if ps.h != nil {
 		ps.h.sendReport() // its looks came or went: the hub serves them from the report (hub/looks.go)
@@ -756,9 +793,36 @@ func (ps *extensions) watchUpgrade(ctx context.Context, id string) (rolledBack b
 	return false, ""
 }
 
+// runtimeContext is the long-lived lifecycle context for extension processes and manager-owned restarts. Once the
+// manager has started, processes follow ps.ctx (or h.ctx), never a caller's short-lived HTTP or RPC request context.
+// When no manager context has been attached (isolated unit tests), it detaches cancellation from fallback so request
+// teardown cannot kill the process.
+func (ps *extensions) runtimeContext(fallback context.Context) context.Context {
+	ps.mu.Lock()
+	ctx := ps.ctx
+	h := ps.h
+	ps.mu.Unlock()
+	if ctx != nil {
+		return ctx
+	}
+	if h != nil && h.ctx != nil {
+		return h.ctx
+	}
+	if fallback != nil {
+		return context.WithoutCancel(fallback)
+	}
+	return context.Background()
+}
+
 // apply makes plugin id run as the registry says: whatever ran of it stops (its connectors leave the registry), and
-// it starts again if it is there, switched on, compatible and set up.
+// it starts again if it is there, switched on, compatible and set up. The started process and its setup belong to the
+// manager's lifecycle (runtimeContext), never to a short-lived caller request context.
 func (ps *extensions) apply(ctx context.Context, id string) {
+	if id != "" && id == volcID(ps.modules()) {
+		ps.speechApplyMu.Lock()
+		defer ps.speechApplyMu.Unlock()
+	}
+	ctx = ps.runtimeContext(ctx)
 	ps.mu.Lock()
 	old := ps.byID[id]
 	delete(ps.byID, id)
@@ -801,7 +865,7 @@ func (ps *extensions) apply(ctx context.Context, id string) {
 		}
 		return
 	}
-	hp := &hubExtension{id: id, kind: p.Manifest.Kind(), stats: ps.stats.of(id)}
+	hp := &hubExtension{id: id, kind: p.Manifest.Kind(), stats: ps.stats.of(id), recordUpdatedAt: p.Record.UpdatedAt}
 	if p.Manifest.Exports != nil {
 		hp.contributions = ps.reg.ContributionsToContext(ctx, id)
 	}
@@ -849,7 +913,7 @@ func (ps *extensions) apply(ctx context.Context, id string) {
 				ps.logf("plugin %s: %v", id, err)
 			} else if c.ID() == "github" {
 				// after this start: the move changes its settings, which restarts it
-				go ps.h.migrateGitHubConfig(context.WithoutCancel(ctx), id)
+				go ps.h.migrateGitHubConfig(ctx, id)
 			}
 		}
 	}
@@ -1218,7 +1282,9 @@ func (ps *extensions) specOf(ctx context.Context, p *extension.Extension, hp *hu
 			return ps.storageCall(ctx, p, method, params)
 		}
 		switch method {
-		case "kb.list", "kb.get", "kb.day", "kb.search", "kb.update", "kb.owner", "kb.recent":
+		case kbImportCheckpoint, kbSentMarkers:
+			return ps.kbProviderCall(ctx, p, hp, settingsEpoch, method, params)
+		case "kb.list", "kb.get", "kb.day", "kb.search", "kb.update", "kb.owner", "kb.recent", "kb.put_recording":
 			return ps.extensionKBCall(ctx, id, method, params)
 		case "assistant.conversations", "assistant.messages", "assistant.memory", assistantwire.MethodAssistantEntriesList: // assistant.read, assistant.memory.read (extension_assistant_read.go)
 			return ps.extensionAssistantCall(ctx, id, method, params)
@@ -1336,7 +1402,13 @@ func (ps *extensions) specOf(ctx context.Context, p *extension.Extension, hp *hu
 			extensionConnectors.Store(c.ID, p.Record.Source)
 		}
 		cfg := proc.Config{ID: c.ID, Name: c.Name, Manifest: ps.knownOnly(id, connectorManifest(c)), Secrets: secrets, KB: kbase,
-			Logf: ps.logf, Link: link}
+			Logf: ps.logf, Link: link, Identity: &connector.ExtensionIdentity{
+				Extension: p.Record.ID,
+				Version:   p.Record.Version,
+				Source:    p.Record.Source,
+				MarketKey: p.Record.MarketKey,
+				Remote:    p.Record.Remote != nil,
+			}}
 		cfg.RecallNotBefore = hp.recallNotBefore // the program is not asked about a send before this install, whoever asks
 		if p.Record.Granted.GhLogin && ps.h != nil {
 			cfg.GhToken = ps.h.ghTokenFor
@@ -1559,13 +1631,14 @@ func (ps *extensions) roleChanged(ctx context.Context) {
 	if ps == nil {
 		return
 	}
+	runCtx := ps.runtimeContext(ctx)
 	for _, p := range ps.reg.List() {
 		if !p.Record.Enabled || p.Problem != "" || len(p.Manifest.Connectors()) == 0 && len(p.Manifest.APIs()) == 0 {
 			continue
 		}
 		if hp := ps.get(p.Record.ID); hp != nil && hp.proc != nil {
 			ps.logf("plugin %s: restarted for the hub's new role in its group", p.Record.ID)
-			ps.apply(ctx, p.Record.ID)
+			ps.apply(runCtx, p.Record.ID)
 		}
 	}
 }
@@ -1599,7 +1672,7 @@ func (ps *extensions) connectorSwitched(ctx context.Context, id string, on bool)
 		state = "on"
 	}
 	ps.logf("plugin %s: restarted for its connector %s switched %s", owner, id, state)
-	ps.apply(ctx, owner)
+	ps.apply(ps.runtimeContext(ctx), owner)
 }
 
 // errModuleProgramOff: an extension runs `personad <name>`, a module's program, and the manager's `modules` setting has

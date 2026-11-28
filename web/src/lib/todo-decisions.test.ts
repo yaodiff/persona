@@ -17,23 +17,23 @@ describe("decisionSourceLabel", () => {
   const sessions = [{ machine_id: "mac", session_id: "s1", title: "发版 Agent" }] as Session[];
   const lookup = makeSessionLookup(sessions);
   it("says a decision written by hand is one", () => {
-    expect(decisionSourceLabel(dec("a"), todo, lookup)).toBe("手动记的");
+    expect(decisionSourceLabel(dec("a"), todo, lookup)).toBe("手动记录");
   });
   it("says a decision recorded when the task was finished came from the agent's outcome", () => {
-    expect(decisionSourceLabel(dec("a", { source: "outcome", source_machine: "mac", source_session: "s1" }), todo, lookup)).toBe("Agent 做完时记的");
+    expect(decisionSourceLabel(dec("a", { source: "outcome", source_machine: "mac", source_session: "s1" }), todo, lookup)).toBe("记录于 Agent 完成时");
   });
   it("says a decision an agent noted while it worked is the agent's, not the user's", () => {
-    expect(decisionSourceLabel(dec("a", { source: "agent", source_machine: "mac", source_session: "s1" }), todo, lookup)).toBe("Agent 干活时记的");
+    expect(decisionSourceLabel(dec("a", { source: "agent", source_machine: "mac", source_session: "s1" }), todo, lookup)).toBe("由 Agent 执行期间记录");
   });
   it("says a decision the user gave in the todo's chat thread came from there", () => {
-    expect(decisionSourceLabel(dec("a", { source: "thread", source_message: "feishu-om_1" }), todo, lookup)).toBe("在飞书话题里回的");
+    expect(decisionSourceLabel(dec("a", { source: "thread", source_message: "feishu-om_1" }), todo, lookup)).toBe("来自飞书话题回复");
   });
   it("names the agent whose card it was answered in, from the session list or the todo's snapshot", () => {
-    expect(decisionSourceLabel(dec("a", { source: "card", source_machine: "mac", source_session: "s1" }), todo, lookup)).toBe("在「发版 Agent」的提问里答的");
-    expect(decisionSourceLabel(dec("a", { source: "card", source_machine: "mac", source_session: "gone" }), todo, lookup)).toBe("在「旧 Agent」的提问里答的");
-    expect(decisionSourceLabel(dec("a", { source: "card", source_machine: "mac", source_session: "nobody" }), todo, lookup)).toBe("在 Agent 的提问里答的");
+    expect(decisionSourceLabel(dec("a", { source: "card", source_machine: "mac", source_session: "s1" }), todo, lookup)).toBe("回复自「发版 Agent」的提问");
+    expect(decisionSourceLabel(dec("a", { source: "card", source_machine: "mac", source_session: "gone" }), todo, lookup)).toBe("回复自「旧 Agent」的提问");
+    expect(decisionSourceLabel(dec("a", { source: "card", source_machine: "mac", source_session: "nobody" }), todo, lookup)).toBe("回复自 Agent 的提问");
     const long = makeSessionLookup([{ machine_id: "mac", session_id: "s2", title: "请立刻用 AskUserQuestion 工具问我一个问题（只问一个）" }] as Session[]);
-    expect(decisionSourceLabel(dec("a", { source: "card", source_machine: "mac", source_session: "s2" }), todo, long)).toBe("在「请立刻用 AskUserQuestion 工具问…」的提问里答的");
+    expect(decisionSourceLabel(dec("a", { source: "card", source_machine: "mac", source_session: "s2" }), todo, long)).toBe("回复自「请立刻用 AskUserQuestion 工具问…」的提问");
   });
 });
 

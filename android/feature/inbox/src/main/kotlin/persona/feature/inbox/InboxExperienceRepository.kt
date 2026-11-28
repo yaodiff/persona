@@ -167,6 +167,6 @@ class InboxExperienceRepository(
 
     override suspend fun askPersona(itemId: String, action: InboxAiAction) {
         ready.await()
-        sendToPersona(itemId, action, actions.context(itemId))
+        sendToPersona(itemId, action, actions.context(itemId).text)
     }
 }

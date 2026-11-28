@@ -53,7 +53,7 @@ private struct NeedsYouOrnament: View {
 
     /// The waiting ones as the badges count them, longest waiting first; the one after the conversation on screen.
     private func openNext() {
-        let keys = model.pendingInteractions.map(\.sessionKey).filter { k in
+        let keys = model.aggregatePendingInteractions.map(\.sessionKey).filter { k in
             model.latest(k)?.assistant == true || model.isQuiet(k) || !model.isMuted(k)
         }
         var order: [SessionKey] = []

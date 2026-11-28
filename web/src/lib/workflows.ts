@@ -433,7 +433,11 @@ function backgroundCommands(s: Session): NonNullable<Session["background"]> {
 
 function commandLine(tasks: NonNullable<Session["background"]>, since?: string): WaitLine {
   const first = tasks[0];
-  const what = (first?.description || first?.command || "").split("\n")[0]!.trim();
+  const description = first?.description?.trim() ?? "";
+  const text = description.startsWith("Cron:")
+    ? description.match(/(?:,|\n)\s*Prompt:[ \t]*([^\r\n]*)/)?.[1] ?? ""
+    : description || first?.command || "";
+  const what = text.split("\n", 1)[0]!.trim();
   return { what, more: Math.max(0, tasks.length - 1), ...(since ? { since } : {}) };
 }
 

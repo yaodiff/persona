@@ -2,11 +2,15 @@
 // while the page is in front, and on demand. The "Terminal" page and the sidebar's terminal tree (when turned on) read them.
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, enc, errorText } from "./api";
+import { onShownHint } from "./shown-hints";
+import { onHubEvent } from "./store";
+import { rememberHostAbilities } from "./host-abilities";
 import type { PanesResponse } from "./terminals";
 import type { Machine } from "./types";
 
 /** How often the layout is read again while the page is in front (agents' states are live already, from the sessions). */
 export const REFRESH_MS = 8000;
+const HINT_COALESCE_MS = 2000;
 
 export interface Listing {
   data?: PanesResponse;
@@ -42,7 +46,12 @@ export function usePanes(machines: Machine[], enabled = true) {
         // A reply that repeats what is shown keeps the object (and so the trees built from it and every row): the
         // layout rarely changes between two reads, and each machine's reply would re-render the page or the sidebar.
         return api<PanesResponse>(`/machines/${enc(mid)}/panes`).then(
-          (data) => fresh() && setListing((l) => (l[mid] && l[mid].error === undefined && sameLayout(l[mid].data, data) ? l : { ...l, [mid]: { data } })),
+          (data) => {
+            if (!fresh()) return;
+            // what each host can do, for the menus of sessions that never read this list (#17053)
+            rememberHostAbilities(mid, data);
+            setListing((l) => (l[mid] && l[mid].error === undefined && sameLayout(l[mid].data, data) ? l : { ...l, [mid]: { data } }));
+          },
           // a failed read keeps what was seen: the list does not blink out
           (e) => {
             if (!fresh()) return;
@@ -70,10 +79,31 @@ export function usePanes(machines: Machine[], enabled = true) {
   useEffect(() => {
     const ids = key ? key.split("\n") : [];
     if (!ids.length) return;
+    let lastHintAt = 0;
+    let hintTimer: ReturnType<typeof setTimeout> | undefined;
+    const refreshNow = () => {
+      if (document.visibilityState !== "visible") return;
+      clearTimeout(hintTimer);
+      hintTimer = undefined;
+      lastHintAt = Date.now();
+      void load(ids);
+    };
     void loadBusy(ids);
-    const t = setInterval(() => document.visibilityState === "visible" && void load(ids), REFRESH_MS);
+    const t = setInterval(refreshNow, REFRESH_MS);
+    const offVis = () => refreshNow();
+    document.addEventListener("visibilitychange", offVis);
+    const offHello = onHubEvent("hello", refreshNow);
+    const offList = onShownHint("sessions_list", () => {
+      const wait = lastHintAt + HINT_COALESCE_MS - Date.now();
+      if (wait <= 0) refreshNow();
+      else hintTimer ??= setTimeout(refreshNow, wait);
+    });
     return () => {
       clearInterval(t);
+      clearTimeout(hintTimer);
+      document.removeEventListener("visibilitychange", offVis);
+      offHello();
+      offList();
       // the read still out belongs to the old key: it no longer holds `busy` (with no machine left, nothing would clear it)
       busyToken.current++;
       setBusy(false);

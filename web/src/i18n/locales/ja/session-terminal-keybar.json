@@ -6,5 +6,12 @@
   "shortcuts": "ショートカット",
   "copy_selection": "選択したテキストをコピー",
   "paste": "クリップボードから貼り付け",
-  "enter": "Return"
+  "enter": "Return",
+  "line": "非表示で 1 行入力",
+  "line_title": "1 行を入力（非表示）",
+  "line_placeholder": "パスワード、トークン、コード…",
+  "line_send": "入力して Return",
+  "line_show": "入力内容を表示",
+  "line_hide": "入力内容を隠す",
+  "line_hint": "そのままターミナルに入力して Return を押します。Persona には保存されません。"
 }

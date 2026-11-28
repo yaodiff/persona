@@ -7,6 +7,7 @@ import type { PromptQR } from "./connectors";
 import { extIdOf, extRoot } from "./extension-api";
 import type { AuthPrompt as WireAuthPrompt, AuthState } from "./extension-wire";
 import { messageManager } from "./manager-choice";
+import type { ScopedAssistantClient } from "./scoped-assistant-api";
 import { onHubEvent } from "./store";
 import { t } from "../i18n";
 
@@ -38,7 +39,7 @@ export type AuthPrompt = WireAuthPrompt & { qr?: PromptQR };
 
 const base = (id: string) => `${extRoot()}/${enc(id)}/-/auth`;
 
-export const getAuth = (id: string) => api<ExtensionAuth>(base(id));
+export const getAuth = (id: string, client?: ScopedAssistantClient) => (client?.request ?? api)<ExtensionAuth>(base(id));
 /** One step: "" starts over; a device code / QR step is asked again with no values. */
 export const authStep = (id: string, step: string, values: Record<string, string> = {}) =>
   api<AuthPrompt>(`${base(id)}/step`, { method: "POST", json: { step, values } });
@@ -129,11 +130,23 @@ export function toolText(x: ExtensionTool): string {
   return x.reused ? t("lib-extension-auth.tool_reused", { version: x.version }) : x.version;
 }
 
-/** A link the page may open: https only. */
+function hasCtrlOrSpace(url: string): boolean {
+  for (let i = 0; i < url.length; i++) {
+    const c = url.charCodeAt(i);
+    if (c <= 0x20 || c === 0x7f) return true;
+  }
+  return /\s/.test(url);
+}
+
+/** A link the page may open: credential-free https with an explicit authority and host only (normalized). */
 export function safeLink(url?: string): string {
-  if (!url) return "";
+  const trimmed = url?.trim();
+  if (!trimmed || hasCtrlOrSpace(trimmed) || !/^https:\/\//i.test(trimmed)) return "";
+  const auth = trimmed.slice(8).split(/[/?#]/, 1)[0];
+  if (!auth || auth.includes("@") || auth.includes("\\")) return "";
   try {
-    return new URL(url).protocol === "https:" ? url : "";
+    const u = new URL(trimmed);
+    return u.protocol === "https:" && u.hostname !== "" && u.username === "" && u.password === "" ? u.href : "";
   } catch {
     return "";
   }

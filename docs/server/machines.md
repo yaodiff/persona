@@ -7,7 +7,7 @@ Each computer's OS, current load and curves for the past 24 hours. The node coll
 | Collection (parsing /proc, vm_stat, iostat, sw_vers, Win32 responses, etc.) | `server/internal/sysmon/` (`sysmon.go`, `winparse.go` pure parsing; `linux.go` / `darwin.go` / `windows.go` read the OS) |
 | Node sending | `server/internal/node/metrics.go` |
 | Manager storage, downsampling, cleanup, API (hub forwards `devicewire.MetricsRoutes`) | `server/internal/devices/metrics.go`, `server/internal/db/metrics.go`, migration `0051_machine_metrics.sql` |
-| Token usage: node metering, manager storage, API (see "Token usage" below) | `server/internal/tokenuse/`, `server/internal/node/usage.go`, `server/internal/node/usage_adapters.go`, `server/internal/devices/usage.go`, `server/internal/db/usage.go`, migration `manager/0421_machine_usage.sql` |
+| Token usage: node metering, manager storage, API (see "Token usage" below) | `server/internal/tokenuse/`, `server/internal/node/usage.go`, `server/internal/node/usage_adapters.go`, `server/internal/devices/usage.go`, `server/internal/devices/usage_projects.go`, `server/internal/db/usage.go`, migration `manager/0421_machine_usage.sql` |
 | App | `apple/Persona/Views/Machines/` (`MachinesView`, `MachineDetailView`, `MetricCharts`, `OSBadge`), model `apple/Packages/PersonaWire/Sources/PersonaWire/MachineMetrics.swift` |
 | Inspect local samples / overhead | `personad sysmon [n]`: prints system info and n+1 samples (one every 10 seconds, n ≤ 8640, one day); final line gives actual sample count, collection duration and personad CPU (Ctrl-C stops immediately) |
 
@@ -292,6 +292,7 @@ How many tokens each machine runs, for the Machines page's cards and charts (the
   (`step = 600`), the 10-minute rows older than 7 days and an hour into one row per hour (`step = 3600`, `db.RollupUsageHours`), and rows older than 53 weeks and a day are deleted.
   About 1 to 3 rows a machine and minute (one per model, launcher and agent in use), 10,000 to 30,000 rows a machine for the week, then 24 to 72 a machine and day for the year (about 9,000 to 27,000).
   Rows keep their agent through the rollups (`machine_usage.agent`, migration `manager/0551_usage_by_agent.sql`); rows stored before agents were kept apart, and an older node's, have `''`.
+  They keep their directory the same way (`machine_usage.dir`, "Token usage by project" below).
 - **Ranges**: 1 hour by minute (60 points), 24 hours by 10 minutes (144), 7 days by hour (168). A point is the step's sums; for "per minute" the apps divide by the step's minutes, the step under way by the part of it that had passed when the report came (at least a minute, `web/src/lib/usage-rate.ts` `stepMinutes`, PersonaWire `MachineUsageSeries.minutes(at:)`; #9205).
   A step with no monitoring sample and nothing counted is a break (`gap`), as in the monitoring charts; a machine that never sent monitoring samples has no breaks.
 - **Card** (`GET /api/v1/metrics`'s `usage` per machine, from memory): today's sums, all tokens per minute now (over the last two to three minutes) and the last 60 minutes by minute.
@@ -309,6 +310,93 @@ so a day's number is the same sum as today's tokens on the Machines page.
   through the `machine_usage_ts` index. A row counts in the span its start is in: the minute and 10-minute rows of the last week fall exactly, while the hour rows split a day at the hour
   in a zone whose clock is not a whole hour from UTC.
 - Without Postgres (`stored: false`) both come from the buckets in memory, the last 26 hours.
+
+### Token usage by project
+
+The token usage page's **By Project** (#16530): today's, the last 3 days' and the last 7 days' tokens by project, across
+machines, and one project's breakdown (`devices/usage_projects.go`, `devicewire/usage_projects.go`).
+
+- **What a row says**: each bucket also names where its session started (`proto.UsageBucket.Dir`, `machine_usage.dir`,
+  migration `manager/20261126153844_usage_by_dir.sql`): the start directory written from the home folder (`~/code/app`, `~`;
+  outside home as it is), or a token, `:assistant` (a Persona assistant conversation), `:temp` (a temporary folder, from
+  a node or manager before #16827), `:unknown` (a record that names no directory). The directory is part of the row's
+  key through the minute, ten-minute and hour rows, the backfill and a runtime's deltas. `''` is "not split": usage stored before, or from an older node.
+- **Where a session started** (`node/usage_dirs.go`): the directory Persona started it in (its state), else the first
+  directory its records name: a Claude Code transcript's head (a subagent's or workflow agent's file takes its session's
+  own transcript), a Codex or TRAE CLI rollout's `session_meta`, a pi or omp session's header, opencode's
+  `session.directory` (read apart from the usage query, so a database without it is still metered), a runtime's row.
+  Never the latest one: Claude Code's `cwd` follows the model's `cd` (`docs/lessons/transcript.md`). Read once per file
+  (the head, at most 256 KB). The assistant's own directories are `:assistant`. A temporary folder (the system's temp
+  directory, `/tmp`, `/var/tmp`, macOS's `/var/folders`) is named by its path like any directory to a manager that
+  answers `usage.features` with `temp_dirs: true` (#16827), and is `:temp` to an older one.
+- **Resolving it** (`resolveUsageDir`, in the background, once per directory and connection; the meter never waits for
+  it): the nearest `.git` above it, read as git does without running git (`node/gitplace.go`: a linked worktree's
+  shared git dir, a submodule's own). Its remote is `origin`, else `upstream`, else the first one in the repository's
+  `config` (read up to 256 KB): the SSH, scp-like, HTTPS and git:// spellings of one repository give one key, the user,
+  password or token and the port are dropped, the host is lower case (`ssh.github.com`, `www.github.com` and the
+  forges' other names folded in), a trailing `.git` and empty segments go, and GitHub's, GitLab's, Bitbucket's,
+  Codeberg's, Gitee's and Azure DevOps's paths are keyed in lower case (others keep theirs; the name keeps the remote's
+  own case). A remote written as it was cloned is used as written, so a global `insteadOf` rewrite to a mirror does not
+  change the key; only a shorthand with no dotted host (`gh:owner/repo`) is asked of git (`git remote get-url`, 10
+  seconds at most). A local path, a URL with a query and anything else is no remote: then the key is the root commit
+  (`git rev-list --max-parents=0 HEAD`, 10 seconds at most), so a copy on another machine is the same project, and two
+  repositories made from one template are merged (known and accepted); with no commit yet, the folder's name
+  (`local:dir:`). Forks and mirrors with another owner stay apart. A repository at home or above it (dotfiles in git)
+  is the home folder's only, a folder in it its own; a repository whose config cannot be read, and a broken `.git`,
+  are folders; a directory that cannot be read is not looked into (a folder); one that is gone is not resolved, and the
+  manager keeps its last resolution. **A temporary folder** (#16827) is the project of a repository made inside it (a
+  worktree added in `/tmp`, a clone there: Agents that work in worktrees under `/tmp` count for their repository), and
+  otherwise `temp`: in no repository, in one at the temporary folder's top or above it (which would make every
+  temporary folder one project), in one with no commit or a `.git` that cannot be read (only the folder's name, random
+  in such folders, to know it by), and gone, so a temporary folder is never split by its name.
+- **What a directory is**: the node sends, with the report that first names a directory on a connection, what it resolved
+  it to (`dirs`, `proto.UsageDir`): the project key the manager sums by across machines, its name, the remote's host,
+  the place (the working tree's top, or the folder) and whether that is a linked worktree. Keys: `git:<host>/<path>`,
+  `local:<root commit>`, `local:dir:<folder>`, `folder:<folder name>`, `home`. The manager keeps the latest resolution of
+  each machine's directory in `usage_dirs` (and in memory), so the usage of a directory removed since (a finished task's
+  worktree) keeps its project, and a folder that later gets a remote moves its history to the repository. `temp` never
+  replaces another resolution (`replacesResolution`, `putUsageDirSQL`): a node says it for a temporary folder that is
+  gone too, and a worktree removed from `/tmp` keeps its repository.
+  It keeps only the shapes a node makes (`usableDirs`): a `git:` key has a lower-case host with no user or port and
+  path segments of a forge's characters, its name is the key's path and its host the key's, so no remote's
+  credentials, URL or query can be stored even from a broken node; `temp` carries no name, host or place, so the apps
+  never show a temporary folder's (random) name. A refused resolution is logged by count only. A directory resolved
+  to `temp` is summed with `:temp` into the one `temp` project and shows no place.
+- **Sums** (`db.UsageDirSpans`): every machine's rows summed into the calendar's day bounds (and today's hours for a
+  breakdown) by machine and directory, and for a breakdown by agent, model and launcher too; Go maps each machine's
+  directory to its project. A directory no node resolved is `unknown`. So a range's projects and its not-split part add
+  up to exactly the calendar's total for the same days. Without Postgres both come from memory (the last 26 hours).
+- **Groups**: `repo` and `local` are development, `folder`, `home`, `temp` and `assistant` non-development, `unknown` apart.
+  Home, temp, assistant and unknown carry no name (the apps name them), so a folder's name never shows the account's.
+- **A project's name**: the name and host of its resolutions with the most tokens in the range (two machines may write
+  one remote in different case).
+- **Breakdown**: by computer, Agent, model, launcher and place (each working tree or folder on each computer, worktrees
+  marked), the last 7 days by day and today by the hour, its share of every project's tokens, and its cache hit rate.
+- **The week before** (`node/usage_resplit.go`, `devices/usage_resplit.go`, `db.ResplitUsage`, table `usage_resplit`, migration
+  `manager/20261126162313_usage_resplit.sql`): once, a few minutes after connecting to a manager that keeps directories,
+  a node asks `usage.resplit.status`; unless done, it re-reads its transcripts from a week ago to where its live window
+  starts (the ten-minute rows the projects' week is summed from) by the ten minutes, with the live meter's rules and
+  each session's start directory, rate-limited like the backfill, and sends them with what their directories resolve to.
+  The manager splits each stored ten minutes, model, launcher and file-metered agent that has no directory in the
+  re-read shares, kind by kind (largest remainder), so every key's sums, and the calendar, stay exactly as they were.
+  Usage the transcripts no longer hold, a runtime's and an older node's stays not split; re-read usage with nothing
+  stored is left out. The manager records the last ten minutes sent and when it finished, so a cut re-split goes on
+  and one sent again changes nothing; a machine with nothing to split is done at once.
+  **The temporary folders' pass** (#16827, migration `manager/20261127045749_usage_resplit_temp.sql`, the `temp_`
+  columns of `usage_resplit`): a node that names temporary folders by their paths says `temp_dirs: true` in
+  `usage.resplit.status`; once the first pass is done the manager answers `pass: "temp"` while the week has rows under
+  `:temp`, and the node re-reads the week again and sends only the sessions that started in a temporary folder, with
+  what their folders resolve to. The manager splits each ten minutes' `:temp` rows, together with the rows already
+  stored for those folders in the same ten minutes (a node that named them by path for part of it), in the re-read
+  shares, sums unchanged; usage the transcripts no longer hold stays `:temp`. An older node is never asked (its re-read
+  still says `:temp`).
+- **Rolling upgrades**: the node splits by directory only after the manager answers `usage.features` with `dirs: true`;
+  an older manager answers `unknown method`, and the node sends its buckets summed as before (there, several buckets of
+  one minute, model, launcher and agent would replace each other). An older node sends no directories: its usage is
+  not split. A node names temporary folders by their paths only when the manager also answers `temp_dirs: true`; to a
+  manager before it, and from a node before it, they are `:temp`, which the manager still takes as the `temp` project.
+  The routes are not open to extension tokens or read-only sessions: project names and places are more than
+  counts.
 
 ### Backfill
 
@@ -419,9 +507,9 @@ The retired native Mac app showed this section through the shared iOS view and r
 
 - **Fetch**: hub routes `GET /api/v1/machines/{mid}/doctor` (read-only) and `POST …/doctor/fix` (rewrite Persona-generated files, recheck and return a new report) are **`full` devices only** (reports contain paths and user hook commands; fix writes files). Node RPC: `node.doctor` (read-only unless `{"fix":true}`), `node.doctor.fix` (`node/doctor_rpc.go`); checks run in node with CLI `RunDoctor`, same `DoctorReport` JSON. Hub GET never passes `fix` to node.
 - **Report language**: current clients send `Accept-Language`, which the hub forwards as the RPC's optional `locale`; a new node then words `detail`, `hint` and human `items` in the page's language without changing the report shape or grouping fields. A header-less request and the assistant's direct readiness call keep canonical zh-Hans. A new node with an old hub therefore keeps today's report, and an old node with a new hub ignores `locale` and has its Chinese report relayed unchanged. The command's human text instead uses `i18n.Terminal`; its `--json` always retains canonical zh-Hans bytes.
-- **Group by feature** (`FEATURES` in `web/src/lib/node-health.ts`): phone approval cards (`node.sock`, claude / assistant settings and hooks, `command-paths`), state and notifications (`node.sock`, `command-paths`), terminal and engine (`herdr`), MCP tools (`node.sock`, `mcp.json`, `command-paths`), skills (`agent-plugin`, `claude-version`), runtime integrations (`runtime.sock`).
+- **Group by feature** (`FEATURES` in `web/src/lib/node-health.ts`): phone approval cards (`node.sock`, claude / assistant settings and hooks, `command-paths`), state and notifications (`node.sock`, `command-paths`), terminal and engine (`herdr` where herdr is in the computer's engine set, `orca` where Orca is, #17037; `herdr` for any other set), MCP tools (`node.sock`, `mcp.json`, `command-paths`), skills (`agent-plugin`, `claude-version`), runtime integrations (`runtime.sock`).
   Each feature takes its worst check: any `fail` → **Has issues**, any `warn` → **Partly available**, all normal → **Ready**. Terminal/engine and runtime integration are optional: warn-only means **Not enabled** (in **Not set up: …**, not counted as needing attention),
-  except when this computer uses herdr (including herdr + Herdr App, and no selection defaults to herdr), unreachable herdr means **Has issues**. Unmapped extra checks reported by node go to **Other checks** if abnormal, never hidden.
+  except when this computer uses herdr (including herdr + Herdr App, and no selection defaults to herdr) or Orca, where an unreachable herdr or a stopped or incompatible Orca means **Has issues**. The node reports the `orca` check only where Orca is installed, so an Orca computer whose node does not report it (an older node) has no terminal feature rather than one that is off. Unmapped extra checks reported by node go to **Other checks** if abnormal, never hidden.
   `global-permission-hooks` (user's synchronous PermissionRequest hooks) is not a feature; displayed as an informational line below features, read-only, when not ok. Hooks of extensions installed on that computer alone are ok, so they show no line (#11973).
   `launchd-process-type` (Mac) and `path-access` (#5944) are in no feature either: when not fine they show under **Other checks** with the node's hint. Their state is empty, so **Fix** doesn't offer them: reloading the LaunchAgent from inside the node would stop it, and only `personad node doctor --fix` on that Mac does it.
 - **UI**: **Everything works** or **N feature(s) need attention** at top (Moshi wording), then **Not set up: …**; **View all checks (N)** expands individual state, name, finding, remedy and differing files; **Check again**;

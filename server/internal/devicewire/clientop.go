@@ -15,6 +15,13 @@ func ClientOpTarget(path, query string) json.RawMessage {
 	return target
 }
 
+// ClientOpTargetWithOccurrence also pins an interaction action's normalized occurrence.
+// Receipts created without an occurrence keep ClientOpTarget's original digest.
+func ClientOpTargetWithOccurrence(path, query, occurrence string) json.RawMessage {
+	target, _ := json.Marshal(map[string]string{"path": path, "query": query, "occurrence": occurrence})
+	return target
+}
+
 // ClientOpDigest binds a receipt to the target and normalized input the hub claimed.
 // The caller must normalize or scrub any fields the operation's contract requires.
 func ClientOpDigest(kind string, target json.RawMessage, valid bool, params any) string {

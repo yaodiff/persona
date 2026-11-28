@@ -1153,7 +1153,7 @@ func TestExternalHotInventoryAndOrdinaryListsDoNotRefresh(t *testing.T) {
 			}
 			f.mu.Lock()
 			defer f.mu.Unlock()
-			if calls != 4 {
+			if calls != 2 {
 				t.Fatalf("hot inventory or ordinary lists made extra calls: %d", calls)
 			}
 		})

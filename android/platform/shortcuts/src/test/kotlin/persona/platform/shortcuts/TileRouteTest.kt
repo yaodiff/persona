@@ -43,6 +43,8 @@ import persona.core.contracts.JsonCodec
 import persona.core.contracts.Machine
 import persona.core.contracts.ServerEvent
 import persona.core.contracts.Session
+import persona.core.contracts.api.AssistantRepository
+import persona.core.contracts.api.AssistantSnapshot
 import persona.core.contracts.api.ConnectionState
 import persona.core.contracts.api.HubConnection
 import persona.core.contracts.api.InteractionCenter
@@ -132,10 +134,17 @@ class TileRouteApplication : Application(), GeneratedComponent, SurfacesDependen
         override suspend fun refresh() = Unit
     }
 
+    private val assistantRepository = object : AssistantRepository {
+        override val assistant = MutableStateFlow(AssistantSnapshot())
+        override suspend fun refresh() = Unit
+    }
+
     override fun fleet() = feed
     override fun sessions() = sessionRepository
+    override fun assistant() = assistantRepository
     override fun interactions(): InteractionCenter = error("Not used by tile routing")
     override fun pairing() = restoring
+    override fun surfaces(): SurfacesRuntime = error("Not used by tile routing")
 
     fun completeRestore() {
         restoredScope = "hub/generation"

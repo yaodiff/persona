@@ -274,6 +274,17 @@ struct ElicitationTests {
         }
     }
 
+    @Test func onlyAggregateAwareChatAppsDeclareApprovalMirrors() {
+        for app in [RequestClientMetadata(platform: .iOS, surface: .app, version: "1"), RequestClientMetadata(platform: .macOS, surface: .app, version: "1"),
+                    RequestClientMetadata(platform: .visionOS, surface: .app, version: "1")] {
+            #expect(LiveConnection.helloFeatures(app).contains("approval_mirrors"), "\(app.value)")
+        }
+        for other in [RequestClientMetadata(platform: .watchOS, surface: .app, version: "1"), RequestClientMetadata(platform: .iOS, surface: .systemExtension, version: "1"),
+                      RequestClientMetadata(platform: .iOS, surface: .intent, version: "1")] {
+            #expect(!LiveConnection.helloFeatures(other).contains("approval_mirrors"), "\(other.value)")
+        }
+    }
+
     /// The watch can't fill them in, and a watch build without the kind would lose the whole summary over one.
     @Test func theWatchSummaryLeavesThemOut() throws {
         let model = AppModel()

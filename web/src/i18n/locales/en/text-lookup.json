@@ -1,0 +1,12 @@
+{
+  "save": "Save",
+  "saved": "Saved",
+  "loading": "Looking up…",
+  "empty": "No meaning found.",
+  "failed": "Couldn't look this up.",
+  "unavailable": "The dictionary isn't available.",
+  "retry": "Try again",
+  "close": "Close",
+  "provider": "From {name}",
+  "save_failed": "Couldn't save that change. Try again."
+}

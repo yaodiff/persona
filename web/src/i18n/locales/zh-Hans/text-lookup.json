@@ -1,0 +1,12 @@
+{
+  "save": "保存",
+  "saved": "已保存",
+  "loading": "正在查…",
+  "empty": "没有查到释义。",
+  "failed": "这次没查到。",
+  "unavailable": "词典现在不可用。",
+  "retry": "重试",
+  "close": "关闭",
+  "provider": "来自{name}",
+  "save_failed": "没能保存这次更改，请再试一次。"
+}

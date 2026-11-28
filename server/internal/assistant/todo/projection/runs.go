@@ -23,6 +23,7 @@ const (
 	prFreshFor                 = 15 * time.Minute // PR facts count this long after they were checked
 	pendingReviewEscalateAfter = 24 * time.Hour   // todos_v2: pending_review stays in working this long, then surfaces to needs_you
 	canWaitEscalateAfter       = 48 * time.Hour   // todos_v2: non-critical can_wait decisions age into active needs_you after this long
+	stoppedFollowupAfter       = time.Hour        // unfinished stops need follow-up only after a full hour
 )
 
 // runKind is how one linked run stands, as far as the rules care; the order is the order runReading checks them in.
@@ -67,10 +68,24 @@ func (r run) title() string {
 
 // since is when the run got where it is: its session's state_since, else its updated_at.
 func (r run) since() time.Time {
+	if r.s.Work != nil && r.s.Work.Phase != proto.WorkWorking && !r.s.Starting &&
+		stateOf(*r.s) != proto.StateWorking && stateOf(*r.s) != proto.StateNeedsYou && !r.s.Work.TurnAt.IsZero() {
+		return r.s.Work.TurnAt
+	}
 	if !r.s.StateSince.IsZero() {
 		return r.s.StateSince
 	}
 	return r.s.UpdatedAt
+}
+
+func (r run) reportStatus() string {
+	if r.s.Work != nil && r.s.Work.Closeout != nil {
+		switch status := r.s.Work.Closeout.Status; status {
+		case proto.CloseoutDone, proto.CloseoutNotDone, proto.CloseoutBlocked:
+			return status
+		}
+	}
+	return ""
 }
 
 func parkEvidenceInteractionID(f *Facts) string {
@@ -196,26 +211,58 @@ func runReading(r run, now time.Time) runKind {
 	switch {
 	case st == proto.StateNeedsYou:
 		return runAsks
+	case s.Starting:
+		return runStarting
+	case st == proto.StateWorking && s.Assistant:
+		return runPersona
+	case st == proto.StateWorking && !s.BackgroundWorking:
+		return runRunning
+	case runningBackground(s):
+		return runBackground
+	case s.Work != nil && s.Work.Phase == proto.WorkWorking:
+		return runRunning
 	case usageLimited(s, now):
 		return runLimited
 	case interrupted(s, now):
 		return runInterrupted
 	case s.AwaitsReply && stopped(s):
 		return runAwaitsReply
+	case r.reportStatus() == proto.CloseoutDone:
+		return runUnread
+	case r.reportStatus() != "":
+		if waitsOn(s) != "" {
+			return runWaits
+		}
+		if waitsByItself(s, now) {
+			return runBackground
+		}
+		return runIdle
 	case st == proto.StateUnread:
 		return runUnread
 	case waitsOn(s) != "":
 		return runWaits
 	case waitsByItself(s, now):
 		return runBackground
-	case s.Starting:
-		return runStarting
-	case st == proto.StateWorking && s.Assistant:
-		return runPersona
-	case st == proto.StateWorking:
-		return runRunning
 	}
 	return runIdle
+}
+
+// A generic blocked/external hint is not execution. Keep actual background and child work distinct from it.
+func runningBackground(s proto.Session) bool {
+	if s.BackgroundWorking || len(s.Background) > 0 || s.Children().Working > 0 {
+		return true
+	}
+	for _, a := range s.Subagents {
+		if a.Running {
+			return true
+		}
+	}
+	for _, w := range s.Workflows {
+		if w.Running {
+			return true
+		}
+	}
+	return false
 }
 
 // stateOf is a session's state as the apps read it: the hub's, else worked out from its status.
@@ -356,6 +403,7 @@ func earliest(a, b time.Time) time.Time {
 // session (docs/assistant/todo-status-sop.md "Principle: real signals only").
 func lastActivity(f *Facts, now time.Time) time.Time {
 	last := later(f.UpdatedAt, &f.CreatedAt)
+	last = later(last, &f.RuntimeAt)
 	last = later(last, f.ReopenedAt)
 	last = later(last, f.DoneAt)
 	if v := f.Supervision; v != nil {

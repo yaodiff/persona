@@ -5,7 +5,7 @@
 // nothing. The node checks all three against its screen and stops, changing nothing, when they disagree.
 import { api, ApiError, errorText, sessionPath } from "./api";
 import { t } from "../i18n";
-import { stateOf } from "./format";
+import { activityOf } from "./format";
 import type { Item, Session } from "./types";
 import { stateName } from "./state-labels";
 import { injectedOf } from "./injected";
@@ -85,7 +85,7 @@ export function rewindTarget(items: Item[], messageId: string): RewindTarget | n
 export function rewindBlock(session: Session | undefined, busy: boolean): string {
   const supported = session?.capabilities?.rewind ?? Boolean(session && !session.source_kind && (!session.agent || session.agent === "claude"));
   if (!session || session.assistant || !supported) return t("rewind.unsupported");
-  const state = stateOf(session);
+  const state = activityOf(session);
   if (state === "offline" || session.starting) return stateName("offline");
   if (state === "needs_you" || (session.pending_interactions ?? 0) > 0) return stateName("needs_you");
   if (busy || state === "working") return stateName("working");

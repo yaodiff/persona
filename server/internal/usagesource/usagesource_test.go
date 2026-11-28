@@ -341,6 +341,33 @@ func TestGenericSource(t *testing.T) {
 	}
 }
 
+// The generic reader preserves reset information for the manager's expiry and sibling checks.
+func TestGenericAntigravityResetForms(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{"accounts":[
+			{"id":"claude","provider":"antigravity","name":"Antigravity · Claude / GPT","windows":[
+				{"label":"5h","used_percent":0},
+				{"label":"7d","used_percent":24,"resets_at":"2026-11-12T09:00:00.123Z"}]},
+			{"id":"gemini","provider":"antigravity","name":"Antigravity · Gemini","windows":[
+				{"label":"5h","used_percent":0,"resets_at":"1970-01-01T00:00:00Z"}]}]}`)
+	}))
+	defer srv.Close()
+	res, err := Fetch(t.Context(), Config{Type: TypeGeneric, URL: srv.URL, Key: testKey}, now)
+	if err != nil || len(res.Accounts) != 2 {
+		t.Fatalf("generic poll: %+v, %v", res, err)
+	}
+	c, g := res.Accounts[0], res.Accounts[1]
+	if c.Pass || c.Ref != "claude" || c.Name != "Antigravity · Claude / GPT" || len(c.Windows) != 2 || len(g.Windows) != 1 {
+		t.Fatalf("generic seats: %+v", res.Accounts)
+	}
+	idle, timed, epoch := c.Windows[0], c.Windows[1], g.Windows[0]
+	if idle.Model != "" || idle.WindowMinutes != 300 || idle.UsedPercent != 0 || idle.ResetsAt != nil ||
+		timed.WindowMinutes != 10080 || timed.ResetsAt == nil || !timed.ResetsAt.Equal(now.Add(7*24*time.Hour+123*time.Millisecond)) ||
+		epoch.ResetsAt == nil || !epoch.ResetsAt.Equal(time.Unix(0, 0)) {
+		t.Fatalf("generic reset values: %+v, %+v", c.Windows, g.Windows)
+	}
+}
+
 func TestGenericSourceKeepsTheFirstAccountOfARepeatedID(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.WriteString(w, `{"accounts":[

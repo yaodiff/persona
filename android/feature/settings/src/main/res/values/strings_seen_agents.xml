@@ -1,0 +1,5 @@
+<resources>
+    <string name="settings_seen_agents">Seen Agents</string>
+    <string name="settings_seen_agents_stay">Stay Until Refresh</string>
+    <string name="settings_seen_agents_leave">Leave When the Chat Closes</string>
+</resources>

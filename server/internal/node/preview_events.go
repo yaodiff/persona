@@ -1,8 +1,8 @@
 package node
 
 import (
+	"crypto/sha256"
 	"encoding/base64"
-	"encoding/binary"
 	"encoding/json"
 	"math"
 
@@ -37,19 +37,33 @@ func (t *previewTab) event(method string, params json.RawMessage) bool {
 			t.cdp("Page.screencastFrameAck", map[string]any{"sessionId": f.SessionID})
 			return false
 		}
-		t.seq++
-		msg := make([]byte, 9, 9+len(jpeg))
-		msg[0] = previewFrameMsg
-		binary.BigEndian.PutUint32(msg[1:], t.seq)
-		binary.BigEndian.PutUint16(msg[5:], uint16(math.Round(f.Metadata.DeviceWidth)))
-		binary.BigEndian.PutUint16(msg[7:], uint16(math.Round(f.Metadata.DeviceHeight)))
-		t.write(preview.Binary, append(msg, jpeg...))
-		t.unacked++
-		if t.unacked < previewInFlight {
+		w := uint16(math.Round(f.Metadata.DeviceWidth))
+		h := uint16(math.Round(f.Metadata.DeviceHeight))
+		if w == 0 || h == 0 {
+			w, h = uint16(t.vp.w), uint16(t.vp.h)
+		}
+		// Headless Chromium's Page.captureScreenshot forces a compositor frame that causes
+		// Page.startScreencast to re-emit the exact same JPEG bytes while the capture is in flight.
+		// Ack an identical consecutive frame directly so it neither cancels our still capture nor
+		// overwrites a sharper still frame.
+		sum := sha256.Sum256(jpeg)
+		if t.hasLastScreencast && sum == t.lastScreencastHash && w == t.lastScreencastW && h == t.lastScreencastH {
+			t.cdp("Page.screencastFrameAck", map[string]any{"sessionId": f.SessionID})
+			return false
+		}
+		t.hasLastScreencast = true
+		t.lastScreencastHash = sum
+		t.lastScreencastW, t.lastScreencastH = w, h
+		t.frameGen++
+		t.stillPendingGen = 0
+		t.stillSentPNG = false
+		t.sendFrame(w, h, jpeg)
+		if len(t.inFlight) < previewInFlight {
 			t.cdp("Page.screencastFrameAck", map[string]any{"sessionId": f.SessionID})
 		} else {
 			t.heldAck = append(t.heldAck, f.SessionID)
 		}
+		t.scheduleStill()
 	case "Fetch.requestPaused":
 		var r struct {
 			RequestID    string `json:"requestId"`
@@ -85,6 +99,7 @@ func (t *previewTab) event(method string, params json.RawMessage) bool {
 			if f.Frame.UnreachableURL != "" {
 				t.url = f.Frame.UnreachableURL
 			}
+			t.withdrawSelect()
 			t.pushPage(true)
 		}
 	case "Page.lifecycleEvent":
@@ -115,15 +130,31 @@ func (t *previewTab) event(method string, params json.RawMessage) bool {
 		}
 	case "Runtime.bindingCalled":
 		var c struct {
-			Name    string `json:"name"`
-			Payload string `json:"payload"`
+			Name               string `json:"name"`
+			Payload            string `json:"payload"`
+			ExecutionContextID int    `json:"executionContextId"`
 		}
-		if json.Unmarshal(params, &c) == nil && c.Name == previewTitleBinding && c.Payload != t.title {
-			if r := []rune(c.Payload); len(r) > 300 { // the page can call the function with anything
-				c.Payload = string(r[:300])
+		if json.Unmarshal(params, &c) != nil {
+			return false
+		}
+		switch c.Name {
+		case previewTitleBinding:
+			if c.Payload != t.title {
+				if r := []rune(c.Payload); len(r) > 300 { // the page can call the function with anything
+					c.Payload = string(r[:300])
+				}
+				t.title = c.Payload
+				t.pushPage(false)
 			}
-			t.title = c.Payload
-			t.pushPage(false)
+		case previewSelectBinding:
+			t.onSelectBinding(c.ExecutionContextID, c.Payload)
+		}
+	case "Runtime.executionContextDestroyed":
+		var d struct {
+			ExecutionContextID int `json:"executionContextId"`
+		}
+		if json.Unmarshal(params, &d) == nil && d.ExecutionContextID != 0 && d.ExecutionContextID == t.selectExecCtxID {
+			t.withdrawSelect()
 		}
 	case "Target.targetCreated": // a window the page opened: shown here when it is this computer's, else in a new tab
 		var i struct {
@@ -164,6 +195,7 @@ func (t *previewTab) event(method string, params json.RawMessage) bool {
 			t.picked(r.BackendNodeID)
 		}
 	case "Inspector.targetCrashed":
+		t.withdrawSelect()
 		t.send(map[string]any{"t": "crashed"})
 	case "Target.targetDestroyed", "Target.detachedFromTarget":
 		t.send(map[string]any{"t": "closed", "code": "tab_closed"})

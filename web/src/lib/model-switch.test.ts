@@ -38,12 +38,20 @@ describe("which sessions can switch model", () => {
     const cx = session({ agent: "codex", source_kind: "codex_app_server", capabilities: { send: true, model: true } as Session["capabilities"] });
     expect(canSwitchModel(cx)).toBe(true);
     expect(canSwitchModel(session({ agent: "codex", space_kind: "codex_app", capabilities: { send: true, model: true } as Session["capabilities"] }))).toBe(true);
+
+    // Live terminal agy session (no source_kind, no explicit launcher): honors capabilities.model and resolves launcher to "agy".
+    const agyTerm = session({ agent: "agy", pane_id: "herdr:w1:p1", capabilities: { send: true, modes: false, model: true } as Session["capabilities"] });
+    expect(canSwitchModel(agyTerm)).toBe(true);
+    expect(sessionLauncher(agyTerm)).toBe("agy");
+    expect(modelBusy({ ...agyTerm, status: "working" })).toContain("正在处理中");
+    expect(modelBusy({ ...agyTerm, status: "working", background_waiting: true })).toBe("");
+    expect(modelBusy({ ...agyTerm, state: "needs_you" })).toContain("正在处理中");
   });
 
   it("is busy while Claude works or waits on you, but Codex and plugin-backed Claude Desktop queue for the next step", () => {
     expect(modelBusy(session())).toBe("");
-    expect(modelBusy(session({ status: "working" }))).toContain("正在工作");
-    expect(modelBusy(session({ state: "needs_you" }))).toContain("正在工作");
+    expect(modelBusy(session({ status: "working" }))).toContain("正在处理中");
+    expect(modelBusy(session({ state: "needs_you" }))).toContain("正在处理中");
     expect(modelBusy(session({ agent: "codex", status: "working" }))).toBe("");
     expect(modelBusy(session({ agent: "codex", state: "needs_you" }))).toBe("");
     expect(

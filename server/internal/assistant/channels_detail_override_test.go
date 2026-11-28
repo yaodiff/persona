@@ -40,6 +40,7 @@ func TestChannelDetailTargetOverride(t *testing.T) {
 			}, nil
 		})
 		s := newTestService(t, f)
+		setIntegrationsV2(t, s, false)
 		body := getDetailJSON(t, s, "topicchat")
 		ov, _ := body["target_override"].(map[string]any)
 		if ov == nil || ov["mode"] != channel.TargetOverrideTopics {
@@ -63,6 +64,7 @@ func TestChannelDetailTargetOverride(t *testing.T) {
 			}, nil
 		})
 		s := newTestService(t, f)
+		setIntegrationsV2(t, s, false)
 		body := getDetailJSON(t, s, "topicchat")
 		if _, exists := body["target_override"]; exists {
 			t.Fatalf("expected target_override to be omitted when inactive, got %#v", body["target_override"])
@@ -88,6 +90,7 @@ func TestChannelDetailTargetOverride(t *testing.T) {
 			}, nil
 		})
 		s := newTestService(t, f)
+		setIntegrationsV2(t, s, false)
 
 		threaded := getDetailJSON(t, s, "threadchat")
 		ov, _ := threaded["target_override"].(map[string]any)
@@ -130,4 +133,41 @@ func TestChannelDetailTargetOverride(t *testing.T) {
 			}
 		}
 	})
+}
+
+func TestChannelDetailV2RespectsPluginOverride(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		overrides map[string]*channel.TargetOverride
+		want      *channel.TargetOverride
+	}{
+		{name: "suppressed", overrides: map[string]*channel.TargetOverride{}},
+		{name: "active", overrides: map[string]*channel.TargetOverride{"topicchat": {Mode: channel.TargetOverrideThreads}},
+			want: &channel.TargetOverride{Mode: channel.TargetOverrideTopics}},
+		{name: "older hub", want: &channel.TargetOverride{Mode: channel.TargetOverrideTopics}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFakeHub().withMachine()
+			f.answerApp(AppChannels, ChannelsList, func(json.RawMessage) (any, error) {
+				res := map[string]any{"channels": []channel.View{{
+					ID: "topicchat", Name: "Topic Chat", Kind: channel.KindIM, Source: channel.SourcePlugin,
+					Installed: true, Enabled: true, State: channel.StateConnected,
+					Capabilities: channel.Capabilities{Threads: true},
+				}}}
+				if tc.overrides != nil {
+					res["target_overrides"] = tc.overrides
+				}
+				return res, nil
+			})
+			s := newTestService(t, f)
+			setIntegrationsV2(t, s, true)
+			detail := getChannelDetail(t, s, "topicchat")
+			if detail.ThreadMode != channel.ThreadModePerTopic {
+				t.Fatalf("effective thread mode = %q, want per_topic", detail.ThreadMode)
+			}
+			if got := detail.TargetOverride; (got == nil) != (tc.want == nil) || got != nil && got.Mode != tc.want.Mode {
+				t.Fatalf("v2 target_override = %+v, want %+v", got, tc.want)
+			}
+		})
+	}
 }

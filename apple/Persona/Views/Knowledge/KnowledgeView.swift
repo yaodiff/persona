@@ -759,6 +759,7 @@ struct KBHitRow: View {
 struct KnowledgeDetailView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.shownAsSheet) private var shownAsSheet
+    @Environment(\.dismiss) private var dismiss
     /// An Agent this page opens, pushed over it with Back to it (#12006).
     @State private var pushedAgent: SessionKey?
     @Environment(\.knowledgeSettingsAPI) private var inheritedAPI
@@ -768,6 +769,8 @@ struct KnowledgeDetailView: View {
     /// Opened from a search: the places it was found come first.
     var query: String? = nil
     @State private var detail: KBDetailResponse?
+    /// A chat's Inbox items as the page draws them (#15356), worked out once per read.
+    @State private var chatInbox: KBChatInbox.Page?
     @State private var error: String?
     @State private var allMatches = false
     @State private var allMoments = false
@@ -844,6 +847,8 @@ struct KnowledgeDetailView: View {
                         }
                     } header: { sectionHeader(String(localized: "Agents on This Project"), agents.count) }
                 }
+                // A chat's Inbox items (#15356): none, nothing drawn.
+                if let inbox = chatInbox, opensInbox { KBChatInboxSection(page: inbox, open: openInboxItem) }
                 if let log = d.log, !log.isEmpty { timeline(log) }
                 KBFactsSection(facts: KBFacts.text(d.meta), edit: { factsEditor = true }, delete: { Task { await deleteFacts() } })
                 // Empty once the header's parts are taken out (a summary that is just the one line): no blank card.
@@ -855,6 +860,7 @@ struct KnowledgeDetailView: View {
                 } else if let sum = d.summary, case let profile = Self.profile(sum, oneLine: shown.oneLine), !profile.isEmpty {
                     Section("Profile") {
                         Markdown(Links.markdown(MathMarkdown.rewrite(profile))).markdownTheme(.persona).readingContent().textSelection(.enabled)
+                            .textLookupSurface("knowledge")
                             .padding(.vertical, Theme.Space.sm)
                     }
                 }
@@ -867,7 +873,8 @@ struct KnowledgeDetailView: View {
                 if let recent = d.recent, !recent.isEmpty {
                     Section {
                         DisclosureGroup(isExpanded: $showRecent) {
-                            Text(recent).font(Theme.Font.secondary).textSelection(.enabled)
+                            // A row an Inbox item holds opens that item (#15356).
+                            KBRecentText(text: recent, pieces: opensInbox ? chatInbox?.pieces : nil, open: openInboxItem)
                         } label: {
                             Label("Messages from the Last 7 Days", systemImage: Theme.Icon.conversation)
                         }
@@ -1355,8 +1362,26 @@ struct KnowledgeDetailView: View {
     private func showDetail(_ response: KBDetailResponse) {
         let name = Self.shown(entry, detail: response).name
         removedLinks = KBRemovedLink.rows(in: response.detail, name: name)
+        chatInbox = KBChatInbox.Page(response)
         detail = response
         error = nil
+    }
+
+    /// Whether this phone opens Inbox items: not while the hub's navigation hides the Inbox page, where a link to one
+    /// goes back to the start (`returnToStartIfHidden`).
+    private var opensInbox: Bool {
+        #if os(iOS)
+        !model.hiddenNavigationPages.contains(.inbox)
+        #else
+        true
+        #endif
+    }
+
+    /// An Inbox item of this chat, opened in the Inbox as a link to it opens; a sheet this page is in closes first.
+    private func openInboxItem(_ item: KBInboxItem) {
+        Haptics.tap()
+        if shownAsSheet { dismiss() }
+        model.openKBInboxItem(item.id, manager: capturedAPI?.managerID)
     }
 
     private func load() async {
@@ -1438,7 +1463,7 @@ struct KBMomentView: View {
                 }
                 if let chunks {
                     ForEach(Array(chunks.enumerated()), id: \.offset) { _, c in
-                        Markdown(c).markdownTheme(.persona).readingContent()
+                        Markdown(c).markdownTheme(.persona).readingContent().textLookupSurface("knowledge")
                     }
                 } else if let error {
                     Label(error, systemImage: Theme.Icon.error).foregroundStyle(Theme.danger).font(Theme.Font.caption)

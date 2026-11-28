@@ -9,12 +9,31 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// session.modes on an agy or cursor pane is refused with its code (a 409 at the hub), and no key reaches the pane: on
-// the Claude Code path it pressed shift+tab looking for Claude Code's input box and answered 502.
+// session.modes refuses unsupported controls with CodeModesUnsupported (409 at the hub) and sends no keys to the pane:
+// cursor refuses permission_mode, effort and model; agy refuses permission_mode (while model and effort switch live).
 func TestWorkAgentPaneRefusesModes(t *testing.T) {
-	for _, tc := range []struct{ name, row string }{
-		{"agy", agyTestRow},
-		{"cursor", "cursor-w1-p1"},
+	for _, tc := range []struct {
+		name, row string
+		requests  []map[string]any
+	}{
+		{
+			name: "agy",
+			row:  agyTestRow,
+			requests: []map[string]any{
+				{"session_id": agyTestRow, "permission_mode": "acceptEdits"},
+				{"session_id": agyTestRow, "permission_mode": proto.ModeBypass},
+			},
+		},
+		{
+			name: "cursor",
+			row:  "cursor-w1-p1",
+			requests: []map[string]any{
+				{"session_id": "cursor-w1-p1", "permission_mode": "acceptEdits"},
+				{"session_id": "cursor-w1-p1", "permission_mode": proto.ModeBypass},
+				{"session_id": "cursor-w1-p1", "effort": "high"},
+				{"session_id": "cursor-w1-p1", "model": "other-model"},
+			},
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			n, f, home := herdrNode(t)
@@ -23,12 +42,7 @@ func TestWorkAgentPaneRefusesModes(t *testing.T) {
 			} else {
 				seedAgents(t, n, f, agentOf(cursorAgent, "", proto.StatusIdle, agyTestPane, "w1:t1", "w1", home, "cursor"))
 			}
-			for _, params := range []map[string]any{
-				{"session_id": tc.row, "permission_mode": "acceptEdits"},
-				{"session_id": tc.row, "permission_mode": proto.ModeBypass},
-				{"session_id": tc.row, "effort": "high"},
-				{"session_id": tc.row, "model": "other-model"},
-			} {
+			for _, params := range tc.requests {
 				_, err := request(t, n, "session.modes", params)
 				if refusalCode(err) != proto.CodeModesUnsupported {
 					t.Fatalf("%v: err %v, want %s", params, err, proto.CodeModesUnsupported)

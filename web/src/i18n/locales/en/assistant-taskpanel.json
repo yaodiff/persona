@@ -9,5 +9,8 @@
   "starting": "Starting the agent. Its chat will show up here once it's running.",
   "no_agent": "No Agent is currently working on this task.",
   "open_in_new_window": "Open in new window",
-  "switch_agent": "Switch agent"
+  "switch_agent": "Switch agent",
+  "report": "Task report",
+  "raw_session": "View raw Agent session",
+  "follow_up": "Follow up in chat"
 }

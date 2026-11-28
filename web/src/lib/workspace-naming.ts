@@ -8,7 +8,7 @@ export type WorkspaceRules = Partial<Record<RuleField, string>>;
 export type WorkspaceRulesPatch = Record<RuleField, string | null>;
 export type WorkspaceNamingSettings = {
   manager?: string; machine_id?: string; workspace_naming_version?: string;
-  workspace_rules?: WorkspaceRules; effective_workspace_rules?: WorkspaceRules;
+  workspace_rules?: WorkspaceRules; effective_workspace_rules?: WorkspaceRules; system_defaults?: WorkspaceRules;
 };
 export type WorkspaceRulesRecord = { todo_id: string; revision: number; workspace_rules: WorkspaceRules };
 export type NamingDiagnostic = { code: string; field: string; repo_id?: string; severity: "error" | "warning" };
@@ -19,7 +19,11 @@ export type WorkspaceNamingPlan = {
     rules: WorkspaceRules; rule_sources?: Record<RuleField, string>; layout: RepositoryLayout; repository_snapshot: TaskRepositoryPreparationSnapshot };
   repositories: Array<{ repo_id: string; requested_ref: RequestedRef; relative_path: string; absolute_path: string; task_branch: string }>;
 };
-export type WorkspaceNamingPreview = { status: "complete" | "incomplete" | "invalid"; sample: boolean; plan?: WorkspaceNamingPlan; diagnostics: NamingDiagnostic[] };
+export type WorkspaceNamingPreview = {
+  status: "complete" | "incomplete" | "invalid"; sample: boolean; plan?: WorkspaceNamingPlan; diagnostics: NamingDiagnostic[];
+  system_defaults?: WorkspaceRules;
+  branch_sources?: Array<{ repo_id: string; kind: string; branch?: string }>;
+};
 export function rulesPatch(rules: WorkspaceRules): WorkspaceRulesPatch {
   return Object.fromEntries(RULE_FIELDS.map((key) => [key, rules[key] ?? null])) as WorkspaceRulesPatch;
 }

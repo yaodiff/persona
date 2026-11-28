@@ -3,6 +3,7 @@
 // to read (status changes, spans, usage, confirmations) yield no item but still take a seq, so the log and the pages
 // keep one numbering.
 
+import { assistantPreview } from '../../runtime-sdk/lib/assistant-preview.js'
 import { appToolName, clipInput, snippet } from '../../runtime-sdk/index.js'
 
 // Words the hub recognizes and rewrites into the reader's language (docs/protocol/i18n.md, transcript.Runtime*):
@@ -130,8 +131,8 @@ export function logStatus(events) {
 export function lastText(events) {
   for (let i = events.length - 1; i >= 0; i--) {
     if (events[i]?.type === 'agent.message') {
-      const t = textOf(events[i].content)
-      if (t.trim()) return snippet(t)
+      const preview = assistantPreview(textOf(events[i].content))
+      if (preview) return preview
     }
     if (events[i]?.type === 'user.message') return ''
   }

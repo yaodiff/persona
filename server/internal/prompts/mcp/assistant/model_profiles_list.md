@@ -1,4 +1,4 @@
-List profiles, active profile, drift, rollback previews and audit events. Model settings only, never credentials.{{template "shared/mcp_language" .}}
+List saved profiles, active profile, drift, rollback previews and audit events.{{template "shared/mcp_language" .}}
 
 ```json
 {

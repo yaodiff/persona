@@ -342,15 +342,15 @@ final class WatchModel {
         // To the hub of the interaction's own group.
         guard canAnswer(ix), let api = api(ix.group) else { return }
         do {
-            _ = try await api.resolve(ix.id, r)
-            interactions.removeAll { $0.uid == ix.uid }
-            petInteractions.removeAll { $0.uid == ix.uid }
+            _ = try await api.resolve(ix.id, r, occurrence: ix.createdAtWire)
+            interactions.removeAll { interactionRemovalMatches($0, resolved: ix) }
+            petInteractions.removeAll { interactionRemovalMatches($0, resolved: ix) }
             forgetSeen(ix.uid)
             WKInterfaceDevice.current().play(.success)
         } catch let e as APIError where e.status == 410 {
             // Already ended on server: remove interaction cleanly without error
-            interactions.removeAll { $0.uid == ix.uid }
-            petInteractions.removeAll { $0.uid == ix.uid }
+            interactions.removeAll { interactionRemovalMatches($0, resolved: ix) }
+            petInteractions.removeAll { interactionRemovalMatches($0, resolved: ix) }
             forgetSeen(ix.uid)
             WKInterfaceDevice.current().play(.directionDown)
         } catch {
@@ -833,8 +833,10 @@ struct WatchInteractionView: View {
                 case .elicitation: // an MCP form or link is answered on the phone, which keeps it off the watch: its message only
                     Text(interaction.watchSummary).font(.footnote)
                 }
-                Button("Handle on Computer") { act(.dismissed) }
-                    .lineLimit(1).minimumScaleFactor(0.8).font(.caption2).foregroundStyle(.secondary)
+                if interaction.noHandBack != true {
+                    Button("Handle on Computer") { act(.dismissed) }
+                        .lineLimit(1).minimumScaleFactor(0.8).font(.caption2).foregroundStyle(.secondary)
+                }
             }
         }
         .buttonStyle(.bordered)

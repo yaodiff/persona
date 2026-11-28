@@ -10,6 +10,7 @@ import { Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExt
 import { ApiError, credentialOwner, errorText, getToken, onCredentialChange } from "../../lib/api";
 import { extIdOf } from "../../lib/extension-api";
 import { openLink } from "../../lib/links";
+import { openTargetOf } from "../../ui/AssistantCard";
 import {
   actUI, fieldValues, httpOnlyUI, isUnsupported, numberProblem, outcome, pushPage, refreshDelay, renderUI, submitValues, uiPlaces, UI_VERSION,
   type UIAction, type UIContext, type UIFilter, type UIItem, type UIMore, type UIPage, type UIPlace, type UIPush, type UISearch, type UITabs, type UIView,
@@ -25,13 +26,17 @@ import { NATIVE, NativeTabs } from "../../ui/ExtensionNative";
 import { keepLoaded, patchView } from "../../lib/code-review";
 import { KeysHelp, ReviewBar, ReviewKeys, ReviewProvider, ReviewToolbar, reviewing } from "../extensions/DiffReview";
 import { Icon } from "../../ui/icons";
-import { useStore } from "../../lib/store";
+import { getState, useStore } from "../../lib/store";
 import { canTryUIStream } from "../../lib/extension-ui-stream-gate";
 import { lazyPage } from "../../lib/lazy-page";
 import { PageBoundary } from "../PageBoundary";
-import { defaultKnown, defaultManager, otherManager, useKnownDefault, useLinkManager } from "../../lib/manager-choice";
+import { sendDraft } from "../../lib/drafts";
+import { conversationPage } from "../../lib/conversation-page";
+import { mainConversationMachine } from "../../lib/feed-cache";
+import { chosenManager, defaultKnown, defaultManager, otherManager, useKnownDefault, useLinkManager } from "../../lib/manager-choice";
 import { keepView, NATIVE_UI_VERSION, readKeptView } from "../../lib/extension-view-cache";
 import type { UIRowControl } from "../../lib/extension-ui-v6";
+import { ExtensionSetupNotice } from "./ExtensionSetupNotice";
 import { currentLanguage, t } from "../../i18n";
 import { HEALTH_INTAKE_UI, STRENGTH_EVENT } from "../../lib/health-intake-ui";
 import { SUBSCRIPTIONS_UI } from "../../lib/subscriptions-ui";
@@ -322,11 +327,13 @@ function KeptView({ view, native, compact, bare, title, onWide, onTitle }: { vie
 }
 export function LegacyExtensionUI({
   extension, ui, context, embedded, compact, bare, title, onUnsupported, onMissing, onFailed, revision, onOpenSource, pages, history: withHistory, state: firstState, onWide, onDepth, navigation, active = true, manager,
-  placeholder, onView, onTitle, openPage, onClose,
+  placeholder, onView, onTitle, openPage, onClose, setupOwner,
 }: {
   extension: string; ui: string; context?: UIContext; embedded?: boolean; compact?: boolean; bare?: boolean; title?: string;
   /** Whose extension it is (another manager's inbox item or computer, docs/assistant/managers.md "Clients"); none: the default's. */
   manager?: string;
+  /** A direct page can recover from its first 404 by opening the owning installation's settings. */
+  setupOwner?: string; // empty until the direct page's default manager is known
   onUnsupported?: () => void; onMissing?: () => void; onFailed?: (e: unknown) => void; revision?: string; onOpenSource?: () => void;
   pages?: "stack" | "open"; history?: boolean; state?: string;
   /** A native/legacy mixed stack has one history owner; HTTP entries delegate navigation. */
@@ -362,23 +369,32 @@ export function LegacyExtensionUI({
   const pageKey = `${top.id}\n${depth}\n${top.ui}`;
   const pageKeyRef = useRef(pageKey);
   pageKeyRef.current = pageKey;
+  const ctxKey = `${context?.launcher ?? ""}\n${context?.machine ?? ""}\n${context?.item ?? ""}\n${context?.size ?? ""}`;
+  const targetKey = `${extension}\0${pageKey}\0${ctxKey}\0${manager ?? ""}`;
+  const targetKeyRef = useRef(targetKey);
+  targetKeyRef.current = targetKey;
   const [shownView, setShownView] = useState<{ key: string; view: UIView } | null>(null);
-  const view = shownView?.key === pageKey ? shownView.view : null;
+  const view = shownView?.key === targetKey ? shownView.view : null;
   const setView = useCallback((next: UIView | null | ((before: UIView | null) => UIView | null)) => {
-    const key = pageKeyRef.current;
+    const key = targetKeyRef.current;
     setShownView((cur) => {
       const prev = cur?.key === key ? cur.view : null;
       const resolved = typeof next === "function" ? next(prev) : next;
       return resolved ? { key, view: resolved } : null;
     });
   }, []);
-  const [error, setError] = useState("");
+  const [failure, setFailure] = useState<{ message: string; checkSetup: boolean; attempt: number }>();
+  const error = failure?.message;
   const [unsupported, setUnsupported] = useState(false);
   const [loading, setLoading] = useState(false);
   const [values, setValues] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState("");
+  const busyReqRef = useRef(0);
+  const loadReqRef = useRef(0);
   // `done`: told whether the action asked about was done (a code component's act waits for it)
   const [confirming, setConfirming] = useState<{ action: UIAction; destructive: boolean; values?: Record<string, string>; control?: { c: UIRowControl; value: string }; done?: (ok: boolean) => void } | null>(null);
+  const confirmingRef = useRef(confirming);
+  confirmingRef.current = confirming;
   // UI version 6: a control's value the user chose, by its name, shown until the extension's answer is drawn; the ones on
   // their way more than a second (a small spinner); each control's request on its way and the latest change made meanwhile
   const [controls, setControls] = useState<Record<string, string>>({});
@@ -389,9 +405,39 @@ export function LegacyExtensionUI({
   const stateRef = useRef<string | undefined>(top.state);
   const drawnRef = useRef(false); // a view has been drawn
   const asked = useRef(0);
+  const visitRef = useRef(0);
   const inFlightRef = useRef(false);
-  const ctxKey = `${context?.launcher ?? ""}\n${context?.machine ?? ""}\n${context?.item ?? ""}\n${context?.size ?? ""}`;
+  const mountedRef = useRef(true);
+  const isCurrentPage = (
+    expectedKey: string,
+    expectedId: number | undefined,
+    expectedVisit: number,
+    expectedTarget: string,
+  ) =>
+    mountedRef.current
+    && visitRef.current === expectedVisit
+    && targetKeyRef.current === expectedTarget
+    && pageKeyRef.current === expectedKey
+    && stackRef.current.at(-1)?.id === expectedId;
   const mode = pages ?? (compact || embedded ? "open" : "stack");
+  useEffect(() => {
+    mountedRef.current = true;
+    const live = flight.current;
+    return () => {
+      mountedRef.current = false;
+      visitRef.current += 1;
+      asked.current += 1;
+      loadReqRef.current += 1;
+      inFlightRef.current = false;
+      live.forEach((f) => clearTimeout(f.timer));
+      live.clear();
+      if (confirmingRef.current) {
+        const pending = confirmingRef.current;
+        confirmingRef.current = null;
+        pending.done?.(false);
+      }
+    };
+  }, []);
   useEffect(() => onDepth?.(depth), [depth, onDepth]);
 
   // the first page follows the props (a different extension or page opened in the same place)
@@ -400,6 +446,7 @@ export function LegacyExtensionUI({
   useEffect(() => {
     if (lastPropKey.current === propKey) return;
     lastPropKey.current = propKey;
+    visitRef.current += 1;
     asked.current += 1;
     poppingRef.current = null;
     const entry: StackEntry = { id: ++nextEntryId.current, ui, ...(firstState ? { state: firstState, initialState: firstState } : {}) };
@@ -410,11 +457,18 @@ export function LegacyExtensionUI({
   }, [propKey, ui, firstState]);
 
   // keep: drawn again for the same thing, the fields typed into stay as typed
-  const show = (v: UIView, keep = false, expectedKey = pageKeyRef.current, expectedId = stackRef.current.at(-1)?.id) => {
+  const show = (
+    v: UIView,
+    keep = false,
+    expectedKey = pageKeyRef.current,
+    expectedId = stackRef.current.at(-1)?.id,
+    expectedVisit = visitRef.current,
+    expectedTarget = targetKeyRef.current,
+  ) => {
     const current = stackRef.current;
     const lastIdx = current.length - 1;
     const curTop = current[lastIdx];
-    if (!curTop || pageKeyRef.current !== expectedKey || curTop.id !== expectedId) return;
+    if (!curTop || !isCurrentPage(expectedKey, expectedId, expectedVisit, expectedTarget)) return;
     // drawn again for the same page: the diffs loaded since stay (UI version 5)
     setView((before) => (keep ? keepLoaded(before, v) : v));
     const start = fieldValues(v);
@@ -435,7 +489,7 @@ export function LegacyExtensionUI({
     // a control's choice stays only while its request is on its way: once answered, what the extension draws is shown
     setControls((c) => keepFlying(c, flight.current));
     if (!keep) setQuery(v.search?.value ?? "");
-    setError("");
+    setFailure(undefined);
     setUnsupported(false); // a view drawn is something here
     setDrawnAt(Date.now());
   };
@@ -444,34 +498,54 @@ export function LegacyExtensionUI({
   // and is not drawn, nor its error shown (#4931).
   const load = useCallback((keep?: boolean) => {
     const mine = ++asked.current;
+    const loadMine = ++loadReqRef.current;
     const expectedKey = pageKey;
     const expectedId = top.id;
+    const expectedVisit = visitRef.current;
+    const expectedTarget = targetKey;
     inFlightRef.current = true;
     setLoading(true);
     renderUI(extension, top.ui, context, stateRef.current, manager)
-      .then((v) => mine === asked.current && show(v, keep === true, expectedKey, expectedId))
+      .then((v) => mine === asked.current && isCurrentPage(expectedKey, expectedId, expectedVisit, expectedTarget)
+        && show(v, keep === true, expectedKey, expectedId, expectedVisit, expectedTarget))
       .catch((e) => {
-        if (mine !== asked.current) return;
+        if (mine !== asked.current || !isCurrentPage(expectedKey, expectedId, expectedVisit, expectedTarget)) return;
         if (isUnsupported(e)) (setUnsupported(true), onUnsupported?.());
         else if (onMissing && e instanceof ApiError && e.status === 404 && depth === 1) onMissing();
         else if (onFailed && !drawnRef.current) onFailed(e);
         else {
-          setError(errorText(e));
+          setFailure({ message: errorText(e), attempt: mine, checkSetup: setupOwner !== undefined && !drawnRef.current
+            && depth === 1 && !httpOnlyUI(extension) && e instanceof ApiError && e.status === 404 });
           setDrawnAt(Date.now()); // a failed refresh waits a whole interval too
         }
       })
       .finally(() => {
-        if (mine === asked.current) inFlightRef.current = false;
-        setLoading(false);
+        if (loadMine === loadReqRef.current) {
+          inFlightRef.current = false;
+          if (mountedRef.current) setLoading(false);
+        }
       });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [extension, pageKey, ctxKey, manager]);
   // a new page (pushed, popped, another one): its own state, a fresh view
   useEffect(() => {
+    visitRef.current += 1;
     stateRef.current = top.state;
     drawnRef.current = false;
+    flight.current.forEach((f) => clearTimeout(f.timer));
+    flight.current.clear();
+    if (confirmingRef.current) {
+      const pending = confirmingRef.current;
+      confirmingRef.current = null;
+      pending.done?.(false);
+      setConfirming(null);
+    }
+    busyReqRef.current = 0;
+    setBusy("");
+    setControls({});
+    setSlow({});
     setView(null);
-    setError("");
+    setFailure(undefined);
     setUnsupported(false); // "nothing here" was the page before's answer
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -491,8 +565,8 @@ export function LegacyExtensionUI({
     const start = fieldValues(view);
     if (view && depth === 1 && Object.entries(start).every(([k, v]) => (valuesNow.current[k] ?? v) === v)) onView?.(view, UI_VERSION, manager);
   }, [view, depth, onView, manager]);
-  useRefresh(active ? refreshDelay(view) : 0, drawnAt, () => {
-    if (!busy) load(true);
+  useRefresh(active && !busy ? refreshDelay(view) : 0, drawnAt, () => {
+    if (!busy && !inFlightRef.current) load(true);
   });
   useInvalidate(
     extension,
@@ -521,6 +595,7 @@ export function LegacyExtensionUI({
       if (at >= current.length) return;
       const next = current.slice(0, Math.max(1, at));
       const nextTop = next[next.length - 1];
+      visitRef.current += 1;
       asked.current += 1;
       stackRef.current = next;
       pageKeyRef.current = `${nextTop.id}\n${next.length}\n${nextTop.ui}`;
@@ -549,6 +624,7 @@ export function LegacyExtensionUI({
         : current[idx] ?? { ...entry, id: ++nextEntryId.current, ...(entry.state !== undefined ? { initialState: entry.state } : {}) },
     );
     const nextTop = next[next.length - 1];
+    visitRef.current += 1;
     asked.current += 1;
     poppingRef.current = null;
     if (historied && next.length > current.length) {
@@ -576,6 +652,7 @@ export function LegacyExtensionUI({
     } else {
       const next = current.slice(0, -1);
       const nextTop = next[next.length - 1];
+      visitRef.current += 1;
       asked.current += 1;
       stackRef.current = next;
       pageKeyRef.current = `${nextTop.id}\n${next.length}\n${nextTop.ui}`;
@@ -585,6 +662,12 @@ export function LegacyExtensionUI({
 
   // resolves to whether the action was done: false when it did not go (a field not a number) or failed
   const run = async (action: UIAction, extra?: Record<string, string>): Promise<boolean> => {
+    // A full page may open an existing Persona session or to-do (#14617): route locally, like an assistant card.
+    // The hub only keeps session and task targets on extension pages; other forms still go through ui.action.
+    if (action.open) {
+      openTargetOf(action.open, linkManager);
+      return true;
+    }
     if (action.push) {
       push(action.push);
       return true;
@@ -599,15 +682,26 @@ export function LegacyExtensionUI({
         return false;
       }
     }
-    setBusy(action.id);
     const mine = ++asked.current;
+    if (inFlightRef.current) {
+      loadReqRef.current += 1;
+      inFlightRef.current = false;
+      setLoading(false);
+    }
+    busyReqRef.current = mine;
+    setBusy(action.id);
     const expectedKey = pageKey;
     const expectedId = top.id;
+    const expectedVisit = visitRef.current;
+    const expectedTarget = targetKey;
     try {
       const r = outcome(await actUI(extension, top.ui, action.id, { context, state: stateRef.current, values: sent, manager }), context?.item, extension);
+      // Do not apply view updates or trigger navigation/open/pop/reload side effects after unmount or page switch.
+      const sameEntry = isCurrentPage(expectedKey, expectedId, expectedVisit, expectedTarget);
+      if (!sameEntry) return false;
       // what it says to do is still done; the view it answers only while nothing was asked since
-      const latest = mine === asked.current && pageKeyRef.current === expectedKey && stackRef.current.at(-1)?.id === expectedId;
-      if (r.view && latest) show(r.view, !!(extra && "q" in extra), expectedKey, expectedId); // a search keeps what is typed
+      const latest = mine === asked.current;
+      if (r.view && latest) show(r.view, !!(extra && "q" in extra), expectedKey, expectedId, expectedVisit, expectedTarget); // a search keeps what is typed
       if (r.items && latest) setView((v) => (v ? patchView(v, r.items) : v));
       if (r.toast) toast(r.toast, "ok");
       if (r.url) openLink(r.url, undefined, linkManager);
@@ -617,18 +711,21 @@ export function LegacyExtensionUI({
       if (r.settings) navigate(r.settings);
       // the subscription pages' Set Up with … (persona://ask): the text to the assistant's main conversation, which opens
       if (r.ask) askAssistant(r.ask);
+      // an extension's own quick prompt (persona://compose?prompt=<id>&text=<text>): into the main composer, not sent
+      if (r.compose) composeAssistant(r.compose);
       if (r.push) push(r.push);
       if (r.pop) pop();
-      if (r.reload) load();
+      if (r.reload && !r.push && !r.pop && isCurrentPage(expectedKey, expectedId, expectedVisit, expectedTarget)) load();
       return true;
     } catch (e) {
+      if (!isCurrentPage(expectedKey, expectedId, expectedVisit, expectedTarget)) return false;
       // an older one's "unsupported" does not take away a view drawn since; a press that failed still says so
       if (isUnsupported(e)) {
         if (mine === asked.current) (setUnsupported(true), onUnsupported?.());
       } else toast(t("settings-extensionview.action_failed", { error: errorText(e) }), "error");
       return false;
     } finally {
-      setBusy("");
+      if (mountedRef.current && busyReqRef.current === mine) setBusy("");
     }
   };
   // an action that does not hold the page (UI version 5: a diff's lines, a viewed mark, a diff loaded as it comes near):
@@ -639,15 +736,17 @@ export function LegacyExtensionUI({
       const at = asked.current;
       const expectedKey = pageKey;
       const expectedId = top.id;
+      const expectedVisit = visitRef.current;
+      const expectedTarget = targetKey;
       try {
         const r = await actUI(extension, top.ui, action.id, { context, state: stateRef.current, values: { ...extra, ...action.values }, manager });
-        const sameEntry = pageKeyRef.current === expectedKey && stackRef.current.at(-1)?.id === expectedId;
-        if (r.items?.length && sameEntry) setView((v) => (v ? patchView(v, r.items) : v));
-        if (r.view && at === asked.current && sameEntry) show(r.view, true, expectedKey, expectedId);
+        if (!isCurrentPage(expectedKey, expectedId, expectedVisit, expectedTarget)) return null;
+        if (r.items?.length) setView((v) => (v ? patchView(v, r.items) : v));
+        if (r.view && at === asked.current) show(r.view, true, expectedKey, expectedId, expectedVisit, expectedTarget);
         if (r.toast) toast(r.toast, "ok");
         return r;
       } catch (e) {
-        toast(t("settings-extensionview.action_failed", { error: errorText(e) }), "error");
+        if (isCurrentPage(expectedKey, expectedId, expectedVisit, expectedTarget)) toast(t("settings-extensionview.action_failed", { error: errorText(e) }), "error");
         return null;
       }
     },
@@ -660,35 +759,41 @@ export function LegacyExtensionUI({
   // last value back and says why. A redraw meanwhile (invalidate, refresh) keeps the user's value until its own answer.
   const sendControl = async (c: UIRowControl, value: string) => {
     const entry: { timer: ReturnType<typeof setTimeout>; queued?: { c: UIRowControl; value: string } } = {
-      timer: setTimeout(() => setSlow((x) => ({ ...x, [c.name]: true })), 1000),
+      timer: setTimeout(() => {
+        if (mountedRef.current && flight.current.get(c.name) === entry) setSlow((x) => ({ ...x, [c.name]: true }));
+      }, 1000),
     };
     flight.current.set(c.name, entry);
     const at = asked.current;
     const expectedKey = pageKey;
     const expectedId = top.id;
+    const expectedVisit = visitRef.current;
+    const expectedTarget = targetKey;
     let r: ReturnType<typeof outcome> | null = null;
+    let failed: unknown = null;
     try {
       r = outcome(await actUI(extension, top.ui, c.action.id, { context, state: stateRef.current, values: { ...c.action.values, [c.name]: value }, manager }), context?.item, extension);
     } catch (e) {
-      toast(t("settings-extensionview.action_failed", { error: errorText(e) }), "error");
+      failed = e;
     }
     clearTimeout(entry.timer);
+    if (flight.current.get(c.name) === entry) flight.current.delete(c.name);
+    if (!isCurrentPage(expectedKey, expectedId, expectedVisit, expectedTarget)) return;
     setSlow((x) => without(x, c.name));
-    flight.current.delete(c.name);
-    // changed again while this one was on its way: the latest goes now, and stays shown
-    if (entry.queued) void sendControl(entry.queued.c, entry.queued.value);
+    if (failed !== null) toast(t("settings-extensionview.action_failed", { error: errorText(failed) }), "error");
+    // changed again while this one was on its way: the latest goes now, and stays shown (unless leaving this page)
+    if (entry.queued && !r?.push && !r?.pop) void sendControl(entry.queued.c, entry.queued.value);
     else if (!r) setControls((x) => without(x, c.name)); // failed: the extension's last value again
     if (!r) return;
-    const sameEntry = pageKeyRef.current === expectedKey && stackRef.current.at(-1)?.id === expectedId;
-    const applied = sameEntry && ((!!r.view && at === asked.current) || !!r.items);
-    if (r.view && at === asked.current && sameEntry) show(r.view, true, expectedKey, expectedId);
-    if (r.items && sameEntry) setView((v) => (v ? patchView(v, r.items) : v));
+    const applied = (!!r.view && at === asked.current) || !!r.items;
+    if (r.view && at === asked.current) show(r.view, true, expectedKey, expectedId, expectedVisit, expectedTarget);
+    if (r.items) setView((v) => (v ? patchView(v, r.items) : v));
     if (applied && !entry.queued) setControls((x) => without(x, c.name));
     if (r.toast) toast(r.toast, "ok");
     if (r.url) openLink(r.url, undefined, linkManager);
     if (r.push) push(r.push);
     if (r.pop) pop();
-    if (r.reload || (r.view && sameEntry && at !== asked.current && !inFlightRef.current)) load(true);
+    if (!r.push && !r.pop && isCurrentPage(expectedKey, expectedId, expectedVisit, expectedTarget) && (r.reload || (r.view && at !== asked.current && !inFlightRef.current))) load(true);
   };
   const applyControl = (c: UIRowControl, value: string) => {
     setControls((x) => ({ ...x, [c.name]: value }));
@@ -702,10 +807,6 @@ export function LegacyExtensionUI({
     if (c.action.confirm?.trim()) setConfirming({ action: c.action, destructive: false, control: { c, value } });
     else applyControl(c, value);
   };
-  useEffect(() => {
-    const live = flight.current;
-    return () => live.forEach((f) => clearTimeout(f.timer));
-  }, []);
   // a hub picture that does not load may have outlived its token (15 minutes): the page is drawn again, which signs
   // anew; at most once a minute, so a picture that is gone for good does not keep drawing the page
   const imageRedraw = useRef(0);
@@ -730,7 +831,10 @@ export function LegacyExtensionUI({
     return run(action, extra);
   };
   const cancelConfirm = () => {
-    confirming?.done?.(false);
+    const pending = confirmingRef.current;
+    if (!pending) return;
+    confirmingRef.current = null;
+    pending.done?.(false);
     setConfirming(null);
   };
   // a segmented acts as soon as another choice is made: its own value goes along (the rest only when it submits)
@@ -841,16 +945,18 @@ export function LegacyExtensionUI({
         </div>
       )}
       {error && !compact && (
-        <div className={cx("flex flex-col items-center gap-2 px-6 text-center", embedded ? "rounded-control bg-inset py-4 shadow-hairline" : "rounded-card bg-surface py-8 shadow-card")}>
-          <span className="flex size-9 items-center justify-center rounded-[10px] bg-red-tint text-red">
-            <Icon name="extension" size={16} />
-          </span>
-          <p className="text-meta font-medium text-ink">{view ? t("settings-extensionview.update_failed") : t("settings-extensionview.draw_failed")}</p>
-          <p className="max-w-[420px] text-label leading-relaxed break-words text-ink-3 select-text">{error}</p>
-          <Button tone="secondary" icon="retry" busy={loading} onClick={() => load()}>
-            {t("settings-extensionview.retry")}
-          </Button>
-        </div>
+        <ExtensionSetupNotice key={JSON.stringify([failure.attempt, setupOwner])} check={failure.checkSetup} extension={extension} manager={setupOwner || undefined}>
+          <div className={cx("flex flex-col items-center gap-2 px-6 text-center", embedded ? "rounded-control bg-inset py-4 shadow-hairline" : "rounded-card bg-surface py-8 shadow-card")}>
+            <span className="flex size-9 items-center justify-center rounded-[10px] bg-red-tint text-red">
+              <Icon name="extension" size={16} />
+            </span>
+            <p className="text-meta font-medium text-ink">{view ? t("settings-extensionview.update_failed") : t("settings-extensionview.draw_failed")}</p>
+            <p className="max-w-[420px] text-label leading-relaxed break-words text-ink-3 select-text">{error}</p>
+            <Button tone="secondary" icon="retry" busy={loading} onClick={() => load()}>
+              {t("settings-extensionview.retry")}
+            </Button>
+          </div>
+        </ExtensionSetupNotice>
       )}
       {view && (
         <ReviewProvider view={isReview ? view : null} page={pageKey} fetch={fetchQuiet}>
@@ -894,8 +1000,11 @@ export function LegacyExtensionUI({
               <Button
                 tone={confirming.destructive ? "danger" : "primary"}
                 onClick={() => {
-                  const { action: a, values: v, control, done } = confirming;
+                  const pending = confirmingRef.current;
+                  if (!pending) return;
+                  confirmingRef.current = null;
                   setConfirming(null);
+                  const { action: a, values: v, control, done } = pending;
                   if (control) applyControl(control.c, control.value);
                   else void run(a, v).then((ok) => done?.(ok));
                 }}
@@ -1036,4 +1145,20 @@ export function askAssistant(text: string) {
   void import("../../lib/outbox")
     .then((m) => m.askPersona(text))
     .catch((e: unknown) => toast(t("settings-extensionview.action_failed", { error: errorText(e) }), "error"));
+}
+
+/** Puts one of an extension's quick prompts in the assistant's main composer, without sending it: the main
+ *  conversation opens on the computer it really runs on (main_machine_id, lib/feed-cache.ts), or the
+ *  new-conversation page when there is none yet, and the owner sends when ready. */
+export function composeAssistant(text: string) {
+  const a = getState().assistant;
+  const machine = mainConversationMachine(a);
+  if (a?.main && machine) {
+    sendDraft(`${machine}/${a.main}`, { type: "replace", text });
+    navigate(conversationPage(a.main, machine, chosenManager() ?? undefined));
+    return;
+  }
+  sendDraft("persona-new", { type: "replace", text });
+  const onStarter = typeof location !== "undefined" && (location.pathname === "/persona/new" || (location.pathname === "/persona" && !a?.main));
+  if (!onStarter) navigate("/persona/new");
 }

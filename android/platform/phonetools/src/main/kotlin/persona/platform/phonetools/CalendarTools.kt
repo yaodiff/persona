@@ -64,7 +64,11 @@ internal data class CalendarArguments(
             val start = parseTime(args.text("start"), zone) ?: invalid("start is required, as ISO 8601 with a timezone")
             val end = parseTime(args.text("end"), zone) ?: invalid("end is required, as ISO 8601 with a timezone")
             if (!end.isAfter(start)) invalid("end must be after start")
-            return CalendarArguments(title, start, end, args.text("location"), args.text("notes"), args.bool("all_day"), args.text("calendar"))
+            val allDay = args.bool("all_day")
+            if (allDay && !end.atZone(zone).toLocalDate().isAfter(start.atZone(zone).toLocalDate())) {
+                invalid("an all-day event needs an exclusive end date after its start date")
+            }
+            return CalendarArguments(title, start, end, args.text("location"), args.text("notes"), allDay, args.text("calendar"))
         }
     }
 }
@@ -111,7 +115,6 @@ internal class CalendarTools(
     private val resolver = context.contentResolver
 
     fun events(args: JsonObject): PhoneToolResult {
-        val zone = ZoneId.systemDefault()
         val start = parseTime(args.text("start"), zone) ?: LocalDate.now(zone).atStartOfDay(zone).toInstant()
         val end = parseTime(args.text("end"), zone) ?: start.atZone(zone).plusDays(7).toInstant()
         if (!end.isAfter(start)) invalid("end must be after start")
@@ -163,12 +166,14 @@ internal class CalendarTools(
         attendeesJson(queryAttendees(resolver, eventId).take(MAX_ATTENDEES), owner)
 
     fun create(args: JsonObject): PhoneToolResult {
-        val event = CalendarArguments.parse(args)
+        val event = CalendarArguments.parse(args, zone)
         val (id, name) = writableCalendar(event.calendar)
+        val startMillis = event.startMillis(zone)
+        val endMillis = event.endMillis(zone)
         val values = ContentValues().apply {
             put(Calendar.Events.CALENDAR_ID, id); put(Calendar.Events.TITLE, event.title)
-            put(Calendar.Events.DTSTART, event.startMillis()); put(Calendar.Events.DTEND, event.endMillis())
-            put(Calendar.Events.EVENT_TIMEZONE, if (event.allDay) "UTC" else ZoneId.systemDefault().id)
+            put(Calendar.Events.DTSTART, startMillis); put(Calendar.Events.DTEND, endMillis)
+            put(Calendar.Events.EVENT_TIMEZONE, if (event.allDay) "UTC" else zone.id)
             put(Calendar.Events.ALL_DAY, if (event.allDay) 1 else 0)
             put(Calendar.Events.EVENT_LOCATION, event.location); put(Calendar.Events.DESCRIPTION, event.notes)
         }
@@ -176,7 +181,8 @@ internal class CalendarTools(
             ?: unavailable("日程没有保存 / The calendar did not take the event.")  // i18n-ignore: tool result for the model
         return PhoneToolResult.text(buildJsonObject {
             put("id", ContentUris.parseId(uri).toString()); put("title", event.title)
-            put("start", iso(event.start)); put("end", iso(event.end))
+            put("start", if (event.allDay) eventTime(startMillis, true, zone) else iso(event.start, zone))
+            put("end", if (event.allDay) eventTime(endMillis, true, zone) else iso(event.end, zone))
             name?.takeIf { it.isNotEmpty() }?.let { put("calendar", it) }
         }.toString())
     }
@@ -207,7 +213,7 @@ internal class CalendarTools(
             put(Calendar.Calendars.NAME, "Persona"); put(Calendar.Calendars.CALENDAR_DISPLAY_NAME, "Persona")
             put(Calendar.Calendars.OWNER_ACCOUNT, "Persona"); put(Calendar.Calendars.CALENDAR_ACCESS_LEVEL, Calendar.Calendars.CAL_ACCESS_OWNER)
             put(Calendar.Calendars.CALENDAR_COLOR, LOCAL_CALENDAR_COLOR); put(Calendar.Calendars.VISIBLE, 1)
-            put(Calendar.Calendars.SYNC_EVENTS, 1); put(Calendar.Calendars.CALENDAR_TIME_ZONE, ZoneId.systemDefault().id)
+            put(Calendar.Calendars.SYNC_EVENTS, 1); put(Calendar.Calendars.CALENDAR_TIME_ZONE, zone.id)
         }
         val created = resolver.insert(uri, values)
             ?: unavailable("这台手机上没有可写入的日历 / No writable calendar is configured on this phone.")  // i18n-ignore: tool result for the model

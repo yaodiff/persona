@@ -158,7 +158,7 @@ internal fun Todo.place(host: AssistantTaskHost, lead: Session?): String = build
     val a = activeAgents.firstOrNull() ?: agents.firstOrNull()
     if (a != null) {
         add(host.machineName(a.machineId))
-        a.cwd?.trimEnd('/')?.substringAfterLast('/')?.takeIf(String::isNotBlank)?.let(::add)
+        persona.core.contracts.compactFolderName(a.cwd).takeIf(String::isNotBlank)?.let(::add)
     }
     lead?.agentLabel?.let(::add)
 }.joinToString(" · ")
@@ -640,8 +640,8 @@ private fun ReceiptCard(item: FeedItem, host: AssistantTaskHost, todos: List<Tod
     }
     val busy by host.tasks.busy.collectAsStateWithLifecycle()
     // A done receipt ends a stretch of work, not the task: while its todo is open (the agent stopped unfinished, waits on
-    // the user…) it says so, not "done"; done once the todo is (#6153). One gone from the list stands on its receipt.
-    val stopped = !failed && todo != null && todo.doneAt == null
+    // the user…) it says so, not "done"; done once the todo is done or its agent has an unread completion (#6153).
+    val stopped = !failed && todo != null && todo.doneAt == null && state != TaskState.Unread
     val tone = if (failed) PersonaTheme.palette.danger else if (stopped) PersonaTheme.palette.idle else PersonaTheme.palette.done
     val summary = todo?.startError?.takeIf { failed && it.isNotBlank() }?.let { stringResource(R.string.chat_tasks_now_failed, it.trim()) } ?: item.field("summary")
     Row(Modifier.fillMaxWidth().clip(PersonaTheme.shapes.cardShape).background(PersonaTheme.palette.statusSurface).padding(Tokens.Space.l),
@@ -669,7 +669,7 @@ private fun ReceiptCard(item: FeedItem, host: AssistantTaskHost, todos: List<Tod
 /** What the task's agent said last, its Markdown styled and its web links linked, in four lines (#1508). */
 @Composable
 private fun ReceiptSummary(md: String) {
-    Text(agentWords(md), style = PersonaTheme.type.callout, color = PersonaTheme.palette.ink2, maxLines = 4, overflow = TextOverflow.Ellipsis)
+    Text(summaryWords(md), style = PersonaTheme.type.callout, color = PersonaTheme.palette.ink2, maxLines = 4, overflow = TextOverflow.Ellipsis)
 }
 
 /** A task the model service cut off (#1516): red, why in words, "Continue" while it is still cut off; once its agent went on,
@@ -977,8 +977,9 @@ internal fun MessageCard(item: FeedItem, host: AssistantTaskHost, todos: List<To
                 Text(stringResource(when { done -> R.string.chat_tasks_message_replied; dismissed -> R.string.chat_tasks_draft_dismissed
                     filed -> R.string.chat_tasks_message_filed_title; else -> R.string.chat_tasks_message_drafted }), style = PersonaTheme.type.caption,
                     color = when { done -> PersonaTheme.palette.done.text; filed || dismissed -> PersonaTheme.palette.ink2; else -> PersonaTheme.palette.accent })
-                if (sent != null) Text(sent.text, style = PersonaTheme.type.body, color = PersonaTheme.palette.ink)
-                else if (filed || dismissed) Text(item.field("draft").orEmpty(), style = PersonaTheme.type.body, color = PersonaTheme.palette.ink2)
+                if (sent != null) {
+                    if (sent.text.isNotEmpty()) Text(sent.text, style = PersonaTheme.type.body, color = PersonaTheme.palette.ink)
+                } else if (filed || dismissed) Text(item.field("draft").orEmpty(), style = PersonaTheme.type.body, color = PersonaTheme.palette.ink2)
                 else BasicTextField(draft, { draft = it }, Modifier.fillMaxWidth(),
                     textStyle = PersonaTheme.type.body.copy(color = PersonaTheme.palette.ink),
                     cursorBrush = SolidColor(PersonaTheme.palette.accent))
@@ -1061,8 +1062,11 @@ private fun GlassMessageCard(item: FeedItem, host: AssistantTaskHost, todo: Todo
                 // Sent: what the hub says went out, which may have been edited on another device.
                 if (editing && open) BasicTextField(draft, onDraft, Modifier.fillMaxWidth().testTag("message-card-field"),
                     textStyle = type.body.copy(color = palette.ink), cursorBrush = SolidColor(palette.accent))
-                else Text(sent?.text ?: draft.ifEmpty { item.field("draft").orEmpty() }, style = type.body,
-                    color = if (filed || dismissed) palette.ink2 else palette.ink)
+                else {
+                    val displayed = sent?.text ?: draft.ifEmpty { item.field("draft").orEmpty() }
+                    if (displayed.isNotEmpty()) Text(displayed, style = type.body,
+                        color = if (filed || dismissed) palette.ink2 else palette.ink)
+                }
             }
             if (blank != null) Text(stringResource(R.string.chat_tasks_message_blank, blank), style = type.caption, color = palette.danger.text)
             if (filed) Text(stringResource(R.string.chat_tasks_message_filed), style = type.caption, color = palette.ink2)

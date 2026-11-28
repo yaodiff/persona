@@ -57,7 +57,7 @@ describe("a connector's page while it starts", () => {
   it("keeps the newest status when an older read answers last, and stops polling", async () => {
     draw("x");
     await answer(0, [starting("x")]);
-    expect(text()).toContain("启动后就能登录");
+    expect(text()).toContain("启动完成后即可登录");
 
     await tick(); // the poll's first read, still on its way
     expect(reads).toHaveLength(2);
@@ -71,7 +71,7 @@ describe("a connector's page while it starts", () => {
     await answer(1, [starting("x")]); // the older one, late
     expect(text()).toContain("已连接");
     expect(text()).toContain("账号 x");
-    expect(text()).not.toContain("启动后就能登录");
+    expect(text()).not.toContain("启动完成后即可登录");
 
     await tick(20_000);
     expect(reads).toHaveLength(3); // no longer starting: no more polling

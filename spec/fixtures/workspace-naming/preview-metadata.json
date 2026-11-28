@@ -1,0 +1,11 @@
+{
+  "system_defaults": {
+    "base_directory": "{home}/workspace",
+    "task_directory_template": "task-{task-id}",
+    "branch_template": "persona/{task-id}"
+  },
+  "branch_sources": [
+    { "repo_id": "api", "kind": "repository_default" },
+    { "repo_id": "web", "kind": "explicit_branch", "branch": "release/next" }
+  ]
+}

@@ -187,7 +187,7 @@ func (s *Service) kbOpenLocked(ctx context.Context, set assistantwire.KBSettings
 		if err != nil {
 			return nil, err
 		}
-		e := &kb.Engine{Store: st, TextDays: set.TextDays, AttachmentDays: set.AttachmentDays, AttachmentDaysBySource: set.AttachmentDaysBySource, RecordingDaysFunc: s.recordingDaysNow, MinutesDaysFunc: s.minutesDaysNow, ExtraDirs: kbReadDirs(set.ExtraDirs),
+		e := &kb.Engine{Store: st, TextDays: set.TextDays, AttachmentDays: set.AttachmentDays, AttachmentDaysBySource: set.AttachmentDaysBySource, RecordingDaysFunc: s.recordingTextDaysNow, AudioDaysFunc: s.recordingAudioDaysNow, MinutesDaysFunc: s.minutesDaysNow, ExtraDirs: kbReadDirs(set.ExtraDirs),
 			Selection: s.kbSelectionNow, TopicsOn: s.kbTopicsNow}
 		k.cur.Store(&kbOpened{eng: e, set: set})
 		return e, nil
@@ -225,7 +225,7 @@ func (s *Service) kbOpenLocked(ctx context.Context, set assistantwire.KBSettings
 	// The models are counted per lane run (kb_lanes.go: kbCounted, through the run's context).
 	// Retries: the steps' backoffs carry over to the engine after this one (the hub's settings changed; #4247).
 	e := &kb.Engine{Store: k.store, Retries: &k.retries, Model: kbCounted("inbox.triage", s.kbModel("inbox.triage")), ModelFor: func(id string) kb.Model { return kbCounted(id, s.kbModel(id)) },
-		Owner: s.owner(ctx), Logf: s.logf, TextDays: set.TextDays, AttachmentDays: set.AttachmentDays, AttachmentDaysBySource: set.AttachmentDaysBySource, HandleKey: k.key, Index: s.kbIndexEntity, Unindex: s.kbUnindex, RecordingDaysFunc: s.recordingDaysNow, MinutesDaysFunc: s.minutesDaysNow, TranscriptionReady: s.transcriptionReadyCached, EarlierMeetingsInAnswers: true, Changed: s.kbChanged, MineObserved: s.kbObserveOwner,
+		Owner: s.owner(ctx), Logf: s.logf, TextDays: set.TextDays, AttachmentDays: set.AttachmentDays, AttachmentDaysBySource: set.AttachmentDaysBySource, HandleKey: k.key, Index: s.kbIndexEntity, Unindex: s.kbUnindex, RecordingDaysFunc: s.recordingTextDaysNow, AudioDaysFunc: s.recordingAudioDaysNow, MinutesDaysFunc: s.minutesDaysNow, TranscriptionReady: s.transcriptionReadyCached, EarlierMeetingsInAnswers: true, Changed: s.kbChanged, MineObserved: s.kbObserveOwner,
 		Selection: s.kbSelectionNow, TopicsOn: s.kbTopicsNow,
 		// All-day recordings: the recap time from the evening routine's (recording_host.go); their names and the day's
 		// push are the recording module's (recordingHook below).
@@ -488,7 +488,8 @@ func (s *Service) kbLoop(ctx context.Context) {
 // kbRounds is when the archive lane last did what it does less often than every run (only that lane touches it).
 type kbRounds struct {
 	items, prune, links time.Time
-	tagMore             bool // item tagging stopped at its cap with untagged items left
+	lark                time.Time // the Lark minutes and documents import (kb_lark.go)
+	tagMore             bool      // item tagging stopped at its cap with untagged items left
 }
 
 // kbPrepare is what a round checks before it starts lanes, quickly, on the loop's goroutine: nothing when the
@@ -569,6 +570,8 @@ func (s *Service) kbArchiveLane(ctx context.Context, e *kb.Engine, r *kbRounds) 
 	case r.tagMore: // untagged items left past the last run's cap
 		s.kbRun(ctx, func() { r.tagMore = s.kbTagItems(ctx, e, r.tagMore) })
 	}
+	// The owner's Lark minutes and document titles, through lark-cli (kb.lark_minutes, off by default).
+	s.kbRun(ctx, func() { s.kbLarkMinutes(ctx, e, r) })
 	daily := time.Since(r.prune) >= 24*time.Hour
 	if daily {
 		r.prune = time.Now()

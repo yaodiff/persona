@@ -146,7 +146,7 @@ Implementation (#4045): generated values are **not written back to `.env`**. Com
 | Scenario | Source of the first code |
 | --- | --- |
 | Just ran `hub setup` | Terminal QR code; or open the printed `/admin#setup=…` in a phone browser, set a password, then "Pair phone" |
-| Already has a logged-in device | **Settings › Devices › Connect new device** on that device (already on web and iOS; Android added this round) |
+| Already has a logged-in device | **Connect a new device** in Settings. On Web, open **Advanced › Devices**. On Apple, open **Advanced › Devices & Pairing**. On Android, open **Devices**. |
 | Same LAN, hub has TLS enabled (P1) | "Find nearby hubs" on the app's first screen browses `_persona-hub._tcp` and lists "Home hub 'xxx'". **mDNS provides discovery, not trust**: broadcast `fp` cannot establish initial trust (`docs/operations/network.md:75`). A one-time code is still required after discovery; the benefit is telling the user "Hub is installed; here is where to get a code" |
 
 On the iPhone, a pairing link never pairs by itself (#9929): whether it comes from the camera, another app or the pairing page's scanner, the app first asks **Connect to <host>?**, naming the hub's address as the link gives it (and saying when that hub is already paired), and pairs only after Connect. Cancel leaves everything as it was; typing an address and token and tapping Connect is already the user's own step. The launch arguments `-pairURL` and `-openPairLink` (DEBUG automation) still pair directly.
@@ -435,7 +435,7 @@ Lives under the assistant service, which already knows machine, launcher, and mo
 Evaluation order and data sources (all existing, plus one new node RPC):
 
 1. `computer`: device list, online status, trust state (5.3). Later steps are `unknown` until the computer is `ok`.
-2. `claude`: `claude-version` from node self-check (`node/doctor.go:454`), cached by the assistant service for 10 minutes.
+2. `claude`: `claude-version` from node self-check (`node/doctor_checks.go:96`), cached by the assistant service for 10 minutes.
 3. `model`: new node RPC `claude.auth_status` (4.3, runs `claude auth status --json` in the launcher's actual environment, cached 10 minutes; a signed-out answer is asked again after a minute and waited for, an answer that said nothing — timeout, unreadable output — is asked again after a minute in the background while the last one is used); the most recent `?probe=1` or "Try a message" result; `turn_error_kind` of main chat's last turn. **No proactive token spending** by default. If never verified, use `unknown` + `model_unverified`, not `problem`; `mode` can still be `full`.
 4. `first_message`: whether main chat has ever had a successful reply or a successful probe check (`?probe=1`). `todo` does not affect `mode`.
 

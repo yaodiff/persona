@@ -9,17 +9,23 @@ internal data class ListFixture(val name: String, val operation: String, val inp
     override fun toString() = name
 }
 
-/** The list cases in [path], spelled out as "spec/fixtures/<domain>" so the build declares that domain as an input. */
-internal fun listFixtures(path: String): List<Array<Any>> {
+/** The list cases in each directory or JSON file, under an input domain declared by the build. */
+internal fun listFixtures(vararg paths: String): List<Array<Any>> {
     val root = System.getProperty("persona.repo.root") ?: error("persona.repo.root is required")
-    val directory = File(root, path)
-    check(directory.isDirectory) { "Missing fixtures: $directory" }
-    val files = directory.listFiles { file -> file.extension == "json" }!!.sortedBy { it.name }
-    check(files.isNotEmpty()) { "No fixtures: $directory" }
+    val files = paths.flatMap { path ->
+        val location = File(root, path)
+        val fixtures = if (location.isDirectory) {
+            location.listFiles { file -> file.isFile && file.extension == "json" }.orEmpty().sortedBy { it.name }
+        } else {
+            listOf(location).filter { it.isFile && it.extension == "json" }
+        }
+        check(fixtures.isNotEmpty()) { "No fixtures: $location" }
+        fixtures
+    }
     // Only list fixtures ({schema_version, operation, cases}); the directory also holds other shared rules that their own
     // tests read (spec/fixtures/inbox/handoff_memory.json, #2725).
     return files.mapNotNull { file -> JsonCodec.parseToJsonElement(file.readText()).jsonObject.takeIf { "cases" in it }?.let { file to it } }
-        .also { check(it.isNotEmpty()) { "No list fixtures: $directory" } }
+        .also { check(it.isNotEmpty()) { "No list fixtures: ${paths.joinToString()}" } }
         .flatMap { (file, document) ->
             check(document.getValue("schema_version").jsonPrimitive.int == 1)
             val cases = document.objects("cases")

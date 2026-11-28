@@ -13,8 +13,10 @@ import Testing
         #expect(again == value)
     }
 
-    @Test func parsesGoTimestamps() {
-        #expect(JSON.parseDate("2026-11-15T10:20:30.123456789Z") == Date(timeIntervalSince1970: 1_794_738_030.123))
-        #expect(!Date(timeIntervalSince1970: 0).isMeaningful)
+    @Test func comparesOccurrenceTimesWithoutTruncatingNanoseconds() {
+        #expect(JSON.compareOccurrenceTimes("2026-11-15T10:20:30.000000001Z", "2026-11-15T10:20:30.000000002Z") == .orderedAscending)
+        #expect(JSON.compareOccurrenceTimes("2026-11-15T18:20:30.000000002+08:00", "2026-11-15T10:20:30.000000001Z") == .orderedDescending)
+        #expect(JSON.compareOccurrenceTimes("2026-11-15T18:20:30.000000001+08:00", "2026-11-15T10:20:30.000000001Z") == .orderedSame)
+        #expect(JSON.compareOccurrenceTimes("not a time", "2026-11-15T10:20:30Z") == nil)
     }
 }

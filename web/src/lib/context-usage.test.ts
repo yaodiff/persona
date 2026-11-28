@@ -22,7 +22,7 @@ describe("labels", () => {
   const u = contextUsage({ context_tokens: 78000, context_window: 200000 })!;
   it("labels the used share and explains both used and remaining shares", () => {
     expect(contextLabel(u)).toBe("上下文 39%");
-    expect(contextTooltip(u)).toBe("上下文 39%（已用），还剩 61%");
+    expect(contextTooltip(u)).toBe("上下文已用 39%，剩余 61%");
   });
   it("warns from 80% used", () => {
     expect(contextWarn(contextUsage({ context_tokens: 158000, context_window: 200000 })!)).toBe(false);
@@ -60,7 +60,7 @@ describe("rowDetail", () => {
   it("lists folder, model, context and age, leaving out what is unknown", () => {
     const s = { ...base, model: "claude-opus-5-5", context_tokens: 78000, context_window: 200000, updated_at: "2026-11-05T11:55:00Z" };
     expect(rowDetail(s, now).map((p) => p.text)).toEqual(["上下文 39%", "opus 5.5", "5分钟前", "weather"]);
-    expect(rowDetail(s, now)[0]).toMatchObject({ text: "上下文 39%", warn: false, title: "上下文 39%（已用），还剩 61%" });
+    expect(rowDetail(s, now)[0]).toMatchObject({ text: "上下文 39%", warn: false, title: "上下文已用 39%，剩余 61%" });
     expect(rowDetail(base, now).map((p) => p.text)).toEqual(["weather"]);
   });
   it("marks a nearly full window", () => {
@@ -78,12 +78,12 @@ describe("the header's popover (#4054)", () => {
   it("says the share with the tokens, then what happens when it fills; only notes, nothing to choose", () => {
     const notes = contextNotes(contextUsage({ context_tokens: 78000, context_window: 200000 })!);
     expect(notes.map((n) => [n.label, n.hint])).toEqual([
-      ["上下文 39%（已用），还剩 61%", "7.8 万 / 20 万 token"], // the token count as the compaction divider writes it
-      ["上下文是 Agent 在这段对话里能记住的量，用完会自动压缩：较早的内容只留摘要。", undefined],
+      ["上下文已用 39%，剩余 61%", "7.8 万 / 20 万 token"], // the token count as the compaction divider writes it
+      ["上下文表示 Agent 在当前对话中能够记住的内容容量。用满后会自动压缩，较早的对话内容将仅保留摘要。", undefined],
     ]);
     expect(notes.every((n) => n.note)).toBe(true);
     const near = contextNotes(contextUsage({ context_tokens: 170000, context_window: 200000 })!);
-    expect(near[0].label).toBe("上下文 85%（已用），还剩 15%");
+    expect(near[0].label).toBe("上下文已用 85%，剩余 15%");
     expect(near[1].label).toContain("/compact");
   });
 });

@@ -37,12 +37,18 @@
 	<array>
 		<dict>
 			<key>CFBundleURLSchemes</key>
-			<array><string>persona</string></array>
+			<array>
+				<string>persona</string>
+			</array>
 		</dict>
 	</array>
 	<key>WKApplication</key>
 	<true/>
 	<key>WKCompanionAppBundleIdentifier</key>
 	<string>$(PERSONA_BUNDLE_ID)</string>
+	<key>NSHealthShareUsageDescription</key>
+	<string>Persona lets you read health summaries on Apple Watch, for example steps, workouts and sleep. With rolling recording on, Persona checks heart rate, HRV, steps, workouts and moods to keep the minutes around them; the records stay in Apple Health on your paired iPhone.</string>
+	<key>NSHealthUpdateUsageDescription</key>
+	<string>Persona saves health samples you confirm on Apple Watch to Apple Health on your paired iPhone. When you turn on sync, water and protein records are written there too.</string>
 </dict>
 </plist>

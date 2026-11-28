@@ -276,6 +276,9 @@ func (s *Service) startRefused(ctx context.Context, machine, launcher string, er
 	if err != nil && !coded {
 		return
 	}
+	if coded && re.Code == proto.CodeLauncherMissing {
+		s.invalidateLauncherListCache(machine)
+	}
 	cur := s.readinessRecordNow(ctx).Start
 	if err == nil && (cur == nil || cur.Machine != machine || cur.Launcher != launcher) {
 		return // nothing to clear: no write on every start

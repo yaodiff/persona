@@ -10,7 +10,8 @@ import XCTest
 /// iPhone it went to the Agents tab instead.
 ///
 /// Against scripts/mock/mock_hub.py with MOCK_TASKS=1 MOCK_TASKS_NO_ASKS=1 MOCK_MANAGERS=0 (PERSONA_MOCK_HUB), the Sidebar
-/// layout. `-sideBars YES` (PERSONA_SIDE_BARS=1) lays the pages out as under the open Duo's side bars on any simulator;
+/// layout; the task page's test also needs MOCK_TASKS_SENT=1 (it skips without). `-sideBars YES` (PERSONA_SIDE_BARS=1)
+/// lays the pages out as under the open Duo's side bars on any simulator;
 /// PERSONA_ORIENTATION=landscape turns the device on its side. PERSONA_SHOTS=<dir> keeps the screens (PERSONA_SHOTS_DEVICE
 /// names the device, PERSONA_SHOTS_APPEARANCE the appearance).
 final class PageAgentPushTests: XCTestCase {
@@ -22,6 +23,10 @@ final class PageAgentPushTests: XCTestCase {
     /// The widget to-do's Agent and one of the weather project's.
     private static let widgetAgent = "macbook/a1f3c2d4-0000-4000-8000-000000000001"
     private static let widgetTitle = "给天气 App 加主屏幕小组件"
+    /// The tests Agent's row title in the sidebar.
+    private static let testsTitle = "补齐网络层的单元测试"
+    /// The widget task's title (its page hosts the widget Agent's chat).
+    private static let taskTitle = "修小组件横屏崩溃"
     /// The orders to-do in the list and its one Agent, sharing a title.
     private static let ordersAgent = "server/a1f3c2d4-0000-4000-8000-000000000004"
     private static let ordersTitle = "排查 /orders 接口变慢"
@@ -57,6 +62,86 @@ final class PageAgentPushTests: XCTestCase {
         try drillDown(from: "brief", tap: open, agent: Self.testsAgent) {
             app.descendants(matching: .any)["brief.card"].firstMatch
         }
+    }
+
+    /// The Agent pushed over the main conversation belongs to the conversation's stack: another Agent picked in the
+    /// sidebar is shown at once, not hidden under the pushed chat; the main conversation picked again comes back with the
+    /// pushed chat in front, and Back returns to the conversation itself.
+    @MainActor func testAnAgentPushedOverTheConversationStaysWithIt() throws {
+        launch()
+        try skipWithoutColumnBeside()
+        let open = app.buttons["打开：Mock 用协议注入还是保留单例？"]
+        reveal(open)
+        open.tap()
+        assertChat(Self.testsAgent)
+        let pushed = settled { $0.root == "conversation" && $0.path == 1 }
+        XCTAssertEqual(pushed?.path, 1, "the Agent's chat was not pushed over the conversation: \(pushed.map(\.description) ?? "-")")
+        shot("stack-0-pushed")
+
+        // Another Agent from the sidebar: the page is that Agent's chat, its root, nothing pushed on it.
+        guard let row = sidebarAgentRow(Self.widgetTitle) else { return }
+        row.tap()
+        assertChat(Self.widgetAgent)
+        let picked = settled { $0.root == "agent" && $0.path == 0 }
+        XCTAssertEqual(picked?.root, "agent", "the picked Agent is not the page's root: \(picked.map(\.description) ?? "-")")
+        XCTAssertEqual(picked?.path, 0, "the conversation's pushed chat is still on the page: \(picked.map(\.description) ?? "-")")
+        app.assertOneSelectedSidebarRow("agents.row", containing: Self.widgetTitle, "the Agent picked in the sidebar")
+        shot("stack-1-picked")
+
+        // The main conversation again: back as it was left, the pushed chat in front with its Back.
+        app.descendants(matching: .any)["sidebar-main"].firstMatch.tap()
+        assertChat(Self.testsAgent)
+        let back = settled { $0.root == "conversation" && $0.path == 1 }
+        XCTAssertEqual(back?.root, "conversation", "the main conversation is not the root: \(back.map(\.description) ?? "-")")
+        XCTAssertEqual(back?.path, 1, "the conversation lost its pushed chat: \(back.map(\.description) ?? "-")")
+        app.assertOneSelectedSidebarRow("sidebar-main", "the main conversation picked again")
+        shot("stack-2-conversation")
+        oneBack("the conversation's pushed chat").tap()
+        let card = app.descendants(matching: .any)["brief.card"].firstMatch
+        XCTAssertTrue(card.waitForExistence(timeout: 10), "Back did not return to the conversation:\n\(app.debugDescription)")
+        let root = settled { $0.root == "conversation" && $0.path == 0 }
+        XCTAssertEqual(root?.path, 0, "Back left something on the conversation: \(root.map(\.description) ?? "-")")
+        shot("stack-3-back")
+    }
+
+    /// A task's page opened from the main conversation (the header of a message Persona sent to it, MOCK_TASKS_SENT=1) is the
+    /// conversation's too (#13156): before the fix it was pushed by view, outside the path, and stayed in front of the
+    /// Agent picked in the sidebar.
+    @MainActor func testATaskPageOpenedFromTheConversationStaysWithIt() throws {
+        launch()
+        try skipWithoutColumnBeside()
+        // The rework Persona sent to the widget task: its header ("Persona → @task") opens the task's page.
+        let sent = app.descendants(matching: .any).matching(identifier: "exchange.routed")
+        guard sent.firstMatch.waitForExistence(timeout: 30) else {
+            throw XCTSkip("no message sent to a task: start the mock with MOCK_TASKS_SENT=1")
+        }
+        let header = sent.buttons.matching(NSPredicate(format: "label CONTAINS %@", Self.taskTitle)).firstMatch
+        reveal(header)
+        header.tap()
+        XCTAssertTrue(waitFor { taskOnPage().map { $0.isHittable } ?? false }, "the task's page did not open:\n\(app.debugDescription)")
+        let pushed = settled { $0.root == "conversation" && $0.path == 1 }
+        XCTAssertEqual(pushed?.path, 1, "the task's page is not on the conversation's path: \(pushed.map(\.description) ?? "-")")
+        shot("task-0-pushed")
+
+        guard let row = sidebarAgentRow(Self.testsTitle) else { return }
+        row.tap()
+        assertChat(Self.testsAgent)
+        let picked = settled { $0.root == "agent" && $0.path == 0 }
+        XCTAssertEqual(picked?.root, "agent", "the picked Agent is not the page's root: \(picked.map(\.description) ?? "-")")
+        XCTAssertEqual(picked?.path, 0, "something is still pushed on the picked Agent: \(picked.map(\.description) ?? "-")")
+        XCTAssertNil(taskOnPage(), "the task's page stayed in front of the picked Agent:\n\(app.debugDescription)")
+        shot("task-1-picked")
+
+        app.descendants(matching: .any)["sidebar-main"].firstMatch.tap()
+        let back = settled { $0.root == "conversation" && $0.path == 1 }
+        XCTAssertEqual(back?.path, 1, "the conversation lost the task's page: \(back.map(\.description) ?? "-")")
+        XCTAssertTrue(waitFor { taskOnPage().map { $0.isHittable } ?? false }, "the task's page did not come back:\n\(app.debugDescription)")
+        shot("task-2-conversation")
+        oneBack("the task's page").tap()
+        let root = settled { $0.root == "conversation" && $0.path == 0 }
+        XCTAssertEqual(root?.path, 0, "Back did not return to the conversation: \(root.map(\.description) ?? "-")")
+        XCTAssertTrue(waitFor { taskOnPage() == nil }, "the task's page is still up after Back:\n\(app.debugDescription)")
+        shot("task-3-back")
     }
 
     /// A to-do's Agent row pushes the Agent's chat over the to-do's page.
@@ -140,6 +225,48 @@ final class PageAgentPushTests: XCTestCase {
         guard fold.exists, fold.isHittable, app.windows.firstMatch.frame.width < 1000 else { return }
         let main = app.descendants(matching: .any)["sidebar-main"].firstMatch
         if main.exists, main.isHittable, main.frame.maxX > app.windows.firstMatch.frame.width * 0.45 { fold.tap() }
+    }
+
+    /// These need the sidebar beside the page (an iPad, the open Duo on its side): on a phone, or the open Duo upright
+    /// where the column is laid over the page, it is a drawer, and a task's page rises as a sheet.
+    @MainActor private func skipWithoutColumnBeside() throws {
+        let main = app.descendants(matching: .any)["sidebar-main"].firstMatch
+        let beside = main.waitForExistence(timeout: 20) && main.isHittable && main.frame.maxX < app.windows.firstMatch.frame.width * 0.45
+        if !beside { throw XCTSkip("the sidebar is not beside the page on this screen") }
+    }
+
+    /// The Agent's row titled `title` in the sidebar's Agents list, the column scrolled to it; nil (skipped) where the
+    /// column is not beside the page (a phone's drawer, the open Duo upright's overlay).
+    @MainActor private func sidebarAgentRow(_ title: String) -> XCUIElement? {
+        let main = app.descendants(matching: .any)["sidebar-main"].firstMatch
+        guard main.exists, main.isHittable else {
+            XCTFail("the sidebar is not beside the page:\n\(app.debugDescription)")
+            return nil
+        }
+        let row = app.buttons.matching(identifier: "agents.row").matching(NSPredicate(format: "label CONTAINS %@", title)).firstMatch
+        let column = app.windows.firstMatch.coordinate(withNormalizedOffset: .zero)
+            .withOffset(CGVector(dx: main.frame.midX, dy: app.windows.firstMatch.frame.height * 0.6))
+        for _ in 0..<12 where !(row.exists && row.isHittable) {
+            column.press(forDuration: 0.05, thenDragTo: column.withOffset(CGVector(dx: 0, dy: -200)))
+            usleep(500_000)
+        }
+        XCTAssertTrue(row.exists && row.isHittable, "no \(title) row in the sidebar:\n\(app.debugDescription)")
+        return row
+    }
+
+    /// The task's page in front: its header (the hosted chat's `chat.title`, named for the task) on the page beside the
+    /// sidebar, hittable; nil while there is none. Not the task's name elsewhere (a message's header in the conversation).
+    @MainActor private func taskOnPage() -> XCUIElement? {
+        let main = app.descendants(matching: .any)["sidebar-main"].firstMatch
+        let pageStart = main.exists ? main.frame.maxX : 0
+        return app.buttons.matching(identifier: "chat.title").matching(NSPredicate(format: "label BEGINSWITH %@", Self.taskTitle))
+            .allElementsBoundByIndex.first { $0.exists && $0.frame.minX >= pageStart && $0.isHittable }
+    }
+
+    @MainActor private func waitFor(_ done: () -> Bool) -> Bool {
+        let deadline = Date.now.addingTimeInterval(15)
+        while !done() && Date.now < deadline { usleep(300_000) }
+        return done()
     }
 
     /// The weather widget Agent's row on the page in front, scrolled into view.

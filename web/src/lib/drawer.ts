@@ -72,7 +72,7 @@ export function focusBack<T extends { isConnected: boolean }>(opener: T | null, 
   return inDrawer || active === body || active === null ? opener : null;
 }
 
-const SKIP = "input, textarea, select, [contenteditable=''], [contenteditable='true']";
+const SKIP = "input, textarea, select, [contenteditable=''], [contenteditable='true'], [data-decision-swipe]";
 
 function yields(target: Element, root: Element, dx: number): boolean {
   for (let el: Element | null = target; el && el !== root; el = el.parentElement) {

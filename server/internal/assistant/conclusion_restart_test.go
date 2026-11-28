@@ -26,7 +26,7 @@ func TestSupervisionConclusionSurvivesManagerRestart(t *testing.T) {
 	// The parent creates and owns the database; the child must reconnect to that exact database to exercise restart.
 	rawURL := os.Getenv(conclusionCrashDatabase)
 	if os.Getenv(conclusionCrashChild) == "" {
-		rawURL = newDatabase(t)
+		rawURL = newMigratedDatabase(t, db.ManagerSet)
 	} else {
 		dsn, err := url.Parse(rawURL)
 		if err != nil || dsn.Scheme != "postgres" || !strings.HasPrefix(dsn.Path, "/persona_owndb_t_") {

@@ -124,10 +124,8 @@ describe("ToolchainPanel", () => {
     expect(requested).toEqual(["/api/v1/machines/dev-box/toolchain", "/api/v1/machines/dev-box/toolchain?refresh=1"]);
     expect(host.textContent).toContain("Fresh probe");
 
-    // Switching to an offline machine shows the offline notice without firing a request.
-    const offlineTab = [...host.querySelectorAll('[role="tab"]')].find((b) => b.textContent?.includes("Offline Box")) as HTMLButtonElement;
-    expect(offlineTab).toBeTruthy();
-    act(() => offlineTab.click());
+    // Once all computers are offline, the tool shows its offline state without fetching.
+    act(() => root.render(<ToolchainPanel machines={machines.map((m) => ({ ...m, online: false }))} />));
     await flush();
 
     expect(requested).toHaveLength(2);
@@ -253,8 +251,11 @@ describe("ToolchainPanel", () => {
     expect(refreshBtn().textContent).toContain("Refreshing");
 
     // Switch to Box B while Box A's refresh is still in flight: Box A's manual refresh must be aborted.
-    const tabB = [...host.querySelectorAll('[role="tab"]')].find((b) => b.textContent?.includes("Box B")) as HTMLButtonElement;
-    act(() => tabB.click());
+    const picker = host.querySelector("select")!;
+    act(() => {
+      picker.value = "box-b";
+      picker.dispatchEvent(new Event("change", { bubbles: true }));
+    });
     await flush();
     expect(signalRefreshA?.aborted).toBe(true);
     expect(host.textContent).toContain("/opt/box-b/bin/git");

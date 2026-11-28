@@ -20,6 +20,8 @@ import (
 const (
 	// memoryExtensionPageLimit is the limit each memory.entries call asks for.
 	memoryExtensionPageLimit = 200
+	// memoryExtensionMaxPages bounds how many pages one complete memory.entries read may follow.
+	memoryExtensionMaxPages = 250
 	// A source is cached only after pagination completes. Time and byte limits fail the read rather than caching
 	// a prefix that would permanently hide later entries from targeted recall.
 	memoryExtensionReadTimeout = 2 * time.Minute
@@ -123,5 +125,5 @@ func memoryExtensionEntryOf(w wire.MemoryEntry) (memoryExtensionEntry, bool) {
 		}
 	}
 	return memoryExtensionEntry{ID: w.ID, Text: text, OriginSpace: w.OriginSpace, Categories: slices.Clone(w.Categories),
-		Tags: tags, Facet: w.Facet, Standing: w.Standing}, true
+		Tags: tags, Facet: w.Facet, Standing: w.Standing, Rank: w.Rank}, true
 }

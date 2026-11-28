@@ -168,7 +168,14 @@ func (s *Service) managedNamed(ctx context.Context, name string) (storedLauncher
 // before: the node's own pull is the last word). nil for every other launcher.
 func (s *Service) launcherScopeErr(ctx context.Context, machine, name string) error {
 	l, ok := s.managedNamed(ctx, name)
-	if !ok || machine == "" {
+	if !ok {
+		return nil
+	}
+	return s.managedLauncherScopeErr(ctx, machine, l)
+}
+
+func (s *Service) managedLauncherScopeErr(ctx context.Context, machine string, l storedLauncher) error {
+	if machine == "" {
 		return nil
 	}
 	if key := s.scopeReason(l, machine); key != "" {

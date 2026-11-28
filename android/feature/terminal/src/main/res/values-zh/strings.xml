@@ -57,18 +57,18 @@
     <string name="terminal_note_unsupported">这台电脑只能看，不能接管</string>
     <string name="terminal_note_taken">终端已被接管，现在只能看</string>
     <string name="terminal_notice_keys_not_sent">按键没有发出去，请再试一次</string>
-    <string name="terminal_panes_title">终端</string>
-    <string name="terminal_panes_summary">Agent 和普通 shell 都可以打开成终端；接管时窗格会变成手机的大小，离开后恢复</string>
+    <string name="terminal_panes_title">标签页</string>
+    <string name="terminal_panes_summary">打开标签页即可使用终端。接管时终端会适应手机屏幕，离开后恢复原来的大小。</string>
     <string name="terminal_panes_refresh">刷新列表</string>
     <string name="terminal_panes_offline">离线</string>
     <string name="terminal_panes_loading">读取中…</string>
-    <string name="terminal_panes_no_panes">这台电脑上没有打开的终端。</string>
-    <string name="terminal_panes_no_panes_agent">在这台电脑上启动 Agent 后，终端会显示在这里。</string>
+    <string name="terminal_panes_no_panes">这台电脑上没有打开的标签页。</string>
+    <string name="terminal_panes_no_panes_agent">在这台电脑上启动 Agent 后，标签页会显示在这里。</string>
     <string name="terminal_panes_no_computers">还没有电脑</string>
-    <string name="terminal_panes_no_computers_detail">连上一台电脑后，这里列出它的终端</string>
+    <string name="terminal_panes_no_computers_detail">连接电脑后，其标签页会显示在这里。</string>
     <string name="terminal_panes_tab">标签页 %1$s</string>
-    <string name="terminal_panes_untitled">终端</string>
+    <string name="terminal_panes_untitled">Shell</string>
     <string name="terminal_panes_new_tab">新标签页</string>
-    <string name="terminal_panes_new_terminal">新建终端</string>
+    <string name="terminal_panes_new_terminal">新建 Shell</string>
     <string name="terminal_panes_new_tab_failed">新建标签页失败：%1$s</string>
 </resources>

@@ -1,4 +1,4 @@
-Switch atomically to a profile by id; inspect first. Saves a rollback point and affects new model calls/Agent starts, not running work.{{template "shared/mcp_language" .}}
+Inspect first. Apply a profile to future model calls and Agent starts. Saves a rollback point.{{template "shared/mcp_language" .}}
 
 ```json
 {
@@ -6,7 +6,7 @@ Switch atomically to a profile by id; inspect first. Saves a rollback point and 
   "properties": {
     "id": {
       "type": "string",
-      "description": "Profile id from model_profiles_list"
+      "description": "Saved profile ID"
     }
   },
   "additionalProperties": false,

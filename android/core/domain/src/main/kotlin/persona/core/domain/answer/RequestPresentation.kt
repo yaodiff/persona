@@ -55,8 +55,8 @@ val Interaction.alwaysActionLabel: CoreText
 val Interaction.alwaysScopeDetail: CoreText?
     get() {
         alwaysLabel?.takeIf(String::isNotBlank)?.let { return CoreText.plain(it) }
-        if (fromOtherAgent) return null
         val keys = alwaysKeys.orEmpty()
+        if (fromOtherAgent && keys.isEmpty()) return null
         val key = when {
             keys.isNotEmpty() && keys.all { it.startsWith("tool:Read(") && it.endsWith("/**)") } -> Key.AlwaysScopeReadDirectory
             keys.isNotEmpty() && keys.all { it.startsWith("tool:Edit(") && it.endsWith("/**)") } -> Key.AlwaysScopeEditDirectory

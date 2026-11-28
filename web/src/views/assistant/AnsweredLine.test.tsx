@@ -18,7 +18,7 @@ describe("AnsweredLine (#1231)", () => {
 
   it("has nothing to open when a record is empty", () => {
     const html = renderToStaticMarkup(<AnsweredLine item={{ ...item, body: {} }} title="补测试" />);
-    expect(html).toContain("· 回答了");
+    expect(html).toContain("· 已回复");
     expect(html).not.toContain("aria-expanded");
   });
 });

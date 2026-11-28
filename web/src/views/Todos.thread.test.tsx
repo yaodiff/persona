@@ -102,7 +102,7 @@ describe("a todo's chat thread", () => {
 
   it("says how to bind when the todo has no thread, with nothing to unbind", async () => {
     await open("t2");
-    expect(section()?.textContent).toContain("绑到某个话题");
+    expect(section()?.textContent).toContain("绑定到对应话题");
     expect(section()?.textContent).not.toContain("todo_bind_thread");
     expect(section()?.textContent).toContain("/topics");
     expect(button("解绑", section()!)).toBeUndefined();

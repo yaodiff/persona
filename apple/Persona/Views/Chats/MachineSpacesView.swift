@@ -92,7 +92,7 @@ struct MachineSpacesView: View {
             ForEach(g.sessions) { s in
                 let sideUnread = s.state == .unread && !s.assistant && (s.children?.sidesUnread ?? 0) > 0
                     ? model.sides(of: s.key).unreadSummary : nil
-                NavigationLink(value: s.key) { SlotRow(session: s, muted: model.isMuted(s.key), sideUnread: sideUnread, preferHerdrTabName: model.prefersHerdrTabName(for: s)).equatable() }
+                NavigationLink(value: s.key) { SlotRow(session: s, pendingTitle: model.pendingAgentTitle(s.key), muted: model.isMuted(s.key), sideUnread: sideUnread, preferHerdrTabName: model.prefersHerdrTabName(for: s)).equatable() }
             }
         } else {
             NavigationLink(value: SpaceRoute(id: g.id)) {

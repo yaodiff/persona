@@ -35,9 +35,9 @@ describe("MachineDetail boot time", () => {
   ])("shows the local time and date at boot (%s), not the offset when viewed", async (boot, now, date, time) => {
     vi.spyOn(Date, "now").mockReturnValue(Date.parse(now));
     fake.machines = [{ id: "box", name: "Box", online: false, system: { boot_time: Date.parse(boot) / 1000 } } as Machine];
-    act(() => root.render(<MachineDetail mid="box" onToggleSidebar={() => {}} />));
+    act(() => root.render(<MachineDetail subview="diagnostics" mid="box" onToggleSidebar={() => {}} />));
     await flush();
-    const row = [...host.querySelectorAll("dt")].find((dt) => dt.textContent === "开机于")?.parentElement;
+    const row = [...host.querySelectorAll("dt")].find((dt) => dt.textContent === "开机时间")?.parentElement;
     expect(row?.textContent).toContain(date);
     expect(row?.textContent).toContain(time);
   });

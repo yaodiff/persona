@@ -144,9 +144,7 @@ func cardSentAt(it FeedItem) *time.Time {
 	return b.SentAt
 }
 
-// settleCards fills in the cards among items whose item was replied to after they were put in but which do not say
-// so: cards from before it was recorded on them (the reply went out, the card still offered "Send"). When the items
-// were replied to is the inbox's (inboxRepliedAt).
+// settleCards restores a missing send time from the Inbox's send record. A source reply only files the draft.
 func (s *Service) settleCards(ctx context.Context, items []FeedItem) {
 	var ids []string
 	for _, it := range items {
@@ -157,12 +155,12 @@ func (s *Service) settleCards(ctx context.Context, items []FeedItem) {
 	if len(ids) == 0 {
 		return
 	}
-	replied := s.inboxRepliedAt(ctx, ids)
+	sent := s.inboxSentAt(ctx, ids)
 	for _, it := range items {
 		if it.Kind != feedMessage || cardSentAt(it) != nil {
 			continue
 		}
-		at, ok := replied[it.Ref]
+		at, ok := sent[it.Ref]
 		if !ok || at.Before(it.At) {
 			continue
 		}

@@ -687,7 +687,7 @@ func TestManagerRevokeWaitsForAJoinInFlight(t *testing.T) {
 	revokeDuringJoin(t, h, store, joined.ID, move.Code)
 }
 
-// An install script carries the sums of the release on the site now: when the hub read latest.json a minute ago or
+// An install script carries the sums of the release on the site now: when the hub read the feed a minute ago or
 // more, /i/<code> reads it again (the download is the new one), at most once a minute; when that fails the old sums
 // stay. Only a read that worked counts: a periodic check that failed does not make the old release fresh.
 func TestManagerInstallScriptReadsTheReleaseAgain(t *testing.T) {
@@ -695,18 +695,26 @@ func TestManagerInstallScriptReadsTheReleaseAgain(t *testing.T) {
 	p := newPublisher(t, "v1.2.4", 202611060900)
 	var reads atomic.Int32
 	p.asked = func(path string) {
-		if path == "/dl/latest.json" {
+		if path == testFeedPath() {
 			reads.Add(1)
 		}
 	}
 	h.build = update.Make("v1.2.3-202611021500", update.Release, "202611021500", p.srv.URL+"/dl")
 	h.upd.client = p.srv.Client()
-	name := "personad-" + runtime.GOOS + "-" + runtime.GOARCH + ".gz"
+	platform := runtime.GOOS + "-" + runtime.GOARCH
+	name := "personad-" + platform + ".gz"
+	servedName := update.ThisEdition.Served(name)
 	old := strings.Repeat("ab", 32)
+	file := update.File{Name: name, SHA256: old}
+	if servedName != name {
+		file.Served = servedName
+	}
 	setRelease := func(read time.Time) {
 		h.upd.mu.Lock()
-		h.upd.release = &update.Published{Manifest: &update.Manifest{Version: "v1.2.3", Build: 202611021500,
-			Files: map[string]update.File{runtime.GOOS + "-" + runtime.GOARCH: {Name: name, SHA256: old}}}}
+		h.upd.release = &update.Published{Manifest: &update.Manifest{
+			Version: "v1.2.3", Build: 202611021500, Edition: update.ThisEdition.Marker(),
+			Files: map[string]update.File{platform: file},
+		}}
 		h.upd.lastCheck, h.upd.releaseRead, h.upd.refreshTried = read, read, time.Time{}
 		h.upd.mu.Unlock()
 	}
@@ -726,12 +734,18 @@ func TestManagerInstallScriptReadsTheReleaseAgain(t *testing.T) {
 		return string(b)
 	}
 	// The sha256 of the bytes the site serves for this computer now.
-	resp, err := http.Get(p.srv.URL + "/dl/" + name)
+	resp, err := http.Get(p.srv.URL + "/dl/" + servedName)
 	if err != nil {
 		t.Fatal(err)
 	}
-	served, _ := io.ReadAll(resp.Body)
+	served, err := io.ReadAll(resp.Body)
 	resp.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("fetch %s: HTTP %d", servedName, resp.StatusCode)
+	}
 	sum := sha256.Sum256(served)
 	newer := hex.EncodeToString(sum[:])
 	reads.Store(0)
@@ -746,7 +760,7 @@ func TestManagerInstallScriptReadsTheReleaseAgain(t *testing.T) {
 	setRelease(time.Now().Add(-6 * time.Hour))
 	fresh("read 6 hours ago")
 	if n := reads.Load(); n != 1 {
-		t.Fatalf("latest.json read %d times", n)
+		t.Fatalf("release feed read %d times", n)
 	}
 	// Read 2 minutes ago (the release came out since): read again too.
 	setRelease(time.Now().Add(-2 * time.Minute))
@@ -772,7 +786,7 @@ func TestManagerInstallScriptReadsTheReleaseAgain(t *testing.T) {
 		}
 	}
 	if n := reads.Load(); n != 1 {
-		t.Fatalf("tried latest.json %d times within a minute", n)
+		t.Fatalf("tried the release feed %d times within a minute", n)
 	}
 	if s := script(); !strings.Contains(s, "A release may have come out since the hub last checked") {
 		t.Fatalf("the mismatch message:\n%s", s)

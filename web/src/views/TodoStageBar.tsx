@@ -4,6 +4,7 @@
 // Work closed with nothing left to deploy (`stage_done`, #11590) ends with Done after the steps it went through, all
 // passed: no current step is left behind, and no step it never took is ticked.
 import { t } from "../i18n";
+import { safeWebURL } from "../lib/format";
 import { TODO_STAGES, todoStageIndex, todoStageState, type TodoStage, type TodoStageState } from "../lib/todo-stage";
 import { cx } from "../ui/atoms";
 import { Icon } from "../ui/icons";
@@ -41,14 +42,9 @@ function connector(state: TodoStageState, side: "before" | "after") {
 
 /** PR/MR links allow only http(s); merge_requests paths use MR !N, while other labels keep their existing form. */
 export function prLink(raw?: string): { url: string; text: string; label: string } | null {
-  const url = raw?.trim() ?? "";
-  let u: URL;
-  try {
-    u = new URL(url);
-  } catch {
-    return null;
-  }
-  if (u.protocol !== "https:" && u.protocol !== "http:") return null;
+  const url = safeWebURL(raw);
+  if (!url) return null;
+  const u = new URL(url);
   const mr = /\/merge_requests\/(\d+)\/?$/.exec(u.pathname)?.[1];
   const n = /\/(\d+)\/?$/.exec(u.pathname)?.[1];
   const text = mr ? t("todos.stage_mr_n", { n: mr }) : n ? t("todos.stage_pr_n", { n }) : t("todos.stage_pr");

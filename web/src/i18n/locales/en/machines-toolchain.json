@@ -1,7 +1,6 @@
 {
   "title": "Development toolchain & environment",
   "subtitle": "On-demand read-only probe with short-lived caching. Tokens and secrets are never returned.",
-  "machine_select": "Select machine",
   "refresh": "Refresh",
   "refreshing": "Refreshing…",
   "loading": "Probing toolchain and local environment…",

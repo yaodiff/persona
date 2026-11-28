@@ -31,6 +31,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/bus"
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
@@ -676,11 +677,10 @@ func (d *Devices) heldStartReconcile(ctx context.Context, machine string, seq in
 		var call devicewire.HeldStartCall
 		if json.Unmarshal(op.Call, &call) == nil {
 			lctx, lcancel := context.WithTimeout(ctx, heldStartLinkTimeout)
-			var reply devicewire.ReplayHeldStartReply
-			if herr := d.opts.Hub.Call(lctx, devicewire.MethodReplayHeldStart, devicewire.ReplayHeldStartRequest{
+			if _, herr := buswire.Call(lctx, d.opts.Hub, devicewire.ReplayHeldStartMethod, devicewire.ReplayHeldStartRequest{
 				Call:                call,
 				ReconciledSessionID: sessionID,
-			}, &reply); herr != nil {
+			}); herr != nil {
 				d.logf("[%s] held start %s reconciled to %s, post-start link failed: %v", machine, opID, sessionID, herr)
 			}
 			lcancel()
@@ -772,8 +772,7 @@ func (d *Devices) heldStartDeliver(ctx context.Context, raw json.RawMessage, lan
 	if d.opts.Hub == nil {
 		return devicewire.ReplayOutcomeNotSent, "", ""
 	}
-	var reply devicewire.ReplayHeldStartReply
-	err := d.opts.Hub.Call(cctx, devicewire.MethodReplayHeldStart, devicewire.ReplayHeldStartRequest{Call: call}, &reply)
+	reply, err := buswire.Call(cctx, d.opts.Hub, devicewire.ReplayHeldStartMethod, devicewire.ReplayHeldStartRequest{Call: call})
 	if err != nil {
 		if errors.Is(err, bus.ErrOffline) || heldNotWritten(err) {
 			return devicewire.ReplayOutcomeNotSent, "", ""

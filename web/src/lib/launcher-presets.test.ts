@@ -53,7 +53,7 @@ describe("launcher presets", () => {
     expect(launcherNameProblem("jv_team")).toBe("");
     expect(launcherNameProblem("9x")).toMatch(/字母/);
     // every startup ID the hub keeps for itself (reservedLauncherNames)
-    for (const n of ["claude", "presets", "test", "discover", "import", "health"]) expect(launcherNameProblem(n)).toBe(`不能叫 ${n}`);
+    for (const n of ["claude", "presets", "test", "discover", "import", "health"]) expect(launcherNameProblem(n)).toBe(`不能命名为 ${n}`);
     expect(launcherNameProblem("test-2")).toBe("");
   });
 
@@ -63,9 +63,9 @@ describe("launcher presets", () => {
     // counted as characters, not UTF-16 units: 64 emoji fit
     expect(displayNameProblem("🚀".repeat(64))).toBe("");
     expect(displayNameProblem(` ${"字".repeat(64)} `)).toBe("");
-    expect(displayNameProblem("字".repeat(65))).toBe("显示名最多 64 个字，不能换行");
-    expect(displayNameProblem("Team\nrelay")).toBe("显示名最多 64 个字，不能换行");
-    expect(displayNameProblem("Team\trelay")).toBe("显示名最多 64 个字，不能换行");
+    expect(displayNameProblem("字".repeat(65))).toBe("显示名称最多 64 个字符，且不能换行");
+    expect(displayNameProblem("Team\nrelay")).toBe("显示名称最多 64 个字符，且不能换行");
+    expect(displayNameProblem("Team\trelay")).toBe("显示名称最多 64 个字符，且不能换行");
   });
 
   it("sends the model only when another one was picked", () => {
@@ -106,8 +106,8 @@ describe("launcher presets", () => {
     const s = assignSummary(r, true);
     expect(s.assigned).toContain("主对话");
     expect(s.kept).toHaveLength(1);
-    expect(s.kept[0]).toContain("新开的 Agent");
-    expect(s.kept[0]).toContain("你选过");
+    expect(s.kept[0]).toContain("新建 Agent");
+    expect(s.kept[0]).toContain("此前已选择");
     expect(assignSummary({ launcher: { name: "glm" } }, true)).toEqual({ assigned: "", kept: [] });
     expect(assignSummary(r, false)).toEqual({ assigned: "", kept: [] });
     expect(assignSummary({ ...r, assigned: [], kept: [{ purpose: "assistant", reason: "failed" }] }, true).assigned).toBe("");

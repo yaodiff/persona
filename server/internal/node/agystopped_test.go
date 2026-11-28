@@ -389,7 +389,7 @@ func TestAgyCompanionSendClearsStoppedMark(t *testing.T) {
 		})
 
 		// Empty input (!hasInput) must not clear agyStopped.
-		if _, err := n.assistantSendRuntime(context.Background(), n.runtimes.ownerOf(convRow), convRow, cwd, agyAgent, "", nil, "", false, false, false, nil); err != nil {
+		if _, err := n.assistantSendRuntime(context.Background(), n.runtimes.ownerOf(convRow), convRow, cwd, agyAgent, "", nil, "", false, false, false, nil, 0); err != nil {
 			t.Fatalf("empty assistantSendRuntime: %v", err)
 		}
 		if row, ok := agyCompanionStoppedRow(listSessions(t, n), convRow); !ok || !isUserStoppedRow(row) {
@@ -400,7 +400,7 @@ func TestAgyCompanionSendClearsStoppedMark(t *testing.T) {
 		setRuntimeAnswer(host, func(method string, _ json.RawMessage) (any, error) {
 			return map[string]any{"ok": true}, nil
 		})
-		if _, err := n.assistantSendRuntime(context.Background(), n.runtimes.ownerOf(convRow), convRow, cwd, agyAgent, "follow up", nil, "", false, false, false, nil); err != nil {
+		if _, err := n.assistantSendRuntime(context.Background(), n.runtimes.ownerOf(convRow), convRow, cwd, agyAgent, "follow up", nil, "", false, false, false, nil, 0); err != nil {
 			t.Fatalf("assistantSendRuntime: %v", err)
 		}
 		waitFor(t, "hub observes unmasked StatusWorking after assistantSendRuntime", func() bool {

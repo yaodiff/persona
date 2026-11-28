@@ -359,6 +359,7 @@ func TestReadinessNotLoggedInDesktopLauncher(t *testing.T) {
 	f.mu.Lock()
 	f.zshrc = map[string][]proto.Launcher{"server": {desktop, codexApp, {Name: "cx", Agent: "codex"}}}
 	f.mu.Unlock()
+	s.invalidateLauncherListCache("server")
 	m = readinessStep(t, getReadiness(t, s, "", ""), StepModel)
 	if len(m.AltActions) != 2 || m.AltActions[0].ID != "login_claude" || m.AltActions[1].ID != "main_chat_model" ||
 		m.Detail != notLoggedInSwitchZh+desktopAgentZh {
@@ -367,6 +368,7 @@ func TestReadinessNotLoggedInDesktopLauncher(t *testing.T) {
 	f.mu.Lock()
 	f.zshrc = map[string][]proto.Launcher{"server": {{Name: "cx", Agent: "codex"}}}
 	f.mu.Unlock()
+	s.invalidateLauncherListCache("server")
 	if m = readinessStep(t, getReadiness(t, s, "", ""), StepModel); len(m.AltActions) != 2 || m.Detail != notLoggedInSwitchZh {
 		t.Fatalf("no desktop app: %+v", m)
 	}

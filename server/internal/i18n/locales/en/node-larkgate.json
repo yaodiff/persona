@@ -1,8 +1,12 @@
 {
-  "send_to": "Send a message to “{chat}” on Lark as you",
-  "reply_to": "Reply to {sender} in “{chat}” on Lark as you",
-  "reply_in_chat": "Reply in “{chat}” on Lark as you",
+  "default_service": "Lark",
+  "send_to": "Send a message to “{chat}” on {service} as you",
+  "reply_to": "Reply to {sender} in “{chat}” on {service} as you",
+  "reply_in_chat": "Reply in “{chat}” on {service} as you",
+  "reply_to_sender": "Reply to {sender} on {service} as you",
+  "reply_message": "Reply to message {message} on {service} as you",
   "topic_suffix": " (in a topic)",
   "original": "Original message: {text}",
+  "mentions": "Mentions: {mentions}",
   "outgoing": "Message text:\n{text}"
 }

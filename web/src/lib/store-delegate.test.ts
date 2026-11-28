@@ -96,6 +96,33 @@ describe("questions the assistant answers first", () => {
     expect(getState().delegated).toEqual({});
   });
 
+  it("does not attach an older assistant answer to a newer answered occurrence", async () => {
+    const s = online();
+    const first = { ...question, created_at: "2026-01-02T03:04:05.000000001Z" };
+    const replacement = { ...first, created_at: "2026-01-02T03:04:05.000000002Z", summary: "replacement" };
+    s.push({ type: "sessions", machine_id: "m1", sessions: [{ machine_id: "m1", session_id: "s1" }] });
+    s.push({ type: "interaction", interaction: replacement });
+    op.mockResolvedValue({ ok: true });
+    expect((await answerCard(replacement, { answers: { "Which driver?": "Mine" } })).ok).toBe(true);
+    s.push({ type: "interaction_resolved", id: first.id, created_at: first.created_at, answered_by: "assistant", answers: { "Which driver?": "Old" } });
+    expect(getState().delegated.ix1).toBeUndefined();
+    expect(getState().answered.ix1.ix).toEqual(replacement);
+  });
+
+  it("replaces a delegated answer with its newer occurrence and ignores the older one afterward", () => {
+    const s = online();
+    const first = { ...question, created_at: "2026-01-02T03:04:05.000000001Z", delegating: true };
+    const replacement = { ...first, created_at: "2026-01-02T03:04:05.000000002Z" };
+    s.push({ type: "interaction", interaction: first });
+    s.push({ type: "interaction_resolved", id: first.id, created_at: first.created_at, answered_by: "assistant", reason: "first", answers: { "Which driver?": "First" } });
+    expect(getState().delegated.ix1.ix.created_at).toBe(first.created_at);
+    s.push({ type: "interaction", interaction: replacement });
+    s.push({ type: "interaction_resolved", id: replacement.id, created_at: replacement.created_at, answered_by: "assistant", reason: "replacement", answers: { "Which driver?": "Replacement" } });
+    expect(getState().delegated.ix1).toMatchObject({ ix: replacement, reason: "replacement", answers: { "Which driver?": "Replacement" } });
+    s.push({ type: "interaction_resolved", id: first.id, created_at: first.created_at, answered_by: "assistant", reason: "late first", answers: { "Which driver?": "Late first" } });
+    expect(getState().delegated.ix1).toMatchObject({ ix: replacement, reason: "replacement", answers: { "Which driver?": "Replacement" } });
+  });
+
   it("notes this page's own change of answer, and a login forgets them all", () => {
     const s = online();
     s.push({ type: "interaction", interaction: question });

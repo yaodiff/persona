@@ -61,11 +61,11 @@ func TestNodeNamingMetadataIncremental(t *testing.T) {
 	m = read()
 	s := proto.Session{Title: m.title}
 	setContext(&s, m)
-	if s.OutputTokens != 27 || !s.TitleManual || s.TitleSource.String() != "manual" {
-		t.Fatalf("session metadata: output=%d manual=%v source=%q", s.OutputTokens, s.TitleManual, s.TitleSource)
+	if s.OutputTokensValue() != 27 || !s.TitleManual || s.TitleSource.String() != "manual" {
+		t.Fatalf("session metadata: output=%d manual=%v source=%q", s.OutputTokensValue(), s.TitleManual, s.TitleSource)
 	}
 	before := listKey([]proto.Session{s})
-	s.OutputTokens++
+	s.SetOutputTokens(int(s.OutputTokensValue()) + 1)
 	if before == listKey([]proto.Session{s}) {
 		t.Fatal("generated output did not change the published list key")
 	}
@@ -99,8 +99,8 @@ func TestNodeNamingMetadataSources(t *testing.T) {
 			s := proto.Session{Title: m.title}
 			untitled(&s, m)
 			setContext(&s, m)
-			if s.TitleManual || s.TitleSource.String() != tc.source || s.OutputTokens != tc.output {
-				t.Fatalf("source=%q manual=%v output=%d", s.TitleSource, s.TitleManual, s.OutputTokens)
+			if s.TitleManual || s.TitleSource.String() != tc.source || int(s.OutputTokensValue()) != tc.output {
+				t.Fatalf("source=%q manual=%v output=%d", s.TitleSource, s.TitleManual, s.OutputTokensValue())
 			}
 		})
 	}
@@ -109,7 +109,7 @@ func TestNodeNamingMetadataSources(t *testing.T) {
 func TestToolOnlyTitleKeepsKnownPromptProvenance(t *testing.T) {
 	s := proto.Session{Title: "◐ Claude Code"}
 	setContext(&s, quickMeta{titleSource: "prompt", outputTokens: 10})
-	if s.TitleSource != proto.TitleSourcePrompt || s.OutputTokens != 10 {
+	if s.TitleSource != proto.TitleSourcePrompt || s.OutputTokensValue() != 10 {
 		t.Fatal("tool fallback lost its proved transcript provenance")
 	}
 	unknown := proto.Session{Title: "◐ Claude Code"}

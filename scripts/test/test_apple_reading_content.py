@@ -30,6 +30,7 @@ READING_FILES = {
     "Views/Interactions/InteractionViews.swift": "a plan awaiting approval",
     "Views/Interactions/CardFold.swift": "a plan's first lines in its approval card (CardPlan, #6605)",
     "Views/Mail/MailViews.swift": "an email's body",
+    "Views/Mail/MailStoredView.swift": "a mail's stored body while its module is off (#15995)",
     "Views/Knowledge/KnowledgeView.swift": "a knowledge page's body",
     "Views/Knowledge/KBCorrections.swift": "an entry's confirmed facts, written by the user and read like its profile",
     "Views/Knowledge/KBTopicViews.swift": "a topic's knowledge points, read like an entry's profile",

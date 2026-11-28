@@ -38,6 +38,11 @@ export interface CountsViewCounts {
   agents_needs_you?: CountsViewCount;
   /** The to-dos that need the owner, N of the To-dos list (docs/protocol/counts.md, "todos_needs_you"). */
   todos_needs_you?: CountsViewCount;
+  /**
+   * Pending owner cards on Persona conversations and quiet tasks' agents, one per card (docs/protocol/counts.md,
+   * "persona_cards").
+   */
+  persona_cards?: CountsViewCount;
 }
 
 /**
@@ -49,6 +54,8 @@ export interface CountsViewTotals {
   agents_needs_you?: number;
   /** counts.todos_needs_you.n. */
   todos_needs_you?: number;
+  /** counts.persona_cards.n. */
+  persona_cards?: number;
 }
 
 /**
@@ -71,8 +78,8 @@ export interface CountsViewCount {
 export interface CountsRow {
   id: CountsRowKey;
   /**
-   * The row's pending cards, oldest first: a card on no session is its own one card. Absent for a session that waits
-   * in its terminal with no card.
+   * The row's pending cards, oldest first: a card row lists that one card. Absent for a session that waits in its
+   * terminal with no card.
    */
   cards?: CountsCardID[];
 }
@@ -87,7 +94,7 @@ export interface CountsHeldRow {
 
 /**
  * A row as the shared fixtures key it: agent:<machine>/<session> for a session (its children's and sides' cards under
- * it), card:<interaction id> for a card on no session.
+ * it), card:<interaction id> for a card counted on its own.
  */
 export type CountsRowKey = string & { readonly __brand: "CountsRowKey" };
 /** A CountsRowKey from its raw string. */

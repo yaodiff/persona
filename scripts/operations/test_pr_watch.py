@@ -2,6 +2,7 @@
 import hashlib
 import hmac
 import importlib.util
+import io
 from datetime import datetime, timezone
 import json
 import os
@@ -13,7 +14,7 @@ import tempfile
 import threading
 import time
 import unittest
-from contextlib import contextmanager, nullcontext
+from contextlib import contextmanager, nullcontext, redirect_stderr
 from unittest.mock import patch
 
 HERE = Path(__file__).resolve().parent
@@ -408,7 +409,14 @@ class WatcherTests(unittest.TestCase):
         self.assertTrue(all("needReviews" in call["variables"] for call in calls))
         self.assertTrue(all("needThreads" in call["variables"] for call in calls))
         self.assertEqual([call["variables"]["commentsCursor"] for call in calls],
-                         [None, False])
+                         [None, None])
+        # A finished collection stays out of the query through @include, but its cursor variable is still
+        # declared String, so it must stay null rather than `false` (#16737).
+        for call in calls:
+            for field in ("comments", "reviews", "threads"):
+                value = call["variables"][field + "Cursor"]
+                self.assertIsInstance(value, (str, type(None)),
+                                      "%sCursor must be a string or null" % field)
 
     def test_stale_activity_requires_complete_cursor_pages(self):
         response = {"data": {"repository": {"pullRequest": {
@@ -2083,6 +2091,86 @@ class WatcherTests(unittest.TestCase):
                         for name in relatives + ("doc_sections_known.txt",)}
             self.assertEqual(expected, set(shown))
 
+    def test_extension_repository_guards_use_its_own_base_doc_checks(self):
+        import pr_watch_test_guards
+        check_source = (
+            "import pathlib\n"
+            "import sys\n"
+            "ROOT = pathlib.Path(__file__).resolve().parent.parent\n"
+            "def check(root):\n"
+            "    return [] if (pathlib.Path(root) / 'docs-ok').is_file() else ['missing target']\n"
+            "def main():\n"
+            "    errors = check(ROOT)\n"
+            "    print('docs: %s' % ('failed' if errors else 'ok'))\n"
+            "    return bool(errors)\n"
+        )
+        test_source = (
+            "import importlib.util\n"
+            "import pathlib\n"
+            "import tempfile\n"
+            "import unittest\n"
+            "spec = importlib.util.spec_from_file_location('check_docs', pathlib.Path(__file__).with_name('check-docs.py'))\n"
+            "docs = importlib.util.module_from_spec(spec)\n"
+            "spec.loader.exec_module(docs)\n"
+            "class LinkTests(unittest.TestCase):\n"
+            "    def test_checker(self):\n"
+            "        with tempfile.TemporaryDirectory() as tmp:\n"
+            "            self.assertEqual(['missing target'], docs.check(tmp))\n"
+        )
+        stale_source = "raise SystemExit('PR or watcher documentation source ran')\n"
+        for docs_ok in (True, False):
+            with self.subTest(docs_ok=docs_ok), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                watcher, checkout = root / "watcher", root / "pr"
+                for base in (watcher, checkout):
+                    (base / "scripts").mkdir(parents=True)
+                    for name in ("check-docs.py", "test-docs.py"):
+                        (base / "scripts" / name).write_text(stale_source)
+                if docs_ok:
+                    (checkout / "docs-ok").write_text("")
+                shown = []
+
+                def fake_checked(argv, **kwargs):
+                    if argv[:3] == ["git", "cat-file", "-t"]:
+                        return "commit\n"
+                    if argv[:2] == ["git", "show"]:
+                        shown.append(argv[2])
+                        if argv[2] == SHA_BASE + ":scripts/check-docs.py":
+                            return check_source
+                        if argv[2] == SHA_BASE + ":scripts/test-docs.py":
+                            return test_source
+                        raise pr_watch_common.WatchError("fatal: path does not exist: " + argv[2])
+                    return ""
+
+                original_path = sys.path.copy()
+                argv = ["--base", SHA_BASE, "--head", SHA_A, "--worktree", str(checkout), "--repository-guards",
+                        "--repository", "nwverse/persona-extensions"]
+                with patch.dict(sys.modules), \
+                        patch.object(pr_watch_test_guards, "ROOT", watcher), \
+                        patch.object(pr_watch_test_guards, "privacy_environment", return_value={}), \
+                        patch.object(pr_watch_test_guards, "documentation_guard") as persona_guard, \
+                        patch.object(pr_watch_test_guards, "checked", side_effect=fake_checked):
+                    if docs_ok:
+                        self.assertEqual(0, pr_watch_test_guards.main(argv))
+                    else:
+                        with self.assertRaisesRegex(pr_watch_common.WatchError, "scripts/check-docs.py"):
+                            pr_watch_test_guards.main(argv)
+                persona_guard.assert_not_called()
+                self.assertEqual(original_path, sys.path)
+                self.assertEqual([SHA_BASE + ":scripts/check-docs.py", SHA_BASE + ":scripts/test-docs.py"], shown)
+
+    def test_extension_doc_unit_test_failure_blocks(self):
+        import pr_watch_test_guards
+        failing = "import unittest\nclass T(unittest.TestCase):\n    def test_x(self):\n        self.fail('x')\n"
+        sources = {":scripts/check-docs.py": "def main():\n    return False\n", ":scripts/test-docs.py": failing}
+        # Keep the planted failure's report out of the suite log; only the raised guard error matters.
+        with tempfile.TemporaryDirectory() as directory, patch.dict(sys.modules), \
+                redirect_stderr(io.StringIO()), \
+                patch.object(pr_watch_test_guards, "checked",
+                             side_effect=lambda argv, **kwargs: sources[argv[2][len(SHA_BASE):]]):
+            with self.assertRaisesRegex(pr_watch_common.WatchError, "scripts/test-docs.py"):
+                pr_watch_test_guards.extension_documentation_guards(Path(directory), SHA_BASE)
+
     def test_documentation_guard_reads_pr_not_watcher_root(self):
         import pr_watch_test_guards
         module = type("Guard", (), {"ROOT": None, "checked_root": None})
@@ -2704,6 +2792,55 @@ class WatcherTests(unittest.TestCase):
                 pr_watch_repair.commit_and_push_repair("example/one", pr(isCrossRepository=True), root, SHA_BASE, "failure", {"profile": "commands", "commands": [["true"]]}, allow_merge_only=True)
         self.assertIn("Refs #6", created.call_args.kwargs["input_text"])
 
+    def test_continuation_without_issue_opens_when_the_repository_requires_no_link(self):
+        """A repository with no issue workflow can still repair a fork: the body names no issue (#16751)."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            def fake_checked(argv, **kwargs):
+                if argv[:2] == ["git", "rev-parse"]:
+                    if "FETCH_HEAD" in argv:
+                        return SHA_BASE + "\n"
+                    return SHA_B + "\n"
+                if argv[:2] == ["git", "cat-file"]:
+                    return "".join(line.strip() + " commit\n" for line in kwargs["input_text"].splitlines())
+                return ""
+            fork = pr(isCrossRepository=True, body="Automated repair of a fork with no issue workflow.")
+            with patch.object(pr_watch_repair, "pr_snapshot", side_effect=lambda repo, number: pr(head=SHA_B if number == 9 else SHA_A)), \
+                    patch.object(pr_watch_repair, "verify", return_value=[]), \
+                    patch.object(pr_watch_repair, "checked", side_effect=fake_checked), \
+                    patch.object(pr_watch_repair, "run", return_value=subprocess.CompletedProcess([], 0, "", "")), \
+                    patch.object(pr_watch_repair, "gh_json", side_effect=[[], [], {"number": 9}]) as created:
+                number, _ = pr_watch_repair.commit_and_push_repair(
+                    "example/one", fork, root, SHA_BASE, "failure", {"profile": "commands", "commands": [["true"]]},
+                    allow_merge_only=True, require_issue_link=False)
+        self.assertEqual(number, 9)
+        body = json.loads(created.call_args.kwargs["input_text"])["body"]
+        self.assertNotIn("Refs #", body)
+        self.assertIn("Continuation of #7", body)
+
+    def test_continuation_without_issue_is_refused_when_the_repository_requires_a_link(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            def fake_checked(argv, **kwargs):
+                if argv[:2] == ["git", "rev-parse"]:
+                    if "FETCH_HEAD" in argv:
+                        return SHA_BASE + "\n"
+                    return SHA_B + "\n"
+                if argv[:2] == ["git", "cat-file"]:
+                    return "".join(line.strip() + " commit\n" for line in kwargs["input_text"].splitlines())
+                return ""
+            fork = pr(isCrossRepository=True, body="Automated repair of a fork with no issue workflow.")
+            with patch.object(pr_watch_repair, "pr_snapshot", side_effect=lambda repo, number: pr(head=SHA_B if number == 9 else SHA_A)), \
+                    patch.object(pr_watch_repair, "verify", return_value=[]), \
+                    patch.object(pr_watch_repair, "checked", side_effect=fake_checked), \
+                    patch.object(pr_watch_repair, "run", return_value=subprocess.CompletedProcess([], 0, "", "")), \
+                    patch.object(pr_watch_repair, "gh_json", side_effect=[[], []]) as created:
+                with self.assertRaises(pr_watch_common.WatchError):
+                    pr_watch_repair.commit_and_push_repair(
+                        "example/one", fork, root, SHA_BASE, "failure", {"profile": "commands", "commands": [["true"]]},
+                        allow_merge_only=True)
+        created.assert_called()  # lookups ran; no pull request was created
+
     def test_every_failed_lane_must_reproduce_on_main(self):
         failures = [{"command": ["test", "one"], "output": "--- FAIL: TestA\n"},
                     {"command": ["test", "two"], "output": "--- FAIL: TestB\n"}]
@@ -2898,10 +3035,16 @@ class WatcherTests(unittest.TestCase):
         self.assertNotIn("all tests passed", run.call_args.args[0][-1])
 
     def test_semantic_only_extensions_keep_repository_guards(self):
-        with patch.object(pr_watch_verify, "run_check", return_value={"name": "Privacy and documentation guards", "ok": True}) as check:
+        with patch.object(pr_watch_verify, "extension_checks") as full, \
+                patch.object(pr_watch_verify, "run_check", return_value={"name": "Privacy and documentation guards", "ok": True}) as check:
             results = pr_watch_verify.verify("nwverse/persona-extensions", pr(), ".", {"profile": "semantic_only"})
+        full.assert_not_called()
         self.assertEqual(len(results), 1)
-        self.assertIn("--repository-guards", check.call_args.args[1])
+        argv = check.call_args.args[1]
+        self.assertIn("--repository-guards", argv)
+        self.assertEqual("nwverse/persona-extensions", argv[argv.index("--repository") + 1])
+        with self.assertRaises(pr_watch_common.WatchError):
+            pr_watch_verify.verify("example/other", pr(), "/tmp/other-wt", {"profile": "semantic_only"})
 
     def test_verification_policy_version_covers_semantic_only(self):
         self.assertGreaterEqual(pr_watch.VERIFICATION_POLICY_VERSION, 3)
@@ -3327,6 +3470,24 @@ class WatcherTests(unittest.TestCase):
         self.assertFalse(pr_watch.load_config(path)["repositories"][0]["respect_human_reviews"])
         raw = json.loads(path.read_text())
         raw["repositories"][0]["respect_human_reviews"] = "yes"
+        path.write_text(json.dumps(raw))
+        with self.assertRaises(pr_watch_common.WatchError):
+            pr_watch.load_config(path)
+
+    def test_issue_link_requirement_defaults_on_and_rejects_non_boolean(self):
+        """A repository opts out of the linked-issue gate explicitly; the default keeps it (#16751)."""
+        path = self.root / "il-config.json"
+        path.write_text(json.dumps({"repositories": [{"name": "example/one", "checkout": str(self.root), "verify": {}}],
+                                    "state": str(self.root / "il-state.json")}))
+        loaded = pr_watch.load_config(path)
+        self.assertTrue(loaded["repositories"][0]["require_issue_link"])
+        # A merge-time gate only: setting it must not reset exact-head review or verification evidence.
+        self.assertNotIn("require_issue_link", loaded["repository_policy"][0])
+        raw = json.loads(path.read_text())
+        raw["repositories"][0]["require_issue_link"] = False
+        path.write_text(json.dumps(raw))
+        self.assertFalse(pr_watch.load_config(path)["repositories"][0]["require_issue_link"])
+        raw["repositories"][0]["require_issue_link"] = "no"
         path.write_text(json.dumps(raw))
         with self.assertRaises(pr_watch_common.WatchError):
             pr_watch.load_config(path)
@@ -3841,6 +4002,104 @@ class MergeTests(unittest.TestCase):
         self.assertEqual(pr_watch_merge.linked_issue("```\nFixes #1\n```\nRefs #2", "example/one"), [2])
         self.assertEqual(pr_watch_merge.linked_issue("Fixes example/two#3", "example/one"), [])
         self.assertEqual(pr_watch_merge.linked_issue("See https://github.com/example/one/issues/4", "example/one"), [4])
+
+    def test_generic_merge_honours_a_repository_that_requires_no_issue_link(self):
+        unlinked = pr(body="Summary only, no issue reference.")
+        def fake_checked(argv, **kwargs):
+            if argv[:2] == ["git", "rev-parse"]:
+                return (SHA_BASE if "bases" in argv[2] else SHA_A) + "\n"
+            return ""
+        with patch.object(pr_watch_merge, "pr_snapshot", side_effect=[unlinked, pr(state="MERGED")]), \
+                patch.object(pr_watch_merge, "checked", side_effect=fake_checked), \
+                patch.object(pr_watch_merge, "run", return_value=subprocess.CompletedProcess([], 0, "", "")) as execute:
+            pr_watch_merge.merge("example/one", 7, ".", expected_head=SHA_A, expected_base=SHA_BASE,
+                                 require_issue_link=False)
+        self.assertIn("merge", execute.call_args.args[0])
+        # The default still refuses an unlinked PR before any fetch or merge command.
+        with patch.object(pr_watch_merge, "pr_snapshot", side_effect=[unlinked]), \
+                patch.object(pr_watch_merge, "checked") as fetch, \
+                patch.object(pr_watch_merge, "run") as nothing:
+            with self.assertRaises(pr_watch_common.WatchError):
+                pr_watch_merge.merge("example/one", 7, ".", expected_head=SHA_A, expected_base=SHA_BASE)
+        fetch.assert_not_called()
+        nothing.assert_not_called()
+
+
+class PrepareWorktreeTests(unittest.TestCase):
+    """The checkout's FETCH_HEAD is shared with every other fetch in the same clone (#16759)."""
+
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory(prefix="pr-watch-prepare-")
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name)
+        (self.root / "checkout").mkdir()
+        self.config = {"repositories": [{"name": "example/one", "checkout": str(self.root / "checkout"),
+                                        "base": "main", "verify": {"profile": "commands", "commands": [["true"]]},
+                                        "merge": False, "privacy": None, "notify_command": None}],
+                       "reviewer": {}, "webhook": {}, "poll_seconds": 60, "workers": 1,
+                       "state": str(self.root / "state.json")}
+        self.watcher = pr_watch.Watcher(self.config, verbose=False)
+
+    def test_each_fetch_lands_in_its_own_ref_not_the_shared_fetch_head(self):
+        calls = []
+        def fake_checked(argv, **kwargs):
+            calls.append(argv)
+            if argv[:3] == ["gh", "repo", "view"]:
+                return "example/one\n"
+            if argv[:2] == ["git", "rev-parse"]:
+                return (SHA_BASE if argv[2].endswith("/base") else SHA_A) + "\n"
+            return ""
+        with patch.object(pr_watch, "checked", side_effect=fake_checked):
+            worktree = self.watcher.prepare_worktree("example/one", 7, pr())
+        self.assertEqual(worktree.parent, pr_watch_recovery.owned_root(self.config["state"]))
+        self.assertIn(["git", "fetch", "-q", "origin", "+refs/heads/main:refs/pr-watch/prepare/7/base"], calls)
+        self.assertIn(["git", "fetch", "-q", "origin", "+pull/7/head:refs/pr-watch/prepare/7/head"], calls)
+        self.assertIn(["git", "rev-parse", "refs/pr-watch/prepare/7/base"], calls)
+        self.assertIn(["git", "rev-parse", "refs/pr-watch/prepare/7/head"], calls)
+        self.assertEqual([argv for argv in calls if "FETCH_HEAD" in argv], [])
+
+    def test_another_fetch_in_the_checkout_does_not_invalidate_the_preparation(self):
+        """Reproduce the race: merge-pr.sh fetches the PR head between the watcher's two fetches."""
+        env = {k: v for k, v in os.environ.items() if not k.startswith(("GIT_", "GH_", "PYTHON"))}
+        env.update({"GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull})
+        def git(*args, cwd=None):
+            result = subprocess.run(("git",) + args, cwd=cwd or self.root / "checkout", env=env,
+                                    capture_output=True, text=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            return result.stdout.strip()
+        git("init", "-q", "--bare", str(self.root / "origin.git"))
+        git("init", "-q", "-b", "main")
+        git("config", "user.name", "Test User")
+        git("config", "user.email", "test@example.com")
+        git("config", "commit.gpgSign", "false")
+        (self.root / "checkout" / "a.txt").write_text("base\n")
+        git("add", "a.txt")
+        git("commit", "-q", "-m", "Base")
+        base = git("rev-parse", "HEAD")
+        git("remote", "add", "origin", str(self.root / "origin.git"))
+        git("push", "-q", "origin", "main")
+        git("checkout", "-q", "-b", "feature")
+        (self.root / "checkout" / "b.txt").write_text("head\n")
+        git("add", "b.txt")
+        git("commit", "-q", "-m", "Head")
+        head = git("rev-parse", "HEAD")
+        git("push", "-q", "origin", "+HEAD:refs/pull/7/head")
+        git("checkout", "-q", "main")
+        real = pr_watch_common.checked
+        def racing_checked(argv, **kwargs):
+            if argv[:3] == ["gh", "repo", "view"]:
+                return "example/one\n"
+            result = real(argv, **kwargs)
+            if argv[:2] == ["git", "fetch"] and "refs/heads/main" in argv[4]:
+                # Another process (scripts/hooks/merge-pr.sh) fetches its PR head into FETCH_HEAD right now.
+                real(["git", "fetch", "-q", "origin", "pull/7/head"], cwd=kwargs["cwd"], timeout=60)
+            return result
+        with patch.object(pr_watch, "checked", side_effect=racing_checked):
+            worktree = self.watcher.prepare_worktree("example/one", 7, pr(head=head, baseRefOid=base))
+        try:
+            self.assertEqual(git("rev-parse", "HEAD", cwd=worktree), head)
+        finally:
+            self.watcher.remove_worktree("example/one", worktree)
 
 
 if __name__ == "__main__":

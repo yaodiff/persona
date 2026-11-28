@@ -167,7 +167,7 @@ describe("recorded external wait information", () => {
   it.each([`${pr.url}?from=review#comment`, "https://example.test/team/demo/-/merge_requests/7#note"])("keeps a ready review object with a query or fragment: %s", (url) => {
     const todo = make("review-link", 96);
     todo.supervision!.parked!.evidence = { ...evidence(96), kind: "merge_review", ready: true, url };
-    expect(taskWait(todo, now)?.contact?.status).toBe("sent");
+    expect(taskWait(todo, now)?.contact).toMatchObject({ status: "sent" });
     expect(taskWait(todo, now)?.canRemind).toBe(true);
   });
 

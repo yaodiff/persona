@@ -167,9 +167,9 @@ describe("Safari's candidate Enter (isComposing false, keyCode 229)", () => {
 
   it("does not reject a plan with a half-typed reason", async () => {
     pending({ id: "ix_p", machine_id: "m", session_id: "s", kind: "plan", plan: "改一下" });
-    const open = [...host.querySelectorAll("button")].find((b) => b.textContent?.trim() === "打回修改")!;
+    const open = [...host.querySelectorAll("button")].find((b) => b.textContent?.trim() === "退回修改")!;
     act(() => open.click());
-    const input = host.querySelector<HTMLInputElement>('input[placeholder="要怎么改…"]')!;
+    const input = host.querySelector<HTMLInputElement>('input[placeholder="填写需要修改的内容…"]')!;
     type(input, "会議");
     await pressSafariIme(input);
     expect(resolves()).toHaveLength(0);

@@ -11,5 +11,8 @@
   "retry": "再試行",
   "confirm_title": "確認",
   "ok": "OK",
-  "updating": "更新中…"
+  "updating": "更新中…",
+  "setup_title": "{name} を設定",
+  "missing_settings": "必要な設定",
+  "open_settings": "拡張機能の設定を開く"
 }

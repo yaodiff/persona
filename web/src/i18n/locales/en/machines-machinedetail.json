@@ -61,7 +61,6 @@
   "busiest": "Busiest {value}",
   "core_title": "Core {n}: {value}",
   "open_space": "Open space \"{name}\"",
-  "engine_pill_hint": "This computer's engine: click to change it under Engine below",
   "rename": "Rename",
   "rename_label": "Computer name",
   "rename_hint": "Shown in every app and on this computer's Persona Link. Leave it empty to use the id; the id stays the same.",
@@ -69,7 +68,6 @@
   "screen": "View screen",
   "screen_hint": "Open this Mac's live screen (Screen Sharing)",
   "files": "Files",
-  "files_hint": "Browse this computer’s files from its home folder",
   "machine_switch_link_intro": "Connected over SSH. With Persona Link, this computer connects to the hub by itself, also from other networks.",
   "machine_switch_link_action": "Switch to Persona Link…",
   "machine_switch_link_title": "Switch “{name}” to Persona Link?",
@@ -114,8 +112,13 @@
   "machine_switch_link_why_unavailable": "This computer can't switch to Persona Link right now.",
   "hosted_assistants_one": "Hosted assistant",
   "hosted_assistants_other": "Hosted assistants",
-  "hosted_assistants_settings": "Settings › Hub › Assistants",
+  "hosted_assistants_settings": "Settings › Advanced › Assistants",
   "manager_pending_restart_hint": "Binary updated with Redeploy. This assistant will restart automatically once idle.",
   "manager_older_version": "Older version",
-  "manager_version_lag_hint": "This assistant is still running an older version than this computer's node. Restart its manager service to apply."
+  "manager_version_lag_hint": "This assistant is still running an older version than this computer's node. Restart its manager service to apply.",
+  "configuration": "Configuration",
+  "other_workspaces": "Other workspaces",
+  "no_other_workspaces": "No other workspaces",
+  "workspaces_loading": "Loading workspaces…",
+  "workspaces_failed": "Couldn’t load all workspaces. Trying again shortly."
 }

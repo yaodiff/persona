@@ -1,6 +1,10 @@
 package assistantwire
 
-import "encoding/json"
+import (
+	"encoding/json"
+
+	"github.com/nwverse/persona/server/internal/buswire"
+)
 
 // Transcription for extensions (#8485, docs/extensions/extensions.md "Transcription for extensions",
 // schema/extension/transcription.schema.json): an extension granted the transcription scope hands its own audio, a
@@ -15,6 +19,14 @@ const (
 	// MethodTranscriptionExtension is how the manager hands the assistant one of the four: ExtensionTranscription → that
 	// call's result. Not on the extensions' allowlist.
 	MethodTranscriptionExtension = "transcription.extension"
+)
+
+var (
+	TranscriptionStartMethod     = buswire.Method[TranscriptionStartParams, TranscriptionStartResult]{Name: MethodTranscriptionStart}
+	TranscriptionAudioMethod     = buswire.Method[TranscriptionAudioParams, buswire.None]{Name: MethodTranscriptionAudio}
+	TranscriptionFinishMethod    = buswire.Method[TranscriptionJobParams, TranscriptionFinishResult]{Name: MethodTranscriptionFinish}
+	TranscriptionCancelMethod    = buswire.Method[TranscriptionJobParams, buswire.None]{Name: MethodTranscriptionCancel}
+	TranscriptionExtensionMethod = buswire.Method[ExtensionTranscription, json.RawMessage]{Name: MethodTranscriptionExtension}
 )
 
 // The transcription calls' error codes besides permission_denied, CodeInvalidParams and CodeAssistantOffline

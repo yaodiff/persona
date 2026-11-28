@@ -9,9 +9,10 @@ import (
 )
 
 // EngineText words a note a node wrote on one of its engines (proto.Engine.Note) in l. The node writes the canonical
-// Chinese of the node-engine catalog (the Paseo engine's notes, node/paseobridge.go), and the hub matches it at the
-// response boundary, as ComputerText does for a computer's. Any other note (an older node's own words, Orca's) stays
-// as it is, and so does the reason a note carries: what Node.js or the bridge printed is diagnostic data.
+// Chinese of the node-engine catalog (the Paseo engine's notes, node/paseobridge.go; an incompatible Orca's,
+// node/engine.go, whose canonical words are those nodes wrote before the catalog had them), and the hub matches it at
+// the response boundary, as ComputerText does for a computer's. Any other note (an older node's own words) stays as
+// it is, and so does the reason a note carries: what Node.js or the bridge printed is diagnostic data.
 func EngineText(l Lang, text string) string {
 	if text == "" || l == "" {
 		return text

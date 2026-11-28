@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/nwverse/persona/server/internal/lazyre"
+	"github.com/nwverse/persona/server/internal/nodeproto"
 )
 
 // A release's files are fetched after its latest.json was read, and the source need not serve that release any more
@@ -94,7 +95,9 @@ func DownloadRelease(ctx context.Context, client *http.Client, base string, m *M
 	if !IsMismatch(err) {
 		return bin, err
 	}
-	now, cerr := Check(ctx, client, base)
+	// The release's own edition's feed: m was taken as that edition when it was read.
+	edition, _ := nodeproto.ParseEdition(m.Edition)
+	now, cerr := CheckFeed(ctx, client, base, edition)
 	if cerr != nil || now.Manifest.Build == m.Build && now.Manifest.Version == m.Version {
 		return "", err
 	}

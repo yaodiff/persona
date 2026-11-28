@@ -67,3 +67,24 @@ func TestAddRouteScopesPanicsOnADuplicate(t *testing.T) {
 	}()
 	addRouteScopes(map[string]string{route: ScopeInboxWrite, "GET /api/v1/never-added": ScopeKBRead})
 }
+
+// A scope that says it reads opens routes that only read: every route of a scope named *.read is a GET (#17851). An
+// extension granted one was told on the install page that it reads, and a route added to such a scope later asks the
+// user nothing again, so the name is the promise: a route that changes, sends or spends takes a scope of its own.
+func TestReadScopesOnlyGet(t *testing.T) {
+	t.Parallel()
+	for route, scope := range RouteScopes {
+		if !strings.HasSuffix(scope, ".read") {
+			continue
+		}
+		if method, _, ok := strings.Cut(route, " "); !ok || method != "GET" {
+			t.Errorf("%q is opened by %s, a read scope: only GET routes are; give it a scope that says what it does", route, scope)
+		}
+	}
+	if RouteScopes["GET /api/v1/agents/triage"] != ScopeAgentsRead {
+		t.Errorf("GET /api/v1/agents/triage needs %q, want %s (agents_scopes.go)", RouteScopes["GET /api/v1/agents/triage"], ScopeAgentsRead)
+	}
+	if scope, ok := RouteScopes["PUT /api/v1/agents/triage"]; ok {
+		t.Errorf("PUT /api/v1/agents/triage is opened by %s: changing the triage's switches is for full credentials only", scope)
+	}
+}

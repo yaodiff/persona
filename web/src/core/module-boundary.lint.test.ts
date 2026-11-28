@@ -30,6 +30,20 @@ describe("the module boundary", () => {
     expect(await problems("src/modules/health/Example.ts", 'import "./reports";\nimport "../../lib/router";\nimport "../../core/module-host";')).toBe(0);
   });
 
+  it("keeps the file viewer and other modules from importing the Office preview", async () => {
+    // linted one level under src, so the specifier stays inside web/ read from this file too (see the note at the top)
+    expect(await problems("src/views/FileView.tsx", 'import "../modules/office/OfficeView";')).toBeGreaterThan(0);
+    expect(await problems("src/modules/health/Example.ts", 'export const f = () => import("../office/OfficeView");')).toBeGreaterThan(0);
+    expect(await problems("src/modules/office/Example.ts", 'import "../health/module";')).toBeGreaterThan(0);
+  });
+
+  it("keeps live mail behind the mailbox contribution", async () => {
+    expect(await problems("src/views/Inbox.tsx", 'import "../modules/mail/FullMailBody";')).toBeGreaterThan(0);
+    expect(await problems("src/core/Example.ts", 'type Draft = import("../modules/mail/mail").ComposeDraft;')).toBeGreaterThan(0);
+    expect(await problems("src/modules/mail/Example.ts", 'import "../office/module";')).toBeGreaterThan(0);
+    expect(await problems("src/modules/mail/Example.ts", 'import "./mail";')).toBe(0);
+  });
+
   it("keeps core out of every module and the list, template literals included", async () => {
     for (const code of [
       "export const f = (x: string) => import(`../modules/health/${x}`);",

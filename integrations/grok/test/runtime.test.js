@@ -329,6 +329,19 @@ test('native transcript reload keeps failures and discovers a continued assistan
   await f.done()
 })
 
+test('botmux sentinel chunks keep the previous reply preview and the original transcript', () => {
+  const marker = 'BOTMUX_NOTHING_TO_SEND'
+  const text = (value) => ({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: value } })
+  const transcript = (updates) => parseTranscript(updates.map((update) =>
+    JSON.stringify({ method: 'session/update', params: { update } })).join('\n'))
+  const updates = [text('Notes\n' + marker + '\nready'), { sessionUpdate: 'tool_call', toolCallId: 'read', title: 'read_file' }]
+  assert.equal(transcript(updates).lastText, 'Notes ready')
+  const parsed = transcript([...updates, text('BOTMUX_NOTHING_'), text('TO_SEND')])
+  assert.equal(parsed.lastText, 'Notes ready')
+  assert.equal(parsed.items.at(-1).text, marker)
+  assert.equal(transcript([text('BOTMUX_'), text('NOTHING_TO_SEND')]).lastText, '')
+})
+
 test('native transcript separates intermediate text, tools and final answer', () => {
   const updates = [
     { sessionUpdate: 'user_message_chunk', content: { type: 'text', text: '<persona-context>hidden</persona-context>Question' } },

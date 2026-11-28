@@ -183,7 +183,7 @@ func (m *Manifest) validateModel() []error {
 		if m.Runtime != nil || m.Node != nil || len(m.Contributes) > 0 || len(m.ActivationEvents) > 0 || len(m.Configuration) > 0 ||
 			len(m.Secrets) > 0 || len(m.Depends) > 0 || m.Exports != nil ||
 			len(m.Permissions.Network) > 0 || m.Permissions.HubAPI || len(m.Permissions.Hub) > 0 || m.Permissions.LauncherKeys || m.Permissions.GhLogin ||
-			m.Permissions.UsageGateways || m.Permissions.AgentRuntimes || m.Permissions.ErrorReports || m.Permissions.AuthRelay {
+			m.Permissions.UsageGateways || m.Permissions.AgentRuntimes || m.Permissions.ErrorReports || m.Permissions.RoutineFacts || m.Permissions.AuthRelay {
 			bad("extension_pack: a pack has only its members (no runtime, contributes, settings, secrets, permissions, depends or exports)")
 		}
 		members := map[string]bool{}

@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/apierr"
+	"github.com/nwverse/persona/server/internal/assistantwire"
 )
 
 // GET /api/v1/inbox keeps each listed item's JSON and writes the answer from those bytes. It used to copy every item
@@ -114,18 +116,24 @@ func (s *Service) inboxListBytes(shape inboxShape, withIDs bool) ([][]byte, []st
 	now := time.Now()
 	cutoff := now.Add(-inboxKeepDone)
 	cut := b.listedDoneCut(cutoff, all)
+	duplicates := b.larkDuplicates(cutoff, cut, all)
 	if m.kept == nil {
 		m.kept = make(map[string]inboxListed, len(b.items))
 	}
 	rows := make([]inboxListRow, 0, len(b.items))
 	misses := 0
 	for _, it := range b.items {
-		if !inboxShows(it, cutoff, cut, all) {
+		if duplicates.hidden[it.ID] || !inboxShows(it, cutoff, cut, all) {
 			continue
 		}
 		it.arrived(now)
 		row := inboxListRow{it: it, at: it.UpdatedAt}
-		if e := m.kept[it.ID]; e.it == it && e.raw != nil {
+		if _, linked := duplicates.related[it.ID]; linked {
+			// This copy depends on another row. Keep the ordinary memo item-local.
+			c := it.listed()
+			duplicates.link(&c)
+			row.c = &c
+		} else if e := m.kept[it.ID]; e.it == it && e.raw != nil {
 			row.raw = e.raw
 			if shape.lean {
 				row.raw = e.lean
@@ -175,7 +183,9 @@ func (s *Service) inboxListBytes(shape inboxShape, withIDs bool) ([][]byte, []st
 					return nil, nil, now, false
 				}
 			}
-			encoded = append(encoded, inboxListed{it: rows[i].it, raw: raw, lean: lean, tok: rows[i].tok})
+			if rows[i].tok != 0 {
+				encoded = append(encoded, inboxListed{it: rows[i].it, raw: raw, lean: lean, tok: rows[i].tok})
+			}
 			rows[i].raw = raw
 			if shape.lean {
 				rows[i].raw = lean
@@ -196,22 +206,36 @@ func (s *Service) inboxListBytes(shape inboxShape, withIDs bool) ([][]byte, []st
 	return out, ids, now, true
 }
 
+// inboxListResponse is GET /api/v1/inbox's typed answer when the item memo is off. stored_sources is unknown when the
+// store could not supply it; an older client ignores it either way.
+type inboxListResponse struct {
+	AsOf          time.Time                         `json:"as_of"`
+	Items         []InboxItem                       `json:"items"`
+	StoredSources *assistantwire.InboxStoredSources `json:"stored_sources,omitempty"`
+	Triage        InboxTriage                       `json:"triage"`
+}
+
 // writeInboxList writes GET /api/v1/inbox's answer for all (and POST /api/v1/inbox/refresh's): the bytes
-// apierr.WriteJSON wrote of map[string]any{"items": items, "as_of": asOf, "triage": triage}, its keys sorted, HTML
-// escaped as encoding/json escapes it and a newline at the end, with each item's kept bytes in place.
-func (s *Service) writeInboxList(w http.ResponseWriter, all bool) {
+// apierr.WriteJSON writes of inboxListResponse, its keys in declaration order, HTML escaped as encoding/json escapes
+// them and a newline at the end, with each item's kept bytes in place.
+func (s *Service) writeInboxList(ctx context.Context, w http.ResponseWriter, all bool) {
+	stored, known := s.inboxStoredSources(ctx)
+	var presence *assistantwire.InboxStoredSources
+	if known {
+		presence = &stored
+	}
 	if inboxListMemoOn {
-		if items, asOf, ok := s.inboxListRaw(all); ok && writeInboxItems(w, items, asOf, s.inboxTriage()) {
+		if items, asOf, ok := s.inboxListRaw(all); ok && writeInboxItems(w, items, asOf, s.inboxTriage(), presence) {
 			return
 		}
 	}
 	items, asOf := s.inboxListAt(all)
-	apierr.WriteJSON(w, map[string]any{"items": items, "as_of": asOf, "triage": s.inboxTriage()})
+	apierr.WriteJSON(w, inboxListResponse{AsOf: asOf, Items: items, StoredSources: presence, Triage: s.inboxTriage()})
 }
 
-// writeInboxItems writes the answer from the items' bytes; false, nothing written, when as_of or triage cannot be
-// encoded (encoding/json then writes nothing either).
-func writeInboxItems(w http.ResponseWriter, items [][]byte, asOf time.Time, triage InboxTriage) bool {
+// writeInboxItems writes the answer from the items' bytes; false, nothing written, when as_of, triage or the stored
+// sources cannot be encoded (encoding/json then writes nothing either).
+func writeInboxItems(w http.ResponseWriter, items [][]byte, asOf time.Time, triage InboxTriage, stored *assistantwire.InboxStoredSources) bool {
 	at, err := json.Marshal(asOf)
 	if err != nil {
 		return false
@@ -220,8 +244,19 @@ func writeInboxItems(w http.ResponseWriter, items [][]byte, asOf time.Time, tria
 	if err != nil {
 		return false
 	}
+	var sr []byte
+	if stored != nil {
+		sr, err = json.Marshal(stored)
+		if err != nil {
+			return false
+		}
+	}
 	const head, mid, tail = `{"as_of":`, `,"items":[`, `],"triage":`
-	n := len(head) + len(at) + len(mid) + max(len(items)-1, 0) + len(tail) + len(tr) + len("}\n")
+	extra := 0
+	if stored != nil {
+		extra = len(`],"stored_sources":`) + len(sr) + len(`,"triage":`) - len(tail)
+	}
+	n := len(head) + len(at) + len(mid) + max(len(items)-1, 0) + len(tail) + len(tr) + len("}\n") + extra
 	for _, raw := range items {
 		n += len(raw)
 	}
@@ -237,7 +272,14 @@ func writeInboxItems(w http.ResponseWriter, items [][]byte, asOf time.Time, tria
 		}
 		put(raw)
 	}
-	put(append(append(append([]byte(tail), tr...), '}'), '\n'))
+	if stored != nil {
+		put([]byte(`],"stored_sources":`))
+		put(sr)
+		put([]byte(`,"triage":`))
+	} else {
+		put([]byte(tail))
+	}
+	put(append(tr, '}', '\n'))
 	return true
 }
 

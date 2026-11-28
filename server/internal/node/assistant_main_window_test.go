@@ -14,8 +14,9 @@ import (
 
 // The main conversation on a managed launcher is held to the window the manager sends with it (#7314) when the
 // launcher declares a larger one: Claude's compact window and Codex's limit, with the idle /compact at 75% of it. A
-// smaller declared window, another conversation, a launcher Persona does not manage, nothing declared and a window of
-// 0 (an older manager, or the setting at 0) keep what the launcher declares, as before.
+// smaller declared window, another conversation (the manager sends it no window; a leader conversation's is in
+// assistant_lead_window_test.go), a launcher Persona does not manage, nothing declared and a window of 0 (an older
+// manager, or the setting at 0) keep what the launcher declares, as before.
 func TestAssistantMainCompactWindow(t *testing.T) {
 	fakeClaudeHome(t, "exit 0\n")
 	t.Setenv("CODEX_HOME", t.TempDir())
@@ -42,11 +43,11 @@ func TestAssistantMainCompactWindow(t *testing.T) {
 	}{
 		{"main, managed 1M", "gw1m", true, 400_000, "CLAUDE_CODE_AUTO_COMPACT_WINDOW=400000 CLAUDE_CODE_MAX_CONTEXT_TOKENS=1000000", 400_000, 300_000, 300_000},
 		{"main, managed 1M, window 0", "gw1m", true, 0, "CLAUDE_CODE_AUTO_COMPACT_WINDOW=1000000 CLAUDE_CODE_MAX_CONTEXT_TOKENS=1000000", 1_000_000, 750_000, 750_000},
-		{"another conversation", "gw1m", false, 400_000, "CLAUDE_CODE_AUTO_COMPACT_WINDOW=1000000 CLAUDE_CODE_MAX_CONTEXT_TOKENS=1000000", 1_000_000, 750_000, 750_000},
+		{"another conversation", "gw1m", false, 0, "CLAUDE_CODE_AUTO_COMPACT_WINDOW=1000000 CLAUDE_CODE_MAX_CONTEXT_TOKENS=1000000", 1_000_000, 750_000, 750_000},
 		{"declared window below it", "gw200", true, 400_000, "CLAUDE_CODE_AUTO_COMPACT_WINDOW=200000 CLAUDE_CODE_MAX_CONTEXT_TOKENS=1000000", 200_000, 150_000, 150_000},
 		{"nothing declared", "gwbare", true, 400_000, "", 0, 150_000, 750_000},
 		{"main, managed Codex with a 1M model", "codex1m", true, 400_000, "CLAUDE_CODE_AUTO_COMPACT_WINDOW=400000 CLAUDE_CODE_MAX_CONTEXT_TOKENS=1000000", 400_000, 300_000, 300_000},
-		{"another Codex conversation", "codex1m", false, 400_000, "CLAUDE_CODE_MAX_CONTEXT_TOKENS=1000000", 0, 750_000, 750_000},
+		{"another Codex conversation", "codex1m", false, 0, "CLAUDE_CODE_MAX_CONTEXT_TOKENS=1000000", 0, 750_000, 750_000},
 		{"shell launcher declaring 1M", "testbig", true, 400_000, "", 0, 750_000, 750_000},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -201,7 +202,7 @@ func TestAssistantMainCompactWindowWarmSpare(t *testing.T) {
 			}
 			t.Cleanup(spare.stop)
 			// What assistantSend runs a new main conversation's first message with.
-			start := modelExecution{IsMain: true, MainCompactWindow: n.mainWindowOn(tt.launcher, true, 400_000), ConfigDir: spare.model.ConfigDir}
+			start := modelExecution{IsMain: true, MainCompactWindow: n.mainWindowOn(tt.launcher, 400_000), ConfigDir: spare.model.ConfigDir}
 			if n.adoptSpare(cwd, tt.launcher, start) != spare {
 				t.Fatal("the main conversation's start did not adopt the spare warmed for it")
 			}

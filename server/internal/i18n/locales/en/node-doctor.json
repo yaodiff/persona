@@ -35,7 +35,7 @@
   "generated_stale_hint": "Restarting the node rewrites it; you can also run personad node doctor --fix",
   "global_hooks_extensions": "Synchronous PermissionRequest hooks: {count}, all from installed extensions ({extensions})",
   "global_hooks_found": "Synchronous PermissionRequest hooks: {count} (first: {hook})",
-  "global_hooks_found_hint": "They and Persona's phone approvals may both block permission requests and interfere with each other; Persona does not change this file, so review it yourself when needed",
+  "global_hooks_found_hint": "They and Persona's phone approvals may both block permission requests and interfere with each other; Persona does not change {path}, so review it yourself when needed",
   "global_hooks_found_with_extensions": "Synchronous PermissionRequest hooks: {count} (first: {hook}), plus {extension_count} from installed extensions ({extensions})",
   "global_hooks_invalid": "The global settings.json is not valid JSON",
   "global_hooks_invalid_hint": "Claude Code cannot read it either; Persona does not change this file",
@@ -102,6 +102,7 @@
   "preflight_shown_link": "{path} → {target} ({role})",
   "preflight_shown_path": "{path} ({role})",
   "preflight_slow_hint": "Reads were too slow: check again; if this persists, check whether a working directory or link is on a network disk",
+  "preflight_symlink_loop_hint": "This symlink forms a loop; remove the broken symlink or point it to a real directory",
   "preflight_tcc_hint": "macOS privacy protection blocked {target}. Either add and enable {program} in System Settings › Privacy & Security › Full Disk Access, or move it out of {folder}",
   "preflight_unchecked_hung": "Unchecked paths after an earlier read hung: {count}",
   "preflight_unchecked_slow": "Unchecked paths after the check timed out: {count}",
@@ -164,5 +165,10 @@
   "agy_hooks_stale": "Persona's Antigravity CLI hooks run another program than this one",
   "agy_hooks_hint": "Run personad node doctor --fix (agy panes then show their conversation under any engine)",
   "agy_hooks_off": "Persona's Antigravity CLI hooks were removed on purpose (personad node agy-hooks install puts them back)",
-  "agy_hooks_unreadable": "Cannot read the Antigravity CLI hooks file ({error})"
+  "agy_hooks_unreadable": "Cannot read the Antigravity CLI hooks file ({error})",
+  "orca_ok": "Orca {version} is running",
+  "orca_stopped": "Orca is installed but not running",
+  "orca_stopped_hint": "Open Orca first if it is this computer's engine; ignore this when using another engine",
+  "orca_incompatible": "Orca {version} is running but doesn't work with this version of Persona",
+  "orca_incompatible_hint": "Update Orca and Persona to the latest version"
 }

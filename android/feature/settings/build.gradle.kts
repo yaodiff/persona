@@ -25,6 +25,16 @@ android {
     }
     defaultConfig {
         manifestPlaceholders["googleOAuthScheme"] = "persona.oauth.unset"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+    // #13282 shares the exact reviewed generated source and immutable adapter with instrumentation only.
+    // The ordinary main/debug/release source sets never compile either file.
+    sourceSets.named("androidTest") {
+        java.srcDir("src/test/kotlin")
+        java.filter.include(
+            "persona/feature/settings/AboutBuildSnapshot.kt",
+            "persona/feature/settings/generated/AboutBuildRow.kt",
+        )
     }
 }
 
@@ -51,6 +61,10 @@ dependencies {
     testImplementation("androidx.compose.ui:ui-test-manifest")
     testImplementation("org.robolectric:robolectric:4.17")
     testImplementation("androidx.test.ext:junit:1.3.0")
+    androidTestImplementation(platform(libs.compose.bom))
+    androidTestImplementation("androidx.compose.ui:ui-test-junit4")
+    androidTestImplementation("androidx.test:runner:1.7.0")
+    androidTestImplementation("androidx.test.ext:junit:1.3.0")
     implementation(project(":core:contracts"))
     implementation(project(":core:data"))
     implementation(project(":core:hub"))

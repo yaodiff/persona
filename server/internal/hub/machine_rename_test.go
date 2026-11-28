@@ -134,9 +134,13 @@ func busRename(h *Hub, id, name string) (devicewire.RenameReply, error) {
 // A computer's Persona Link renames it through its manager: only a confirmed one, with the hub's own checks.
 func TestLinkRenamesItsComputer(t *testing.T) {
 	h := renameHub(t)
-	got, err := busRename(h, "ren-a", "Studio")
-	if err != nil || got.Name != "Studio" || listedName(h, "ren-a") != "Studio" {
+	raw := json.RawMessage(`{"machine_id":"ren-a","name":"Studio","future_field":true}`)
+	got, err := busMethods[devicewire.MethodRename](h, t.Context(), nil, raw)
+	if err != nil || listedName(h, "ren-a") != "Studio" {
 		t.Fatalf("%+v %v", got, err)
+	}
+	if reply, err := json.Marshal(got); err != nil || string(reply) != `{"name":"Studio"}` {
+		t.Fatalf("wire reply = %s, %v", reply, err)
 	}
 	var re *rpc.Error
 	if _, err := busRename(h, "ren-a", strings.Repeat("x", 41)); !errors.As(err, &re) || re.Code != devicewire.RenameCodeInvalidName {

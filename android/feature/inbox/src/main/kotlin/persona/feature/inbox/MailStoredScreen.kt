@@ -47,7 +47,7 @@ internal fun MailStoredScreen(repository: InboxRepository, route: MailRoute, nav
     }
     val record = listed ?: (lookup as? InboxItemLookupResult.Found)?.record
     // The stored text is read once per item (and again on a pull): null while it is on its way.
-    var stored by remember { mutableStateOf<String?>(null) }
+    var stored by remember { mutableStateOf<PersonaContext?>(null) }
     var read by remember { mutableStateOf(false) }
     LaunchedEffect(repository, record?.item?.id, reload) {
         val id = record?.item?.id ?: return@LaunchedEffect
@@ -58,7 +58,9 @@ internal fun MailStoredScreen(repository: InboxRepository, route: MailRoute, nav
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var handingOff by remember { mutableStateOf(false) }
-    val text = stored?.takeIf { it.isNotBlank() } ?: record?.item?.preview.orEmpty()
+    val text = stored?.text?.takeIf { it.isNotBlank() } ?: record?.item?.preview.orEmpty()
+    // Until the route answers, the notice stays today's wording (Unknown); never claim "whole" or "clipped".
+    val clipping = stored?.mailClipping ?: StoredMailClipping.Unknown
 
     JListPage(title = record?.item?.title?.ifBlank { stringResource(R.string.inbox_mail_no_subject) } ?: stringResource(R.string.inbox_mail_detail_title),
         onBack = navigator::back, refreshing = refreshing,
@@ -109,7 +111,15 @@ internal fun MailStoredScreen(repository: InboxRepository, route: MailRoute, nav
                 }
             }
         }
-        item("mail-off") { JNotice(stringResource(R.string.inbox_mail_module_off), Modifier.padding(top = Tokens.Space.m)) }
+        item("mail-off") {
+            // Only a hub `true` adds that the text is cut short. Android's existing sentence makes no clipping claim,
+            // so Whole and Unknown both keep it exactly (#15995, the web StoredMailClipping wording rule).
+            val offNotice = when (clipping) {
+                StoredMailClipping.Clipped -> R.string.inbox_mail_module_off_clipped
+                StoredMailClipping.Whole, StoredMailClipping.Unknown -> R.string.inbox_mail_module_off
+            }
+            JNotice(stringResource(offNotice), Modifier.padding(top = Tokens.Space.m))
+        }
         item("item-state") {
             JTextButton(stringResource(if (record.item.isDone) R.string.inbox_move_back else R.string.inbox_mail_mark_done), enabled = !busy, onClick = {
                 busy = true

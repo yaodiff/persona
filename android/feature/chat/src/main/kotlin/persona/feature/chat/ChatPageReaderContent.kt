@@ -1,11 +1,13 @@
 package persona.feature.chat
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.layout.layoutId
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -57,8 +59,8 @@ internal fun ChatPageReaderContent(
     agentChat: Boolean,
     scope: kotlinx.coroutines.CoroutineScope,
     timeline: ChatTimeline,
-    timelineVersion: MutableState<Int>,
-    currentItems: () -> List<Item>,
+    timelineVersion: State<Int>,
+    onFreeze: () -> Unit,
     newestVisibleItem: State<Item?>,
     readThrough: Item?,
     snapshot: persona.core.contracts.api.ChatSnapshot,
@@ -135,6 +137,17 @@ internal fun ChatPageReaderContent(
     val channels = LocalChannels.current
     val openingChannel = remember(opening?.clientMsgId, channels) { ChannelSources.of(opening?.clientMsgId, channels) }
     val openingSource: (@Composable () -> Unit)? = if (openingChannel != null) ({ JChannelSource(openingChannel) }) else externalSource
+    val interleavedRows = remember(lines, placed.before) {
+        if (placed.before.isEmpty()) null
+        else buildList<TranscriptListRow>(lines.size + placed.before.values.sumOf { it.size }) {
+            for (line in lines) {
+                add(TranscriptListRow.Line(line))
+                placed.before[line.id]?.asReversed()?.forEach { message ->
+                    add(TranscriptListRow.Outbox(message))
+                }
+            }
+        }
+    }
     Column(Modifier.fillMaxSize()) {
         if (search.selected != null) ReturnChip { search.returnToOrigin(chatList) }
         search.notice?.let { Text(it, Modifier.padding(horizontal = horizontalPadding), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2) }
@@ -142,7 +155,6 @@ internal fun ChatPageReaderContent(
             CloseoutCard(closeout, closeoutWork?.artifacts.orEmpty(), key.path, Modifier.padding(
                 start = horizontalPadding, end = horizontalPadding, top = pagePaddingValues.calculateTopPadding() + Tokens.Space.s))
         }
-        val showJump = !chatList.followsEnd
         ChatReaderLayout(
             Modifier.weight(1f).then(if (foldsHeader) Modifier.nestedScroll(headerScroll) else Modifier),
             topInset = padding.calculateTopPadding(), bottomInset = padding.calculateBottomPadding(),
@@ -153,15 +165,14 @@ internal fun ChatPageReaderContent(
                         .padding(top = topInset + Tokens.Space.s, bottom = Tokens.Space.s))
             },
             navigation = {
-                ChatPageReaderNavigation(horizontalPadding, showJump, lines, contentPlans, renderStyle, list,
-                    planSheet, sheetPlan, glass, agentChat, hasPendingCards, scope, timeline, timelineVersion, currentItems,
+                ChatPageReaderNavigation(horizontalPadding, lines, contentPlans, renderStyle, list,
+                    planSheet, sheetPlan, glass, agentChat, hasPendingCards, scope, timeline, timelineVersion, onFreeze,
                     chatList, snapshot.items, newestVisibleItem, readThrough, deferCount)
             },
         ) { listBottomInset ->
             val outboxBubble: @Composable (OutboxMessage) -> Unit = { message ->
                 val delivery = composerDeliveries[message.clientMessageId]
-                val deliveryState = if (message.state in setOf(DeliveryState.Refused, DeliveryState.Rejected))
-                    delivery?.state ?: message.state else message.state
+                val deliveryState = effectiveOutboxState(message.state, delivery?.state)
                 val busy = message.clientMessageId in deliveryActions.busyIds
                 val onAction = onDeliveryAction?.let { action -> { messageAction: DeliveryAction -> action(message, messageAction) } }
                 val failed = deliveryState == DeliveryState.Rejected || deliveryState == DeliveryState.Refused
@@ -213,43 +224,51 @@ internal fun ChatPageReaderContent(
                     item(key = "outbox-${message.clientMessageId}", contentType = "outbox") { outboxBubble(message) }
                 }
                 pendingDay?.let { day -> item(key = PENDING_DAY_ROW, contentType = "day") { DayLine(day, Modifier.testTag("chat-pending-day")) } }
-                for (line in lines) {
-                    item(key = line.contentKey, contentType = line.contentType()) {
-                        ChatSearchHighlight(search, line.contentKey) {
-                            androidx.compose.runtime.CompositionLocalProvider(LocalAssistantTaskHost provides taskHost,
-                                LocalTurnErrorFixAction provides fixModel, LocalTurnErrorModelActions provides turnModelActions,
-                                LocalOpenRecap provides openRecap) {
-                                val pictures = contentUserImages[line.id].orEmpty()
-                                val isOpening = opening != null && when (line) {
-                                    is ChatLine.Row -> line.row.item?.id == opening.id || pictures.any { it.id == opening.id }
-                                    is ChatLine.UserImages -> line.images.any { it.id == opening.id }
-                                    else -> false
-                                }
-                                ChatLineContent(line, key, loader,
-                                    line.recordedDuration(snapshot.recordedTurnDurations),
-                                    onToggle, onExpand, folding, foldErrors,
-                                    lastUserId = lastUserId,
-                                    turnFix = turnFix?.takeIf { line.contentKey == lines.firstOrNull()?.contentKey },
-                                    turnLauncher = turnLauncher,
-                                    onLastLine = { extent -> chatList.reportLastLine(line.contentKey, extent) }, onFullText = onFullText,
-                                    style = renderStyle, agentSession = session, textUpdates = textUpdates,
-                                    liveText = snapshot.liveText, streamingItemIds = snapshot.streamingItemIds,
-                                    userImages = pictures, openingSource = if (isOpening) openingSource else null,
-                                    imagesInUserBubble = line.id in contentHiddenImages,
-                                    workRunning = (line as? ChatLine.Step)?.let { contentWorkGroups[it.groupId]?.live } == true,
-                                    lastWorkStep = (line as? ChatLine.Step)?.let {
-                                        // A nested subagent's card can come after the line's own last step (Glass).
-                                        if (subagentCards) contentLastSteps[it.groupId] == it.step.id
-                                        else contentWorkGroups[it.groupId]?.steps?.lastOrNull()?.id == it.step.id
-                                    } == true,
-                                    plan = (line as? ChatLine.Step)?.let { contentPlans[it.groupId] },
-                                    showSourceLabel = line.id in contentSourceLabels, waiting = waitingOnYou,
-                                    closeoutReply = closeoutReplyId, hideTaskPrompts = foldsBackground, onTerminal = onTerminal)
+                val transcriptLine: @Composable (ChatLine) -> Unit = { line ->
+                    ChatSearchHighlight(search, line.contentKey) {
+                        androidx.compose.runtime.CompositionLocalProvider(LocalAssistantTaskHost provides taskHost,
+                            LocalTurnErrorFixAction provides fixModel, LocalTurnErrorModelActions provides turnModelActions,
+                            LocalOpenRecap provides openRecap) {
+                            val pictures = contentUserImages[line.id].orEmpty()
+                            val isOpening = opening != null && when (line) {
+                                is ChatLine.Row -> line.row.item?.id == opening.id || pictures.any { it.id == opening.id }
+                                is ChatLine.UserImages -> line.images.any { it.id == opening.id }
+                                else -> false
                             }
+                            ChatLineContent(line, key, loader,
+                                line.recordedDuration(snapshot.recordedTurnDurations),
+                                onToggle, onExpand, folding, foldErrors,
+                                lastUserId = lastUserId,
+                                showToolViews = line !is ChatLine.Step || line.groupId !in contentWorkGroups,
+                                turnFix = turnFix?.takeIf { line.contentKey == lines.firstOrNull()?.contentKey },
+                                turnLauncher = turnLauncher,
+                                onLastLine = { extent -> chatList.reportLastLine(line.contentKey, extent) }, onFullText = onFullText,
+                                style = renderStyle, agentSession = session, textUpdates = textUpdates,
+                                liveText = snapshot.liveText, streamingItemIds = snapshot.streamingItemIds,
+                                userImages = pictures, openingSource = if (isOpening) openingSource else null,
+                                imagesInUserBubble = line.id in contentHiddenImages,
+                                workRunning = (line as? ChatLine.Step)?.let { contentWorkGroups[it.groupId]?.live } == true,
+                                lastWorkStep = (line as? ChatLine.Step)?.let {
+                                    // A nested subagent's card can come after the line's own last step (Glass).
+                                    if (subagentCards) contentLastSteps[it.groupId] == it.step.id
+                                    else contentWorkGroups[it.groupId]?.steps?.lastOrNull()?.id == it.step.id
+                                } == true,
+                                plan = (line as? ChatLine.Step)?.let { contentPlans[it.groupId] },
+                                showSourceLabel = line.id in contentSourceLabels, waiting = waitingOnYou,
+                                closeoutReply = closeoutReplyId, hideTaskPrompts = foldsBackground, onTerminal = onTerminal)
                         }
                     }
-                    placed.before[line.id].orEmpty().asReversed().forEach { message ->
-                        item(key = "outbox-${message.clientMessageId}", contentType = "outbox") { outboxBubble(message) }
+                }
+                if (interleavedRows == null) {
+                    items(lines, key = ChatLine::contentKey, contentType = ChatLine::contentType) { line ->
+                        transcriptLine(line)
+                    }
+                } else {
+                    items(interleavedRows, key = TranscriptListRow::key, contentType = TranscriptListRow::contentType) { row ->
+                        when (row) {
+                            is TranscriptListRow.Line -> transcriptLine(row.line)
+                            is TranscriptListRow.Outbox -> outboxBubble(row.message)
+                        }
                     }
                 }
                 if (earlierEngines != null) earlierEngineHistory(earlierEngines, scope, loader, renderStyle, onReadEarlierText)
@@ -277,11 +296,35 @@ internal fun ChatPageReaderContent(
     }
 }
 
+/**
+ * Resolves the displayed delivery state for an outbox bubble. A composer overlay may advance a refused message while
+ * its Clear & Send retry is in flight or freshly accepted, but a stale Unknown / WaitingForNetwork overlay from an
+ * earlier attempt must never mask an authoritative Refused / Rejected outbox state.
+ */
+internal fun effectiveOutboxState(outboxState: DeliveryState, composerState: DeliveryState?): DeliveryState =
+    if (outboxState in setOf(DeliveryState.Refused, DeliveryState.Rejected) &&
+        composerState in setOf(DeliveryState.Sending, DeliveryState.Sent, DeliveryState.Held))
+        composerState!! else outboxState
+
+private sealed interface TranscriptListRow {
+    val key: String
+    val contentType: String
+
+    data class Line(val line: ChatLine) : TranscriptListRow {
+        override val key: String get() = line.contentKey
+        override val contentType: String get() = line.contentType()
+    }
+
+    data class Outbox(val message: OutboxMessage) : TranscriptListRow {
+        override val key: String get() = "outbox-${message.clientMessageId}"
+        override val contentType: String get() = "outbox"
+    }
+}
+
 /** The same plan-return and latest-message navigation slot, with the page's plan and timeline state holders. */
 @Composable
 private fun ChatPageReaderNavigation(
     horizontalPadding: Dp,
-    showJump: Boolean,
     lines: List<ChatLine>,
     contentPlans: Map<String, LinePlan?>,
     renderStyle: ChatRenderStyle,
@@ -293,14 +336,15 @@ private fun ChatPageReaderNavigation(
     hasPendingCards: Boolean,
     scope: kotlinx.coroutines.CoroutineScope,
     timeline: ChatTimeline,
-    timelineVersion: MutableState<Int>,
-    currentItems: () -> List<Item>,
+    timelineVersion: State<Int>,
+    onFreeze: () -> Unit,
     chatList: ChatListState,
     items: List<Item>,
     newestVisibleItem: State<Item?>,
     readThrough: Item?,
     deferCount: Boolean,
 ) {
+    val showJump = !chatList.followsEnd
     // A plan outside the viewport (or inside a folded Glass work line, matching iOS ChatPlan.latest) stays reachable
     // from the conversation's footer.
     val anchor = remember(lines, contentPlans, renderStyle) { latestPlanLine(lines, contentPlans) }
@@ -322,7 +366,8 @@ private fun ChatPageReaderNavigation(
     // An open sheet keeps the last plan if its work line folds away.
     if (planSheet.value && activePlan != null) SideEffect { sheetPlan.value = activePlan }
     if (showJump || showPlanPill) Row(
-        Modifier.fillMaxWidth().padding(horizontal = horizontalPadding).padding(bottom = Tokens.Space.s),
+        Modifier.fillMaxWidth().padding(horizontal = horizontalPadding).padding(bottom = Tokens.Space.s)
+            .then(if (showPlanPill) Modifier.layoutId(PlanReaderFooter) else Modifier),
         horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -333,7 +378,7 @@ private fun ChatPageReaderNavigation(
                     if (opensSheet) { sheetPlan.value = activePlan; planSheet.value = true }
                     else anchor?.let { target ->
                         scope.launch {
-                            timeline.freeze(currentItems()); timelineVersion.value++
+                            onFreeze()
                             chatList.scrollToRecord(target.lineId)
                         }
                     }
@@ -343,7 +388,7 @@ private fun ChatPageReaderNavigation(
             }
         }
         if (showJump) ChatJumpToLatest(
-            timeline, timelineVersion.value, items, newestVisibleItem, readThrough,
+            timeline, timelineVersion, items, newestVisibleItem, readThrough,
             deferCount = deferCount, agentChat = agentChat, onClick = chatList::returnToLatest)
     }
 }

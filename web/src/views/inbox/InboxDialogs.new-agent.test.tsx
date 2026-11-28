@@ -83,7 +83,7 @@ describe("Hand to AI: New agent…", () => {
     const list = document.body.querySelector('[role="radiogroup"]')!;
     const rows = [...list.children];
     expect(rows[2]).toBe(row());
-    expect(row().textContent).toContain("开 Agent…");
+    expect(row().textContent).toContain("新建 Agent…");
     expect(rows[0].getAttribute("aria-checked")).toBe("true");
   });
 

@@ -73,6 +73,9 @@ type Request struct {
 	// Attempt is the hook process's own id, the same on each reconnect; Resume marks those reconnects.
 	Attempt string `json:"attempt,omitempty"`
 	Resume  bool   `json:"resume,omitempty"`
+	// CreatedAt identifies the resumable hook occurrence across node reconnects.
+	// Older nodes ignore it and retain their legacy reconstruction behavior.
+	CreatedAt *time.Time `json:"created_at,omitempty"`
 	// AgentPID / AgentStart: the claude the hook runs under and when it started (AgentOf); 0 / "" when not found.
 	AgentPID   int    `json:"agent_pid,omitempty"`
 	AgentStart string `json:"agent_start,omitempty"`
@@ -205,6 +208,10 @@ func dial(ctx context.Context, path string, req any, hangUpOnCancel bool) ([]byt
 // (it answers {"retry":true}, or the connection breaks) it reconnects to the next one with the same request, marked
 // Resume, for up to ResumeWait. The error is ErrNoNode when nothing listens at the first try.
 func DialResumable(ctx context.Context, dial Dialer, req Request) ([]byte, error) {
+	if req.CreatedAt == nil || req.CreatedAt.IsZero() {
+		now := time.Now().UTC()
+		req.CreatedAt = &now
+	}
 	line, err := dial(ctx, req)
 	if errors.Is(err, ErrNoNode) {
 		return nil, err

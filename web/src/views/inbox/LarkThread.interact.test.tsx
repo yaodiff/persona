@@ -125,7 +125,7 @@ describe("飞书会话页的交互", () => {
     expect(host.querySelector('button[aria-label="点赞"]')).not.toBeNull();
     await act(async () => byText("批准")!.click());
     await flush();
-    expect(vi.mocked(toast).mock.calls.some(([text, tone]) => tone === "error" && String(text).includes("没能提交") && String(text).includes("回调超时"))).toBe(true);
+    expect(vi.mocked(toast).mock.calls.some(([text, tone]) => tone === "error" && String(text).includes("提交失败") && String(text).includes("回调超时"))).toBe(true);
 
     fail = false;
     vi.useFakeTimers();

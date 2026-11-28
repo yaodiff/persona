@@ -12,10 +12,7 @@ import (
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
-// #7559: the node starts traex and omp with no permission mode and no effort, and refuses a start that names one
-// (node/control.go). The hub must not send plan for a read-only task to them, nor fill in a writable task's default
-// mode or a tier's effort; one the caller names is refused before anything starts. pi, cursor and agy (#8151) the node
-// starts with the two ignored: the hub drops them, the caller's own included, without refusing.
+// TRAE CLI and omp refuse a Persona permission mode. TRAE CLI keeps a named effort, and omp refuses it.
 
 const readonlyConstraint = "本任务只读：不改项目文件、不提交、不对外写入"
 
@@ -73,8 +70,7 @@ func TestReadonlyNonClaudeTaskCarriesTheConstraintNotPlan(t *testing.T) {
 	}
 }
 
-// A writable task to traex gets neither the owner's default permission mode (on its card, or at the start) nor its
-// tier's effort; Codex and Claude keep theirs.
+// A TRAE CLI task keeps the tier's effort and omits the owner's default permission mode.
 func TestWritableNonClaudeTaskGetsNoDefaultModeOrEffort(t *testing.T) {
 	for _, tc := range []struct{ agent, wantMode string }{
 		{"traex", ""},
@@ -113,6 +109,12 @@ func TestWritableNonClaudeTaskGetsNoDefaultModeOrEffort(t *testing.T) {
 				t.Fatalf("starts = %v", f.starts)
 			}
 			start := f.starts[0]
+			if tc.agent == "traex" {
+				if mode, _ := start["permission_mode"].(string); mode != "" || start["effort"] != "high" || task.Effort != "high" {
+					t.Fatalf("TRAE CLI task lost its effort or kept a permission mode: %v", start)
+				}
+				return
+			}
 			if tc.wantMode == "" {
 				noModesStart(t, start)
 				if task.Effort != "" {
@@ -127,7 +129,7 @@ func TestWritableNonClaudeTaskGetsNoDefaultModeOrEffort(t *testing.T) {
 	}
 }
 
-// A mode or effort the call names for traex or omp is refused by task_plan, saying why, before a plan is saved or
+// A mode for TRAE CLI or omp, or an effort for omp, is refused by task_plan, saying why, before a plan is saved or
 // anything starts. A read-only task's permission is replaced by read-only, so it is not one the call asked for. For pi
 // and cursor (work agents, #8151) neither is refused: the plan saves none and the task starts without them, as the node
 // would start it anyway; a read-only task for them is refused as read-only (#8316), whatever it names.
@@ -164,13 +166,18 @@ func TestNonClaudeTaskRefusesAskedModeOrEffort(t *testing.T) {
 						}
 						return
 					}
-					if tc.want == "" || !refuses {
+					traexEffort := agent == "traex" && tc.effort != ""
+					if tc.want == "" || !refuses || traexEffort {
 						if err != nil {
 							t.Fatalf("task refused: %v", err)
 						}
 						saved := readonlyFeedPlan(t, s, "chat").Tasks[0]
-						if saved.Effort != "" || (!tc.readonly && saved.Permission != "") {
-							t.Fatalf("the card keeps what will not run: permission %q, effort %q", saved.Permission, saved.Effort)
+						wantEffort := ""
+						if traexEffort {
+							wantEffort = tc.effort
+						}
+						if saved.Effort != wantEffort || (!tc.readonly && saved.Permission != "") {
+							t.Fatalf("unexpected card: permission %q, effort %q", saved.Permission, saved.Effort)
 						}
 						if tc.readonly { // started at once; a writable one waits for Start
 							f.mu.Lock()
@@ -178,7 +185,13 @@ func TestNonClaudeTaskRefusesAskedModeOrEffort(t *testing.T) {
 							if len(f.starts) != 1 || f.starts[0]["launcher"] != agent {
 								t.Fatalf("starts = %v", f.starts)
 							}
-							noModesStart(t, f.starts[0])
+							if traexEffort {
+								if f.starts[0]["effort"] != wantEffort || f.starts[0]["permission_mode"] != nil {
+									t.Fatalf("TRAE CLI read-only start: %v", f.starts[0])
+								}
+							} else {
+								noModesStart(t, f.starts[0])
+							}
 						}
 						return
 					}
@@ -196,7 +209,7 @@ func TestNonClaudeTaskRefusesAskedModeOrEffort(t *testing.T) {
 	}
 }
 
-// agent_start to traex or omp: an effort the call names is refused before anything starts (and before a health
+// agent_start to omp: an effort the call names is refused before anything starts (and before a health
 // conversation's card asks the user); a tier's is dropped; no mode. pi and cursor start with neither, the call's own
 // effort dropped rather than refused (#8151). Claude, Codex and a Paseo provider keep the effort they are given.
 func TestAgentStartNonClaudeEffort(t *testing.T) {
@@ -222,7 +235,7 @@ func TestAgentStartNonClaudeEffort(t *testing.T) {
 		}
 		return f.starts[0]
 	}
-	for _, agent := range []string{"traex", "omp", "pi", "cursor"} {
+	for _, agent := range []string{"omp", "pi", "cursor"} {
 		t.Run(agent+"/asked", func(t *testing.T) {
 			f, err := run(t, agent, map[string]any{"launcher": agent, "effort": "high"})
 			if proto.IsWorkAgentType(agent) {
@@ -247,6 +260,28 @@ func TestAgentStartNonClaudeEffort(t *testing.T) {
 			noModesStart(t, oneStart(t, f, agent))
 		})
 	}
+	t.Run("traex", func(t *testing.T) {
+		for _, input := range []map[string]any{
+			{"launcher": "traex", "model": "example-fast", "effort": "xhigh"},
+			{"tier": "standard"},
+		} {
+			wantEffort, _ := input["effort"].(string)
+			if wantEffort == "" {
+				wantEffort = "high"
+			}
+			f, err := run(t, "traex", input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			start := oneStart(t, f, "traex")
+			if mode, _ := start["permission_mode"].(string); mode != "" || start["effort"] != wantEffort {
+				t.Fatalf("TRAE CLI start: %v", start)
+			}
+			if model, ok := input["model"]; ok && start["model"] != model {
+				t.Fatalf("TRAE CLI start lost the model: %v", start)
+			}
+		}
+	})
 	// Codex, and an agent a runtime starts (a Paseo provider, #8141), keep the effort: the node or the runtime judges it.
 	for _, agent := range []string{"codex", "paseo"} {
 		t.Run(agent+"/asked", func(t *testing.T) {

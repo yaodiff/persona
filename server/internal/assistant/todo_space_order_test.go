@@ -6,7 +6,6 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -188,9 +187,7 @@ func waitWorkspaceRequest(t *testing.T, done <-chan struct{}, method string) {
 			return true
 		default:
 		}
-		buf := make([]byte, 1<<20)
-		buf = buf[:runtime.Stack(buf, true)]
-		for _, stack := range strings.Split(string(buf), "\n\n") {
+		for _, stack := range goroutineStacks() {
 			if strings.Contains(stack, "[sync.Mutex.Lock]") && strings.Contains(stack, "(*Service)."+method+"(") {
 				return true
 			}

@@ -16,7 +16,7 @@ describe("machine deployment", () => {
   it.each(["link", "service"])("requires advertised capability for %s nodes", (kind) => {
     const legacy = machineDeployment(machine({ kind }));
     expect(legacy).toMatchObject({ supported: false, canDeploy: false });
-    expect(legacy.reason).toContain("手动更新一次 node");
+    expect(legacy.reason).toContain("手动更新 node");
     expect(legacy.reason).toContain("hub");
     expect(machineDeployment(machine({ kind, can_deploy: true }))).toMatchObject({ supported: true, canDeploy: true });
   });
@@ -30,7 +30,7 @@ describe("machine deployment", () => {
 
   it("never offers to redeploy the hub's local node", () => {
     expect(machineDeployment(machine({ kind: "local" }))).toMatchObject({ supported: false, canDeploy: false });
-    expect(machineDeployment(machine({ kind: "local", can_deploy: true })).reason).toContain("本机升级 hub");
+    expect(machineDeployment(machine({ kind: "local", can_deploy: true })).reason).toContain("本机更新 hub");
   });
 
   it.each(["link", "service"])("waits for %s nodes to reconnect before starting", (kind) => {
@@ -40,9 +40,10 @@ describe("machine deployment", () => {
 
   it.each([
     ["waiting_idle", "等待空闲", "Agent 空闲"],
-    ["transferring", "传输中", "传到这台电脑"],
+    ["transferring", "传输中", "传输到这台电脑"],
+    ["draining", "待空闲重启", "等待当前任务完成后重启"],
     ["restarting", "重启中", "重启"],
-    ["confirming", "确认中", "确认与 hub 的版本一致"],
+    ["confirming", "确认中", "确认其与 hub 版本一致"],
   ] as const)("keeps %s visible through offline/version transitions and prevents duplicate deployments", (deploy_phase, label, text) => {
     const result = machineDeployment(machine({ kind: "link", can_deploy: false, online: false, node_mismatch: false, deploy_phase }));
     expect(result).toMatchObject({ visible: true, canDeploy: false, busy: true, label });
@@ -51,7 +52,7 @@ describe("machine deployment", () => {
 
   it("treats only restart and confirmation disconnects as expected, and restores recovery after failure", () => {
     const offline = machine({ kind: "link", online: false, can_deploy: true });
-    for (const deploy_phase of ["waiting_idle", "transferring", undefined] as const) {
+    for (const deploy_phase of ["waiting_idle", "transferring", "draining", undefined] as const) {
       expect(machineDeployment({ ...offline, deploying: true, deploy_phase }).expectedDisconnect).toBe(false);
     }
     for (const deploy_phase of ["restarting", "confirming"] as const) {
@@ -65,19 +66,19 @@ describe("machine deployment", () => {
   it("keeps old hubs busy until they report completion without claiming version confirmation", () => {
     const result = machineDeployment(machine({ deploying: true, node_mismatch: false }));
     expect(result).toMatchObject({ visible: true, canDeploy: false, busy: true, label: "部署中" });
-    expect(result.message).toContain("还需确认");
+    expect(result.message).toContain("完成后将确认其与 hub 版本一致");
   });
 
   it("preserves errors even without a mismatch or while capability is unavailable", () => {
     const result = machineDeployment(machine({ kind: "link", can_deploy: false, node_mismatch: false, deploy_error: "当前 node 不支持远程更新" }));
-    expect(result).toMatchObject({ visible: true, canDeploy: false, error: "上次部署没成：当前 node 不支持远程更新" });
+    expect(result).toMatchObject({ visible: true, canDeploy: false, error: "上次部署失败：当前 node 不支持远程更新" });
     expect(result.reason).toContain("手动更新");
   });
 
   it("allows retry after a failed supported deployment and retains errors during a retry", () => {
     const failed = machine({ kind: "service", can_deploy: true, deploy_error: "未收到新版本确认" });
     expect(machineDeployment(failed)).toMatchObject({ visible: true, canDeploy: true, label: "重新部署" });
-    expect(machineDeployment({ ...failed, deploying: true, deploy_phase: "confirming" })).toMatchObject({ busy: true, canDeploy: false, error: "上次部署没成：未收到新版本确认" });
+    expect(machineDeployment({ ...failed, deploying: true, deploy_phase: "confirming" })).toMatchObject({ busy: true, canDeploy: false, error: "上次部署失败：未收到新版本确认" });
   });
 
   it("clears the banner only when the hub reports no pending phase, mismatch or error", () => {

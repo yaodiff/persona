@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"slices"
 	"testing"
 	"time"
 
@@ -24,6 +25,28 @@ func TestTruncateForTestClearsDetachedWorkEvents(t *testing.T) {
 	}
 	if events, err := d.WorkEvents(ctx, time.Time{}); err != nil || len(events) != 0 {
 		t.Fatalf("detached events survived fixture cleanup: %+v %v", events, err)
+	}
+}
+
+// Since session_work has no foreign key, truncating todos leaves it behind. Every fixture must start with an empty table (#17374).
+func TestTruncateForTestClearsSessionWork(t *testing.T) {
+	d, ctx := open(t), context.Background()
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	w := SessionWork{MachineID: "box", SessionID: "s1", TurnAt: now, UpdatedAt: now,
+		Work: proto.WorkState{Phase: proto.WorkDone}}
+	if err := d.PutSessionWork(ctx, w); err != nil {
+		t.Fatal(err)
+	}
+	if works, err := d.SessionWorks(ctx, time.Time{}); err != nil || !slices.ContainsFunc(works, func(work SessionWork) bool {
+		return work.MachineID == w.MachineID && work.SessionID == w.SessionID && work.TurnAt.Equal(now)
+	}) {
+		t.Fatalf("fixture session work missing: %+v %v", works, err)
+	}
+	if err := d.TruncateForTest(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if works, err := d.SessionWorks(ctx, time.Time{}); err != nil || len(works) != 0 {
+		t.Fatalf("session work survived fixture cleanup: %+v %v", works, err)
 	}
 }
 

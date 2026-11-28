@@ -11,7 +11,7 @@ import (
 
 func northStarWeeklyDB(t *testing.T) (*Service, *db.DB, *db.DB, string) {
 	t.Helper()
-	s, manager, dsn := northStarDB(t)
+	s, manager, dsn := northStarDBOn(t, newMigratedDatabase(t, db.AllSets))
 	hub, err := db.Open(context.Background(), dsn, db.HubSet)
 	mustDo(t, err)
 	t.Cleanup(hub.Close)

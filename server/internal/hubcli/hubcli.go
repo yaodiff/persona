@@ -13,16 +13,18 @@ import (
 	"github.com/nwverse/persona/server/internal/clitext"
 	"github.com/nwverse/persona/server/internal/hub"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/update"
 )
 
 // Usage is the hub's commands, as `personad hub …` (clitext.Named puts the program's name in).
 const Usage = `  personad hub [run]        run the hub (config ~/.persona/hub.json); behind its edge on Linux and macOS, which
                            holds the ports and switches to a new binary with no restart (docs/operations/hub-restart.md "Blue-green switching")
-  personad hub switch [--binary <path>] [--prev <path>] [--timeout 8m] | --status
+  personad hub switch [--binary <path>] [--prev <path>] [--timeout 8m] [--hub-only] | --status
                            have the running edge start <path> (default: the program the hub runs now, personad or
                            persona-hub) and switch to it once it is up, waiting at most --timeout; --status only says what
                            serves now; exit 0 switched, 1 it did not (the hub serves on), 3 no edge here (restart the service instead)
+                           --hub-only skips requesting an idle reload of this hub's resident node
   personad hub setup [--yes] [--listen :18660] [--tls :18662] [--outside] [--no-service | --manager-service] [--json]
                     [--lang en|zh-Hans|ja]
                                            set this machine up as the hub: hub.json, database, service, pairing (docs/assistant/onboarding.md);
@@ -93,6 +95,16 @@ func Hub(ctx context.Context, build update.Build, args []string) error {
 		return hub.RunSlot(ctx, build)
 	case "switch":
 		return runHubSwitch(rest)
+	case "publish-packages": // deploy.sh passes its verified build directory
+		if len(rest) != 1 {
+			return usageError("hub publish-packages requires one staging directory")
+		}
+		return update.PublishPackages(rest[0], identity.NodeBinaryDir(), build)
+	case "sync-local-node": // deploy.sh can restart a Hub without an edge
+		if len(rest) != 0 {
+			return noArguments(sub)
+		}
+		return hub.SyncLocalNode(ctx, build.Version, build.Number)
 	case "doctor":
 		if len(rest) != 0 {
 			return noArguments("doctor")

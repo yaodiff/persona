@@ -69,7 +69,7 @@ const agents = [
   agent("u1", "Release notes", "unread"),
 ];
 
-function render(over: { machine?: Machine; kind?: AlertKind; alerts?: MachineAlert[]; records?: LauncherHealthRecord[]; onReconnect?: (id: string) => void; onRecords?: (r: LauncherHealthRecord[]) => void; onReloadRecords?: () => void; onKind?: (k: AlertKind) => void; agents?: Session[] } = {}) {
+function render(over: { machine?: Machine; kind?: Exclude<AlertKind, "disk">; alerts?: MachineAlert[]; records?: LauncherHealthRecord[]; onReconnect?: (id: string) => void; onRecords?: (r: LauncherHealthRecord[]) => void; onReloadRecords?: () => void; onKind?: (k: AlertKind) => void; agents?: Session[] } = {}) {
   act(() => root.render(
     <MachineAlertSheet
       machine={over.machine ?? laptop}
@@ -147,7 +147,7 @@ describe("the memory sheet", () => {
     // 4 over 10 cores: one decimal, as the chip and the card write it (the sheet said 0.40)
     expect($("[data-testid=pressure-figures]")?.textContent).toContain("每核 0.4");
     expect($("[data-testid=pressure-figures]")?.textContent).not.toContain("0.40");
-    expect($("[data-testid=load-definition]")?.textContent).toMatch(/^负载 = 正在运行和排队等 CPU 的线程数/);
+    expect($("[data-testid=load-definition]")?.textContent).toMatch(/^负载指过去 1 分钟内正在运行及等待 CPU 的平均线程数/);
   });
 
   it("stops only the idle Agents, after a confirmation that lists them, one at a time, and says how it went", async () => {
@@ -166,8 +166,8 @@ describe("the memory sheet", () => {
     await click($("[data-testid=stop-confirm]"));
     expect(posts("/close").map((c) => c.path)).toEqual(["/api/v1/sessions/laptop/i1/close", "/api/v1/sessions/laptop/u1/close"]);
     const outcome = $("[data-testid=stop-outcome]")?.textContent ?? "";
-    expect(outcome).toContain("已停掉 1 个，共 2 个");
-    expect(outcome).toContain("「Release notes」没有停掉：the node refused");
+    expect(outcome).toContain("已停止 1 / 2 个");
+    expect(outcome).toContain("无法停止「Release notes」：the node refused");
   });
 
   it("says when the computer's Persona is too old to tell, offers Redeploy, and keeps the Agents and Stop working", async () => {
@@ -207,7 +207,7 @@ describe("the memory sheet", () => {
   });
 });
 
-describe("the disk sheet", () => {
+describe("cache recovery on a computer without a usage map", () => {
   const disk = (caches: { id: string; path: string; bytes: number; in_use: boolean }[]) => ({
     machine_id: "laptop", at: 1,
     disk: { volumes: [{ mount: "/", used: 450 * GB, total: 500 * GB }], folders: [{ path: "~/code", bytes: 120 * GB }], partial: true, caches },
@@ -224,7 +224,9 @@ describe("the disk sheet", () => {
       ] : [{ id: "go-build", path: "~/.cache/go-build", bytes: 6 * GB, in_use: true }]));
     };
     routes["POST /api/v1/machines/laptop/cleanup"] = () => json({ freed_bytes: 4.8 * GB, items: [{ id: "npm-cache", bytes: 2 * GB, status: "cleaned" }, { id: "xcode-derived-data", bytes: 3 * GB, status: "in_use" }] });
-    render({ kind: "disk", alerts: [{ kind: "disk", severity: "critical" }] });
+    routes["GET /api/v1/machines/laptop/storage/usage"] = () => json({ code: "node_outdated" }, 409);
+    const { UsageMap } = await import("./UsageMap");
+    await act(async () => root.render(<UsageMap machine={laptop} focus={{ mode: "reclaim", seq: 1 }} />));
     await flush();
     expect($("[data-testid=folders]")?.textContent).toContain("~/code");
     expect($("[data-testid=folders-partial]")).not.toBeNull();
@@ -244,7 +246,7 @@ describe("the disk sheet", () => {
     await click($("[data-testid=clean-confirm]"));
     expect(posts("/cleanup").map((c) => c.body)).toEqual([{ ids: ["npm-cache", "xcode-derived-data"] }]);
     const result = $("[data-testid=cleanup-result]")?.textContent ?? "";
-    expect(result).toContain("实际腾出了 4.80 GB");
+    expect(result).toContain("已释放 4.80 GB 磁盘空间");
     expect($("[data-item=xcode-derived-data]")?.getAttribute("data-status")).toBe("in_use");
     expect(reads).toBe(2); // read again after the cleanup
   });
@@ -259,7 +261,7 @@ describe("the version sheet", () => {
     expect($("[data-testid=builds]")?.textContent).toContain("v1-202611141020");
     expect($("[data-testid=builds]")?.textContent).toContain("v1-202611110815");
     expect($("[data-testid=build-gap]")?.textContent).toBe("这台电脑的版本比 hub 早 3 天。");
-    expect($("[data-testid=working-count]")?.textContent).toContain("1 个 Agent 在工作");
+    expect($("[data-testid=working-count]")?.textContent).toContain("1 个 Agent 正在工作");
   });
 
   it("redeploys only after a confirmation, follows the pushed phases, and offers Try again after a failure", async () => {
@@ -285,33 +287,43 @@ describe("the version sheet", () => {
     await flush();
     expect(state("transferring")).toBe("failed");
     expect($("[data-testid=deploy-failed]")?.textContent).toContain("copy failed: no space left");
-    expect($("[data-testid=redeploy]")?.textContent).toBe("再试一次");
+    expect($("[data-testid=redeploy]")?.textContent).toBe("重试");
     await click($("[data-testid=redeploy]"));
     await click($("[data-testid=redeploy-confirm]"));
     expect(posts("/deploy")).toHaveLength(2);
+    show({ ...studio, deploying: true, deploy_phase: "draining", deploy_error: undefined });
+    await flush();
+    expect(state("transferring")).toBe("done");
+    expect(state("draining")).toBe("current");
+    expect(state("restarting")).toBe("todo");
+    expect($("[data-testid=deploy-draining-note]")?.textContent).toContain("正在等待当前任务完成后重启");
     show({ ...studio, deploying: true, deploy_phase: "confirming", deploy_error: undefined });
     await flush();
+    expect(state("draining")).toBe("done");
     expect(state("confirming")).toBe("current");
+    expect($("[data-testid=deploy-draining-note]")).toBeNull();
     show({ ...studio, node_mismatch: false, node_version: "v1-202611141020" });
     await flush();
     expect($("[data-testid=deploy-done]")?.textContent).toContain("v1-202611141020");
     expect(state("done")).toBe("done");
   });
 
-  it("withdraws an open Redeploy confirmation when the computer starts updating elsewhere", async () => {
+  it("withdraws an open Redeploy confirmation when the computer starts updating or draining elsewhere", async () => {
     const show = (machine: Machine) => render({ machine, kind: "mismatch", agents: [] });
-    show(studio);
-    await flush();
-    await click($("[data-testid=redeploy]"));
-    const confirm = $("[data-testid=redeploy-confirm]") as HTMLButtonElement;
-    expect(confirm.disabled).toBe(false);
+    for (const phase of ["draining", "restarting"] as const) {
+      show(studio);
+      await flush();
+      await click($("[data-testid=redeploy]"));
+      const confirm = $("[data-testid=redeploy-confirm]") as HTMLButtonElement;
+      expect(confirm.disabled).toBe(false);
 
-    show({ ...studio, deploy_phase: "restarting" });
-    await flush();
-    expect($('[data-step="restarting"]')?.getAttribute("data-state")).toBe("current");
-    expect(confirm.isConnected && !confirm.disabled).toBe(false);
-    await act(async () => { confirm.click(); });
-    expect(posts("/deploy")).toHaveLength(0);
+      show({ ...studio, deploy_phase: phase });
+      await flush();
+      expect($(`[data-step="${phase}"]`)?.getAttribute("data-state")).toBe("current");
+      expect(confirm.isConnected && !confirm.disabled).toBe(false);
+      await act(async () => { confirm.click(); });
+      expect(posts("/deploy")).toHaveLength(0);
+    }
   });
 
   it("gives the hub's reason when it can't update the computer", async () => {
@@ -326,7 +338,7 @@ describe("the version sheet", () => {
     render({ machine: studio, kind: "mismatch", alerts: [] });
     await flush();
     hub.version = "v1-202611141020";
-    expect($("[data-testid=build-gap]")?.textContent).toContain("不知道 hub 的版本");
+    expect($("[data-testid=build-gap]")?.textContent).toContain("无法获取 hub 版本");
   });
 
   it("shows co-located managers, restart notes in Redeploy confirmation, and pending_restart after deploy", async () => {
@@ -402,15 +414,15 @@ describe("the launcher sheet", () => {
     render({ kind: "launcher", alerts: [{ kind: "launcher", severity: "warning", count: 2 }], records, onRecords: (r) => got.push(r) });
     await flush();
     expect($$("[data-testid=failing-launchers] [data-launcher]").map((l) => l.getAttribute("data-launcher"))).toEqual(["codex", "team"]);
-    expect($("[data-launcher=codex]")?.textContent).toContain("已经用到订阅的用量上限");
+    expect($("[data-launcher=codex]")?.textContent).toContain("已达到订阅用量上限");
     expect($("[data-launcher=codex]")?.textContent).toContain("连续失败 3 次");
     expect($("[data-launcher=team]")?.textContent).toContain("Team relay");
     expect($("[data-launcher=team]")?.textContent).toContain("401 invalid x-api-key");
-    expect($("[data-testid=healthy-launchers]")?.textContent).toBe("claude");
+    expect($("[data-testid=healthy-launchers]")?.textContent).toBe("Claude Code");
     await click($("[data-launcher=team] [data-testid=test-again]"));
     expect(posts("/launchers/health/check").map((c) => c.path)).toEqual(["/api/v1/launchers/health/check?machine=laptop&launcher=team"]);
     expect(got).toEqual([[expect.objectContaining({ launcher: "team", state: "ok" })]]);
-    expect($("[data-launcher=team]")?.textContent).toContain("现在可以用了");
+    expect($("[data-launcher=team]")?.textContent).toContain("已恢复可用");
   });
 
   it("reads the records again when a check answers none for the launcher (#14534)", async () => {
@@ -422,6 +434,6 @@ describe("the launcher sheet", () => {
     expect(reloads).toBe(0);
     await click($("[data-launcher=team] [data-testid=test-again]"));
     expect(reloads).toBe(1);
-    expect($("[data-launcher=team]")?.textContent).toContain("这次检查没有结果");
+    expect($("[data-launcher=team]")?.textContent).toContain("本次检查未返回结果");
   });
 });

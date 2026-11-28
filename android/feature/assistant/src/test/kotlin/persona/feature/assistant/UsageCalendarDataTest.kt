@@ -24,7 +24,7 @@ class UsageCalendarDataTest {
         val names = JsonCodec.parseToJsonElement(fixture.readText()).jsonObject.getValue("names").jsonObject
         val brands = mapOf(
             "claude" to AgentMarkKind.Claude, "codex" to AgentMarkKind.Codex, "trae" to AgentMarkKind.Trae,
-            "traecli" to AgentMarkKind.Trae,
+            "traex" to AgentMarkKind.Trae, "traecli" to AgentMarkKind.Trae,
             "pi" to AgentMarkKind.Pi, "opencode" to AgentMarkKind.OpenCode,
             "gemini" to AgentMarkKind.Gemini, "cursor" to AgentMarkKind.Cursor,
         )

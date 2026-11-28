@@ -16,17 +16,20 @@ export interface OwnerApprovalReply {
 export interface OwnerApprovalAttempt {
   target: string;
   id: string;
+  createdAt?: string;
 }
 
 const ownerApprovalAttempts = new Map<string, OwnerApprovalAttempt>();
+const ownerApprovalAttemptKey = (ix: Interaction) => `${ix.id}\u0000${ix.created_at ?? ""}`;
 
 /** One operation ID survives an uncertain request, remount and user retry; a different card starts a new operation. */
 export function ownerApprovalAttempt(ix: Interaction, previous: OwnerApprovalAttempt | null): OwnerApprovalAttempt {
-  if (previous?.target === ix.id) return previous;
-  const existing = ownerApprovalAttempts.get(ix.id);
+  if (previous?.target === ix.id && previous.createdAt === ix.created_at) return previous;
+  const key = ownerApprovalAttemptKey(ix);
+  const existing = ownerApprovalAttempts.get(key);
   if (existing) return existing;
-  const attempt = { target: ix.id, id: uuid() };
-  ownerApprovalAttempts.set(ix.id, attempt);
+  const attempt = { target: ix.id, id: uuid(), createdAt: ix.created_at };
+  ownerApprovalAttempts.set(key, attempt);
   return attempt;
 }
 
@@ -43,12 +46,13 @@ export async function replyOwnerApproval(ix: Interaction, phrase: string, client
         text: phrase,
         client_msg_id: clientMsgID,
         approval_reply_to: ix.id,
+        ...(ix.created_at ? { approval_reply_created_at: ix.created_at } : {}),
       },
     });
     if (reply?.approval_reply !== true || reply.interaction_id !== ix.id) {
       return t("chat-interactions.owner_reply_unavailable");
     }
-    ownerApprovalAttempts.delete(ix.id);
+    ownerApprovalAttempts.delete(ownerApprovalAttemptKey(ix));
     return "";
   } catch (e) {
     return t("chat-interactions.send_failed", { error: errorText(e) });

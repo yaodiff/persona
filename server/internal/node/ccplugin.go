@@ -86,6 +86,12 @@ var (
 	// ccPluginConfirmWait is how long the node looks for the prompt in the transcript, past ccPluginSubmitWait: only a
 	// message the plugin can no longer submit goes through the inbox instead.
 	ccPluginConfirmWait = 10 * time.Second
+
+	// ccPluginCompactionTTL is the defensive end for a compaction report whose matching end never arrived.
+	ccPluginCompactionTTL = 15 * time.Minute
+	// ccPluginCompactionEveryS is how often a running compaction's live line is refreshed. Clients drop an
+	// ordinary live line after 15 seconds.
+	ccPluginCompactionEveryS = 3
 )
 
 // What session.send says about how a message for the owner went in (delivered_as), and why it went through the inbox
@@ -152,17 +158,35 @@ type ccPluginCaps struct {
 	permissions bool
 }
 
+// ccPluginEffort carries the time of the step itself so a later poll cannot outrank a newer session choice.
+type ccPluginEffort struct {
+	AtMS  int64  `json:"at_ms"`
+	Level string `json:"level,omitempty"`
+	Reset bool   `json:"reset,omitempty"`
+}
+
 // ccPluginSession is a session whose plugin polls this node.
 type ccPluginSession struct {
-	pid             int
-	version, engine string
-	caps            ccPluginCaps
-	permAuthorized  bool
-	seen            time.Time
+	pid               int
+	version, engine   string
+	caps              ccPluginCaps
+	permAuthorized    bool
+	classicPassedOver bool
+	effort            ccPluginEffort
+	effortSeen        time.Time
+	seen              time.Time
 	// poll is the waiting poll's hand-off, nil while none waits; done ends it early (a newer poll).
 	poll chan ccPluginDelivery
 	done chan struct{}
 	acks map[string]chan ccPluginAck // messages, interrupts or settings handed over and not settled, by id
+}
+
+// ccPluginCompaction is a main-loop compaction Persona's plugin reported for a pane-less outside Claude.
+type ccPluginCompaction struct {
+	pid       int
+	procStart string
+	trigger   string
+	started   time.Time
 }
 
 // ccPluginRegistry is every session whose plugin polled this node since it started; its zero value is ready.
@@ -170,18 +194,51 @@ type ccPluginRegistry struct {
 	mu             sync.Mutex
 	sessions       map[string]*ccPluginSession
 	queued         map[string]ccPluginQueuedSettings
+	compactions    map[string]ccPluginCompaction
 	personaHooks   map[string]ccPluginPersonaHook
 	perms          map[ccPluginPermID]*ccPluginPerm
 	completedReqs  map[ccPluginPermID]time.Time
 	completedTools map[string]time.Time
 }
 
+// beginCompaction records the start for id, replacing an older report of that session and expiring abandoned ones.
+func (r *ccPluginRegistry) beginCompaction(id string, c ccPluginCompaction, now time.Time) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.compactions == nil {
+		r.compactions = map[string]ccPluginCompaction{}
+	}
+	for other, old := range r.compactions {
+		if now.Sub(old.started) >= ccPluginCompactionTTL {
+			delete(r.compactions, other)
+		}
+	}
+	r.compactions[id] = c
+}
+
+// endCompaction ends id's report when it belongs to pid; an older process cannot end a newer session's report.
+func (r *ccPluginRegistry) endCompaction(id string, pid int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if c, ok := r.compactions[id]; ok && c.pid == pid {
+		delete(r.compactions, id)
+	}
+}
+
+// compaction is id's report, if any. The caller checks whether its process still lives.
+func (r *ccPluginRegistry) compaction(id string) (ccPluginCompaction, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	c, ok := r.compactions[id]
+	return c, ok
+}
+
 // polled records a poll from session id's claude pid and makes it the session's waiting poll; the poll it replaces
 // (the same session's, still waiting) is ended. When settings were pre-queued for id and the plugin supports settings,
 // polled returns them immediately without leaving a waiting channel. When permission authorization changed (for example
 // the first authorized poll of a permissions-capable plugin), permAuthChanged is true and the caller responds at once
-// instead of holding the first poll for 25 s. It also returns whether capabilities changed.
-func (r *ccPluginRegistry) polled(id string, pid int, version, engine string, caps ccPluginCaps, allowPerms bool) (poll chan ccPluginDelivery, done chan struct{}, immediate *ccPluginSettings, permAuthChanged, capabilitiesChanged bool) {
+// instead of holding the first poll for 25 s. It also reports changes to session metadata.
+func (r *ccPluginRegistry) polled(id string, pid int, version, engine string, caps ccPluginCaps, allowPerms, classicPassedOver bool, effort ccPluginEffort) (poll chan ccPluginDelivery, done chan struct{}, immediate *ccPluginSettings, permAuthChanged, metadataChanged bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.sessions == nil {
@@ -211,8 +268,14 @@ func (r *ccPluginRegistry) polled(id string, pid int, version, engine string, ca
 	}
 	auth := caps.permissions && allowPerms
 	permAuthChanged = s.permAuthorized != auth
-	changed := isNew || s.caps != caps || permAuthChanged
-	s.version, s.engine, s.caps, s.permAuthorized, s.seen = version, engine, caps, auth, now
+	changed := isNew || s.caps != caps || permAuthChanged || s.classicPassedOver != classicPassedOver
+	// Only regular readback polls carry a snapshot. A timestamped reset on load or session change
+	// invalidates the previous snapshot without counting as evidence against a session setting.
+	if effort.AtMS > 0 && effort.AtMS >= s.effort.AtMS {
+		changed = changed || s.effort.Level != effort.Level || s.effort.Reset != effort.Reset || now.Sub(s.effortSeen) >= ccPluginStale
+		s.effort, s.effortSeen = effort, now
+	}
+	s.version, s.engine, s.caps, s.permAuthorized, s.classicPassedOver, s.seen = version, engine, caps, auth, classicPassedOver, now
 	if caps.settings {
 		if q, ok := r.queued[id]; ok {
 			delete(r.queued, id)
@@ -250,6 +313,17 @@ func (r *ccPluginRegistry) session(id string, pid int) *ccPluginSession {
 		return s
 	}
 	return nil
+}
+
+// observedEffort returns a snapshot and the process that supplied it while its plugin is live.
+func (r *ccPluginRegistry) observedEffort(id string) (ccPluginEffort, int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	s := r.sessions[id]
+	if s != nil && !s.effort.Reset && s.effort.AtMS > 0 && time.Since(s.effortSeen) < ccPluginStale {
+		return s.effort, s.pid
+	}
+	return ccPluginEffort{}, 0
 }
 
 // busyInputCapable reports whether session id's polling plugin supports queueing owner messages while a turn runs.
@@ -290,6 +364,29 @@ func (r *ccPluginRegistry) permissionsAuthorized(id string, pid int) bool {
 	defer r.mu.Unlock()
 	s := r.sessions[id]
 	return s != nil && s.pid == pid && s.permAuthorized
+}
+
+// classicPassedOver reports whether the session's plugin saw a main-loop tool call bypass classic.PreToolUse.
+func (r *ccPluginRegistry) classicPassedOver(id string, pid int) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	s := r.sessions[id]
+	return s != nil && s.pid == pid && s.classicPassedOver && (s.poll != nil || time.Since(s.seen) < ccPluginStale)
+}
+
+// cancelPermissions withdraws every active plugin permission card for one session and process.
+func (r *ccPluginRegistry) cancelPermissions(sessionID string, pid int) {
+	var toCancel []*ccPluginPerm
+	r.mu.Lock()
+	for _, p := range r.perms {
+		if p.sessionID == sessionID && p.pid == pid {
+			toCancel = append(toCancel, p)
+		}
+	}
+	r.mu.Unlock()
+	for _, p := range toCancel {
+		p.cancelAsPassthrough()
+	}
 }
 
 // queueSettings stores desired model/effort settings for session id so the next settings-capable poll receives them
@@ -456,6 +553,11 @@ func (n *Node) ccPluginPermissionsCapable(id string, pid int) bool {
 	return n.ccPlugins.permissionsCapable(id, pid)
 }
 
+// ccPluginClassicPassedOver: session id's plugin saw Claude Code pass classic hooks over it.
+func (n *Node) ccPluginClassicPassedOver(id string, pid int) bool {
+	return n.ccPlugins.classicPassedOver(id, pid)
+}
+
 // queueCCPluginSettings queues session-scoped model / effort overrides for session id (e.g. a newly seeded or resting
 // desktop session whose claude process has not polled yet).
 func (n *Node) queueCCPluginSettings(id, model, effort string) {
@@ -616,18 +718,22 @@ func (n *Node) serveCCPluginHTTP(ctx context.Context, c net.Conn, first []byte, 
 // ccPluginRequest is one of the plugin's requests, answered with a status and a JSON body.
 func (n *Node) ccPluginRequest(ctx context.Context, c net.Conn, method, path string, body []byte) (int, any) {
 	what, ok := strings.CutPrefix(path, ccPluginPrefix)
-	if !ok || method != http.MethodPost || (what != "poll" && what != "ack" && what != "permission" && what != "permission-done") {
+	if !ok || method != http.MethodPost || (what != "poll" && what != "ack" && what != "compact" && what != "permission" && what != "permission-done") {
 		return http.StatusNotFound, map[string]any{"error": "unknown"}
 	}
 	var in struct {
-		SessionID     string   `json:"session_id"`
-		PluginVersion string   `json:"plugin_version"`
-		EngineVersion string   `json:"engine_version"`
-		Capabilities  []string `json:"capabilities"`
-		WaitMS        int64    `json:"wait_ms"`
-		ID            string   `json:"id"`
-		Submitted     bool     `json:"submitted"`
-		Reason        string   `json:"reason"`
+		SessionID         string         `json:"session_id"`
+		PluginVersion     string         `json:"plugin_version"`
+		EngineVersion     string         `json:"engine_version"`
+		Capabilities      []string       `json:"capabilities"`
+		ClassicPassedOver bool           `json:"classic_passed_over"`
+		ObservedEffort    ccPluginEffort `json:"observed_effort"`
+		WaitMS            int64          `json:"wait_ms"`
+		ID                string         `json:"id"`
+		Submitted         bool           `json:"submitted"`
+		Reason            string         `json:"reason"`
+		Phase             string         `json:"phase"`
+		Trigger           string         `json:"trigger"`
 	}
 	if json.Unmarshal(body, &in) != nil || !validID(in.SessionID) {
 		return http.StatusBadRequest, map[string]any{"error": "invalid"}
@@ -645,6 +751,8 @@ func (n *Node) ccPluginRequest(ctx context.Context, c net.Conn, method, path str
 	case "ack":
 		n.ccPlugins.acked(in.SessionID, pid, in.ID, ccPluginAck{Submitted: in.Submitted, Reason: clipReason(in.Reason)})
 		return http.StatusOK, map[string]any{"ok": true}
+	case "compact":
+		return n.ccPluginReportCompaction(pid, claude, in.Phase, in.Trigger)
 	case "permission":
 		return n.ccPluginPermission(ctx, pid, claude, body)
 	case "permission-done":
@@ -665,10 +773,19 @@ func (n *Node) ccPluginRequest(ctx context.Context, c net.Conn, method, path str
 		settings:    slices.Contains(in.Capabilities, "settings"),
 		permissions: slices.Contains(in.Capabilities, "permissions"),
 	}
-	allowPerms := caps.permissions && n.ccPluginServesPermissions(claude)
-	poll, done, immediate, permAuthChanged, changed := n.ccPlugins.polled(in.SessionID, pid, clipReason(in.PluginVersion), clipReason(in.EngineVersion), caps, allowPerms)
+	allowPerms := caps.permissions && n.ccPluginServesPermissions(claude) && !in.ClassicPassedOver
+	effort := in.ObservedEffort
+	if !desktopEntrypoint(claude.Entrypoint) {
+		effort = ccPluginEffort{}
+	} else if effort.Level != effortAuto && !slices.Contains(proto.EffortLevels, effort.Level) {
+		effort.Level = ""
+	}
+	poll, done, immediate, permAuthChanged, changed := n.ccPlugins.polled(in.SessionID, pid, clipReason(in.PluginVersion), clipReason(in.EngineVersion), caps, allowPerms, in.ClassicPassedOver, effort)
+	if permAuthChanged && in.ClassicPassedOver {
+		n.ccPlugins.cancelPermissions(in.SessionID, pid)
+	}
 	if changed {
-		n.notifySessions()
+		n.notifySessionsSoon()
 	}
 	if immediate != nil {
 		return http.StatusOK, ccPluginDelivery{Messages: []ccPluginMessage{}, Settings: immediate, Permissions: allowPerms}
@@ -695,6 +812,31 @@ func (n *Node) ccPluginRequest(ctx context.Context, c net.Conn, method, path str
 		}
 	}
 	return http.StatusOK, ccPluginDelivery{Messages: []ccPluginMessage{}, Permissions: n.ccPlugins.permissionsAuthorized(in.SessionID, pid)}
+}
+
+// ccPluginReportCompaction records a main-loop compaction for a pane-less claude outside Persona's terminals. The
+// plugin's report only drives the live line when the session is watched: it changes nothing in the session or transcript.
+func (n *Node) ccPluginReportCompaction(pid int, c claudeProc, phase, trigger string) (int, any) {
+	if phase != "start" && phase != "end" {
+		return http.StatusBadRequest, map[string]any{"error": "invalid"}
+	}
+	if trigger != "manual" && trigger != "auto" && trigger != "plugin" && trigger != "precompute" {
+		return http.StatusBadRequest, map[string]any{"error": "invalid"}
+	}
+	if !ccPluginServes(n, c) || outsidePane(c) != "" || n.livePane(c.SessionID) != "" {
+		return http.StatusOK, map[string]any{"ok": false}
+	}
+	switch phase {
+	case "start":
+		now := time.Now()
+		n.ccPlugins.beginCompaction(c.SessionID, ccPluginCompaction{
+			pid: pid, procStart: claudeFileStart(c.ProcStart), trigger: trigger, started: now,
+		}, now)
+	case "end":
+		n.ccPlugins.endCompaction(c.SessionID, pid)
+	}
+	n.wakeCompactionLive(c.SessionID)
+	return http.StatusOK, map[string]any{"ok": true}
 }
 
 // clipReason keeps a short word from the plugin (a version, a reason) short.

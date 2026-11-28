@@ -59,7 +59,7 @@ afterEach(() => {
 describe("MachineDetail and a switch to Persona Link", () => {
   it("hides the expected disconnect while a switch runs, and shows its steps", async () => {
     fake.machines = [{ id: "box", name: "盒子", kind: "link", online: false, error: "Persona Link 没有连上来", error_code: "link_offline", link_switch: { available: false, reason: "in_progress", phase: "connecting" } } as Machine];
-    act(() => root.render(<MachineDetail mid="box" onToggleSidebar={() => {}} />));
+    act(() => root.render(<MachineDetail subview="management" mid="box" onToggleSidebar={() => {}} />));
     await flush();
     expect(host.querySelector("[data-offline-box]")).toBeNull();
     expect(button("重新连接")).toBeUndefined();
@@ -68,7 +68,7 @@ describe("MachineDetail and a switch to Persona Link", () => {
 
   it("still shows the offline box when no switch runs", async () => {
     fake.machines = [{ id: "box", name: "盒子", kind: "ssh", online: false, error: "something odd", link_switch: { available: false, reason: "offline" } } as Machine];
-    act(() => root.render(<MachineDetail mid="box" onToggleSidebar={() => {}} />));
+    act(() => root.render(<MachineDetail subview="management" mid="box" onToggleSidebar={() => {}} />));
     await flush();
     expect(host.querySelector("[data-offline-box]")).not.toBeNull();
     expect(host.querySelector("[data-link-switch]")).toBeNull(); // the offline box says it; nothing of a switch too
@@ -76,14 +76,14 @@ describe("MachineDetail and a switch to Persona Link", () => {
 
   it("shows nothing about switching for an older hub", async () => {
     fake.machines = [{ id: "box", name: "盒子", kind: "ssh", online: true } as Machine];
-    act(() => root.render(<MachineDetail mid="box" onToggleSidebar={() => {}} />));
+    act(() => root.render(<MachineDetail subview="management" mid="box" onToggleSidebar={() => {}} />));
     await flush();
     expect(host.querySelector("[data-link-switch]")).toBeNull();
   });
 
   it("posts once through the app's request to the machine's link-switch route", async () => {
     fake.machines = [{ id: "box", name: "盒子", kind: "ssh", online: true, home: "/home/alice", link_switch: { available: true } } as Machine];
-    act(() => root.render(<MachineDetail mid="box" onToggleSidebar={() => {}} />));
+    act(() => root.render(<MachineDetail subview="management" mid="box" onToggleSidebar={() => {}} />));
     await flush();
     await act(async () => button("切换到 Persona Link…")!.click());
     await act(async () => button("切换")!.click());

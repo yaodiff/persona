@@ -78,3 +78,11 @@ test('a branch shows only its entries, at their file positions; its key changes 
   assert.equal(branchKey(more, main.slice(0, 3)), 'root@a1', 'a leaf with entries after it is a branch of its own')
   assert.equal(branchKey(e, main.slice(0, 3)), 'root@a1')
 })
+
+test('assistant preview filters standalone botmux lines before flattening the branch', () => {
+  const marker = 'BOTMUX_NOTHING_TO_SEND'
+  const message = (text) => ({ message: { role: 'assistant', content: [{ type: 'text', text }] } })
+  const words = 'The manual calls it ' + marker
+  const branch = [message(words + '\n  ' + marker + '\r\nDetails.'), message(marker)]
+  assert.equal(lastText(branch), words + ' Details.')
+})

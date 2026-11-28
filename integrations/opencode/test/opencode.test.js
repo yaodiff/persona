@@ -1,6 +1,9 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { startFakeNode, until } from '../../runtime-sdk/testing/fake-node.js'
 import { createOpencodeHost } from '../lib/opencode.js'
@@ -1012,4 +1015,119 @@ test('plugin refuses ambiguous assistant ownership and never retargets a cached 
     })
     return r.status === 404
   })
+})
+
+test('plugin assistant isMemoryWrite blocks multi-resource bypass, symlink escapes, namei divergence, and missing cwd fallback', async (t) => {
+  const base = mkdtempSync(join(tmpdir(), 'persona-oc-plug-mem-'))
+  t.after(() => rmSync(base, { recursive: true, force: true }))
+  const asstDir = join(base, 'assistant')
+  const memDir = join(asstDir, 'memory')
+  const nestedMem = join(memDir, 'nested', 'deep')
+  const outsideDir = join(base, 'outside')
+  const outsideSub = join(outsideDir, 'sub')
+  mkdirSync(nestedMem, { recursive: true })
+  mkdirSync(outsideSub, { recursive: true })
+  writeFileSync(join(outsideDir, 'secret.txt'), 'secret')
+  const escapeFileLink = join(memDir, 'escape-file.md')
+  const danglingLink = join(memDir, 'dangling.md')
+  const escapeDirLink = join(memDir, 'out-dir')
+  const deepLink = join(memDir, 'deep-link')
+  const loopA = join(memDir, 'loop-a')
+  const loopB = join(memDir, 'loop-b')
+  symlinkSync(join(outsideDir, 'secret.txt'), escapeFileLink)
+  symlinkSync(join(outsideDir, 'new-evil.txt'), danglingLink)
+  symlinkSync(outsideSub, escapeDirLink)
+  symlinkSync(nestedMem, deepLink)
+  symlinkSync(loopB, loopA)
+  symlinkSync(loopA, loopB)
+
+  const n = await startFakeNode(t, { tools: [] })
+  n.resolve = () => ({ allow: false })
+  const d = fakeDb()
+  const host = createOpencodeHost(
+    { openDb: d.openDb, pid: 4254 },
+    { socketPath: n.path, retryMs: 20, pushDelayMs: 5, answerFirst: 'local', home: base },
+  )
+  t.after(() => host.stop())
+
+  const ctx = fakeCtx(asstDir)
+  ctx.session.create = async () => ({ id: 'ses_mem_sec', title: '' })
+  ctx.mcp = { add: async () => ({}) }
+  host.register(ctx)
+  await n.ready
+
+  await n.peer.call('session.start', { cwd: asstDir, assistant: true })
+  await n.peer.call('session.send', {
+    session_id: 'ses_mem_sec',
+    text: 'memory security check',
+    assistant: true,
+    mode: 'default',
+    memory_dir: memDir,
+    client_msg_id: 'cm_plug_mem_sec',
+  })
+
+  const askAndExpect = async (id, resources, wantDecision, wantAskedDelta, extra = {}) => {
+    const before = n.asked.length
+    ctx.emit('permission.asked', { id, sessionID: 'ses_mem_sec', action: 'write', resources, ...extra })
+    await until(`reply ${id}`, () => ctx.calls.some((c) => c[0] === 'permission.reply' && c[1].requestID === id))
+    const reply = ctx.calls.find((c) => c[0] === 'permission.reply' && c[1].requestID === id)[1]
+    assert.equal(reply.decision, wantDecision, `${id}: expected ${wantDecision}`)
+    assert.equal(n.asked.length, before + wantAskedDelta, `${id}: unexpected phone ask delta`)
+  }
+
+  const sparseResources = [join(memDir, 'ok.md')]
+  sparseResources.length = 2
+  for (const [id, resources, extra] of [
+    ['multi_escape', [join(memDir, 'ok.md'), join(outsideDir, 'secret.txt')]],
+    ['multi_empty', [join(memDir, 'ok.md'), '']],
+    ['multi_null', [join(memDir, 'ok.md'), null]],
+    ['sparse_res', sparseResources],
+    ['empty_arr', []],
+    ['sym_file', [escapeFileLink]],
+    ['sym_dangling', [danglingLink]],
+    ['sym_dir', [join(escapeDirLink, 'pwn.txt')]],
+    ['namei_dotdot', [`${escapeDirLink}/../secret.txt`]],
+    ['lex_dotdot', [`${deepLink}/../../SOUL.md`]],
+    ['sym_loop', [loopA]],
+    ['tilde', ['~/SOUL.md']],
+    ['nul', [`${join(memDir, 'ok.md')}\0`]],
+    ['mem_self', [memDir]],
+    ['meta_filepath_out', [join(memDir, 'ok.md')], { metadata: { filepath: join(outsideDir, 'secret.txt') } }],
+    ['meta_diff', [join(memDir, 'ok.md')], { metadata: { diff: '--- a/etc/hosts' } }],
+    ['meta_non_obj', [join(memDir, 'ok.md')], { metadata: 'bad' }],
+    ['patterns_out', [join(memDir, 'ok.md')], { patterns: [join(outsideDir, 'secret.txt')] }],
+    ['files_out', [join(memDir, 'ok.md')], { files: [join(outsideDir, 'secret.txt')] }],
+  ]) {
+    await askAndExpect(id, resources, 'reject', 1, extra)
+  }
+
+  // Empty cwd must NOT fall back to memoryDir for relative paths.
+  const asst = host.assistants.get('ses_mem_sec')
+  const savedCwd = asst.cwd
+  asst.cwd = ''
+  try {
+    await askAndExpect('empty_cwd', ['AGENTS.md'], 'reject', 1)
+  } finally {
+    asst.cwd = savedCwd
+  }
+
+  // Root filesystem memoryDir must fail closed.
+  const savedMem = asst.memoryDir
+  asst.memoryDir = '/'
+  try {
+    await askAndExpect('root_mem', ['/etc/hosts'], 'reject', 1)
+  } finally {
+    asst.memoryDir = savedMem
+  }
+
+  // Legitimate writes inside memoryDir still auto-allow without asking phone.
+  for (const [id, resources, extra] of [
+    ['ok_single', [join(memDir, 'notes.md')]],
+    ['ok_multi', [join(memDir, 'a.md'), join(memDir, 'nested', 'b.md')]],
+    ['ok_rel', ['memory/sub/new.md']],
+    ['ok_dotdot_name', [join(memDir, '..note.md')]],
+    ['ok_meta_patterns', [join(memDir, 'notes.md')], { patterns: [join(memDir, 'notes.md')], metadata: { filepath: join(memDir, 'notes.md') } }],
+  ]) {
+    await askAndExpect(id, resources, 'once', 0, extra)
+  }
 })

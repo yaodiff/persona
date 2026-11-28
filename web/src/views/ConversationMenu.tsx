@@ -1,11 +1,13 @@
 import { lazy, Suspense } from "react";
-// A Persona conversation's menu in the sidebar (the iOS sidebar's long press, Android's drawer): "设为常驻" / "取消常驻",
-// "Rename…", "Archive", "Copy session ID", then "End…" while it runs. The main conversation is never a lead, renamed or
-// archived; the background supervisor (#5082, lib/background-supervisor.ts) is built in and only has "Copy session ID".
-// All of it is the hub's (the same calls as "All chats"): 设为常驻 makes the chat a leader (#4331,
-// POST …/directions/{id}/make), 取消常驻 ends it (…/end; the tasks it handed out keep their supervisor).
+// A Persona conversation's menu in the sidebar (matching iOS AssistantSidebar):
+// - Non-main conversations: pin/unpin as direction leader, Rename…, Archive, Copy session ID, Delete, and End… while live.
+// - Main conversation: capability-gated Compact context, Clear context, and New main chat… (matching iOS MainConversationMenu),
+//   plus Copy session ID and End… while live; never made a leader, renamed, archived, or deleted.
+// - Built-in background supervisor (#5082, lib/background-supervisor.ts): only Copy session ID.
 import { api, enc, errorText, sessionPath } from "../lib/api";
+import { COMPACT_REQUESTED_EVENT, compactBody, compactPath } from "../lib/compaction";
 import { sessionTitle } from "../lib/format";
+import { clearMainContext } from "../lib/main-clear";
 import { refreshAssistant } from "../lib/store";
 import type { Session } from "../lib/types";
 import { copyText, Dialog, Loading, toast, type MenuItem, type ToastAction } from "../ui/atoms";
@@ -18,8 +20,12 @@ export interface ConversationMenuDeps {
   unarchive: (s: Session) => Promise<unknown>;
   end: (s: Session) => Promise<unknown>;
   refresh: () => Promise<unknown>;
-  /** Makes the conversation a leader (常驻) or ends it, on the hub for every device. */
+  /** Makes the conversation a direction leader or ends it, on the hub for every device. */
   lead: (s: Session, on: boolean) => Promise<unknown>;
+  /** Compacts the conversation's context on the hub. */
+  compact?: (s: Session) => Promise<unknown>;
+  /** Clears the main conversation's context in place on the hub. */
+  clearMain?: (s: Session) => Promise<unknown>;
   copy: (text: string) => unknown;
   notify: (text: string, tone: "ok" | "error", action?: ToastAction) => void;
 }
@@ -31,8 +37,15 @@ export const conversationMenuDeps: ConversationMenuDeps = {
   end: (s) => api(`${sessionPath(s.machine_id, s.session_id)}/close`, { method: "POST" }),
   refresh: () => refreshAssistant(),
   lead: (s, on) => api(`/assistant/directions/${enc(s.session_id)}/${on ? "make" : "end"}`, { method: "POST", json: {} }),
+  compact: async (s) => {
+    await api(compactPath(s.session_id), { method: "POST", json: compactBody(s.machine_id) });
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent(COMPACT_REQUESTED_EVENT, { detail: { mid: s.machine_id, sid: s.session_id } }));
+    }
+  },
+  clearMain: (s) => clearMainContext(s.session_id),
   copy: copyText,
-  notify: (text, tone, action) => toast(text, tone, action),
+  notify: (...args) => toast(...args),
 };
 
 /** A running conversation can be ended (iOS `status.isLive`). */
@@ -98,13 +111,74 @@ export function conversationArchiveItem(s: Session, deps: ConversationMenuDeps =
   };
 }
 
-/** `leader`: the conversation is a leader (常驻) now. `builtIn`: it is the background supervisor, which the hub keeps
- *  listed and running: no 设为常驻, Rename, Archive or End. */
-export function conversationMenuItems(s: Session, o: { main: boolean; leader?: boolean; builtIn?: boolean; canDelete?: boolean; onDelete?: () => void }, deps: ConversationMenuDeps = conversationMenuDeps): MenuItem[] {
-  const copy: MenuItem = { key: "copy", label: t("conversation-menu.copy_id"), icon: "copy", accel: "c", onSelect: () => void deps.copy(s.session_id) };
-  if (o.builtIn) return [copy];
+export interface ConversationMenuOptions {
+  main: boolean;
+  leader?: boolean;
+  builtIn?: boolean;
+  canDelete?: boolean;
+  onDelete?: () => void;
+  canCompact?: boolean;
+  canClearMain?: boolean;
+  canNewMain?: boolean;
+  clearingMain?: boolean;
+  onNewMain?: () => void;
+}
+
+/** Context actions shared by the header and sidebar. The sidebar keeps the menu owner mounted to host the dialog. */
+export function assistantContextItems(
+  s: Session,
+  o: Pick<ConversationMenuOptions, "canCompact" | "canClearMain" | "canNewMain" | "clearingMain" | "onNewMain">,
+  keepMenuOpen: boolean,
+  deps: ConversationMenuDeps = conversationMenuDeps,
+): MenuItem[] {
+  const compacting = s.compaction?.state === "running";
+  const compactAction = deps.compact ?? conversationMenuDeps.compact!;
+  const clearMainAction = deps.clearMain ?? conversationMenuDeps.clearMain!;
+  return [
+    ...(o.canCompact
+      ? [{
+          key: "compact",
+          label: compacting ? t("assistant-assistantchat.compacting") : t("assistant-assistantchat.compact"),
+          icon: "layers" as const,
+          disabled: compacting,
+          onSelect: async () => {
+            try {
+              await compactAction(s);
+            } catch (e) {
+              deps.notify(t("assistant-assistantchat.compact_start_failed", { error: errorText(e) }), "error");
+            }
+          },
+        }]
+      : []),
+    ...(o.canClearMain
+      ? [{
+          key: "clear",
+          label: t("assistant-assistantchat.clear"),
+          icon: "retry" as const,
+          disabled: Boolean(o.clearingMain),
+          onSelect: () => clearMainAction(s),
+        }]
+      : []),
+    ...(o.canNewMain && o.onNewMain
+      ? [{
+          key: "newmain",
+          label: t("assistant-assistantchat.new_main_ellipsis"),
+          icon: "compose" as const,
+          keepOpen: keepMenuOpen,
+          disabled: Boolean(o.clearingMain),
+          onSelect: o.onNewMain,
+        }]
+      : []),
+  ];
+}
+
+/** `leader`: the conversation is a direction leader now. `builtIn`: it is the background supervisor, which the hub keeps
+ *  listed and running: no leader toggle, Rename, Archive, main actions, or End. */
+export function conversationMenuItems(s: Session, o: ConversationMenuOptions, deps: ConversationMenuDeps = conversationMenuDeps): MenuItem[] {
+  const copyBase: MenuItem = { key: "copy", label: t("conversation-menu.copy_id"), icon: "copy", accel: "c", onSelect: () => void deps.copy(s.session_id) };
+  if (o.builtIn) return [copyBase];
   const own: MenuItem[] = o.main
-    ? []
+    ? assistantContextItems(s, o, true, deps)
     : [
         leaderItem(s, !!o.leader, deps),
         {
@@ -125,6 +199,7 @@ export function conversationMenuItems(s: Session, o: { main: boolean; leader?: b
         },
         conversationArchiveItem(s, deps),
       ];
+  const copy: MenuItem = o.main && own.length > 0 ? { ...copyBase, divider: true } : copyBase;
   return [
     ...own,
     copy,

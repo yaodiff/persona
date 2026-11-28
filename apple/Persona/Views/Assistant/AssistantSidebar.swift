@@ -991,8 +991,8 @@ struct AssistantSidebar: View {
     /// What a folded Pages heading still says: Inbox's and To-dos' counts (the web's tally).
     @ViewBuilder private var placesTally: some View {
         if placesFolded {
-            let inbox = InboxStore.shared.unreadCount
-            let todos = TodoStore.shared.isSupported ? TodoStore.shared.sidebarCount : 0
+            let inbox = showsInbox ? InboxStore.shared.unreadCount : 0
+            let todos = showsTodos ? TodoStore.shared.sidebarCount : 0
             HStack(spacing: Theme.Space.xs) {
                 if inbox > 0 { CountBadge(count: inbox, look: .needs, label: String(localized: "Inbox")) }
                 if todos > 0 {
@@ -1374,14 +1374,31 @@ extension AssistantSidebar {
 
     // MARK: What to start
 
+    private var showsInbox: Bool {
+        #if os(iOS)
+        !model.hiddenNavigationPages.contains(.inbox)
+        #else
+        true
+        #endif
+    }
+
+    private var showsTodos: Bool {
+        #if os(iOS)
+        if model.hiddenNavigationPages.contains(.todos) { return false }
+        #endif
+        return TodoStore.shared.isSupported
+    }
+
     @ViewBuilder private func actions(_ all: [Session]) -> some View {
         if let openInbox, let onMachines {
             // The shell's: the places to go (the main conversation is the row above them, `mainItem`).
             VStack(alignment: .leading, spacing: 0) {
                 meetingRow
-                action(String(localized: "Inbox"), Theme.Icon.inbox, id: "sidebar-inbox", count: InboxStore.shared.unreadCount, place: .inbox, run: openInbox)
+                if showsInbox {
+                    action(String(localized: "Inbox"), Theme.Icon.inbox, id: "sidebar-inbox", count: InboxStore.shared.unreadCount, place: .inbox, run: openInbox)
+                }
                 starredRow
-                if TodoStore.shared.isSupported {
+                if showsTodos {
                     todosRow { (openTodos ?? openInbox)() }
                 }
                 action(String(localized: "Scheduled Tasks"), Theme.Icon.schedule, place: .routines, run: openRoutines)

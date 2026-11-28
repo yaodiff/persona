@@ -20,6 +20,13 @@ export interface DraftImage {
   data: string; // base64
 }
 
+export interface CommentImage extends DraftImage {
+  id: string;
+}
+
+/** A selection without a saved quote can supply its id when the first picture is ready. */
+export type CommentImagePicker = (target: string | (() => string | undefined), files: File[], signal: AbortSignal) => Promise<void>;
+
 /** What "Quote" holds above the input: the quoted words, who said them, when; for a task's card, which task. */
 export interface DraftQuote {
   text: string;
@@ -28,6 +35,8 @@ export interface DraftQuote {
   task?: QuotedTask;
   /** Set on a comment (the note, where it sits); the quote then carries the picked words or the code in `text`. */
   comment?: QuoteComment;
+  /** Images held in this browser tab, like the composer's other pictures. */
+  images?: readonly CommentImage[];
   /** Which entry of the list (set when it joins it). */
   id?: string;
 }
@@ -79,16 +88,20 @@ function quoteBody(q: DraftQuote): string {
 }
 
 /** The quotes waiting as the blocks that lead the message: the message quote first, then the comments numbered in order. */
-export function quoteBlocks(quotes: DraftQuote | readonly DraftQuote[] | null): string[] {
+export function quoteBlocks(quotes: DraftQuote | readonly DraftQuote[] | null, imageOffset = 0): string[] {
   const list = quotes === null ? [] : "text" in quotes ? [quotes] : quotes;
   let n = 0;
-  const bodies = [...list.filter((q) => !q.comment), ...list.filter((q) => q.comment)].map((q) => (q.comment ? commentBlock(q, ++n) : quoteBody(q)));
+  const bodies = [...list.filter((q) => !q.comment), ...list.filter((q) => q.comment)].map((q) => {
+    if (!q.comment) return quoteBody(q);
+    const images = q.images?.map(() => ++imageOffset);
+    return commentBlock(q, ++n, images);
+  });
   return bodies.filter(Boolean).map((b) => withQuote("", b).trimEnd());
 }
 
 /** The message as sent with its quotes: their blocks, a blank line, then what was typed (just the blocks when nothing was). */
-export function withQuoteBlock(quotes: DraftQuote | readonly DraftQuote[] | null, text: string): string {
-  const blocks = quoteBlocks(quotes);
+export function withQuoteBlock(quotes: DraftQuote | readonly DraftQuote[] | null, text: string, imageOffset = 0): string {
+  const blocks = quoteBlocks(quotes, imageOffset);
   if (!blocks.length) return text;
   const lead = blocks.join("\n\n");
   return text.trim() ? `${lead}\n\n${text}` : lead;
@@ -150,7 +163,7 @@ export function storedQuotes(key: string): DraftQuote[] {
 export function storeQuotes(key: string, list: readonly DraftQuote[]) {
   if (conversationKeyDeleted(key)) list = [];
   const stored = quoteKey(key);
-  if (list.length) safeDraftWrite(stored, () => localStorage.setItem(stored, JSON.stringify(list)));
+  if (list.length) safeDraftWrite(stored, () => localStorage.setItem(stored, JSON.stringify(list.map((q) => q.images ? { ...q, images: undefined } : q))));
   else safeDraftRemove(stored);
 }
 
@@ -211,6 +224,20 @@ export function setQuotes(key: string, list: readonly DraftQuote[]) {
   putQuotes(key, { list, editing: null, fresh: false });
 }
 
+/** A refused send puts its comments back ahead of any written while it was in flight. */
+export function restoreQuotes(key: string, sent: readonly DraftQuote[]) {
+  if (!sent.length) return;
+  const st = getQuotes(key);
+  const restored = sent.filter((q) => q.comment ? !st.list.some((x) => x.id === q.id) : !st.list.some((x) => !x.comment));
+  putQuotes(key, { ...st, list: [...restored, ...st.list] });
+}
+
+export function setCommentImages(key: string, id: string, update: (images: readonly CommentImage[]) => readonly CommentImage[]) {
+  const st = getQuotes(key);
+  const list = st.list.map((q) => q.id === id && q.comment ? { ...q, images: update(q.images ?? []) } : q);
+  putQuotes(key, { ...st, list });
+}
+
 export function removeQuote(key: string, id: string) {
   const st = getQuotes(key);
   const list = st.list.filter((q) => q.id !== id);
@@ -230,11 +257,14 @@ export function editNote(key: string, id: string) {
   if (st.editing !== id) putQuotes(key, { ...st, editing: id, fresh: false });
 }
 
-/** Esc in a note: a new card goes, an older one keeps its last note (the caller restores it). */
-export function cancelNote(key: string, id: string, previous: string) {
+/** Esc in a note: a new card goes, an older one goes back to the start of this edit. */
+export function cancelNote(key: string, id: string, previous: string, images?: readonly CommentImage[]) {
   const st = getQuotes(key);
   if (st.fresh && st.editing === id) removeQuote(key, id);
-  else setNote(key, id, previous, true);
+  else {
+    const list = st.list.map((q) => q.id === id && q.comment ? { ...q, images, comment: { ...q.comment, body: clampComment(previous) } } : q);
+    putQuotes(key, { list, editing: null, fresh: false });
+  }
 }
 
 /** A pulled-back queued message goes under what is typed, on its own line (AppModel.editQueued). */

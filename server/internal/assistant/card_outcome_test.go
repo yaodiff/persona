@@ -144,7 +144,7 @@ func TestAwaitExpiryCarriesReason(t *testing.T) {
 	ctx := context.Background()
 	ft := newFleetTest(t)
 
-	r, err := ft.s.waitInteraction(ctx, proto.Interaction{ID: "ix_exp", MachineID: "mac", SessionID: "s1", Kind: proto.IxPermission,
+	r, err := ft.s.waitInteraction(ctx, proto.Interaction{ID: "ix_exp", MachineID: "mac", SessionID: "s1", Kind: proto.IxPermission, OutwardWrite: true,
 		ExpiresAt: time.Now().Add(50 * time.Millisecond)})
 	if err != nil || !r.Dismiss || r.Reason != proto.DismissedExpired || r.Outcome() != proto.OutcomeExpired {
 		t.Fatalf("expired: %+v %v", r, err)
@@ -156,7 +156,7 @@ func TestAwaitExpiryCarriesReason(t *testing.T) {
 	cctx, cancel := context.WithCancel(ctx)
 	done := make(chan proto.Resolution, 1)
 	go func() {
-		r, _ := ft.s.waitInteraction(cctx, proto.Interaction{ID: "ix_gone", MachineID: "mac", SessionID: "s1", Kind: proto.IxPermission,
+		r, _ := ft.s.waitInteraction(cctx, proto.Interaction{ID: "ix_gone", MachineID: "mac", SessionID: "s1", Kind: proto.IxPermission, OutwardWrite: true,
 			ExpiresAt: time.Now().Add(time.Hour)})
 		done <- r
 	}()
@@ -176,7 +176,7 @@ func TestAwaitExpiryCarriesReason(t *testing.T) {
 
 	// The user's answer on a device, through the apps' route: theirs.
 	go func() {
-		r, _ := ft.s.waitInteraction(ctx, proto.Interaction{ID: "ix_dev", MachineID: "mac", SessionID: "s1", Kind: proto.IxPermission,
+		r, _ := ft.s.waitInteraction(ctx, proto.Interaction{ID: "ix_dev", MachineID: "mac", SessionID: "s1", Kind: proto.IxPermission, OutwardWrite: true,
 			ExpiresAt: time.Now().Add(time.Hour)})
 		done <- r
 	}()
@@ -196,7 +196,7 @@ func TestAwaitExpiryCarriesReason(t *testing.T) {
 
 	// The assistant answering for the user: not theirs.
 	go func() {
-		r, _ := ft.s.waitInteraction(ctx, proto.Interaction{ID: "ix_for", MachineID: "mac", SessionID: "s1", Kind: proto.IxPermission,
+		r, _ := ft.s.waitInteraction(ctx, proto.Interaction{ID: "ix_for", MachineID: "mac", SessionID: "s1", Kind: proto.IxPermission, OutwardWrite: true,
 			ExpiresAt: time.Now().Add(time.Hour)})
 		done <- r
 	}()

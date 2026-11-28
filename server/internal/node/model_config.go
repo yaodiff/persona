@@ -18,7 +18,9 @@ import (
 
 // modelExecution is non-secret per-turn execution metadata supplied by the hub.
 type modelExecution struct {
-	Source modelhttp.Source `json:"ModelSource,omitzero"`
+	ModelAliases  *proto.ModelAliases `json:"-"`
+	ExplicitModel string              `json:"-"`
+	Source        modelhttp.Source    `json:"ModelSource,omitzero"`
 
 	CodexEffortFallback string `json:"-"`
 	Strict              bool   `json:",omitempty"` // scheduled execution never substitutes another model or agent
@@ -50,10 +52,10 @@ type modelExecution struct {
 	// worker Agent conversations have neither flag.
 	FollowsSetting bool   `json:",omitempty"`
 	ConfigDir      string `json:"-"` // a conversation's directory, not its model; retained across process restarts
-	// MainCompactWindow: the compaction window the manager holds the main conversation to (assistant.main_compact_window,
-	// #7314), sent with is_main; 0 (another conversation, a launcher Persona does not manage, an older manager, the
-	// setting at 0) leaves the launcher's (assistantCompactionPolicy). Omitted when 0, so a fingerprint from before it
-	// stays the same.
+	// MainCompactWindow: the compaction window the manager holds the main conversation (sent with is_main) and each leader
+	// conversation to (assistant.main_compact_window, #7314, #15318); 0 (another conversation, a guest, a launcher Persona
+	// does not manage, an older manager, the setting at 0) leaves the launcher's (assistantCompactionPolicy). Omitted
+	// when 0, so a fingerprint from before it stays the same.
 	MainCompactWindow int `json:",omitempty"`
 	// SupervisionInstructions is manager-authorized role policy, never task or event data.
 	// It changes the execution fingerprint so a role change resumes in a fresh process.
@@ -89,6 +91,13 @@ type modelExecution struct {
 	// NewModelChoice classifies this request against the previous recovery chain. It is per-turn provenance, never
 	// persisted or included in the execution fingerprint, and is committed only when the input is delivered.
 	NewModelChoice bool `json:"-"`
+	// PersistedModel marks a model restored from sessionState.Model when the caller supplied no model choice on this
+	// turn (for example after cross-engine launcher fallback cleared options). Per-turn provenance only: never
+	// persisted or included in the execution fingerprint.
+	PersistedModel bool `json:"-"`
+	// FromRecovery marks a model chosen by automatic recovery or a temporary fallback hold rather than an explicit
+	// user/hub choice. Per-turn provenance only: never persisted or included in the execution fingerprint.
+	FromRecovery bool `json:"-"`
 	// SecretTicket: the hand-off a new Claude Code start puts in its environment (secretenv.go). Per start, never
 	// part of a fingerprint, never kept for a resume.
 	SecretTicket string `json:"-"`

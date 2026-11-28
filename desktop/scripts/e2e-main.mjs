@@ -52,14 +52,16 @@ let island; // the shell's notch island (island.ts), seen with the web's first s
 /** The rows the island keeps: the web's last ones, none once their page is gone. */
 const islandRows = () => island?.state.rows.length ?? 0;
 /** What a Mac draws: the island's page from the shell's own scheme, as a packaged app must load it (its fuses keep
- *  file:// out of the asar), with its stylesheet (the black pill) and its script (the leading count). */
+ *  file:// out of the asar), with its stylesheet (the pill opaque and near black, whatever its exact shade: #050506
+ *  since #14553; transparent without the stylesheet) and its script (the leading count). */
 async function islandDrawn() {
   const w = island?.window;
   if (!w || w.isDestroyed()) throw new Error("no island window");
   const url = w.webContents.getURL();
   const seen = w.webContents.isLoading() ? { loading: true } : await w.webContents.executeJavaScript(
     "({ pill: getComputedStyle(document.querySelector('#island')).backgroundColor, left: document.querySelector('#left').textContent })");
-  if (url !== "persona-island://app/island.html" || seen.pill !== "rgb(0, 0, 0)" || !/^\d+\+?$/.test(seen.left ?? "")) {
+  const pill = /^rgb\((\d+), (\d+), (\d+)\)$/.exec(seen.pill ?? "");
+  if (url !== "persona-island://app/island.html" || !pill || pill.slice(1).some(c => Number(c) > 16) || !/^\d+\+?$/.test(seen.left ?? "")) {
     throw new Error(`the island's page at ${url} shows ${JSON.stringify(seen)}`);
   }
   return seen;

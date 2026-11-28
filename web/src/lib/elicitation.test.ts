@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api, CLIENT_FEATURES } from "./api";
+import { clientInstance } from "./device-id";
 import { answerLines } from "./answered";
 import { defaults, dropElicitationDraft, elicitationDraft, elicitationResolution, elicitationSource, fields, numberInputMode, saveElicitationDraft, supported, urlHost, urlTarget, validate } from "./elicitation";
 import { interactionAsk, interactionTitle } from "./inbox";
@@ -156,8 +157,8 @@ describe("elicitation 的文案", () => {
     // Persona's own server and a plugin's read as on Android (mcpServerLabel)
     expect(elicitationSource({ ...form(), mcp_server_name: "plugin_persona" })).toEqual(["来自 MCP 服务器 Persona"]);
     expect(elicitationSource({ ...form(), mcp_server_name: "plugin_docs" })).toEqual(["来自 MCP 服务器 docs"]);
-    expect(interactionTitle(form())).toBe("MCP 表单等你填写");
-    expect(interactionTitle({ ...form(), elicitation: { mode: "url", url: "https://example.com" } })).toBe("MCP 链接等你确认");
+    expect(interactionTitle(form())).toBe("MCP 表单等待你填写");
+    expect(interactionTitle({ ...form(), elicitation: { mode: "url", url: "https://example.com" } })).toBe("MCP 链接等待你确认");
     expect(interactionAsk(form())).toBe("请填写");
   });
 
@@ -171,7 +172,7 @@ describe("elicitation 的文案", () => {
     ]);
     expect(answerLines(form(), { action: "decline" })[0].answer).toBe("已拒绝");
     expect(answerLines(form(), { action: "cancel" })[0].answer).toBe("已取消");
-    expect(answerLines({ ...form(), elicitation: { mode: "url", url: "https://example.com" } }, { action: "accept" })[0].answer).toBe("已打开链接，继续");
+    expect(answerLines({ ...form(), elicitation: { mode: "url", url: "https://example.com" } }, { action: "accept" })[0].answer).toBe("已打开链接并继续");
   });
 });
 
@@ -184,6 +185,7 @@ describe("声明能力", () => {
     await api("/interactions", { token: "t" });
     const headers = fetcher.mock.calls[0][1].headers as Headers;
     expect(headers.get("X-Persona-Client")).toBe("web/1");
+    expect(headers.get("X-Persona-Client-Instance")).toBe(clientInstance);
     expect(CLIENT_FEATURES).toContain("elicitation");
   });
 });

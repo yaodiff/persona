@@ -153,3 +153,16 @@ test('v1SessionItems, v1ImageOf, and acpPermissionCard map opencode 1.x DB and A
   assert.equal(card.summary, 'rm -rf dist')
   assert.equal(card.always_label, '总是允许 Bash')
 })
+
+test('assistant preview filters standalone botmux lines in both database formats', () => {
+  const marker = 'BOTMUX_NOTHING_TO_SEND'
+  const words = 'The manual calls it ' + marker
+  const texts = [words + '\n  ' + marker + '\r\nDetails.', marker]
+  const messages = texts.map((text, i) => ({ id: 'm' + i, type: 'assistant', content: [{ type: 'text', text }] }))
+  assert.equal(lastText(messages), words + ' Details.')
+  const rows = messages.map(({ id }) => ({ id, data: JSON.stringify({ role: 'assistant' }) }))
+  const parts = new Map(messages.map(({ id, content }) => [id, content.map(p => ({ data: JSON.stringify(p) }))]))
+  const result = v1SessionItems(rows, parts)
+  assert.equal(result.lastText, words + ' Details.')
+  assert.deepEqual(result.items.map(i => i.text), texts)
+})

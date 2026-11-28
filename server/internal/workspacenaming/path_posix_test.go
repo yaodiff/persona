@@ -52,3 +52,24 @@ func TestResolvePrivateStateTargetCaseRules(t *testing.T) {
 		})
 	}
 }
+
+func TestLiteralBaseUnderPhysicalHome(t *testing.T) {
+	ctx := NodeContext{Home: "/var/home/example", PersonaHome: "/var/home/example/state"}
+	const physicalHome = "/private/var/home/example"
+	s := source()
+	s.Rules.BaseDirectory = ctx.Home + "/tasks"
+	p := ResolveWithPhysicalHome(s, ctx, physicalHome)
+	if p.Plan == nil || p.Plan.BasePath != physicalHome+"/tasks" ||
+		p.Plan.Repositories[0].AbsolutePath != physicalHome+"/tasks/task-todo_123/web" ||
+		p.Plan.Source.Rules.BaseDirectory != s.Rules.BaseDirectory || CheckPlan(*p.Plan) != nil {
+		t.Fatal(p)
+	}
+
+	// Existing plans outside the home retain their digest, even with a common name prefix.
+	s.Rules.BaseDirectory = ctx.Home + "-shared/tasks"
+	old := Resolve(s, ctx)
+	current := ResolveWithPhysicalHome(s, ctx, physicalHome)
+	if old.Plan == nil || current.Plan == nil || old.Plan.Digest != current.Plan.Digest {
+		t.Fatal(old, current)
+	}
+}

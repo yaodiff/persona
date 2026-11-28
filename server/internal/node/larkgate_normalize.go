@@ -18,13 +18,16 @@ import (
 // groups as written inline (larkgate_inline.go) and resolves immediately preceding literal command assignments
 // solely for classification. It never executes the input.
 func normalizeLarkCommand(cmd, cwd string, gates []proto.CommandGate) string {
-	return normalizeLarkCommandTracked(cmd, cwd, gates, nil)
+	return normalizeLarkCommandRelaxed(cmd, cwd, gates, nil, false)
 }
 
 // resolved, when non-nil, records the normalized segment positions whose executable came from a proven assignment.
 // The classifier uses that provenance only for the neighboring-opaque-program check; the command itself is still
 // parsed and classified normally. Positions, rather than word content, keep an identical later literal segment distinct.
-func normalizeLarkCommandTracked(cmd, cwd string, gates []proto.CommandGate, resolved map[int]bool) string {
+// relax (a bypass conversation, classifyLarkRelaxed) also lets a here-document's file be named through a literal
+// variable set earlier in the list (`d=~/notes; cat > $d/note.md <<'EOF'`) and sit in a directory that does not exist
+// yet (made by mkdir in the same list), #15860.
+func normalizeLarkCommandRelaxed(cmd, cwd string, gates []proto.CommandGate, resolved map[int]bool, relax bool) string {
 	tree, err := syntax.NewParser().Parse(strings.NewReader(cmd), "")
 	if err != nil {
 		return cmd
@@ -81,11 +84,41 @@ func normalizeLarkCommandTracked(cmd, cwd string, gates []proto.CommandGate, res
 	hasHeredoc, safe, goTest := false, true, false
 	var bodies []*syntax.Word
 	dir := cwd // a literal cd moves where later relative targets are
+	// vars (relax): literal values of variables assigned by a statement of their own at the top of the list, in order.
+	// One assigned anywhere else (after && or ||) or to anything but a literal is unknown from then on.
+	vars := map[string]string{}
+	top := map[*syntax.Stmt]bool{}
+	for _, stmt := range tree.Stmts {
+		top[stmt] = true
+	}
+	// path is a target or argument word's value: a literal word as before or, relaxed, one with variables from vars.
+	path := func(word *syntax.Word, value string) string {
+		if value == "" && relax {
+			if resolved, _, ok := literalLoopWord(word, vars); ok {
+				return resolved
+			}
+		}
+		return value
+	}
 	for _, stmt := range stmts {
 		call := stmt.Cmd.(*syntax.CallExpr)
 		if len(call.Args) == 0 {
 			if len(stmt.Redirs) != 0 {
 				safe = false
+			}
+			for _, a := range call.Assigns {
+				if a.Name == nil {
+					continue
+				}
+				value, ok := "", false
+				if relax && top[stmt] && !a.Append && a.Index == nil && a.Array == nil && a.Value != nil {
+					value, ok = larkLiteralAssignValue(a.Value, cmd)
+				}
+				if ok {
+					vars[a.Name.Value] = value
+				} else {
+					delete(vars, a.Name.Value)
+				}
 			}
 			continue
 		}
@@ -105,7 +138,8 @@ func normalizeLarkCommandTracked(cmd, cwd string, gates []proto.CommandGate, res
 		// Do not infer safety from an interpreter denylist: build tools and
 		// arbitrary programs can execute the file as well. Only these ordinary
 		// file/inspection commands and the specified test invocation are inert.
-		allowed := map[string]bool{"cat": true, "tee": true, "echo": true, "pwd": true, "ls": true, "head": true, "wc": true}[base]
+		allowed := map[string]bool{"cat": true, "tee": true, "echo": true, "pwd": true, "ls": true, "head": true, "wc": true}[base] ||
+			relax && base == "mkdir" // makes the directories a note is then written in
 		if base == "go" && len(call.Args) > 1 && call.Args[1].Lit() == "test" {
 			allowed = true
 			goTest = true
@@ -115,6 +149,11 @@ func normalizeLarkCommandTracked(cmd, cwd string, gates []proto.CommandGate, res
 		}
 		for _, arg := range call.Args[1:] {
 			value, expanded := executionWord(arg)
+			if expanded && relax {
+				if resolved, _, ok := literalLoopWord(arg, vars); ok {
+					value, expanded = resolved, false
+				}
+			}
 			option, _, _ := strings.Cut(strings.TrimLeft(value, "-"), "=")
 			if expanded || strings.HasPrefix(value, "-") && (option == "exec" || option == "toolexec") {
 				safe = false
@@ -122,7 +161,7 @@ func normalizeLarkCommandTracked(cmd, cwd string, gates []proto.CommandGate, res
 		}
 		for _, redir := range stmt.Redirs {
 			if redir.Hdoc == nil {
-				if (redir.Op != syntax.RdrOut && redir.Op != syntax.AppOut) || redir.Word == nil || !safeHeredocTarget(redir.Word.Lit(), dir) {
+				if (redir.Op != syntax.RdrOut && redir.Op != syntax.AppOut) || redir.Word == nil || !safeHeredocTarget(path(redir.Word, redir.Word.Lit()), dir, relax) {
 					safe = false
 				}
 				continue
@@ -136,7 +175,7 @@ func normalizeLarkCommandTracked(cmd, cwd string, gates []proto.CommandGate, res
 			if base == "cat" {
 				output := false
 				for _, other := range stmt.Redirs {
-					if (other.Op == syntax.RdrOut || other.Op == syntax.AppOut) && other.Word != nil && safeHeredocTarget(other.Word.Lit(), dir) {
+					if (other.Op == syntax.RdrOut || other.Op == syntax.AppOut) && other.Word != nil && safeHeredocTarget(path(other.Word, other.Word.Lit()), dir, relax) {
 						output = true
 					}
 				}
@@ -146,11 +185,11 @@ func normalizeLarkCommandTracked(cmd, cwd string, gates []proto.CommandGate, res
 			} else {
 				files := 0
 				for _, arg := range call.Args[1:] {
-					value := arg.Lit()
+					value := path(arg, arg.Lit())
 					if value == "-a" || value == "--append" {
 						continue
 					}
-					if value == "" || strings.HasPrefix(value, "-") || !safeHeredocTarget(value, dir) {
+					if value == "" || strings.HasPrefix(value, "-") || !safeHeredocTarget(value, dir, relax) {
 						safe = false
 					}
 					files++
@@ -209,7 +248,9 @@ func normalizeLarkCommandTracked(cmd, cwd string, gates []proto.CommandGate, res
 
 // Special files, symlinks and virtual filesystems can forward the heredoc to
 // a running process. An unknown target is not proof of an ordinary file.
-func safeHeredocTarget(name, cwd string) bool {
+// relax (a bypass conversation) also takes a file in directories that do not exist yet: the write then makes or fails
+// on plain directories under the nearest one that exists, which is checked as the parent would be (#15860).
+func safeHeredocTarget(name, cwd string, relax bool) bool {
 	if name = larkHomePath(name); !safeLiteralCommand(name) {
 		return false
 	}
@@ -222,7 +263,12 @@ func safeHeredocTarget(name, cwd string) bool {
 	name = filepath.Clean(name)
 	parent, err := filepath.EvalSymlinks(filepath.Dir(name))
 	if err != nil {
-		return false
+		if !relax {
+			return false
+		}
+		if parent, err = larkMissingParent(filepath.Dir(name)); err != nil {
+			return false
+		}
 	}
 	for _, path := range []string{name, filepath.Join(parent, filepath.Base(name))} {
 		for _, prefix := range []string{"/dev", "/proc", "/sys"} {
@@ -236,6 +282,33 @@ func safeHeredocTarget(name, cwd string) bool {
 		return true
 	}
 	return err == nil && info.Mode().IsRegular()
+}
+
+// larkMissingParent is where a directory that does not exist would be made: the nearest existing ancestor, with its
+// symlinks resolved, joined with the missing rest. That ancestor has to be a directory.
+func larkMissingParent(dir string) (string, error) {
+	for missing := ""; ; {
+		real, err := filepath.EvalSymlinks(dir)
+		if err == nil {
+			info, err := os.Stat(real)
+			if err != nil {
+				return "", err
+			}
+			if !info.IsDir() {
+				return "", os.ErrInvalid
+			}
+			return filepath.Join(real, missing), nil
+		}
+		if !os.IsNotExist(err) {
+			return "", err
+		}
+		up := filepath.Dir(dir)
+		if up == dir {
+			return "", err
+		}
+		missing = filepath.Join(filepath.Base(dir), missing)
+		dir = up
+	}
 }
 
 // go test can execute generated tests and package initializers. Only a document

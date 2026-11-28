@@ -28,6 +28,7 @@ import (
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/link"
+	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -55,6 +56,9 @@ type nodeStateStore interface {
 
 // Options are what Devices needs from the manager it runs in.
 type Options struct {
+	// Edition is the edition this manager was built as (update.Build.Edition; the zero value is the full build): the
+	// only release manifests it reads, and the only edition of node build it fetches (packages.go).
+	Edition nodeproto.Edition
 	// ProjectState lets the owning manager retain transport identities independently of computers.
 	ProjectState func(devicewire.States) devicewire.States
 	// PackageHub supplies the bound address, TLS transport and manager credential for confirmed development packages.
@@ -112,7 +116,9 @@ type Options struct {
 	// UsageExtension asks an extension (contributes.usage) about a launcher's gateway: usage.query, whose answer is the
 	// accounts to draw (usagesource.ExtensionAnswer). The extensions are the manager's, so it owns this; it holds the
 	// launcher's key and sends the extension's requests with it. nil: extension sources cannot be read.
-	UsageExtension func(ctx context.Context, extension, launcher string) (json.RawMessage, error)
+	UsageExtension     func(ctx context.Context, extension, launcher string) (json.RawMessage, error)
+	DirectUsageSources func() []DirectUsageSource
+	DirectUsageQuery   func(context.Context, DirectUsageSource) (json.RawMessage, error)
 	// TailcatKey is the identity file the computers reached over tailcat trust (tunnel.LoadOrCreateHubKey); "": this
 	// machine's data directory's (tunnel.HubKeyPath).
 	TailcatKey string
@@ -160,9 +166,11 @@ type Devices struct {
 	clipboard clipboardSwitches
 	// fileTransfer: the machines the user turned file transfer on for (transfer_settings.go).
 	fileTransfer fileTransferSwitches
-	links        linkSet
-	stopping     atomic.Bool
-	workers      sync.WaitGroup
+	// orcaChats: the machines the user turned "Start new Agents as Orca chats" on for (orca_chat_starts.go).
+	orcaChats orcaChatSwitches
+	links     linkSet
+	stopping  atomic.Bool
+	workers   sync.WaitGroup
 
 	// attention: the assistant's latest "Needs you" summary for Persona Link (attention.go); nil before the first.
 	attention atomic.Pointer[link.Attention]
@@ -227,6 +235,8 @@ func New(o Options) *Devices {
 	d.usageGW.init(usage, d.usageWin.invalidate, d.logf)
 	d.usageWin.balances = d.usageBal.accounts
 	d.usageGW.fetchExtension = o.UsageExtension
+	d.usageGW.discoverDirect = o.DirectUsageSources
+	d.usageGW.fetchDirect = o.DirectUsageQuery
 	d.usageBal.init(o.LauncherBalances, d.usageWin.invalidate, d.logf)
 	return d
 }
@@ -327,6 +337,9 @@ func (d *Devices) Configure(cfg devicewire.Config) {
 		if first { // after a start from the own list: what its connections could not do without the hub
 			d.afterOwnList(ctx)
 		}
+		if cfg.AutoUpdateNodes && (!old.AutoUpdateNodes || old.HubVersion != cfg.HubVersion) {
+			go d.updateNodes(ctx)
+		}
 	}
 	d.fleetRegroup()
 	// Where the hub is, what it is called, whether the computer waits to be confirmed: Persona Link shows them.
@@ -382,6 +395,10 @@ func (d *Devices) config() devicewire.Config {
 }
 
 func (d *Devices) hubVersion() string { return d.config().HubVersion }
+
+// AdvertisedHubVersion is the last build advertised on the authenticated bus.
+// The service watcher also rechecks it after its own bus has shut down.
+func (d *Devices) AdvertisedHubVersion() string { return d.hubVersion() }
 
 // errPendingUnknown: the hub has not said which machines wait to be confirmed.
 var errPendingUnknown = errors.New("the hub has not said which computers wait to be confirmed")

@@ -13,7 +13,7 @@ registerHooks({
       return {url:new URL('../core/Markdown.ts',context.parentURL).href,shortCircuit:true};
     if (specifier === '@kit.ArkTS') return {url:'client-boundary:'+specifier,shortCircuit:true};
     if (context.parentURL?.endsWith('/ClientModel.ets')) {
-      if (['../core/BackgroundActivity', '../core/ChatSendFeedback', '../core/DictationLanguage', './Wire', './AgentAttention', './AssistantView', './DemoRepository', './NavigationContext', './ChatDraftStore', './HubRepository', './MutationStore', './Compatibility', './InteractionDecision', '../core/ClientLocale', '../core/ClientLocale', '../core/Domain', '../core/ScopePolicy', '../core/StorageOwnership', '../core/MessageContent', '../core/TranscriptCache'].includes(specifier)) {
+      if (['../core/BackgroundActivity', '../core/ChatSendFeedback', '../core/DictationLanguage', './Wire', './AgentAttention', './AssistantView', './DemoRepository', './NavigationContext', './ChatDraftStore', './HubRepository', './MutationStore', './Compatibility', './InteractionDecision', '../core/ClientLocale', '../core/Domain', '../core/HubModules', '../core/NextSuggestions', '../core/ScopePolicy', '../core/StorageOwnership', '../core/MessageContent', '../core/TranscriptCache', '../core/XiaoYiActions'].includes(specifier)) {
         const base = new URL(specifier, context.parentURL);
         return {url: base.href + (existsSync(new URL(base.href + '.ts')) ? '.ts' : '.ets'), shortCircuit: true};
       }
@@ -59,6 +59,7 @@ registerHooks({
       export const withSourceContext = text => text;
       export const messageDisplay = text => text;
       export const nativeNotifications = {async clear(){},features(){return ['elicitation'];}};
+      export const nativeLiveView = {async initialize(){},async receiveFleetEvent(){},async syncFromModel(){},async stopNow(){},setForeground(){}};
     `};
     if (url.endsWith('.ets')) return {format:'module', shortCircuit:true, source:stripTypeScriptTypes(readFileSync(new URL(url),'utf8').replace(/@ObservedV2\s*/g,'').replace(/@Trace\s+/g,''))};
     return next(url, context);
@@ -87,6 +88,34 @@ function fixture() {
   model.loadChat=async()=>{};
   return {model,writes};
 }
+test('an accepted hub hello selects picture limits by the destination session agent', () => {
+  const model = new ClientModel();
+  model.profile.hubId = 'hub-a';
+  model.refresh = async () => {};
+  const hello = (limits, hub = 'hub-a') => model.event(JSON.stringify({type: 'hello', hub_id: hub, image_limits: limits}));
+  const values = row => {
+    const limits = model.imageLimits(row);
+    return [limits.requestBytes, limits.imageBytes, limits.maxSide, limits.perMessage];
+  };
+  const standard = [33554432, 3750000, 1600, 20];
+  const row = ResourceRow.from({id: 'one', machine_id: 'machine', agent: 'codex'}, 'session');
+  assert.deepEqual(values(row), standard);
+  hello({request_bytes: 7340032, image_bytes: 100000, max_side: 1024, per_message: 7,
+    agents: {codex: {per_message: 2, max_side: 600}, claude: {per_message: 4}, pi: 'invalid'}});
+  assert.deepEqual(values(row), [standard[0], standard[1], 600, 2]);
+  assert.deepEqual(values(), [standard[0], standard[1], standard[2], 4]);
+  model.sessions = [ResourceRow.from({id: 'one', machine_id: 'machine', agent: 'pi', launcher: 'codex'}, 'session')];
+  assert.deepEqual(values(row), [7340032, 100000, 1024, 7]);
+  // An assistant conversation names its agent under `launcher`, not `agent`.
+  const conversation = ResourceRow.from({id: 'conv', machine_id: 'machine', launcher: 'codex'}, 'conversation');
+  assert.deepEqual(values(conversation), [standard[0], standard[1], 600, 2]);
+  hello({per_message: 13}, 'another-hub');
+  assert.deepEqual(values(row), [7340032, 100000, 1024, 7]);
+  hello({request_bytes: 'wrong', image_bytes: -1, max_side: 0, per_message: 1e30});
+  assert.deepEqual(values(row), standard);
+  hello(undefined);
+  assert.deepEqual(values(row), standard);
+});
 
 test('whole and partial quotes retain their source and other draft references across the chat wire',async()=>{
   const {model}=fixture();model.features=['persona_contracts_v1'];

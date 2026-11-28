@@ -24,7 +24,7 @@ vi.mock("../../lib/connectors", async (original) => ({
 }));
 vi.mock("../../ui/atoms", async (original) => ({ ...(await original<typeof import("../../ui/atoms")>()), toast: vi.fn() }));
 import { toast } from "../../ui/atoms";
-import { ConnectorBody } from "./ConnectorThread";
+import { ConnectorBody, openSystem } from "./ConnectorThread";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 globalThis.ResizeObserver ??= class {
@@ -161,7 +161,7 @@ describe("连接器会话页", () => {
     await flush();
     act(() => buttons().find((b) => b.getAttribute("aria-label")?.includes("很早的"))!.click());
     await flush();
-    expect(toast).toHaveBeenCalledWith("原消息太早了，往上翻几页再找");
+    expect(toast).toHaveBeenCalledWith("原消息较早，请向上翻页查找。");
   });
 
   it("sends a reply to one message with its id as reply_to", async () => {
@@ -296,5 +296,65 @@ describe("连接器会话页", () => {
     await flush();
     expect(host.querySelector("img[src*='stk-1']")).not.toBeNull();
     expect(host.querySelector("button[data-thread-picture]")).toBeNull();
+  });
+
+  it("rejects javascript/data/file/userinfo URLs in openSystem while allowing credential-free http(s) links", () => {
+    const openSpy = vi.spyOn(window, "open").mockImplementation(() => null);
+    const prevLoc = window.location;
+    const hrefSet = vi.fn();
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: {
+        get href() { return "http://localhost/"; },
+        set href(v: string) { hrefSet(v); },
+      },
+    });
+    try {
+      for (const bad of [
+        "javascript:alert(1)",
+        "  JaVaScRiPt:alert(1)",
+        "java\tscript:alert(1)",
+        "data:text/html,<script>alert(1)</script>",
+        "vbscript:msgbox(1)",
+        "file:///etc/passwd",
+        "vscode://file/etc/passwd",
+        "//evil.example/x",
+        "https://github.example@evil.example/pr/1",
+        "http://me:pw@example.com/pr/1",
+        "https:/admin",
+        "https://@evil.example/pr/1",
+        "https://good.example\\@evil.example/pr/1",
+        "https://example.com/\x00pr",
+        "tg://me:pw@evil.example/join",
+        "tg://",
+        "tg://@evil.example/join",
+        "sms:",
+        "mailto:",
+        "tel:",
+        "sms://me:pw@evil.example",
+      ]) {
+        openSystem(bad);
+      }
+      expect(openSpy).not.toHaveBeenCalled();
+      expect(hrefSet).not.toHaveBeenCalled();
+
+      openSystem("https://github.com/nwverse/persona/pull/1");
+      expect(openSpy).toHaveBeenCalledWith("https://github.com/nwverse/persona/pull/1", "_blank", "noopener,noreferrer");
+      openSystem("sms:+15551234");
+      openSystem("sms:me@example.com&body=hi");
+      openSystem("mailto:me@example.com");
+      openSystem("tel:+15550100");
+      openSystem("tg://resolve?domain=demo");
+      expect(hrefSet.mock.calls).toEqual([
+        ["sms:+15551234"],
+        ["sms:me@example.com&body=hi"],
+        ["mailto:me@example.com"],
+        ["tel:+15550100"],
+        ["tg://resolve?domain=demo"],
+      ]);
+    } finally {
+      Object.defineProperty(window, "location", { configurable: true, value: prevLoc });
+      openSpy.mockRestore();
+    }
   });
 });

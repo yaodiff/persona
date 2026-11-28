@@ -52,6 +52,10 @@ Hand part of your own task to workers: each task you give this starts a new codi
             "type": "string",
             "description": "launcher name, one that machine has; empty: the default"
           },
+          "host": {
+            "type": "string",
+            "description": "agy (companion) or an enabled engine such as herdr. Overrides the preset host."
+          },
           "model": {
             "type": "string",
             "description": "model id; empty: the launcher's default"
@@ -77,6 +81,7 @@ Hand part of your own task to workers: each task you give this starts a new codi
             ],
             "description": "empty: the default mode for a writable task. Claude-family launchers always use bypassPermissions; readonly=true adds a first-prompt constraint; Codex keeps plan; TRAE CLI and omp take none"
           },
+          "multi_issue_report": {"type":"boolean","description":"Only for a report investigating several issues; requires a findings list before park or close."},
           "readonly": {
             "type": "boolean",
             "description": "true when the worker only reads (looks things up, reads code, changes no project files); false when it changes files. The first message automatically adds the read-only constraint. Claude-family launchers use bypassPermissions; Codex keeps its plan sandbox"
@@ -92,6 +97,19 @@ Hand part of your own task to workers: each task you give this starts a new codi
           "goal": {
             "type": "string",
             "description": "a read-only worker's goal: what you get from it, in one sentence (a writable worker needs done_when instead); estimates are automatic for both"
+          },
+          "distinct_from": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["todo_id", "reason"],
+              "additionalProperties": false,
+              "properties": {
+                "todo_id": {"type": "string"},
+                "reason": {"type": "string", "minLength": 1}
+              }
+            },
+            "description": "required for each open todo whose saved repository issue/PR link this worker references: its todo_id and why this is separate work, kept in the brief"
           },
           "expect_minutes": {
             "type": "integer",

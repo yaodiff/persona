@@ -659,4 +659,3 @@ describe("the Connect step's own check (#4881)", () => {
     expect(pending.map((r) => r.path)).toEqual(["/api/v1/launchers/discover"]);
   });
 });
-

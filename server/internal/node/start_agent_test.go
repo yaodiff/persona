@@ -62,9 +62,9 @@ func TestOtherAgentStartCommandLineBreaks(t *testing.T) {
 // startOtherAgent builds its command for the shell of the pane it made: a zsh pane sources it from a start file, and a
 // tcsh pane (no `.`) gets it typed out with the first message on one line.
 func TestOtherAgentStartTypesForThePaneShell(t *testing.T) {
-	for shell, want := range map[string]string{
-		"/bin/zsh":  "traex 'a b\nc'",
-		"/bin/tcsh": "traex 'a b c'",
+	for shell, tc := range map[string]struct{ model, want string }{
+		"/bin/zsh":  {"", "traex 'a b\nc'"},
+		"/bin/tcsh": {"example-fast", "traex -m example-fast -- 'a b c'"},
 	} {
 		t.Run(shell, func(t *testing.T) {
 			withPaneShell(t, shell)
@@ -78,7 +78,8 @@ func TestOtherAgentStartTypesForThePaneShell(t *testing.T) {
 					cancel()
 				}
 			})
-			_, _ = n.startOtherAgent(ctx, n.hosts.Get(host.Herdr).(*herdrHost), home, traexAgent, traexAgent, "a\tb\nc", "", "w1", "")
+			_, _ = n.startOtherAgent(ctx, n.hosts.Get(host.Herdr).(*herdrHost), home, traexAgent, traexAgent, "a\tb\nc", "", "w1", "", modelExecution{Model: tc.model})
+			want := tc.want
 			if shell == "/bin/zsh" {
 				want = inAgentEnv(n.dir, want, shellQuote)
 			}
@@ -100,8 +101,8 @@ func TestOtherAgentStartTypesForThePaneShell(t *testing.T) {
 // the command is typed with the message on one line.
 func TestOtherAgentStartFlattensForAGuessedShell(t *testing.T) {
 	for shell, want := range map[string]string{
-		"/bin/zsh":  "traex 'a\nb'",
-		"/bin/tcsh": "traex 'a b'",
+		"/bin/zsh":  "traex -m example-fast -c 'model_reasoning_effort=xhigh' -- 'a\nb'",
+		"/bin/tcsh": "traex -m example-fast -c 'model_reasoning_effort=xhigh' -- 'a b'",
 	} {
 		t.Run(shell, func(t *testing.T) {
 			withPaneShell(t, shell)
@@ -112,7 +113,7 @@ func TestOtherAgentStartFlattensForAGuessedShell(t *testing.T) {
 			starts := orcaTypedStarts(o)
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second) // until the agent would show up
 			defer cancel()
-			_, _ = n.start(ctx, projDir, traexAgent, "a\nb", "", "", "", "", "", "", "")
+			_, _ = n.start(ctx, projDir, traexAgent, "a\nb", "", "", "", "xhigh", "", "", "", modelExecution{Model: "example-fast"})
 			ran := starts()
 			for _, p := range o.Params("terminal.send") {
 				if text, _ := p["text"].(string); strings.Contains(text, traexAgent+" ") {
@@ -126,5 +127,38 @@ func TestOtherAgentStartFlattensForAGuessedShell(t *testing.T) {
 				t.Errorf("ran %q, want one command ending %q", ran, want)
 			}
 		})
+	}
+}
+
+// Resuming a non-Claude terminal session outside its space keeps the kept record's folder inside that space (#12216).
+func TestOtherAgentResumeKeepsRecordFolderInSpace(t *testing.T) {
+	const run = "0a1b2c3d-7777-4f60-8a7b-9c0d1e2f3a44"
+	n, f, home := herdrNode(t)
+	charts := mkdir(t, filepath.Join(home, ".persona", "health", "charts"))
+	elsewhere := mkdir(t, filepath.Join(home, "elsewhere"))
+	n.state.put(run, sessionState{Launcher: "codex-wrap", Cwd: charts, Model: "m1", ModelEffort: "high"})
+
+	f.reply("tab.create", map[string]any{"tab": map[string]any{"tab_id": "w1:t2"}, "root_pane": map[string]any{"pane_id": "w1:p2"}})
+	f.reply("session.snapshot", snapshot(nil, nil, []any{map[string]any{
+		"agent":         "codex",
+		"agent_status":  "idle",
+		"pane_id":       "w1:p2",
+		"tab_id":        "w1:t2",
+		"workspace_id":  "w1",
+		"cwd":           elsewhere,
+		"agent_session": map[string]any{"kind": "id", "value": run},
+	}}, nil))
+
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	if _, err := n.startOtherAgent(ctx, n.hosts.Get(host.Herdr).(*herdrHost), elsewhere, "codex-wrap", "codex", "", run, "w1", ""); err != nil {
+		t.Fatalf("startOtherAgent resume: %v", err)
+	}
+	st, ok := n.state.get(run)
+	if !ok {
+		t.Fatal("missing session state after resume")
+	}
+	if st.Cwd != charts {
+		t.Fatalf("record Cwd = %q, want %q (stay in health space)", st.Cwd, charts)
 	}
 }

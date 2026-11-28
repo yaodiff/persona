@@ -103,3 +103,15 @@ internal fun simulateShowCustomView(
 internal fun simulateHideCustomView(view: ChatSelectionWebView) {
     shadowOf(view).webChromeClient.onHideCustomView()
 }
+
+internal fun simulateDownloadStart(
+    view: ChatSelectionWebView,
+    url: String,
+    userAgent: String = "PersonaTestAgent/1.0",
+    contentDisposition: String = "",
+    mimeType: String = "application/octet-stream",
+    contentLength: Long = -1L,
+) {
+    val listener = checkNotNull(shadowOf(view).downloadListener) { "Expected DownloadListener on ChatSelectionWebView" }
+    listener.onDownloadStart(url, userAgent, contentDisposition, mimeType, contentLength)
+}

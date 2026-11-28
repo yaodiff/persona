@@ -2,6 +2,7 @@ package persona.feature.agents
 
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
@@ -37,6 +38,8 @@ import persona.core.contracts.api.MessageSender
 import persona.core.contracts.api.OutboxMessage
 import persona.core.contracts.api.SessionsRepository
 import persona.core.domain.sort.AgentGrouping
+import persona.core.domain.sort.AgentQuickFilter
+import persona.core.domain.sort.AgentSeenRows
 import persona.core.domain.sort.AgentSession
 
 /**
@@ -65,6 +68,7 @@ class AgentsJustFinishedTest {
     }
 
     @Test fun openingItHoldsItsPlaceDrawnSeenUntilTheChatIsLeft() = runBlocking {
+        preferences.setSeenRows(AgentSeenRows.Leave)
         model = model()
         awaitSection("state/just_finished", "machine/finished")
         assertTrue(row("machine/finished").showsJustFinished)
@@ -93,10 +97,124 @@ class AgentsJustFinishedTest {
         awaitSection("state/just_finished", "machine/finished")
         val unseen = model!!.page.value.spaces.flatMap { it.members }.filter { it.unseen }
         assertEquals(listOf("machine/finished"), unseen.map { it.id })
-        model!!.markRead(unseen)
+        model!!.markRead(unseen, clear = true)
         // Before the hub answers: the hub's list still has the flag.
         awaitIdle("machine/finished", "machine/seen")
         assertTrue(sessions.value.first().work!!.justFinished)
+    }
+
+    @Test fun fiveRowsStayInUnreadAfterTheyAreReadUntilRefresh(): Unit = runBlocking {
+        val unread = (1..5).map { session("unread-$it", "unread") }
+        val keys = unread.map { it.key.path }
+        sessions.value += unread
+        model = model()
+        awaitSection("state/unread", *keys.toTypedArray())
+
+        for (session in unread) {
+            visible.value = session.key
+            preferences.markSeen(listOf(session))
+            visible.value = null
+            withTimeout(10_000) {
+                model!!.page.first { page -> page.list.groups.singleOrNull { it.id == "state/unread" }?.heldSeen?.contains(session.key.path) == true }
+            }
+        }
+        val section = model!!.page.value.list.groups.single { it.id == "state/unread" }
+        assertEquals(keys, section.heldSeen)
+        assertEquals(0, section.sectionCount)
+
+        model!!.refresh()
+        withTimeout(10_000) {
+            model!!.page.first { page ->
+                page.list.groups.none { it.id == "state/unread" } &&
+                    page.list.groups.singleOrNull { it.id == "state/idle" }?.rows?.map { it.id }?.containsAll(keys) == true
+            }
+        }
+    }
+
+    @Test fun aNewTurnDropsTheOldUnreadPlaceEvenAfterItFinishes(): Unit = runBlocking {
+        val unread = session("new-turn", "unread")
+        sessions.value += unread
+        model = model()
+        model!!.filter(AgentQuickFilter.Unread)
+        awaitSection("state/unread", unread.key.path)
+        model!!.opened(row(unread.key.path))
+        preferences.markSeen(listOf(unread))
+        withTimeout(10_000) { model!!.page.first { page -> page.list.groups.any { unread.key.path in it.heldSeen } } }
+
+        for (next in listOf("working", "idle")) {
+            sessions.value = sessions.value.map { if (it.key == unread.key) it.copy(state = next) else it }
+            withTimeout(10_000) {
+                model!!.page.first { page -> page.sessions.any { it.key == unread.key && it.state == next } }
+            }
+            assertFalse(model!!.page.value.list.groups.any { group -> group.rows.any { it.id == unread.key.path } })
+        }
+    }
+
+    @Test fun bulkReadMovesEveryRowWhileTheFirstReceiptIsPending(): Unit = runBlocking {
+        val unread = listOf(session("bulk-a", "unread"), session("bulk-b", "unread"))
+        sessions.value += unread
+        model = model()
+        awaitSection("state/unread", *unread.map { it.key.path }.toTypedArray())
+        val writeStarted = CompletableDeferred<Unit>()
+        val releaseWrite = CompletableDeferred<Unit>()
+        beforeSeen = {
+            writeStarted.complete(Unit)
+            releaseWrite.await()
+        }
+        try {
+            model!!.markRead(unread.map { row(it.key.path) }, clear = true)
+            withTimeout(10_000) {
+                writeStarted.await()
+                model!!.page.first { page -> page.list.groups.none { it.id == "state/unread" } }
+            }
+            assertTrue(hub.value.seen.isEmpty())
+        } finally {
+            releaseWrite.complete(Unit)
+        }
+    }
+
+    @Test fun clearerLeavesOnlyUnseenRowsInTheSelectedSection() = runBlocking {
+        val unread = listOf(session("unread-one", "unread"), session("unread-two", "unread"))
+        sessions.value += unread
+        model = model()
+        awaitSection("state/unread", *unread.map { it.key.path }.toTypedArray())
+        preferences.markSeen(listOf(unread.first()))
+        val heldSection = withTimeout(10_000) {
+            model!!.page.first { it.list.groups.any { group -> group.heldSeen.contains(unread.first().key.path) } }
+        }.list.groups.single { it.id == "state/unread" }
+        model!!.clearSeen(heldSection.heldSeen.toSet())
+        awaitSection("state/unread", unread.last().key.path)
+    }
+
+    @Test fun markAllCountsUnreadAndReleasesHeldRowsFromTheTarget() {
+        val held = AgentSession(session("held", "idle"), seenPlace = persona.core.domain.sort.AgentSeenPlace.Unread)
+        val unread = AgentSession(session("unread", "unread"))
+        val idle = AgentSession(session("idle", "idle"))
+
+        val markAll = markAllSeenBatch(listOf(held, unread, idle))
+
+        assertEquals(listOf("machine/unread"), markAll.unread.map(AgentSession::id))
+        assertEquals(listOf("machine/held", "machine/unread", "machine/idle"), markAll.release.map(AgentSession::id))
+    }
+
+    @Test fun markAllReleasesAHeldRowAndTheUnreadRowTogether(): Unit = runBlocking {
+        val held = session("bulk-held", "unread")
+        val unread = session("bulk-unread", "unread")
+        sessions.value += listOf(held, unread)
+        model = model()
+        awaitSection("state/unread", held.key.path, unread.key.path)
+
+        preferences.markSeen(listOf(held))
+        val section = withTimeout(10_000) {
+            model!!.page.first { page ->
+                page.list.groups.singleOrNull { it.id == "state/unread" }?.heldSeen == listOf(held.key.path)
+            }
+        }.list.groups.single { it.id == "state/unread" }
+        val markAll = markAllSeenBatch(section.rows)
+
+        model!!.markRead(markAll.unread, clear = true, release = markAll.release)
+
+        withTimeout(10_000) { model!!.page.first { page -> page.list.groups.none { it.id == "state/unread" } } }
     }
 
     @Test fun aSeenChatHoldsNothingAndLeavesJustFinishedAsItIs() = runBlocking {
@@ -106,6 +224,7 @@ class AgentsJustFinishedTest {
         awaitIdle("machine/seen", finishedLeft = false)
     }
 
+    private var beforeSeen: suspend () -> Unit = {}
     private val preferences = AgentsPreferences(object : androidx.datastore.core.DataStore<androidx.datastore.preferences.core.Preferences> {
         override val data = MutableStateFlow(androidx.datastore.preferences.core.emptyPreferences())
         override suspend fun updateData(transform: suspend (androidx.datastore.preferences.core.Preferences) -> androidx.datastore.preferences.core.Preferences) =
@@ -116,7 +235,10 @@ class AgentsJustFinishedTest {
         override suspend fun togglePin(path: String, space: Boolean) = Unit
         override suspend fun toggleMute(path: String, space: Boolean) = Unit
         // As HubPreferencesRepository: this phone's seen shows before the hub records it.
-        override suspend fun markSeen(session: SessionKey, version: String) { hub.value = hub.value.copy(seen = hub.value.seen + (session.path to version)) }
+        override suspend fun markSeen(session: SessionKey, version: String) {
+            beforeSeen()
+            hub.value = hub.value.copy(seen = hub.value.seen + (session.path to version))
+        }
     }).also { runBlocking {
         it.grouping(AgentGrouping.State)
         it.range("", AgentRange.All)

@@ -25,6 +25,33 @@ func TestCompatAssistantURLDoesNotWeakenSecurity(t *testing.T) {
 	}
 }
 
+// Extension pages accept the legacy scheme for exactly the session and task links they accept as persona://, and
+// strip the same kb and file links.
+func TestCompatExtensionOpenAliasMatchesPersona(t *testing.T) {
+	for _, target := range []string{"persona://session/machine-1/session-1", "persona://task/todo-1"} {
+		legacy := strings.Replace(target, "persona://", "jarvis://", 1)
+		if err := CheckExtensionOpen(legacy); err != nil {
+			t.Fatalf("%s: CheckExtensionOpen rejected valid target: %v", legacy, err)
+		}
+		v := viewWithOpen(legacy)
+		dropped := StripAssistantFieldsForPage(&v)
+		if a := actionAt(v); a == nil || a.Open != legacy {
+			t.Fatalf("%s: page open was dropped (%v)", legacy, dropped)
+		}
+	}
+	for _, target := range []string{"persona://kb/projects/notes.md", "persona://file/machine-1/%2Fetc%2Fhosts"} {
+		legacy := strings.Replace(target, "persona://", "jarvis://", 1)
+		if err := CheckExtensionOpen(legacy); err == nil {
+			t.Fatalf("%s: CheckExtensionOpen accepted disallowed target", legacy)
+		}
+		v := viewWithOpen(legacy)
+		dropped := StripAssistantFieldsForPage(&v)
+		if a := actionAt(v); a != nil || len(dropped) == 0 || dropped[0] != "assistant_action" {
+			t.Fatalf("%s: non-page target survived: %#v (dropped %v)", legacy, a, dropped)
+		}
+	}
+}
+
 func compatLookValue(fallback string) map[string]any {
 	return map[string]any{
 		"id": "fixture-look", "name": "jarvis", "subtitle": "jarvis-circuit",

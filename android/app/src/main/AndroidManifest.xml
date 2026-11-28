@@ -11,6 +11,8 @@
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- Required on Android 17+ (targetSdk >= 37, ENABLE_RESTRICT_ASSIST_STRUCTURE) for system assist context & screenshot callbacks. -->
+    <uses-permission android:name="android.permission.READ_ASSIST_STRUCTURE_SCREEN_CONTENT" />
 
     <uses-feature android:name="android.hardware.camera" android:required="false" />
 
@@ -74,6 +76,41 @@
             android:exported="false"
             android:excludeFromRecents="true"
             android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+
+        <!-- Lightweight ACTION_ASSIST fallback for launchers and OEM paths that do not open a voice session. -->
+        <activity
+            android:name=".assist.AssistActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:windowSoftInputMode="adjustNothing|stateHidden">
+            <intent-filter>
+                <action android:name="android.intent.action.ASSIST" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+
+        <!-- Android Default Digital Assistant (ROLE_ASSISTANT) services. -->
+        <service
+            android:name=".assist.PersonaVoiceInteractionService"
+            android:exported="true"
+            android:label="${appLabel}"
+            android:permission="android.permission.BIND_VOICE_INTERACTION">
+            <intent-filter>
+                <action android:name="android.service.voice.VoiceInteractionService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.voice_interaction"
+                android:resource="@xml/voice_interaction_service" />
+        </service>
+        <service
+            android:name=".assist.PersonaVoiceInteractionSessionService"
+            android:exported="true"
+            android:permission="android.permission.BIND_VOICE_INTERACTION" />
+        <service
+            android:name=".assist.PersonaRecognitionService"
+            android:exported="false" />
         <provider
             android:name=".dev.DevShareProvider"
             android:authorities="${applicationId}.dev.files"

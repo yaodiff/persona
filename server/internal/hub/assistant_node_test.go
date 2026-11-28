@@ -60,7 +60,8 @@ func newAssistantNode(t *testing.T, h *Hub) *assistantNode {
 			return map[string]any{"cwd": "/home/me/.persona/assistant"}, nil
 		case "node.configure":
 			n.kept = nil
-			for _, k := range p["keep_sessions"].([]any) {
+			keep, _ := p["keep_sessions"].([]any)
+			for _, k := range keep {
 				n.kept = append(n.kept, k.(string))
 			}
 			return map[string]any{}, nil

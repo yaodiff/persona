@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { t } from "../i18n";
 import { LIST_PAIRS_MAX, listPair, type ListCounts } from "./session-list";
-import { catalogGroups, countGroups, groupMachines, holdsPlace, validCatalog, type SessionCatalog } from "./session-groups";
+import { catalogGroups, computerSections, countGroups, groupMachines, holdsPlace, parentFolder, validCatalog, type SessionCatalog } from "./session-groups";
 
 const catalog = (patch: Partial<SessionCatalog> = {}): SessionCatalog => ({
   revision: "r1", total: 12,
@@ -38,16 +38,62 @@ describe("groups from the hub's catalog", () => {
     expect(new Set([app.key, notes.key, rest.key]).size).toBe(3);
   });
 
-  it("keeps a space its computer's, and puts every computer's sessions in no space in one last group", () => {
+  it("keeps a space its computer's, and each computer's sessions in no space a last group of that computer's (#13522)", () => {
     const groups = catalogGroups(catalog(), "group");
     expect(groups.map((g) => [g.name, g.count, g.places.map((p) => p.machine)])).toEqual([
-      ["Release", 5, ["mac"]], ["Release", 2, ["pc"]], ["ws-9", 1, ["pc"]], [t("paged-agents.no_space"), 4, []],
+      ["Release", 5, ["mac"]], ["Release", 2, ["pc"]], ["ws-9", 1, ["pc"]], [t("paged-agents.no_space"), 1, ["mac"]], [t("paged-agents.no_space"), 3, ["nas"]],
     ]);
     expect(groups[0].filters).toEqual({ space: [listPair("mac", "w1")] });
     expect(groups[1].filters).toEqual({ space: [listPair("pc", "w1")] });
     expect(groups[0].key).not.toBe(groups[1].key);
-    expect(groups[3]).toMatchObject({ rest: true, filters: { space: [listPair("nas", ""), listPair("mac", "")] } });
-    expect(groupMachines(groups)).toBe(2);
+    expect(groups.slice(3).map((g) => [Boolean(g.rest), g.filters])).toEqual([[true, { space: [listPair("mac", "")] }], [true, { space: [listPair("nas", "")] }]]);
+    expect(new Set(groups.map((g) => g.key)).size).toBe(groups.length);
+    expect(groupMachines(groups)).toBe(3);
+    // the same name on two computers is no clash: nothing is added to it
+    expect(groups.map((g) => g.qualifier)).toEqual([undefined, undefined, undefined, undefined, undefined]);
+  });
+
+  it("tells apart a computer's spaces of one name by their parent folders, where the hub says the folders (#13522)", () => {
+    const spaces = [
+      { machine_id: "mac", id: "w1", name: "app", path: "/Users/me/Desktop/app", total: 2 },
+      { machine_id: "mac", id: "codex-project:/Users/me/code/app", name: "App", path: "/Users/me/code/app", total: 1 },
+      { machine_id: "mac", id: "w3", name: "app", total: 1 }, // an older hub: no folder, nothing to say
+      { machine_id: "mac", id: "w4", name: "notes", path: "/Users/me/notes", total: 1 },
+      { machine_id: "pc", id: "w1", name: "app", path: "C:\\work\\app", total: 1 },
+    ];
+    const groups = catalogGroups(catalog({ spaces }), "group");
+    // a name clashes whatever its case; one on another computer does not
+    expect(Object.fromEntries(groups.map((g) => [g.key, [g.qualifier ?? "", g.places[0].path]]))).toEqual({
+      [listPair("mac", "w1")]: ["~/Desktop", "/Users/me/Desktop/app"],
+      [listPair("mac", "codex-project:/Users/me/code/app")]: ["~/code", "/Users/me/code/app"],
+      [listPair("mac", "w3")]: ["", ""],
+      [listPair("mac", "w4")]: ["", "/Users/me/notes"],
+      [listPair("pc", "w1")]: ["", "C:\\work\\app"],
+    });
+  });
+
+  it("names the folder a path is in by its computer's own separator", () => {
+    expect(parentFolder("/Users/me/Desktop/app")).toBe("/Users/me/Desktop");
+    expect(parentFolder("/Users/me/Desktop/app/")).toBe("/Users/me/Desktop");
+    expect(parentFolder("/srv")).toBe("/");
+    expect(parentFolder("C:\\code\\App")).toBe("C:\\code");
+    expect(parentFolder("C:\\App\\")).toBe("C:\\");
+    expect(parentFolder("\\\\server\\share\\app")).toBe("\\\\server\\share");
+    expect(parentFolder("//server/share/app")).toBe("//server/share");
+    expect(parentFolder("/home/me/back\\slash")).toBe("/home/me"); // a backslash is part of a name outside Windows
+    expect(parentFolder("app")).toBe("");
+    expect(parentFolder("/")).toBe("");
+  });
+
+  it("puts each computer's spaces under it, in the hub's computer order, its sessions in no space last (#13522)", () => {
+    const groups = catalogGroups(catalog({ spaces: [...catalog().spaces, { machine_id: "lab", id: "w7", name: "Bench", total: 2, needs_you: 1 }] }), "group");
+    const sections = computerSections(groups, ["pc", "mac"]);
+    expect(sections.map((s) => [s.machine, s.groups.map((g) => g.name), s.count, s.needs])).toEqual([
+      ["pc", ["Release", "ws-9"], 3, 0], ["mac", ["Release", t("paged-agents.no_space")], 6, 0],
+      // computers the hub does not list come after, by id
+      ["lab", ["Bench"], 2, 1], ["nas", [t("paged-agents.no_space")], 3, 0],
+    ]);
+    expect(computerSections([], ["pc"])).toEqual([]);
   });
 
   it("counts on each group its sessions that need the user, as the hub's catalog says them", () => {
@@ -57,8 +103,8 @@ describe("groups from the hub's catalog", () => {
       spaces: base.spaces.map((s) => s.machine_id === "pc" && s.id === "w1" ? { ...s, needs_you: 1 } : s.id === "" ? { ...s, needs_you: s.machine_id === "nas" ? 2 : 1 } : s),
     });
     expect(catalogGroups(waiting, "project").map((g) => g.needs)).toEqual([2, 0, 1]);
-    expect(catalogGroups(waiting, "group").map((g) => g.needs)).toEqual([0, 1, 0, 3]); // every computer's sessions in no space together
-    expect(catalogGroups(base, "group").map((g) => g.needs)).toEqual([0, 0, 0, 0]);
+    expect(catalogGroups(waiting, "group").map((g) => g.needs)).toEqual([0, 1, 0, 1, 2]); // each computer's sessions in no space apart
+    expect(catalogGroups(base, "group").map((g) => g.needs)).toEqual([0, 0, 0, 0, 0]);
   });
 
   it("asks for no more places than the hub takes", () => {
@@ -74,19 +120,23 @@ describe("groups from the hub's catalog", () => {
     expect(holdsPlace(app, "project", { machine: "pc", project: "C:\\code\\App", group: "w1" })).toBe(true);
     expect(holdsPlace(app, "project", { machine: "nas", project: "/Users/me/code/app", group: "" })).toBe(false); // the same path on another computer
     expect(holdsPlace(rest, "project", { machine: "nas", project: "", group: "" })).toBe(true);
-    const [macRelease, pcRelease] = catalogGroups(catalog(), "group");
+    const [macRelease, pcRelease, , macRest, nasRest] = catalogGroups(catalog(), "group");
     expect(holdsPlace(macRelease, "group", { machine: "mac", project: "/x", group: "w1" })).toBe(true);
     expect(holdsPlace(pcRelease, "group", { machine: "mac", project: "/x", group: "w1" })).toBe(false);
+    expect(holdsPlace(macRest, "group", { machine: "mac", project: "/x", group: "" })).toBe(true);
+    expect(holdsPlace(nasRest, "group", { machine: "mac", project: "/x", group: "" })).toBe(false);
   });
 
   it("takes only a catalog for one: an older hub answers the key with a page", () => {
     expect(validCatalog(catalog())).toBe(true);
     expect(validCatalog({ revision: "r", total: 0, projects: [], spaces: [] })).toBe(true);
+    expect(validCatalog(catalog({ spaces: [{ machine_id: "mac", id: "w1", name: "x", path: "/x", total: 1 }] }))).toBe(true);
     for (const other of [null, { sessions: [], remove: [], has_more: false, revision: "r", total: 0 }, { ...catalog(), projects: null },
       { ...catalog(), total: -1 }, { ...catalog(), projects: [{ id: "dir:x", name: "x", total: 1, places: [] }] },
       { ...catalog(), projects: [{ id: "dir:x", name: "x", total: 1, places: [{ machine_id: "", path: "/x", total: 1 }] }] },
       { ...catalog(), spaces: [{ machine_id: "mac", id: 1, name: "x", total: 1 }] },
-      { ...catalog(), spaces: [{ machine_id: "mac", id: "w1", name: "x", total: 1, needs_you: "1" }] }]) {
+      { ...catalog(), spaces: [{ machine_id: "mac", id: "w1", name: "x", total: 1, needs_you: "1" }] },
+      { ...catalog(), spaces: [{ machine_id: "mac", id: "w1", name: "x", path: 1, total: 1 }] }]) {
       expect(validCatalog(other)).toBe(false);
     }
   });

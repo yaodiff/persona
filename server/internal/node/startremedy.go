@@ -58,6 +58,23 @@ func (n *Node) keptTabFreeLocked(pane string, k keptStart) bool {
 // expired, an agent runs there, or it never was one.
 var errStartTabGone = refusal("start_tab_gone", "that tab is not a failed start's kept tab any more (it expired, or an agent runs there)", nil)
 
+// startTypingKey carries withStartTyping's pane.
+type startTypingKey struct{}
+
+// withStartTyping says what is typed with ctx goes into the kept tab of a failed start on pane, to answer the question
+// its shell stopped on (start.continue, start.answer, start.keys), the node having checked the tab is still kept and
+// no agent runs there. A host that otherwise types text only to an agent it sees in front lets it through then, into
+// a terminal it opened itself and that still runs the same process (Orca: typeGate, #17040).
+func withStartTyping(ctx context.Context, pane string) context.Context {
+	return context.WithValue(ctx, startTypingKey{}, pane)
+}
+
+// startTypingOf is the kept tab ctx types into (withStartTyping), "" for any other typing.
+func startTypingOf(ctx context.Context) string {
+	pane, _ := ctx.Value(startTypingKey{}).(string)
+	return pane
+}
+
 // startKeys types text (as is, no enter) and then presses keys (Persona's key names: "enter", "esc", "ctrl+c", "y"…)
 // into the kept tab of a failed start on pane. Only such a tab takes them, and only a short answer. The tab is marked
 // typed (keptStart.typed): the Retry that follows waits out a question the keys answered as in a new tab.
@@ -78,6 +95,7 @@ func (n *Node) startKeys(ctx context.Context, pane, text string, keys []string) 
 	if err != nil {
 		return err
 	}
+	ctx = withStartTyping(ctx, pane)
 	n.markKeptTyped(pane) // before the keys: a start that claims the tab meanwhile waits too
 	if text != "" {
 		if err := h.SendText(ctx, ref, text); err != nil {

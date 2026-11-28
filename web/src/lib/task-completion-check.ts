@@ -1,5 +1,5 @@
 import { t } from "../i18n";
-import { api, ApiError, enc, HubTimeoutError, pastHub } from "./api";
+import { api, ApiError, enc, HubTimeoutError, isNetworkFailure, pastHub } from "./api";
 import { itemHeaders } from "./manager-choice";
 import { isLegacySpacesRouteError, type TodoDelivery } from "./todos";
 
@@ -44,5 +44,5 @@ export function completionCheckError(error: unknown): string {
       case 503: return t("todos.check_unavailable");
     }
   }
-  return t(error instanceof TypeError ? "todos.check_network" : "todos.check_failed");
+  return t(isNetworkFailure(error) ? "todos.check_network" : "todos.check_failed");
 }

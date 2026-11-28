@@ -15,5 +15,6 @@
   "follow_default": "デフォルトに戻す",
   "undo_pick": "選択を取り消す",
   "provider_gone": "このプロバイダーはもうこのコンピューターにありません",
-  "pick_dropped": "「{launcher}」では Persona のチャットを実行できないため、デフォルトに戻しました"
+  "pick_dropped": "「{launcher}」では Persona のチャットを実行できないため、デフォルトに戻しました",
+  "restore_last_good": "最後に動いた設定に戻す"
 }

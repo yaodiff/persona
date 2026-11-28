@@ -3,9 +3,9 @@ package persona.feature.chat
 import androidx.compose.runtime.*
 import androidx.compose.ui.res.stringResource
 import persona.core.contracts.api.*
+import persona.core.designsystem.ComposerMetaChip
 import persona.core.designsystem.JAction
 import persona.core.designsystem.JActionSheet
-import persona.core.designsystem.JChip
 import persona.core.designsystem.icons.PersonaIcons
 import kotlinx.coroutines.CancellationException
 
@@ -76,7 +76,13 @@ internal fun ConversationLauncherChip(
             ?: stringResource(R.string.chat_conversation_model_selected)
     }
     val label = if (overridden) listOfNotNull(effective, pickedModelLabel).joinToString(" · ") else defaultLabel
-    JChip(label, onClick = { open = true }, icon = PersonaIcons.model, selected = overridden)
+    ComposerMetaChip(
+        text = label,
+        icon = PersonaIcons.model,
+        selected = overridden,
+        dropdown = true,
+        onClick = { open = true },
+    )
     if (!open) return
 
     val launcherSection = stringResource(R.string.chat_conversation_launcher_section)

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"slices"
 	"strings"
 
 	"github.com/nwverse/persona/server/internal/i18n"
@@ -57,7 +58,7 @@ func (c *Config) checkPrivateNetworkOnly() error {
 	if c.Public.AdvertiseIPv6 != nil && *c.Public.AdvertiseIPv6 {
 		conflicts = append(conflicts, "public.advertise_ipv6 hands out global IPv6 addresses: remove it or set it to false")
 	}
-	for _, raw := range append([]string{c.PublicURL}, c.Public.Advertise...) {
+	for _, raw := range slices.Concat([]string{c.PublicURL}, c.Public.Advertise, c.Public.LinkAdvertise) {
 		if ip, ok := publicAddressIn(raw); ok {
 			conflicts = append(conflicts, fmt.Sprintf("%q names the public address %s: use a private address or an internal name", raw, ip))
 		}

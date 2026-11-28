@@ -88,7 +88,7 @@ func TestMCPWaitPermissionPublishesApprovalThenComputer(t *testing.T) {
 	ft, events := newMCPWaitTest(t)
 	ctx := ft.s.mcpWaitContext(context.Background(), "mac", "10000000-0000-4000-8000-000000000001", true)
 	nextMCPWaitEvent(t, events, "10000000-0000-4000-8000-000000000001", proto.MCPWaitComputer)
-	ix := proto.Interaction{ID: "ix_permission", MachineID: "mac", SessionID: "session", Kind: proto.IxPermission,
+	ix := proto.Interaction{ID: "ix_permission", MachineID: "mac", SessionID: "session", Kind: proto.IxPermission, OutwardWrite: true,
 		ToolName: "example", Summary: "permission text must not be relayed", ExpiresAt: time.Now().Add(time.Hour)}
 	done := make(chan error, 1)
 	go func() {

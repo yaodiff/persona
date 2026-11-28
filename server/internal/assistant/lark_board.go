@@ -32,14 +32,3 @@ func (s *Service) workbenchStamp(ctx context.Context, c *botcard.Card) *botcard.
 func (s *Service) divertNotices(ctx context.Context, kind assistantwire.NoticeKind, cards []*botcard.Card, fallbacks []string) bool {
 	return s.larkModule().DivertNotices(ctx, kind, cards, fallbacks)
 }
-
-// divertAnswer is divertNotices for an answer laid out in cards.
-func (s *Service) divertAnswer(ctx context.Context, kind assistantwire.NoticeKind, cards []botAnswerCard) bool {
-	cs := make([]*botcard.Card, 0, len(cards))
-	fs := make([]string, 0, len(cards))
-	for _, ac := range cards {
-		cs = append(cs, ac.card)
-		fs = append(fs, ac.fallback)
-	}
-	return s.divertNotices(ctx, kind, cs, fs)
-}

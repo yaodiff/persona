@@ -151,6 +151,20 @@ func TestRunnerWritesUseBotIdentity(t *testing.T) {
 	}
 }
 
+func TestBotNotInChatIsSafeAndExplicit(t *testing.T) {
+	for _, raw := range []string{
+		`{"code":230002,"msg":"Bot not in the chat; private details"}`,
+		`{"error":{"type":"api","code":"230002","message":"private details"}}`,
+		`{"error":{"type":"api","subtype":"bot_not_in_chat","message":"private details"}}`,
+	} {
+		err := classifyFailure(commandResult{stderr: []byte(raw)})
+		if err == nil || err.Kind != KindBotNotInChat || !strings.Contains(err.Error(), "bot is not in this chat") ||
+			strings.Contains(err.Error(), "private details") {
+			t.Fatalf("unsafe or opaque membership failure: %+v", err)
+		}
+	}
+}
+
 func TestManagedProfileConfigAndSecretStdin(t *testing.T) {
 	logPath := filepath.Join(t.TempDir(), "init.log")
 	t.Setenv("LARKCLI_FAKE_INIT_LOG", logPath)

@@ -133,6 +133,114 @@ func TestPiInHerdrFoundByTheExtensionsPane(t *testing.T) {
 	}
 }
 
+// An async request for a launcher whose agent owns its session ID starts Pi synchronously, then sends the prompt once
+// through the extension's real session instead of returning a placeholder ID.
+func TestSessionStartPiWithoutAgentTypeUsesItsRealSessionForTheFirstMessage(t *testing.T) {
+	n, f, home, rh := piHerdrNode(t)
+	cwd := mkdir(t, filepath.Join(home, "proj"))
+	n.shellSettled = true // Keep shell settling outside this test; it exercises session identity and first-message routing.
+	f.reply("workspace.list", map[string]any{"workspaces": []any{map[string]any{"workspace_id": "w1", "label": "proj"}}})
+	f.reply("session.snapshot", snapshot(nil, nil, nil, nil))
+	f.reply("tab.create", map[string]any{"tab": map[string]any{"tab_id": "w1:t2"}, "root_pane": map[string]any{"pane_id": "w1:p2"}})
+	runtimes := make(chan *fakeRuntime, 1)
+	f.after(func(c herdrCall) {
+		if c.Method == "pane.send_input" && strings.Contains(c.String(), "HERDR_AGENT=pi") {
+			go func() {
+				runtimes <- piExtension(t, rh, "pi-start", map[string]any{
+					"session_id": piSID, "status": "idle", "pane_id": "w1:p2", "cwd": cwd,
+				})
+			}()
+		}
+	})
+
+	const prompt = "Inspect the parser and report the issue."
+	result, err := request(t, n, "session.start", map[string]any{
+		"cwd": cwd, "workspace_id": "w1", "launcher": "pi", "prompt": prompt, "async": true,
+		// The Web request omits agent_type and session_id for this launcher.
+	})
+	if err != nil {
+		t.Fatalf("start: %v\nherdr calls:\n%s", err, strings.Join(f.trace(), "\n"))
+	}
+	s := decodeSessions(t, []any{result["session"]})[0]
+	if s.SessionID != piSID || s.Agent != piAgent || s.Starting {
+		t.Fatalf("returned session %+v, want Pi's reported session %s", s, piSID)
+	}
+	rt := <-runtimes
+	messages := rt.got("session.send")
+	if len(messages) != 1 {
+		t.Fatalf("Pi received %d first-message sends, want one: %s", len(messages), messages)
+	}
+	var sent struct {
+		SessionID string `json:"session_id"`
+		Text      string `json:"text"`
+	}
+	if err := json.Unmarshal(messages[0], &sent); err != nil {
+		t.Fatal(err)
+	}
+	if sent.SessionID != piSID || sent.Text != prompt {
+		t.Fatalf("first message routed to %q with text %q", sent.SessionID, sent.Text)
+	}
+}
+
+// A promptless Pi start returns the extension's session ID; repeated sends with one client_msg_id reach the extension once.
+func TestSessionStartPiWithoutPromptReturnsItsRealSessionBeforeTheFirstSend(t *testing.T) {
+	n, f, home, rh := piHerdrNode(t)
+	cwd := mkdir(t, filepath.Join(home, "proj"))
+	n.shellSettled = true // Keep shell settling outside this test; it exercises the two-stage Web flow.
+	f.reply("workspace.list", map[string]any{"workspaces": []any{map[string]any{"workspace_id": "w1", "label": "proj"}}})
+	f.reply("session.snapshot", snapshot(nil, nil, nil, nil))
+	f.reply("tab.create", map[string]any{"tab": map[string]any{"tab_id": "w1:t2"}, "root_pane": map[string]any{"pane_id": "w1:p2"}})
+	runtimes := make(chan *fakeRuntime, 1)
+	f.after(func(c herdrCall) {
+		if c.Method == "pane.send_input" && strings.Contains(c.String(), "HERDR_AGENT=pi") {
+			go func() {
+				runtimes <- piExtension(t, rh, "pi-promptless", map[string]any{
+					"session_id": piSID, "status": "idle", "pane_id": "w1:p2", "cwd": cwd,
+				})
+			}()
+		}
+	})
+
+	result, err := request(t, n, "session.start", map[string]any{
+		"cwd": cwd, "workspace_id": "w1", "launcher": "pi", "async": true,
+		// This mirrors the first, promptless Web creation request: no agent_type, prompt or session_id.
+	})
+	if err != nil {
+		t.Fatalf("start: %v\nherdr calls:\n%s", err, strings.Join(f.trace(), "\n"))
+	}
+	s := decodeSessions(t, []any{result["session"]})[0]
+	if s.SessionID != piSID || s.Agent != piAgent || s.Starting {
+		t.Fatalf("returned session %+v, want ready Pi session %s", s, piSID)
+	}
+	rt := <-runtimes
+	if sends := rt.got("session.send"); len(sends) != 0 {
+		t.Fatalf("promptless start sent a message: %s", sends)
+	}
+
+	const prompt, clientMsgID = "Send the first task once.", "pi-first-message"
+	for range 2 {
+		if _, err := request(t, n, "session.send", map[string]any{
+			"session_id": piSID, "text": prompt, "client_msg_id": clientMsgID,
+		}); err != nil {
+			t.Fatalf("first send/retry: %v", err)
+		}
+	}
+	sends := rt.got("session.send")
+	if len(sends) != 1 {
+		t.Fatalf("Pi received %d sends for one client_msg_id, want one: %s", len(sends), sends)
+	}
+	var sent struct {
+		SessionID string `json:"session_id"`
+		Text      string `json:"text"`
+	}
+	if err := json.Unmarshal(sends[0], &sent); err != nil {
+		t.Fatal(err)
+	}
+	if sent.SessionID != piSID || sent.Text != prompt {
+		t.Fatalf("first message routed to %q with text %q", sent.SessionID, sent.Text)
+	}
+}
+
 // A pi pane no extension serves: listed with what is missing, an empty conversation saying so, no sending (nothing
 // typed into pi blind), Esc to interrupt.
 func TestPiInHerdrWithoutTheExtension(t *testing.T) {

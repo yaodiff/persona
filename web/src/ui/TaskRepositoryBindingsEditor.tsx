@@ -4,6 +4,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "rea
 import { useRepositoryRequestContext as useRequestContext } from "../lib/use-repository-request-context";
 import { t } from "../i18n";
 import { ApiError, errorText } from "../lib/api";
+import { safeWebURL } from "../lib/format";
 import {
   cleanRepositoryDraft, formatRequestedRef, isExtensionProvider, isReferenceRepositoryLink, loadRepositoryCatalog, loadTaskRepositories,
   partitionTaskRepositories, repositoryDraft, repositoryLinkKindLabel, repositoryLinkView, repositoryProviderName,
@@ -47,13 +48,21 @@ const SourceNote = ({ name }: { name: string }) => <p role="status" data-reposit
  * before the repository's path.
  */
 function RepositoryRow({ identity, name, source, role, children }: { identity: RepositoryIdentity; name?: string; source?: string; role?: TaskRepositoryRole; children?: React.ReactNode }) {
+  const href = safeWebURL(identity.canonical_url);
+  const label = <>
+    {name && <span className="min-w-0 max-w-1/2 shrink-0 truncate text-meta text-ink">{name}</span>}
+    <span className="min-w-0 flex-1 truncate text-submeta text-ink-3">{repositoryAddress(identity)}{source && <span data-repository-source> · {source}</span>}</span>
+  </>;
   return <div className="flex items-center gap-2.5 px-4 py-2" data-repository-row data-repo-role={role}>
     <RepositoryMark provider={identity.provider} />
-    <a href={identity.canonical_url} target="_blank" rel="noreferrer noopener" title={source ? `${identity.canonical_url} · ${source}` : identity.canonical_url}
-      className="flex touch-hit min-w-0 flex-1 items-center gap-2">
-      {name && <span className="min-w-0 max-w-1/2 shrink-0 truncate text-meta text-ink">{name}</span>}
-      <span className="min-w-0 flex-1 truncate text-submeta text-ink-3">{repositoryAddress(identity)}{source && <span data-repository-source> · {source}</span>}</span>
-    </a>
+    {href ? (
+      <a href={href} target="_blank" rel="noreferrer noopener" title={source ? `${href} · ${source}` : href}
+        className="flex touch-hit min-w-0 flex-1 items-center gap-2">
+        {label}
+      </a>
+    ) : (
+      <span className="flex min-w-0 flex-1 items-center gap-2">{label}</span>
+    )}
     {children}
   </div>;
 }
@@ -64,14 +73,21 @@ function RepositoryRow({ identity, name, source, role, children }: { identity: R
  * the address itself, said to be checked on save.
  */
 function LinkRow({ identity, view, labels, pr, referenceBadge, onRemove, disabled }: { identity: RepositoryIdentity; view: RepositoryLinkView; labels?: readonly RepositoryLinkLabel[]; pr?: PRFacts; referenceBadge?: boolean; onRemove?: () => void; disabled?: boolean }) {
+  const href = safeWebURL(view.url);
   if (view.pending) {
     return <div className="flex items-start gap-2 py-2 pr-4 pl-10" data-repository-link data-link-pending>
       <span data-link-icon="link" className="mt-0.5 shrink-0 text-ink-3"><Icon name="link" size={14} /></span>
       <div className="min-w-0 flex-1">
-        <a href={view.url} target="_blank" rel="noreferrer noopener" className="flex touch-hit items-start gap-2 text-meta leading-snug text-ink-3 hover:underline">
-          <span className="min-w-0 break-all">{view.url}</span>
-          <Icon name="external" size={11} className="mt-1 ml-auto shrink-0 text-ink-3" />
-        </a>
+        {href ? (
+          <a href={href} target="_blank" rel="noreferrer noopener" className="flex touch-hit items-start gap-2 text-meta leading-snug text-ink-3 hover:underline">
+            <span className="min-w-0 break-all">{view.url}</span>
+            <Icon name="external" size={11} className="mt-1 ml-auto shrink-0 text-ink-3" />
+          </a>
+        ) : (
+          <span className="flex items-start gap-2 text-meta leading-snug text-ink-3">
+            <span className="min-w-0 break-all">{view.url}</span>
+          </span>
+        )}
         <p className="text-submeta leading-snug text-ink-3">{t("task-repositories.link_pending")}</p>
       </div>
       {onRemove && <IconButton icon="x" size={24} iconSize={12} className="-mt-0.5" label={t("task-repositories.remove_link", { link: view.url })} onClick={onRemove} disabled={disabled} />}
@@ -87,12 +103,19 @@ function LinkRow({ identity, view, labels, pr, referenceBadge, onRemove, disable
   return <div className="flex items-start gap-2 py-2 pr-4 pl-10" data-repository-link>
     <span data-link-icon={icon} className="mt-0.5 shrink-0 text-ink-3"><Icon name={icon} size={14} /></span>
     <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1">
-      <a href={view.url} target="_blank" rel="noreferrer noopener" aria-label={`${kind} ${tag} · ${identity.path}${title ? ` · ${title}` : ""}`}
-        className="flex touch-hit min-w-0 flex-auto items-start gap-2 text-meta leading-snug text-ink-3 hover:underline">
-        <span className="min-w-0 break-words">{title || kind}</span>
-        <span className="shrink-0 font-medium tabular-nums text-accent-ink">{tag}</span>
-        <Icon name="external" size={11} className="mt-1 ml-auto shrink-0 text-ink-3" />
-      </a>
+      {href ? (
+        <a href={href} target="_blank" rel="noreferrer noopener" aria-label={`${kind} ${tag} · ${identity.path}${title ? ` · ${title}` : ""}`}
+          className="flex touch-hit min-w-0 flex-auto items-start gap-2 text-meta leading-snug text-ink-3 hover:underline">
+          <span className="min-w-0 break-words">{title || kind}</span>
+          <span className="shrink-0 font-medium tabular-nums text-accent-ink">{tag}</span>
+          <Icon name="external" size={11} className="mt-1 ml-auto shrink-0 text-ink-3" />
+        </a>
+      ) : (
+        <span className="flex min-w-0 flex-auto items-start gap-2 text-meta leading-snug text-ink-3">
+          <span className="min-w-0 break-words">{title || kind}</span>
+          <span className="shrink-0 font-medium tabular-nums text-accent-ink">{tag}</span>
+        </span>
+      )}
       {referenceBadge && <span data-link-role="reference"><Pill>{t("task-repositories.link_role_reference")}</Pill></span>}
       {state && <Pill tone={tones[state]}>{t(`session-gitpr.state_${state}`)}</Pill>}
       {pr?.state === "open" && pr.conflicts && <Pill tone="orange">{t("task-repositories.pr_conflict")}</Pill>}
@@ -296,7 +319,7 @@ const isUnsupported = (error: unknown) => error instanceof ApiError && error.sta
 
 /** A to-do's own PR, as the page already parses it (the editor does not read the stage bar, a first-screen chunk). */
 type LegacyPR = { url: string; text: string };
-type TodoRepositoryBindingsProps = { manager: string; owner: string; todoId: string; legacyPRs?: LegacyPR[]; prStatus?: PRFacts; otherPRs?: PRFacts[]; version?: unknown; todosV2?: boolean; repoGate?: TodoRepoGate; onRepositoriesCount?: (count: number) => void };
+type TodoRepositoryBindingsProps = { manager: string; owner: string; todoId: string; legacyPRs?: LegacyPR[]; prStatus?: PRFacts; otherPRs?: PRFacts[]; version?: unknown; todosV2?: boolean; repoGate?: TodoRepoGate; hideRepoGateBanner?: boolean; onRepositoriesCount?: (count: number) => void };
 
 function hasNewPRLinkTitle(previous: Map<string, PRFacts>, current: Map<string, PRFacts>, saved?: TaskRepositorySet) {
   if (previous === current) return false;
@@ -312,7 +335,7 @@ function hasNewPRLinkTitle(previous: Map<string, PRFacts>, current: Map<string, 
 export function TodoRepositoryBindings(props: TodoRepositoryBindingsProps) {
   return <TodoRepositoryBindingsSession key={`${props.owner}:${props.manager}:${props.todoId}`} {...props} />;
 }
-function TodoRepositoryBindingsSession({ manager, owner, todoId, legacyPRs = [], prStatus, otherPRs, version, todosV2, repoGate, onRepositoriesCount }: TodoRepositoryBindingsProps) {
+function TodoRepositoryBindingsSession({ manager, owner, todoId, legacyPRs = [], prStatus, otherPRs, version, todosV2, repoGate, hideRepoGateBanner, onRepositoriesCount }: TodoRepositoryBindingsProps) {
   const prByURL = useMemo(() => {
     const facts = new Map<string, PRFacts>();
     if (prStatus) facts.set(normalizedPR(prStatus.url), prStatus);
@@ -530,7 +553,7 @@ function TodoRepositoryBindingsSession({ manager, owner, todoId, legacyPRs = [],
     </Fragment>;
   };
   const renderRepoGateBanner = () => {
-    if (todosV2 !== true || !repoGate) return null;
+    if (todosV2 !== true || !repoGate || hideRepoGateBanner) return null;
     const tone = repoGateTone(repoGate.state);
     const toneText: Record<RepoGateTone, string> = {
       green: "text-green",
@@ -557,7 +580,7 @@ function TodoRepositoryBindingsSession({ manager, owner, todoId, legacyPRs = [],
               })
             : t("todos.repo_gate_detail_pending", { ready: repoGate.ready_count, total: repoGate.target_count });
     const reasonText = repoGateReasonLabel(repoGate);
-    const blockingPR = repoGate.blocking_pr?.trim();
+    const blockingPR = safeWebURL(repoGate.blocking_pr);
     return (
       <div
         data-testid="todo-detail-repo-gate"
@@ -603,8 +626,11 @@ function TodoRepositoryBindingsSession({ manager, owner, todoId, legacyPRs = [],
         {t(repositories.length ? "task-repositories.manage" : "task-repositories.add")}
       </Button>}>
       {unsupported
-        ? legacyPRs.map((p) => <Row key={p.url} icon="pullRequest" hint={t("task-repositories.legacy_note")}
-            label={<a href={p.url} target="_blank" rel="noreferrer noopener" className="text-accent-ink hover:underline">{p.text}</a>} />)
+        ? legacyPRs.map((p) => {
+            const href = safeWebURL(p.url);
+            return <Row key={p.url} icon="pullRequest" hint={t("task-repositories.legacy_note")}
+              label={href ? <a href={href} target="_blank" rel="noreferrer noopener" className="text-accent-ink hover:underline">{p.text}</a> : p.text} />;
+          })
         : <>
           {renderRepoGateBanner()}
           {matrix

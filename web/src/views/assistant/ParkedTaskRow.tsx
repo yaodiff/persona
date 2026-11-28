@@ -19,12 +19,13 @@ export function ParkedTaskRows({ items }: { items: readonly RunningItem[] }) {
 
 /** Preserve the dedicated waiting tray's row contract and group membership. */
 export function ParkedTaskRow({ todo, countsOpen }: { todo: Todo; countsOpen: boolean }) {
-  const prs = openMergePRs(todo, Date.now());
+  const prs = todo.wait == null ? openMergePRs(todo, Date.now()) : [];
+  const isPR = todo.wait?.kind === "pr_merge" || prs.length > 0;
   return <div data-parked-task-row={todo.id} data-counts-open={countsOpen ? "true" : "false"}
-    data-pr-waiting-row={prs.length ? todo.id : undefined} className="flex items-start gap-2 px-3 py-2.5">
-    <span data-task-mark="waiting" className="mt-0.5 shrink-0 text-ink-3"><Icon name={prs.length ? "pullRequest" : "clock"} /></span>
+    data-pr-waiting-row={isPR ? todo.id : undefined} className="flex items-start gap-2 px-3 py-2.5">
+    <span data-task-mark="waiting" className="mt-0.5 shrink-0 text-ink-3"><Icon name={isPR ? "pullRequest" : "clock"} /></span>
     <div className="min-w-0 flex-1">
-      <button type="button" data-pr-task-link={prs.length ? todo.id : undefined} onClick={() => openTask(todo.id)}
+      <button type="button" data-pr-task-link={isPR ? todo.id : undefined} onClick={() => openTask(todo.id)}
         className="block min-w-11 max-w-full truncate text-left text-sm font-medium hover:underline pointer-coarse:min-h-11">{todo.title}</button>
       <TaskWaitInfo todo={todo} merges={prs} />
     </div>

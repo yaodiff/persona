@@ -23,7 +23,7 @@ describe("ContextGroup", () => {
   it("summarizes one context by its title and several by their count", () => {
     expect(contextSummary(cs)).toBe("上下文 · 3 项");
     expect(contextSummary([cs[1]])).toBe("上下文 · 前面的聊天");
-    expect(contextSummary([{ kind: "edit", title: "段落", text: "x" }])).toBe("要改的内容 · 段落");
+    expect(contextSummary([{ kind: "edit", title: "段落", text: "x" }])).toBe("待修改内容 · 段落");
   });
 
   it("starts folded: one row, no titles or text", () => {

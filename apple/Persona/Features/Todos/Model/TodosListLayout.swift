@@ -466,7 +466,11 @@ nonisolated enum TodoRowContentLogic {
         }
         c.unseen = filed.section == TodoListSection.justFinished && view?.seen != true
         c.mark = mark(filed, view: view)
-        if let view {
+        if let wait = item.wait, filed.section == TodoListSection.waiting {
+            let summary = TodoWaitText.rowSummary(wait, now: now, words: TodoWaitWords(locale: words.locale), calendar: calendar)
+            c.said = TodoLineText.Said(lead: summary.lead, rest: summary.timing, timed: summary.timed)
+            c.asks = view?.asks?.count ?? 0
+        } else if let view {
             c.said = TodoLineText.said(view.line, since: since, closedReason: item.doneReason.flatMap(firstLine), now: now,
                                        words: words, calendar: calendar)
             c.asks = view.asks?.count ?? 0

@@ -49,7 +49,7 @@ describe("收件箱：扩展画的详情（inbox_item）", () => {
   it("offers Same matter as on open and done items without eagerly loading the picker", () => {
     for (const current of [item({}), item({ done_at: "2026-01-01T00:00:00Z", done_by: "user" })]) {
       const html = renderToStaticMarkup(<InboxDetail item={current} loaded />);
-      expect(html).toContain('aria-label="是同一件事…"');
+      expect(html).toContain('aria-label="关联为同一件事…"');
       expect(html).not.toContain("搜索标题和位置");
     }
   });
@@ -64,5 +64,13 @@ describe("收件箱：扩展画的详情（inbox_item）", () => {
     const html = renderToStaticMarkup(<InboxExtensionBody item={item({})} place={place} own={() => <p>own body</p>} />);
     expect(html).toContain("overflow-y-auto");
     expect(html).not.toContain("own body");
+  });
+  it("hides the external open button for unsafe schemes or credentialed URLs and keeps safe links", () => {
+    const unsafeJs = renderToStaticMarkup(<InboxDetail item={item({ id: "g:1", source: "github", connector: { thread: "t1", open_url: "javascript:alert(1)" } })} loaded />);
+    const unsafeAuth = renderToStaticMarkup(<InboxDetail item={item({ id: "g:2", source: "github", connector: { thread: "t2", open_url: "https://github.example@evil.example/pr/1" } })} loaded />);
+    const safe = renderToStaticMarkup(<InboxDetail item={item({ id: "g:3", source: "github", connector: { thread: "t3", open_url: "https://github.com/org/repo/pull/1" } })} loaded />);
+    expect(unsafeJs).not.toContain("打开");
+    expect(unsafeAuth).not.toContain("打开");
+    expect(safe).toContain("打开");
   });
 });

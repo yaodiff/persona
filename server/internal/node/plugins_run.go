@@ -142,11 +142,10 @@ func (ph *pluginHost) run(s proto.PluginNodeStart, sum string) (*pluginRun, erro
 		spec.Env = append(spec.Env, "PERSONA_PLUGIN_SOCKET="+spec.Socket, "PERSONA_EXTENSION_SOCKET="+spec.Socket)
 	}
 	spec.Init = func(context.Context) (extension.InitializeParams, error) { return params, nil }
-	// A program on a computer talks to its plugin's program on the hub, not to the hub itself (no hub_api).
-	spec.Handle = func(_ context.Context, method string, _ json.RawMessage) (any, error) {
-		return nil, &rpc.Error{Code: extension.CodeUnknownMethod, Message: "unknown method " + method + " (a program on a computer has no hub methods)"}
-	}
 	r := &pluginRun{spec: s, sum: sum, leaseUntil: ph.lease(s)}
+	// A program on a computer has no hub_api: it reaches the hub only through this connection, for the methods
+	// proto.PluginNodeHubMethod lists, which the hub answers with its extension's own scopes (plugin.node.hub_call).
+	spec.Handle = ph.programCalls(r)
 	spec.OnEvent = func(event string, params json.RawMessage) {
 		ph.sendRun(r, "plugin.node.event", proto.PluginNodeEvent{ID: id, Revision: s.Revision, Event: event, Params: params})
 	}
@@ -168,6 +167,36 @@ func (ph *pluginHost) sendRun(r *pluginRun, event string, params any) {
 	if active && notify != nil {
 		notify(event, params)
 	}
+}
+
+// programCalls answers r's program's calls: the methods proto.PluginNodeHubMethod lists go to the hub, the rest are
+// unknown here.
+func (ph *pluginHost) programCalls(r *pluginRun) func(context.Context, string, json.RawMessage) (any, error) {
+	return func(ctx context.Context, method string, params json.RawMessage) (any, error) {
+		if !proto.PluginNodeHubMethod(method) {
+			return nil, &rpc.Error{Code: extension.CodeUnknownMethod, Message: "unknown method " + method + " (not one a program on a computer may call)"}
+		}
+		return ph.hubCall(ctx, r, proto.PluginNodeHubCall{ID: proto.PluginNodeExtensionID(r.spec.ID), Revision: r.spec.Revision, Method: method, Params: proto.PluginNodeHubCallParams(params)})
+	}
+}
+
+// hubCall asks the hub on behalf of r's program, while it is the one running and its lease holds.
+func (ph *pluginHost) hubCall(ctx context.Context, r *pluginRun, p proto.PluginNodeHubCall) (any, error) {
+	ph.mu.Lock()
+	active := ph.running[r.spec.ID] == r && !r.expired
+	call := ph.hubCaller
+	ph.mu.Unlock()
+	if !active {
+		return nil, &rpc.Error{Code: extension.CodePermissionDenied, Message: p.Method + ": the program is not the one running here"}
+	}
+	if call == nil {
+		return nil, &rpc.Error{Code: extension.CodeUnsupported, Message: p.Method + ": not connected to the hub"}
+	}
+	var out json.RawMessage
+	if err := call(ctx, proto.MethodPluginNodeHubCall, p, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (ph *pluginHost) send(event string, params any) {

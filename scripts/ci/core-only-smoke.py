@@ -7,7 +7,10 @@ computers) and runs `persona-hub run` with a clean environment, so nothing of th
 PERSONA_HOME) is read. The hub starts the persona-manager beside it, as an installed hub does. Then it checks:
 
 - /api/v1/health answers ok, and an authenticated request (/api/v1/managers) is served;
-- the manager connects and says `modules: loaded none` (internal/assistant/modules.go);
+- the manager connects and says `modules: loaded none` (internal/assistant/modules.go), and the hub's hello still
+  carries the `modules` marker with no built-in module's `module.<id>` flag (a client-only flag such as
+  `module.glasses` may stay), which is the wire fact every client's hide-decision reads (#16243,
+  docs/architecture/core-and-modules.md "Hub flags");
 - every extension program a module provides (builtinext.AddProgram in server/internal/modules/all) is an unknown
   subcommand of personad and persona-manager (usage, exit 2), its built-in extension is not in /api/v1/extensions, and
   that extension's route (/api/v1/extensions/<id>/-/assistant-data) answers 404;
@@ -139,6 +142,8 @@ KEPT_RECORDING, KEPT_PENDING = "6f1c2a3b-0000-4000-8000-00000000c0de", "6f1c2a3b
 # The first holds one photo (attachments/p1.jpg); the third is a hub-transcribed meeting in flight with two seconds of
 # audio held (attachments/audio/0.pcm), which no route serves: it is the module's own input, kept untouched.
 KEPT_AUDIO = "6f1c2a3b-0000-4000-8000-00000000a0d1"
+# A hub-transcribed meeting with timing "turn", speaker timeline, and synthetic names (Ada, Grace).
+KEPT_SPEAKERS = "6f1c2a3b-0000-4000-8000-000000005bea"
 KEPT_WORDS = ("quokka", "wombat")
 
 
@@ -174,6 +179,21 @@ def http_raw(url, token=None):
         return e.code, e.headers, e.read()
 
 
+def http_method(method, url, token=None, body=None):
+    data = json.dumps(body).encode() if body is not None else None
+    headers = {}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    if data is not None:
+        headers["Content-Type"] = "application/json"
+    req = urllib.request.Request(url, data=data, method=method, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            return resp.status, resp.read().decode()
+    except urllib.error.HTTPError as e:
+        return e.code, e.read().decode()
+
+
 def kept_recordings(base, token, module_on, home=None):
     """What the knowledge base's own routes answer for the kept recordings, as (check, ok, detail) rows: listed,
     opened and found, with or without the recording module; `paused` only without it, on the one in flight."""
@@ -205,6 +225,23 @@ def kept_recordings(base, token, module_on, home=None):
         status, body = get(f"/api/v1/kb-search?results=1&q={word}")
         rows.append((f"search finds the stored recording by {word!r} {state} the module",
                      status == 200 and KEPT_RECORDING in json.dumps(body), f"status {status}, {json.dumps(body)[:300]}"))
+    status, body = get(f"/api/v1/kb/recordings/{KEPT_SPEAKERS}")
+    ds = body.get("detail") or {}
+    sp = ds.get("speakers") or {}
+    sp_names = [p.get("name") for p in (sp.get("people") or []) if p.get("name")]
+    sp_segs = [sg.get("speaker") for sg in (ds.get("segments") or [])]
+    rows.append((f"a hub meeting with speakers keeps detail.speakers, names and segment speakers {state} the module",
+                 status == 200 and sp.get("state") == "ready" and sp_names == ["Ada", "Grace"]
+                 and sp_segs == ["s1", "s2", "s1"] and len(sp.get("spans") or []) == 3,
+                 f"status {status}, state {sp.get('state')!r}, names {sp_names}, segs {sp_segs}"))
+    if not module_on:
+        st_edit, _ = http_method("POST", f"{base}/api/v1/recordings/{KEPT_SPEAKERS}/speakers", token, {"rev": 0, "ops": []})
+        rows.append(("POST /api/v1/recordings/{id}/speakers answers 404 without the module", st_edit == 404, f"status {st_edit}"))
+        st_imp, _ = http_method("PUT", f"{base}/api/v1/recordings/{KEPT_SPEAKERS}/speakers/turns", token, {})
+        rows.append(("PUT /api/v1/recordings/{id}/speakers/turns answers 404 without the module", st_imp == 404, f"status {st_imp}"))
+    else:
+        st_imp, _ = http_method("PUT", f"{base}/api/v1/recordings/{KEPT_SPEAKERS}/speakers/turns", token, {})
+        rows.append(("PUT /api/v1/recordings/{id}/speakers/turns answers 404 with debug switch off", st_imp == 404, f"status {st_imp}"))
     if home is not None:  # the stored photo, read back through the route: the file's bytes, with or without the module
         files = recording_files(home)
         stored = files.get(f"{KEPT_RECORDING}/attachments/p1.jpg")
@@ -418,14 +455,14 @@ def observe(base, token):
 
 def expect(base, token, loaded, present, absent, programs, connectors, module_exts, flags=True):
     """Every module in present is there (loaded, its flag, programs' extensions and routes, connectors) and every one in
-    absent is not. flags: check the module.<id> flags (a core-only hub announces none)."""
+    absent is not. flags: check every built-in module's module.<id> flag (a core-only hub announces none of them, but
+    still announces the `modules` marker every client reads; docs/architecture/core-and-modules.md "Hub flags")."""
     features, extensions, listed = observe(base, token)
     for want, ids in ((True, present), (False, absent)):
         what = "missing" if want else "present"
         for id in ids:
             check((id in loaded) == want, f"module {id} {what} in the manager's modules: loaded {loaded}")
-            if flags:
-                check(("module." + id in features) == want, f"flag module.{id} {what} in the hub's features")
+            check(("module." + id in features) == want, f"flag module.{id} {what} in the hub's features")
         for name in flat(programs, ids):
             check((name in extensions) == want, f"extension {name} {what}: {sorted(extensions)}")
             status, _ = http(f"{base}/api/v1/extensions/{name}/-/assistant-data", token)
@@ -442,6 +479,13 @@ def expect(base, token, loaded, present, absent, programs, connectors, module_ex
                 check((status != 404) == want, f"{MODULE_ROUTES[id]} ({id}): {status}, want {'not ' if want else ''}404")
     if flags and (present or absent):
         check("modules" in features, "the hub's features lack the modules marker")
+    if not flags:
+        # A core-only hub has no built-in module, but it still publishes the marker every client's hide-decision needs
+        # (#16243; docs/architecture/core-and-modules.md "Hub flags"). A client-only flag (modapi.ClientModules, glasses)
+        # may stay; any built-in module's flag would mean the core loaded it.
+        check("modules" in features, "a core-only hub's features lack the modules marker, so clients cannot tell it serves no module")
+        stray = sorted(f for f in features if f.startswith("module.") and f.removeprefix("module.") in set(absent))
+        check(not stray, f"a core-only hub announces built-in module flags it loaded no module for: {stray}")
 
 
 def set_modules_off(container, ids):

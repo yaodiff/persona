@@ -4,14 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 )
 
-// gradingNotifyUserPush is a notify_user-shaped push (assistantwire.NotifyPush) from a session on the hub's own machine.
+// gradingNotifyUserPush is a notify_user-shaped push (assistantwire.NotifyPush, Asked=true) from a session on the hub's own machine.
 func gradingNotifyUserPush(session, level string) assistantwire.Notification {
 	n := gradingNotification(level, "", "notice from "+session)
 	n.DeviceID, n.SessionID = "mac", session
+	n.Asked = true
 	return n
 }
 
@@ -158,9 +160,13 @@ func gradingNotifyBusCall(t *testing.T, h *Hub, n assistantwire.Notification) ma
 	if err != nil {
 		t.Fatalf("notify.request: %v", err)
 	}
-	res, ok := out.(map[string]any)
-	if !ok {
-		t.Fatalf("notify.request answered %#v, want a JSON object", out)
+	reply, err := json.Marshal(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var res map[string]any
+	if err := json.Unmarshal(reply, &res); err != nil {
+		t.Fatal(err)
 	}
 	return res
 }
@@ -223,4 +229,80 @@ func heldOf(out *pushOutcome) string {
 		return ""
 	}
 	return out.held
+}
+
+// Non-Asked NotifyPush notices targeting the main conversation without an explicit level (such as plan_waiting,
+// schedule_skipped, or minutes_ready) must stay at derived P1 and be held under push grading and attention modes,
+// never promoted via notify_user.main. Preview supports optional asked (defaulting to true for backward compatibility).
+func TestNotifyPushNonAskedMainConvStaysP1(t *testing.T) {
+	h, f := gradingHub(t)
+	mainGradingProfile(h)
+	if err := h.push.setPushGrading(context.Background(), true); err != nil {
+		t.Fatal(err)
+	}
+	attempts := gradingAttempts(h)
+
+	nonAsked := gradingNotification("", "plan:p1", "Plan waiting")
+	nonAsked.DeviceID, nonAsked.SessionID = "mac", "main-conv"
+	nonAsked.Asked = false
+	out, err := h.deliverPushFrom(assistantwire.AssistantID, nonAsked)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if heldOf(out) != interceptReasonP1 {
+		t.Fatalf("non-Asked main-conv held = %q, want %q", heldOf(out), interceptReasonP1)
+	}
+	if *attempts != 0 {
+		t.Fatalf("non-Asked main-conv alerted %d times, want 0", *attempts)
+	}
+	if view := h.push.heldPushesView("", 0); len(view) != 1 || view[0].Level != assistantwire.LevelP1 || view[0].Reason != interceptReasonP1 {
+		t.Fatalf("intercepts = %+v, want one P1 held entry", view)
+	}
+
+	// Same non-Asked notice through the real notify.request bus handler returns held/reason.
+	nonAskedBus := gradingNotification("", "minutes:m1", "Minutes ready")
+	nonAskedBus.ID = "ntf_non_asked_main"
+	nonAskedBus.DeviceID, nonAskedBus.SessionID = "mac", "main-conv"
+	nonAskedBus.Asked = false
+	res := gradingNotifyBusCall(t, h, nonAskedBus)
+	if res["ok"] != true || res["held"] != true || res["reason"] != interceptReasonP1 {
+		t.Fatalf("bus reply = %#v, want ok/held/%s", res, interceptReasonP1)
+	}
+
+	// Preview parity: asked=false keeps P1 held; omitted asked defaults to true (backward compatible P0 promotion).
+	prevNonAsked := previewGradingHTTP(t, h, nil, `{"notification":{"kind":"assistant","machine_id":"mac","session_id":"main-conv","asked":false}}`)
+	if prevNonAsked.Allow || !prevNonAsked.Held || prevNonAsked.EffectiveLevel != assistantwire.LevelP1 || prevNonAsked.LiveReason != interceptReasonP1 {
+		t.Fatalf("preview asked=false = %+v, want held P1", prevNonAsked)
+	}
+	prevDefault := previewGradingHTTP(t, h, nil, `{"notification":{"kind":"assistant","machine_id":"mac","session_id":"main-conv"}}`)
+	if !prevDefault.Allow || prevDefault.EffectiveLevel != assistantwire.LevelP0 {
+		t.Fatalf("preview omitted asked = %+v, want backward-compatible allow P0", prevDefault)
+	}
+
+	// Explicit Asked=true notify_user from main-conv still promotes to P0 and pushes.
+	askedMain := gradingNotifyUserPush("main-conv", "")
+	outAsked, err := h.deliverPushFrom(assistantwire.AssistantID, askedMain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if heldOf(outAsked) != "" || *attempts != 1 {
+		t.Fatalf("Asked main-conv: out=%+v attempts=%d, want delivered once", outAsked, *attempts)
+	}
+	f.calls(t, 1)
+
+	// With push grading off and fragment attention mode active, non-Asked main-conv still stays P1 (not promoted to P0).
+	if err := h.push.setPushGrading(context.Background(), false); err != nil {
+		t.Fatal(err)
+	}
+	setAttention(h, assistantwire.AttentionFragment, time.Hour, nil)
+	nonAskedAttn := gradingNotification("", "sched:s1", "Schedule skipped")
+	nonAskedAttn.DeviceID, nonAskedAttn.SessionID = "mac", "main-conv"
+	nonAskedAttn.Asked = false
+	outAttn, err := h.deliverPushFrom(assistantwire.AssistantID, nonAskedAttn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if heldOf(outAttn) != assistantwire.AttentionReasonFragmentBatch || *attempts != 1 {
+		t.Fatalf("non-Asked main-conv under fragment mode: out=%+v attempts=%d, want %s", outAttn, *attempts, assistantwire.AttentionReasonFragmentBatch)
+	}
 }

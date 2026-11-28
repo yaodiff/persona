@@ -10,15 +10,15 @@ describe("computer section", () => {
   });
 
   it("is ready with the version", () => {
-    expect(computerView(base, true)).toEqual({ kind: "ready", text: "现在可以操控 · Cua Driver 0.38.0" });
-    expect(computerView({ ...base, backend: "lcu", version: "0.13.5" }, true)).toEqual({ kind: "ready", text: "现在可以操控 · LCU 0.13.5" });
-    expect(computerView({ enabled: true, backend: "lcu", installed: false }, true)).toEqual({ kind: "install", text: "这台 Mac 上还没有装 LCU", retry: false });
+    expect(computerView(base, true)).toEqual({ kind: "ready", text: "已就绪，可以操控 · Cua Driver 0.38.0" });
+    expect(computerView({ ...base, backend: "lcu", version: "0.13.5" }, true)).toEqual({ kind: "ready", text: "已就绪，可以操控 · LCU 0.13.5" });
+    expect(computerView({ enabled: true, backend: "lcu", installed: false }, true)).toEqual({ kind: "install", text: "该 Mac 尚未安装 LCU", retry: false });
   });
 
   it("offers the install, and says why one failed", () => {
-    expect(computerView({ enabled: true, installed: false }, true)).toEqual({ kind: "install", text: "这台 Mac 上还没有装 Cua Driver", retry: false });
+    expect(computerView({ enabled: true, installed: false }, true)).toEqual({ kind: "install", text: "该 Mac 尚未安装 Cua Driver", retry: false });
     const failed = computerView({ enabled: true, installed: false, job: { kind: "install", state: "failed", error: "校验没过" } }, true);
-    expect(failed).toEqual({ kind: "install", text: "没装上：校验没过", retry: true });
+    expect(failed).toEqual({ kind: "install", text: "安装失败：校验没过", retry: true });
   });
 
   it("shows a running job's step, cancel only for an install", () => {
@@ -30,7 +30,7 @@ describe("computer section", () => {
   it("asks for the missing permissions, then waits for 允许 on the Mac", () => {
     const c: MachineComputer = { ...base, ready: false, accessibility: "missing", screen_recording: "missing" };
     expect(missingPermissions(c)).toEqual(["辅助功能", "屏幕录制"]);
-    expect(computerView(c, true)).toEqual({ kind: "grant", text: "Cua Driver 还没有辅助功能、屏幕录制权限" });
+    expect(computerView(c, true)).toEqual({ kind: "grant", text: "Cua Driver 尚缺少辅助功能、屏幕录制权限" });
     expect(computerView({ ...c, job: { kind: "grant", state: "failed", error: "没有弹窗" } }, true)).toEqual({ kind: "grant", text: "没有弹窗" });
     const done = { ...c, job: { kind: "grant", state: "done" } };
     expect(computerView(done, true)).toEqual({ kind: "granted" });

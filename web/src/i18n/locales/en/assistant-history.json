@@ -11,6 +11,8 @@
   "load_failed": "Couldn't load chats",
   "empty_title": "No chats yet",
   "empty_body": "Say something to Persona and the chat will show up here.",
+  "external_empty_title": "No external chats yet",
+  "external_empty_body": "Chats that Lark /agent or another extension opens for you show up here.",
   "no_results": "No chats match \"{query}\"",
   "search_partial": "Still going through older chats; some may not show yet.",
   "archived_count_other": "Archived ({count})",

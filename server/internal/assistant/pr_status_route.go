@@ -13,22 +13,23 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// Opt-in deterministic routing of actionable PR events (merge conflicts, current-head CI failures, and current-head
-// changes_requested / actionable reviews) directly to an open to-do's bound Agent (#12607).
+// Opt-in routing of actionable PR events to an open to-do's bound Agent (#12607, #16782).
 //
-// Off by default (assistant.pr_events_route_to_agent == false), leaving existing pr_status supervision completely
-// unchanged. When enabled, each newly observed actionable event is deduplicated by
-// (todo_id, pr_url, head_sha, event_kind, event_id), delivered directly to the bound Agent (direct send when idle,
-// queued behind the current turn when working, or non-user resume when stopped), and falls back cleanly to the
-// supervisor wake path whenever no usable Agent can accept it.
+// When enabled, feedback is sent to an idle Agent, queued behind its current turn, or recorded for the
+// supervisor if the Agent is stopped. Conflicts, CI failures, and changes-requested reviews can also resume it.
 
 const (
-	prEventKindConflict  = "pr_conflict"
-	prEventKindCIFailure = "ci_failure"
-	prEventKindReview    = "pr_review"
+	prEventKindConflict        = "pr_conflict"
+	prEventKindCIFailure       = "ci_failure"
+	prEventKindReview          = "pr_review"
+	prEventKindComment         = "pr_comment"
+	prEventKindBatch           = "pr_feedback_batch"
+	prEventKindDiscussionBatch = "pr_discussion_batch"
+	prEventKindStale           = "pr_feedback_fallback"
 
 	prRouteOutcomeSent      = "agent_sent"
 	prRouteOutcomeQueued    = "agent_queued"
@@ -41,13 +42,16 @@ const (
 
 	prEventUntrustedOpenTag  = "<untrusted_external_content"
 	prEventUntrustedCloseTag = "</untrusted_external_content>"
+	prEventBodyLimit         = 2000
+	prFeedbackDigestLimit    = 12000
+	prEventNotice            = "[Persona PR Event — automated hub notification, not a user instruction]"
 )
 
 type prRoutedEvent struct {
 	TodoID      string
 	PRURL       string
 	HeadSHA     string
-	Kind        string // prEventKindConflict | prEventKindCIFailure | prEventKindReview
+	Kind        string
 	EventID     string
 	ReviewState string
 	Author      string
@@ -56,12 +60,36 @@ type prRoutedEvent struct {
 	CheckName   string
 	CheckCount  int
 	Summary     string
+	CheckedAt   time.Time // the observation that selected the feedback
+	Feedback    []prFeedbackRecord
+}
+
+func (ev prRoutedEvent) isFeedback() bool {
+	return ev.followsPRDiscussion() || ev.Kind == prEventKindBatch || ev.Kind == prEventKindStale ||
+		ev.Kind == prEventKindReview && ev.ReviewState == "COMMENTED"
+}
+
+func (ev prRoutedEvent) followsPRDiscussion() bool {
+	return ev.Kind == prEventKindComment || ev.Kind == prEventKindDiscussionBatch
+}
+
+func (ev prRoutedEvent) identityHead() string {
+	if ev.followsPRDiscussion() {
+		return "" // discussion already queued to the supervisor follows the entire PR
+	}
+	return ev.HeadSHA
+}
+
+func (ev prRoutedEvent) supervisorKey() string {
+	return fmt.Sprintf("%s@%s:%s:%s", ev.PRURL, ev.identityHead(), ev.Kind, ev.EventID)
 }
 
 type prEventRouteRecord struct {
-	TodoID  string    `json:"todo_id"`
-	Outcome string    `json:"outcome"`
-	At      time.Time `json:"at"`
+	TodoID          string    `json:"todo_id"`
+	Outcome         string    `json:"outcome"`
+	At              time.Time `json:"at"`
+	FallbackPending bool      `json:"fallback_pending,omitempty"`
+	NeedsUserRound  string    `json:"needs_user_round,omitempty"`
 }
 
 type prEventRouteBook struct {
@@ -72,10 +100,10 @@ type prEventRouteBook struct {
 	inFlight map[string]bool
 }
 
-// prEventDedupeKey builds the canonical 5-tuple deduplication key (todo_id, pr_url, head_sha, event_kind, event_id).
+// prEventDedupeKey preserves the existing head-scoped keys and gives each issue comment a key stable across heads.
 func prEventDedupeKey(ev prRoutedEvent) string {
 	prURL := cmp.Or(triageNormalizePRURL(ev.PRURL), strings.TrimSpace(ev.PRURL))
-	raw, _ := json.Marshal([]string{ev.TodoID, prURL, ev.HeadSHA, ev.Kind, ev.EventID})
+	raw, _ := json.Marshal([]string{ev.TodoID, prURL, ev.identityHead(), ev.Kind, ev.EventID})
 	return string(raw)
 }
 
@@ -228,7 +256,9 @@ func extractPREvents(t Todo, cur todoStage, held *TaskReview, status TodoPRStatu
 		return nil
 	}
 	var events []prRoutedEvent
-	if status.URL == cur.PR && status.Conflicts {
+	followed := status.URL == cur.PR || slices.Contains(cur.PRs, status.URL)
+	externalBound := externalParkPRURL(held) != "" && externalParkPRURL(held) == triageNormalizePRURL(status.URL)
+	if (followed || externalBound) && status.Conflicts {
 		events = append(events, prRoutedEvent{
 			TodoID:   t.ID,
 			PRURL:    status.URL,
@@ -262,15 +292,11 @@ func extractPREvents(t Todo, cur todoStage, held *TaskReview, status TodoPRStatu
 	}
 	if status.URL == cur.PR || parkReviewChangeRequested(held, status) {
 		switch {
-		case status.actionableReview.State != "":
+		case status.actionableReview.State == "CHANGES_REQUESTED":
 			r := status.actionableReview
-			if strings.EqualFold(r.State, "COMMENTED") &&
-				(status.Review == "approved" || commentedReviewLooksInformational(r.Body)) {
-				break
-			}
 			eventID := strings.ToLower(r.State)
 			if r.ID > 0 {
-				eventID = fmt.Sprintf("review:%d", r.ID)
+				eventID = prReviewEventID(r.ID)
 			} else if !r.SubmittedAt.IsZero() {
 				eventID = strings.ToLower(r.State) + ":" + r.SubmittedAt.UTC().Format(time.RFC3339Nano)
 			}
@@ -314,41 +340,194 @@ func reviewAuthorHasWriteAssociation(assoc string) bool {
 	}
 }
 
-// commentedReviewLooksInformational filters out purely informational or no-defect COMMENTED reviews
-// (such as automated semantic reviews and short LGTM/QA-pass notes) so they never wake Agents or supervisors.
+const (
+	prCheckStatusPrefix    = `(?:(?:all )?ci(?: checks?| status)?|all checks|checks|(?:all )?tests|test suite|build|lint)(?:: ?| (?:has |have |is |are )?)`
+	prCoverageStatusPrefix = `(?:code )?coverage(?: report)?(?:: ?| (?:is )?)`
+)
+
+var (
+	prCheckStatusLine    = lazyre.New(`^` + prCheckStatusPrefix + `(?:✅ ?)?(?:passed|passing|green|succeeded|successful|success|pending|complete|completed)$`)
+	prCoverageStatusLine = lazyre.New(`^` + prCoverageStatusPrefix + `(?:[0-9]+(?:\.[0-9]+)?%|updated|passed|unchanged)$`)
+	prFailureStatusLine  = lazyre.New(`^(?:` + prCheckStatusPrefix + `|` + prCoverageStatusPrefix + `)(?:❌ ?)?(?:failed|failing|red|failure)\b`)
+	prFeedbackNoWake     = lazyre.New(`(?i)<!--[[:space:]]*persona[[:space:]]*:[[:space:]]*no-wake[[:space:]]*-->`)
+	prWatcherReviewLine  = lazyre.New("^automated independent semantic review(?: at `[0-9a-f]+`)? found no blocking defects$")
+	prWatcherCheckLine   = lazyre.New("^- `[^`]+`$")
+)
+
+// Match whole acknowledgments and known status lines. Any additional finding keeps the review actionable.
 func commentedReviewLooksInformational(body string) bool {
-	lower := strings.ToLower(strings.TrimSpace(body))
-	if lower == "" {
-		return true
-	}
-	for _, phrase := range []string{
-		"no blocking defects",
-		"no blocking issues",
-		"found no blocking",
-		"no defects found",
-		"no issues found",
-		"nothing blocking",
-	} {
-		if strings.Contains(lower, phrase) {
-			return true
+	watcher := false
+	for line := range strings.SplitSeq(body, "\n") {
+		if prFeedbackLineReportsFailure(line) {
+			return false
+		}
+		line = normalizedPRFeedbackLine(line)
+		switch line {
+		case "", "lgtm", "looks good", "looks good to me", "approved", "ship it", "thanks", "thank you", "great work", "nice work",
+			"all green", "qa passed", "verified", "verified on a separate machine", "no blocking defects",
+			"no blocking issues", "found no blocking defects", "found no blocking issues", "no defects found", "no issues found", "nothing blocking",
+			"the watcher merged current main into the same-repository branch to resolve the stale base. the new head will be reviewed",
+			"the verification branch was behind main. the watcher merged current main into the same-repository branch and will review the new head":
+			continue
+		}
+		if prWatcherReviewLine.MatchString(line) {
+			watcher = true
+			continue
+		}
+		if watcher {
+			switch line {
+			case "local checks completed", "- no additional successful lanes",
+				"this records only the checks listed above; it does not claim unrun device or visual acceptance",
+				"semantic-only mode: no full build/vet, cross-platform, build-tag or full-test suite was run. only the lightweight checks listed above and the exact-head merge gates apply",
+				"screenshot acceptance was not performed: no ui evidence adapter is configured":
+				continue
+			}
+			if prWatcherCheckLine.MatchString(line) {
+				continue
+			}
+		}
+		if !prCheckStatusLine.MatchString(line) && !prCoverageStatusLine.MatchString(line) {
+			return false
 		}
 	}
-	trimmed := strings.Trim(lower, " .!✅👍🎉\t\r\n")
-	switch trimmed {
-	case "lgtm", "looks good", "looks good to me", "ship it", "all green", "qa passed", "verified":
-		return true
+	return true
+}
+
+func normalizedPRFeedbackLine(line string) string {
+	return strings.Trim(strings.ToLower(strings.Join(strings.Fields(line), " ")), " .!:✅👍🎉*_")
+}
+
+// Explicit failure status lines bypass the comment batch window.
+func prFeedbackReportsFailure(body string) bool {
+	for line := range strings.SplitSeq(body, "\n") {
+		if prFeedbackLineReportsFailure(line) {
+			return true
+		}
 	}
 	return false
 }
 
+func prFeedbackLineReportsFailure(line string) bool {
+	line = strings.TrimLeft(strings.TrimSpace(line), "#>-*`❌ ")
+	return prFailureStatusLine.MatchString(normalizedPRFeedbackLine(line))
+}
+
+func (d prFeedbackDelivery) event(todoID string, status TodoPRStatus) prRoutedEvent {
+	first := d.Records[0]
+	ev := prRoutedEvent{
+		TodoID: todoID, PRURL: status.URL, HeadSHA: status.HeadOID, CheckedAt: status.CheckedAt,
+		EventID: first.ID, EventURL: first.URL, Author: first.Author, Body: first.Preview,
+		Kind: prEventKindComment,
+	}
+	if !first.isIssueComment() {
+		ev.Kind, ev.ReviewState = prEventKindReview, "COMMENTED"
+	}
+	if len(d.Records) == 1 && !d.Fallback {
+		return ev
+	}
+	ev.Feedback = d.Records
+	ev.EventURL, ev.Author, ev.Body, ev.ReviewState = status.URL, "", "", ""
+	ev.EventID = "batch:" + first.ID
+	if slices.ContainsFunc(d.Records, func(r prFeedbackRecord) bool { return !r.isIssueComment() }) {
+		ev.Kind = prEventKindBatch
+		if slices.ContainsFunc(d.Records, prFeedbackRecord.isIssueComment) {
+			ev.Kind = prEventKindDiscussionBatch
+		}
+	}
+	if d.Fallback {
+		ev.Kind = prEventKindStale
+		ev.EventID = "fallback:" + first.ID
+	} else if d.HeadSHA != status.HeadOID && ev.Kind == prEventKindDiscussionBatch {
+		// Keep the original delivery ID across retries. Old reviews apply to the old diff.
+		ev.Feedback = slices.DeleteFunc(slices.Clone(d.Records), func(r prFeedbackRecord) bool {
+			return !r.isIssueComment()
+		})
+	}
+	return ev
+}
+
+// Feedback is serialized per task and PR. Its route record protects a completed send or fallback if
+// the separate cursor write fails. An uncertain direct send retries only the supervisor fallback.
+func (s *Service) deliverPRFeedback(ctx context.Context, t Todo, ev prRoutedEvent) error {
+	key := prEventDedupeKey(ev)
+	b := &s.prEventRoute
+	b.mu.Lock()
+	s.loadPREventRouteSeenLocked(ctx)
+	prior, handled := b.seen[key]
+	loaded := b.loaded
+	b.mu.Unlock()
+	if !loaded {
+		return errors.New("PR event dedupe history could not be read")
+	}
+	switch prior.Outcome {
+	case prRouteOutcomeSent, prRouteOutcomeQueued, prRouteOutcomeResumed:
+		return nil
+	case prRouteOutcomeFallback:
+		if !prior.FallbackPending {
+			return nil
+		}
+	}
+	cause := errors.New("direct Agent routing was unavailable")
+	if prior.Outcome == prRouteOutcomeUncertain {
+		cause = errors.New("delivery to Agent is unconfirmed")
+	}
+	if !handled && !needsUserWakeEligible(t) {
+		outcome, err := s.deliverPREventToAgent(ctx, t, ev, key)
+		if err == nil {
+			return s.recordPREventRoute(ctx, key, prEventRouteRecord{TodoID: t.ID, Outcome: outcome})
+		}
+		cause = err
+	}
+	t, ok := s.prFeedbackTarget(t.ID, ev.PRURL, ev.HeadSHA, ev.CheckedAt)
+	if !ok {
+		return errors.New("PR feedback no longer matches the task")
+	}
+	final := prEventRouteRecord{TodoID: t.ID, Outcome: prRouteOutcomeFallback}
+	round := prior.NeedsUserRound
+	if !handled {
+		if needsUserWakeEligible(t) {
+			round = s.needsUserRoundKey(t)
+		}
+		pending := final
+		pending.FallbackPending = true
+		pending.NeedsUserRound = round
+		if sendUnknown(cause) {
+			pending.Outcome = prRouteOutcomeUncertain
+		} else if t.Supervision == nil {
+			return cause
+		}
+		// Keep the selected supervisor route and decision round stable if an outbox or receipt write fails.
+		if err := s.recordPREventRoute(ctx, key, pending); err != nil {
+			return err
+		}
+	}
+	var queued bool
+	if round != "" {
+		if !needsUserWakeEligible(t) || s.needsUserRoundKey(t) != round {
+			// The round ended while this event waited on storage. Its pending signal is stale.
+			return s.recordPREventRoute(ctx, key, final)
+		}
+		queued = s.maybeWakeNeedsUserForPRFeedback(ctx, t, ev, round)
+	} else if t.Supervision != nil {
+		queued = s.signalReplacing(nil, prEventFallbackSignal(t.ID, ev, cause))
+	}
+	if !queued {
+		return fmt.Errorf("could not enqueue PR feedback %s for the supervisor: %w", ev.EventID, cause)
+	}
+	return s.recordPREventRoute(ctx, key, final)
+}
+
 // routePREvents routes actionable PR events directly to the bound Agent when assistant.pr_events_route_to_agent is on.
 // It returns whether conflict and parked-review supervisor wakes were already handled by direct Agent routing.
-func (s *Service) routePREvents(ctx context.Context, t Todo, cur todoStage, held *TaskReview, status TodoPRStatus) (conflictRouted, reviewRouted bool) {
+func (s *Service) routePREvents(ctx context.Context, t Todo, cur todoStage, held *TaskReview, status TodoPRStatus, allowConflict bool) (conflictRouted, reviewRouted bool) {
 	events := extractPREvents(t, cur, held, status)
 	if len(events) == 0 {
 		return false, false
 	}
 	for _, ev := range events {
+		if ev.Kind == prEventKindConflict && !allowConflict {
+			continue
+		}
 		key := prEventDedupeKey(ev)
 		if existing, dup := s.claimPREvent(ctx, key); dup {
 			if existing.Outcome != prRouteOutcomeFallback && existing.Outcome != prRouteOutcomeUncertain {
@@ -427,7 +606,6 @@ func (s *Service) routePREvents(ctx context.Context, t Todo, cur todoStage, held
 }
 
 func prEventFallbackSignal(todoID string, ev prRoutedEvent, cause error) superviseSignal {
-	key := fmt.Sprintf("%s@%s:%s:%s", ev.PRURL, ev.HeadSHA, ev.Kind, ev.EventID)
 	var detail string
 	switch ev.Kind {
 	case prEventKindCIFailure:
@@ -444,21 +622,36 @@ func prEventFallbackSignal(todoID string, ev prRoutedEvent, cause error) supervi
 		}
 		detail = fmt.Sprintf("PR %s at head %s has a new %s review%s; direct Agent routing unavailable (%s).",
 			ev.PRURL, shortSHA(ev.HeadSHA), strings.ToLower(cmp.Or(ev.ReviewState, "actionable")), by, clip(oneLine(cause.Error()), 120))
+	case prEventKindComment, prEventKindBatch, prEventKindDiscussionBatch, prEventKindStale:
+		detail = fmt.Sprintf("%s\nEvent: %s\nEvent URL: %s\nDirect Agent routing unavailable (%s).\n%s",
+			prEventNotice, ev.Kind, ev.EventURL, clip(oneLine(cause.Error()), 120), ev.feedbackContent())
 	default:
 		detail = fmt.Sprintf("PR %s at head %s event %s; direct Agent routing unavailable (%s).",
 			ev.PRURL, shortSHA(ev.HeadSHA), ev.Kind, clip(oneLine(cause.Error()), 120))
 	}
-	return superviseSignal{
+	signal := superviseSignal{
 		Todo:   todoID,
 		Kind:   sigPREvent,
 		PRURL:  ev.PRURL,
 		Report: ev.Kind,
-		Key:    key,
+		Key:    ev.supervisorKey(),
 		Detail: detail,
 	}
+	if ev.isFeedback() {
+		signal.PREventID = ev.EventID
+		if ev.Kind == prEventKindReview {
+			signal.Detail += " Review: " + ev.EventURL + "\n" + ev.feedbackContent()
+		}
+	}
+	return signal
 }
 
 func (s *Service) prEventSignalStillHolds(t Todo, g superviseSignal) bool {
+	ev := prRoutedEvent{PRURL: g.PRURL, Kind: g.Report, EventID: g.PREventID}
+	if ev.followsPRDiscussion() {
+		return g.PREventID != "" && g.Key == ev.supervisorKey() && s.prFeedbackBinding(t, g.PRURL) != nil &&
+			!needsUserWakeEligible(t)
+	}
 	if t.PRURL != g.PRURL && !slices.Contains(t.PRs, g.PRURL) {
 		return false
 	}
@@ -473,14 +666,17 @@ func (s *Service) prEventSignalStillHolds(t Todo, g superviseSignal) bool {
 		return false
 	}
 	switch g.Report {
+	case prEventKindBatch, prEventKindStale:
+		ev.HeadSHA = p.HeadOID
+		return g.PREventID != "" && g.Key == ev.supervisorKey() && s.prFeedbackBinding(t, g.PRURL) != nil &&
+			!needsUserWakeEligible(t)
 	case prEventKindCIFailure:
 		return p.Checks == "failure"
 	case prEventKindReview:
-		if p.Review == "changes_requested" {
-			return true
+		if g.PREventID != "" {
+			return t.PRURL == g.PRURL && s.stagePR(t.ID) == g.PRURL && !needsUserWakeEligible(t)
 		}
-		return p.Review != "approved" && p.actionableReview.State != "" &&
-			!commentedReviewLooksInformational(p.actionableReview.Body)
+		return p.Review == "changes_requested"
 	default:
 		return false
 	}
@@ -541,11 +737,19 @@ func (s *Service) deliverPREventToAgent(ctx context.Context, t Todo, ev prRouted
 		if latest, ok := s.todoNow(t.ID); !ok || !taskOpen(latest) {
 			return "", errors.New("task closed before delivery")
 		}
+		if ev.isFeedback() {
+			if latest, ok := s.prFeedbackTarget(t.ID, ev.PRURL, ev.HeadSHA, ev.CheckedAt); !ok || needsUserWakeEligible(latest) {
+				return "", errors.New("PR feedback no longer matches the task")
+			}
+		}
 		sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), wait)
 		defer cancel()
 		var sent agentSendReply
 		if err := s.call(sctx, am.ID, DeviceSessionSend, params, &sent); err != nil {
 			return "", err
+		}
+		if ev.isFeedback() && !sent.OK && !sent.Queued {
+			return "", &completedNodeWriteError{errors.New("the node did not confirm PR feedback delivery")}
 		}
 		s.progressMade(am.ID, c.SessionID, time.Now())
 		if cur.Origin != "" {
@@ -565,10 +769,9 @@ func (s *Service) deliverPREventToAgent(ctx context.Context, t Todo, ev prRouted
 	if lastStopped.SessionID == "" {
 		return "", errors.New("no usable bound agent")
 	}
-	// Never resume a stopped Agent for a plain COMMENTED review; only explicit CHANGES_REQUESTED,
-	// merge conflicts, or CI failures justify resuming a stopped session.
-	if ev.Kind == prEventKindReview && !strings.EqualFold(ev.ReviewState, "CHANGES_REQUESTED") {
-		return "", errors.New("stopped agent is not resumed for a plain COMMENTED review")
+	// Discussion goes to the supervisor when its Agent is stopped.
+	if ev.isFeedback() || ev.Kind == prEventKindReview && !strings.EqualFold(ev.ReviewState, "CHANGES_REQUESTED") {
+		return "", errors.New("stopped agent is not resumed for PR discussion feedback")
 	}
 	am, ok := s.device(ctx, lastStopped.MachineID)
 	if !ok || !am.Reachable {
@@ -582,7 +785,7 @@ func (s *Service) deliverPREventToAgent(ctx context.Context, t Todo, ev prRouted
 		return "", err
 	}
 	why := cleanWhy(fmt.Sprintf("PR %s on %s@%s", ev.Kind, ev.PRURL, shortSHA(ev.HeadSHA)))
-	if err := s.resumeAllowed(ctx, self, am, lastStopped, why, nil); err != nil {
+	if err := s.resumeAllowed(ctx, self, am, lastStopped, why, nil, resumeReview{}); err != nil {
 		return "", err
 	}
 	params := map[string]any{
@@ -596,19 +799,14 @@ func (s *Service) deliverPREventToAgent(ctx context.Context, t Todo, ev prRouted
 	return prRouteOutcomeResumed, nil
 }
 
+var prEventClosingTag = lazyre.New(`(?i)</untrusted_external_content`)
+
 // wrapUntrustedExternalContent encloses external PR/review text in an explicit untrusted-content envelope and
 // neutralizes any embedded closing tag so untrusted text cannot break out of the delimiter.
 func wrapUntrustedExternalContent(source, author, prURL, headSHA, body string) string {
-	sanitized := strings.TrimSpace(body)
-	if sanitized != "" {
-		sanitized = clip(sanitized, 2000)
-		// Neutralize case-insensitive closing tags inside untrusted content.
-		lower := strings.ToLower(sanitized)
-		for idx := strings.Index(lower, "</untrusted_external_content"); idx >= 0; idx = strings.Index(lower, "</untrusted_external_content") {
-			sanitized = sanitized[:idx] + "&lt;/" + sanitized[idx+2:]
-			lower = strings.ToLower(sanitized)
-		}
-	}
+	sanitized := prEventClosingTag.ReplaceAllStringFunc(clip(strings.TrimSpace(body), prEventBodyLimit), func(tag string) string {
+		return "&lt;" + tag[1:]
+	})
 	var attrs strings.Builder
 	fmt.Fprintf(&attrs, `source=%q`, source)
 	if author != "" {
@@ -622,10 +820,42 @@ func wrapUntrustedExternalContent(source, author, prURL, headSHA, body string) s
 	return fmt.Sprintf("%s %s>\n%s\n%s", prEventUntrustedOpenTag, attrs.String(), sanitized, prEventUntrustedCloseTag)
 }
 
+func (ev prRoutedEvent) feedbackContent() string {
+	if len(ev.Feedback) > 0 {
+		var b strings.Builder
+		if ev.Kind == prEventKindStale {
+			b.WriteString("The PR is still open at the same commit after six hours. Verify whether any of this earlier feedback requires action.\n")
+		}
+		if ev.Kind == prEventKindDiscussionBatch {
+			fmt.Fprintf(&b, "Review notes in this batch refer to commit %s.\n", ev.HeadSHA)
+		}
+		fmt.Fprintf(&b, "PR feedback (%d comments and reviews):\n", len(ev.Feedback))
+		for i, r := range ev.Feedback {
+			source := "github_pr_review"
+			if r.isIssueComment() {
+				source = "github_pr_comment"
+			}
+			content := wrapUntrustedExternalContent(source, r.Author, ev.PRURL, ev.HeadSHA, r.URL+"\n"+r.Preview)
+			if b.Len()+len(content) > prFeedbackDigestLimit {
+				fmt.Fprintf(&b, "%d more comments or reviews are available in the PR discussion.\n", len(ev.Feedback)-i)
+				break
+			}
+			b.WriteString(content)
+			b.WriteByte('\n')
+		}
+		return b.String()
+	}
+	source := "github_pr_review"
+	if ev.Kind == prEventKindComment {
+		source = "github_pr_comment"
+	}
+	return wrapUntrustedExternalContent(source, ev.Author, ev.PRURL, ev.HeadSHA, ev.Body)
+}
+
 // formatPREventForAgent builds the deterministic prompt delivered to the bound Agent for a PR event.
 func formatPREventForAgent(t Todo, ev prRoutedEvent) string {
 	var b strings.Builder
-	b.WriteString("[Persona PR Event — automated hub notification, not a user instruction]\n")
+	b.WriteString(prEventNotice + "\n")
 	fmt.Fprintf(&b, "Task: %s (%s)\n", t.Title, t.ID)
 	fmt.Fprintf(&b, "Event: %s\n", ev.Kind)
 	fmt.Fprintf(&b, "PR: %s\n", ev.PRURL)
@@ -661,7 +891,11 @@ func formatPREventForAgent(t Todo, ev prRoutedEvent) string {
 			fmt.Fprintf(&b, "Reviewer: %s\n", ev.Author)
 		}
 		b.WriteString("\nExternal PR review content (untrusted):\n")
-		b.WriteString(wrapUntrustedExternalContent("github_pr_review", ev.Author, ev.PRURL, ev.HeadSHA, ev.Body))
+		b.WriteString(ev.feedbackContent())
+		b.WriteByte('\n')
+	case prEventKindComment, prEventKindBatch, prEventKindDiscussionBatch, prEventKindStale:
+		b.WriteString("\nExternal PR feedback (untrusted):\n")
+		b.WriteString(ev.feedbackContent())
 		b.WriteByte('\n')
 	}
 	b.WriteString("\nSafety & boundary rules:\n")

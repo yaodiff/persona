@@ -120,7 +120,7 @@ object ForwardMessage {
     private fun quoteHeading(c: MessageContext, resources: Resources): String = when {
         c.kind == KIND -> heading(c.attributes, resources)
         c.kind == ChatLinkContext.QUOTE && c.title == ChatLinkContext.QUOTE_ME -> resources.getString(R.string.chat_quote_yours)
-        c.url?.startsWith(SESSION_CONTEXT_URL) == true -> resources.getString(R.string.chat_quote_session, c.title)
+        c.url?.let(::isSessionContextUrl) == true -> resources.getString(R.string.chat_quote_session, c.title)
         else -> resources.getString(R.string.chat_quote_from,
             c.title.ifBlank { c.url ?: resources.getString(R.string.chat_forward_messages) })
     }

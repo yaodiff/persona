@@ -18,7 +18,7 @@ class ModelSheetTest {
 
     @Test fun searchesFriendlyLabelsAndOriginalFields() {
         val model = AgentModel("gpt-6.1-sol")
-        assertTrue(model.matches("6.1 Sol"))
+        assertTrue(model.matches("GPT-6.1 Sol"))
         assertTrue(model.matches(" gpt-6.1-sol "))
         assertTrue(model.matches("6.1 SOL"))
         assertTrue(model.matches(""))
@@ -30,7 +30,7 @@ class ModelSheetTest {
     @Test fun customSelectionsRemainLiteralIds() {
         val models = listOf(AgentModel("gpt-6.1-sol"))
         assertNull(customModelId(models, "gpt-6.1-sol"))
-        assertNull(customModelId(models, "6.1 Sol"))
+        assertNull(customModelId(models, "GPT-6.1 Sol"))
         assertNull(customModelId(models, " "))
         assertEquals("unlisted-model", customModelId(models, " unlisted-model "))
     }

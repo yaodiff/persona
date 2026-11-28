@@ -220,6 +220,29 @@ func TestFeishuStaleStopConcurrentCurrentPresses(t *testing.T) {
 	}
 }
 
+func TestFeishuStopHoldsProgressLockDuringInterrupt(t *testing.T) {
+	needsLarkLayer(t)
+	s, f := stopCardHub(t, FeishuFeatures{Main: true})
+	a := currentStopCard(s, botTarget{Kind: targetPersona, MachineID: "server", SessionID: "conv0001"})
+	_, prog := s.channelRunByID("fb_stop")
+	f.answerNode("session.interrupt", func(string, json.RawMessage) (any, error) {
+		if prog.mu.TryLock() {
+			prog.mu.Unlock()
+			t.Error("progress lock was released before interrupt delivery")
+		}
+		if s.chans.mu.TryLock() {
+			s.chans.mu.Unlock()
+		} else {
+			t.Error("channel state lock was held during interrupt delivery")
+		}
+		return nil, nil
+	})
+	out := s.larkModule().Action(t.Context(), a, "")
+	if out.Toast == nil || out.Toast.Type != "success" || len(f.interrupted()) != 1 {
+		t.Fatalf("current card did not interrupt once: %+v / %v", out.Toast, f.interrupted())
+	}
+}
+
 // stopWatcherHub gates only the first device list after this test's message send returned. Other device lists before
 // that send belong to routing, not the run watcher.
 type stopWatcherHub struct {

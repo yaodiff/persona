@@ -18,6 +18,13 @@ nonisolated struct PersonalAgentSession: Codable, Identifiable, Hashable, Sendab
     var parentSessionKey: String?
     var hasAvatar: Bool?
     var avatarVersion: String?
+    /// The latest message as the source lists it, and whether the user sent it; nil from a source that sends neither.
+    var previewText: String?
+    var previewIsMine: Bool?
+    /// When the user pinned it at the source; nil or 0: not pinned there.
+    var onTopRankTimeMs: Int64?
+    /// What is left of the account's allowance at its service (`PersonalAgentCharge` draws it); nil from a source without.
+    var quota: PersonalAgentQuota?
 
     var rankTime: Date { Date(timeIntervalSince1970: Double(rankTimeMs) / 1000) }
 }

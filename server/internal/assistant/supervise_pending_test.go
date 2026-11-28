@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -41,7 +42,7 @@ func simulateSupervisionRestart(t *testing.T, s *Service) {
 	b.timer, b.timerAt = nil, time.Time{}
 	b.pending, b.pendingLoaded, b.sent, b.dedup = nil, false, nil, nil
 	b.queued, b.last, b.asks = nil, time.Time{}, nil
-	b.legacyBackground, b.failSeen = nil, nil
+	b.legacyBackground, b.failSeen, b.taken = nil, nil, nil // taken is never persisted (#17838)
 	b.mu.Unlock()
 	b.dedupMu.Unlock()
 	b.pendingLoadMu.Unlock()
@@ -96,8 +97,11 @@ func TestNeedsUserPendingSurvivesRestartBeforeDigest(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	g := superviseSignal{Todo: todo.ID, Kind: sigIdle, Key: "owner-wait-1", Detail: "要用户决定：选择发布方式", At: time.Now()}
-	s.signal(g)
+	work := time.Now()
+	if !s.noteOwnerWait(ctx, todo, work, "选择发布方式") {
+		t.Fatal("could not record the owner wait")
+	}
+	g := superviseSignal{Todo: todo.ID, Kind: sigIdle, Key: work.UTC().Format(time.RFC3339Nano)}
 	if got := storedSupervisePending(t, s)[g.id()]; got.Key != g.Key {
 		t.Fatalf("the gathered needs-user signal was not persisted: %+v", got)
 	}
@@ -616,6 +620,8 @@ func TestUnreachableLeaderWithoutUpperRetriesInCurrentProcess(t *testing.T) {
 	}
 	kept := storedSupervisePending(t, s)[g.id()].Key == g.Key
 
+	// putTodo stored a copy of leader that shares this Agents array, and the digest timer reads it: change a copy.
+	leader.Agents = slices.Clone(leader.Agents)
 	leader.Agents[0].ReleasedAt = nil // the same leader task has an active agent again; no hub restart
 	putTodo(s, leader)
 	setMain("conv1")

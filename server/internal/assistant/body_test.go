@@ -192,6 +192,9 @@ func TestDecodeLargeBodyCopiesOnce(t *testing.T) {
 	if raceEnabled {
 		t.Skip("the race detector's allocations")
 	}
+	if !isolated(t) {
+		return
+	}
 	p := assistantwire.HTTPRequest{Method: http.MethodPost, Path: "/api/v1/assistant/conversations", Body: largeStart(4 << 20)}
 	var least uint64
 	defer debug.SetGCPercent(debug.SetGCPercent(-1)) // no GC empties a pool in the middle of a run

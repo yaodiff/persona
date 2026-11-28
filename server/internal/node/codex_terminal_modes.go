@@ -24,6 +24,7 @@ import (
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
+	"github.com/nwverse/persona/server/internal/shellcmd"
 	"github.com/nwverse/persona/server/internal/transcript"
 )
 
@@ -63,6 +64,10 @@ type codexTerminal struct {
 	pane, rollout, home string
 }
 
+type codexTerminalSettings struct {
+	model, effort, tier string
+}
+
 // codexOnTerminal says whether session id is a live Codex on the terminal route: in a pane that takes keys (botmux's
 // takes whole messages), not joined on an app-server (codex_effort.go drives that one), not a subagent (its parent drives
 // it). Then t is where to type /model, or why is the coded refusal of a session whose change could not be made or
@@ -96,22 +101,85 @@ func (n *Node) codexOnTerminalCtx(ctx context.Context, id string, fresh bool) (t
 	return codexTerminal{pane: a.PaneID, rollout: path, home: codexHomeOf(path)}, nil, true
 }
 
-// codexTerminalRow offers a terminal-route Codex's model and effort on its row as an app-server thread's are
-// (sessions.go): capabilities.model, and as efforts the levels of the model it runs, from its home's models_cache.json:
-// Codex's whole list for a model the cache does not name, none for a model that takes none. m is its rollout's meta.
+// codexTerminalRow projects the current settings and the choices supported by the terminal thread's model.
 func (n *Node) codexTerminalRow(id string, s *proto.Session, m quickMeta) {
 	t, why, ok := n.codexOnTerminal(id)
 	if !ok || why != nil || s.Capabilities == nil {
 		return
 	}
 	s.Capabilities.Model = proto.Bool(true)
+	settings := n.codexTerminalSettingsOf(id, t, m)
+	s.Model, s.Effort, s.ServiceTier = cmp.Or(settings.model, s.Model), settings.effort, settings.tier
 	s.Efforts = codexEffortLevels
-	if e, listed := codexModelEffortsIn(t.home, m.model); listed {
+	if e, listed := codexModelEffortsIn(t.home, s.Model); listed {
 		s.Efforts = e.levels
+		if n.terminalSpeedAvailable(s) {
+			s.ServiceTiers = codexSpeedChoices(e.tiers)
+		}
 	}
 	if len(s.Efforts) == 0 {
 		s.Effort = ""
 	}
+}
+
+// codexTerminalSettingsOf uses native settings as soon as the rollout records a model. A rollout with only startup
+// metadata has no turn settings yet, so read the launcher's options in the home identified by that rollout.
+func (n *Node) codexTerminalSettingsOf(id string, t codexTerminal, m quickMeta) codexTerminalSettings {
+	settings := codexTerminalSettings{model: m.model, effort: m.effort, tier: codexTierID(m.serviceTier)}
+	if m.speed.Model != "" && !m.speed.At.Before(m.modelAt) {
+		settings.model = m.speed.Model
+	}
+	if m.speed.Tier != "" && m.speed.At.After(m.serviceTierAt) {
+		settings.tier = m.speed.Tier
+	}
+	if settings.model != "" {
+		return settings
+	}
+	st, _ := n.state.get(id)
+	settings.tier = cmp.Or(settings.tier, st.CodexStartTier)
+	a, _ := n.agent(id)
+	argv := a.ForegroundArgv
+	var launcherModel string
+	if len(argv) == 0 || progName(argv[0]) != "codex" {
+		if launcher, ok := n.managedLauncher(st.Launcher); ok && launcher.AgentType() == "codex" {
+			argv = append([]string{"codex"}, launcher.Args...)
+			launcherModel = launcher.Model
+		} else {
+			argv, _ = n.codexArgv(st.Launcher)
+			for len(argv) > 0 && shellcmd.AssignRe.MatchString(argv[0]) {
+				argv = argv[1:]
+			}
+		}
+	}
+	settings.model = cmp.Or(st.Model, modelArg(argv), launcherModel)
+	settings.effort = cmp.Or(settings.effort, st.ModelEffort)
+	if t.home == "" {
+		return settings
+	}
+	cfg, err := codexSourceConfig(argv, []string{"CODEX_HOME=" + t.home}, cmp.Or(st.Cwd, a.Cwd, m.start), n.home)
+	if err != nil {
+		return settings
+	}
+	model, _ := cfg["model"].(string)
+	effort, _ := cfg["model_reasoning_effort"].(string)
+	tier, _ := cfg["service_tier"].(string)
+	settings.model = cmp.Or(settings.model, model)
+	settings.effort = cmp.Or(settings.effort, effort)
+	settings.tier = codexTierID(cmp.Or(settings.tier, tier, "default"))
+	if settings.model == "" {
+		for _, entry := range readCodexHomeModels(t.home) {
+			if entry.Default {
+				settings.model = entry.ID
+				break
+			}
+		}
+	}
+	if settings.effort == "" {
+		if entry, listed := codexModelEffortsIn(t.home, settings.model); listed {
+			settings.effort = entry.def
+		}
+	}
+	return settings
 }
 
 // setCodexTerminalSettings switches the Codex in t to model and / or effort ("" leaves one as it is) by typing Codex's
@@ -125,7 +193,7 @@ func (n *Node) setCodexTerminalSettings(ctx context.Context, id string, t codexT
 		return false, fmt.Errorf("invalid model %q", model)
 	}
 	n.forgetMeta(n.transcriptPath(id)) // a change made at the computer a moment ago counts
-	now := n.metaOf(id)                // what the rollout says the thread runs with
+	now := n.codexTerminalSettingsOf(id, t, n.metaOf(id))
 	target, listed := codexModelEffortsIn(t.home, cmp.Or(model, now.model))
 	switch {
 	case effort != "":
@@ -148,8 +216,13 @@ func (n *Node) setCodexTerminalSettings(ctx context.Context, id string, t codexT
 	if err != nil {
 		return false, err
 	}
+	return n.applyCodexTerminalSettings(ctx, id, t, cmd, codexTerminalSettings{model: model, effort: effort})
+}
+
+// applyCodexTerminalSettings retries only Codex's explicit temporary startup refusal.
+func (n *Node) applyCodexTerminalSettings(ctx context.Context, id string, t codexTerminal, cmd string, target codexTerminalSettings) (bool, error) {
 	for try := 0; ; try++ {
-		err := n.typeCodexSettings(ctx, id, t, cmd, model, effort)
+		err := n.typeCodexSettings(ctx, id, t, cmd, target)
 		var starting codexStarting
 		if !errors.As(err, &starting) {
 			if err == nil {
@@ -171,14 +244,18 @@ func (n *Node) setCodexTerminalSettings(ctx context.Context, id string, t codexT
 }
 
 // typeCodexSettings types cmd into the Codex in t after the checks a message gets, then waits for the outcome: nil once
-// the rollout records the thread on model and effort ("" either: any), Codex's refusal once the screen shows one, else,
-// after codexSettingsWait, the unconfirmed error. The session's typing lock is held only while typing.
-func (n *Node) typeCodexSettings(ctx context.Context, id string, t codexTerminal, cmd, model, effort string) error {
-	unlock := n.typing.lock(id) // one at a time with the messages: a send in flight types into the same box
+// the rollout records the requested settings, Codex's refusal once the screen shows one, else,
+// after codexSettingsWait, the unconfirmed error. Model and effort changes take the input lock only while typing.
+// Speed changes hold it in setSessionSpeed until confirmation.
+func (n *Node) typeCodexSettings(ctx context.Context, id string, t codexTerminal, cmd string, target codexTerminalSettings) error {
+	unlock := func() {}
+	if target.tier == "" {
+		unlock = n.typing.lock(id)
+	}
 	var once sync.Once
 	release := func() { once.Do(unlock) }
 	defer release()
-	if err := n.checkPane(ctx, t.pane, "codex", ""); err != nil {
+	if err := n.codexReady(ctx, t.pane, target.tier != ""); err != nil {
 		return err // a draft in the box, a dialog on the screen, the agent gone: nothing typed
 	}
 	before, _ := n.readPane(ctx, t.pane, "visible", 60)
@@ -198,12 +275,12 @@ func (n *Node) typeCodexSettings(ctx context.Context, id string, t codexTerminal
 	n.typing.typed(t.pane, cmd)
 	release() // typed: a message may follow now
 	for deadline := time.Now().Add(codexSettingsWait); ; {
-		if codexSettingsRecorded(t.rollout, from, model, effort) {
+		if codexSettingsRecorded(t.rollout, from, target) {
 			return nil
 		}
 		if after, err := n.readPane(ctx, t.pane, "visible", 60); err == nil {
-			if err := codexModelArgsOutcome(before, after, model, effort); err != nil {
-				if codexSettingsRecorded(t.rollout, from, model, effort) {
+			if err := codexTerminalOutcome(before, after, target); err != nil {
+				if codexSettingsRecorded(t.rollout, from, target) {
 					return nil // recorded meanwhile: the record, not a line on the screen, says the change took
 				}
 				return err
@@ -260,7 +337,7 @@ type codexStarting struct{ words string }
 
 func (e codexStarting) Error() string { return e.words }
 
-// codexModelArgsOutcome is Codex's refusal of the /model typed between the screens before and after: a new line of
+// codexTerminalOutcome is Codex's refusal of the /model typed between the screens before and after: a new line of
 // after that starts with Codex's words that the model or level typed is unavailable, that the command takes no
 // arguments now (Codex's Reserve) or an argument it does not know, that /model waits for the running task, or that the
 // session is still starting (codexStarting). Its words are Codex's (Codex 0.169 to 0.171). nil when none shows: the
@@ -269,7 +346,7 @@ func (e codexStarting) Error() string { return e.words }
 // A line is new when after has more copies of it than before: Codex prints the same refusal again for the same pick,
 // below the first one still on the screen. The words count only at the start of a line, so a tool's output or the
 // agent's text that quotes them is not taken for Codex's answer.
-func codexModelArgsOutcome(before, after, model, effort string) error {
+func codexTerminalOutcome(before, after string, target codexTerminalSettings) error {
 	onScreen := map[string]int{}
 	for _, l := range strings.Split(before, "\n") {
 		onScreen[strings.TrimSpace(l)]++
@@ -287,9 +364,10 @@ func codexModelArgsOutcome(before, after, model, effort string) error {
 		switch {
 		case strings.HasPrefix(words, "Session is still starting; try /model"):
 			return codexStarting{words}
-		case model != "" && (strings.HasPrefix(words, "Model '"+model+"' is unavailable") ||
-			strings.HasPrefix(words, "Your ChatGPT model list doesn't include `"+model+"`")),
-			effort != "" && strings.HasPrefix(words, "Reasoning level '"+effort+"' is unavailable"),
+		case target.model != "" && (strings.HasPrefix(words, "Model '"+target.model+"' is unavailable") ||
+			strings.HasPrefix(words, "Your ChatGPT model list doesn't include `"+target.model+"`")),
+			target.effort != "" && strings.HasPrefix(words, "Reasoning level '"+target.effort+"' is unavailable"),
+			target.tier != "" && strings.HasPrefix(words, "Speed '") && strings.Contains(words, "' is unavailable"),
 			strings.HasPrefix(words, "Model arguments are unavailable"),
 			strings.HasPrefix(words, "Unexpected argument '"),
 			strings.HasPrefix(words, "'/model' is disabled while a task is in progress"):
@@ -299,10 +377,10 @@ func codexModelArgsOutcome(before, after, model, effort string) error {
 	return nil
 }
 
-// codexSettingsRecorded says whether the rollout at path has, past offset from, Codex's record of the thread running
-// with model and effort ("" either: any): the thread_settings_applied it writes as soon as it applies a /model, and
+// codexSettingsRecorded says whether the rollout at path has, past offset from, Codex's record of the requested
+// settings (empty fields are ignored): the thread_settings_applied it writes as soon as it applies a /model, and
 // again when a turn starts.
-func codexSettingsRecorded(path string, from int64, model, effort string) bool {
+func codexSettingsRecorded(path string, from int64, target codexTerminalSettings) bool {
 	f, err := os.Open(path)
 	if err != nil {
 		return false
@@ -328,7 +406,9 @@ func codexSettingsRecorded(path string, from int64, model, effort string) bool {
 			continue
 		}
 		s := l.Payload.Settings
-		if (model == "" || s.Model == model) && (effort == "" || s.ReasoningEffort != nil && *s.ReasoningEffort == effort) {
+		if (target.model == "" || s.Model == target.model) &&
+			(target.effort == "" || s.ReasoningEffort != nil && *s.ReasoningEffort == target.effort) &&
+			(target.tier == "" || codexServiceTier(s.ServiceTier) == target.tier) {
 			return true
 		}
 	}

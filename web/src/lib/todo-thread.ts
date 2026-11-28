@@ -1,6 +1,6 @@
 // The chat thread a todo is bound to, as the todo page shows it (#5279, docs/assistant/todos.md "Chat thread"). The web only shows
 // the binding and lets the user unbind it: binding needs a list of the bot's recent topics, which the hub has no
-// route for, so a binding is made by opening a topic in a registered group or by an Agent (`todo_bind_thread`).
+// route for, so a binding is made by requesting a to-do in a registered topic group or by an Agent (`todo_bind_thread`).
 import { t } from "../i18n";
 import { api, enc } from "./api";
 import { hubHas } from "./store";

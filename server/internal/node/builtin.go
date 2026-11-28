@@ -121,6 +121,10 @@ func builtinCall(ctx context.Context, id, method string, params json.RawMessage,
 			return browserStatus(ctx), nil
 		case "call":
 			return browserCall(ctx, params)
+		case "download_info":
+			return browserDownloadInfo(params)
+		case "download_chunk":
+			return browserDownloadChunk(params)
 		case "cookies.list", "cookies.import", "cookies.clear": // sign-ins in ego's profile (browser_cookies.go)
 			return browserCookies(ctx, "browser."+method, params)
 		}

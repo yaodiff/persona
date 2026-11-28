@@ -46,6 +46,7 @@ func TestApprovalTerminalResultDeliverySettlesExactlyOnce(t *testing.T) {
 		if err := ft.s.approvalJournalApplying(context.Background(), ix); err != nil {
 			t.Fatal(err)
 		}
+		reloadApprovalJournalForRestart(ft.s)
 		ft.s.recoverApprovalJournals(context.Background())
 
 		results := settledApprovalTerminalResults(t, ft, ix.ID)

@@ -47,7 +47,11 @@ func (t developmentTransport) RoundTrip(r *http.Request) (*http.Response, error)
 
 func (d *Devices) developmentSite(t devicewire.DevelopmentTarget) (*http.Client, string, error) {
 	cfg := d.config()
-	if !t.Valid() || cfg.DevelopmentHold || cfg.DevelopmentTarget == nil || *cfg.DevelopmentTarget != t || cfg.HubVersion != t.Version {
+	current := cfg.DevelopmentTarget
+	if t.ValidPublished() {
+		current = cfg.PublishedTarget
+	}
+	if (!t.Valid() && !t.ValidPublished()) || cfg.DevelopmentHold || current == nil || *current != t || cfg.HubVersion != t.Version {
 		return nil, "", i18n.Err("devices-deploy.hub_changed")
 	}
 	if d.opts.PackageHub == nil || !d.busUp() {
@@ -96,6 +100,8 @@ func (d *Devices) developmentManifest(ctx context.Context, t devicewire.Developm
 
 var platformPart = lazyre.New(`^[a-z0-9]+$`)
 
+var errNoPublishedPackage = errors.New("no package for this platform on the Hub")
+
 func (d *Devices) lookupDevelopment(ctx context.Context, k packageKey) (nodePackage, error) {
 	if !platformPart.MatchString(k.goos) || !platformPart.MatchString(k.arch) {
 		return nodePackage{}, i18n.Err("devices-deploy.os_unknown")
@@ -124,7 +130,12 @@ func (d *Devices) lookupDevelopment(ctx context.Context, k packageKey) (nodePack
 			f, found = m.Files[plat]
 		}
 	}
-	name := nodeBinaryName(program, plat) + ".gz"
+	name := nodeBinaryName(program, plat)
+	if !t.ValidPublished() {
+		name += ".gz"
+	} else if !found {
+		return nodePackage{}, errNoPublishedPackage
+	}
 	p := nodePackage{Version: t.Version, build: t.Build, goos: k.goos, arch: k.arch, Program: program, development: &t, file: update.File{Name: name}}
 	if found {
 		if f.Name != name || f.Size <= 0 || !validDigest(f.SHA256) || !validDigest(f.BinarySHA256) {
@@ -189,8 +200,12 @@ func (d *Devices) fetchDevelopment(ctx context.Context, p nodePackage) (string, 
 	var got string
 	source, sum := sourceHub, p.file.BinarySHA256
 	if sum != "" {
-		got, err = update.Download(ctx, client, base, p.file, stage)
-		if err != nil && !update.IsNotFound(err) {
+		if t.ValidPublished() {
+			got, err = update.DownloadBinary(ctx, client, base, p.file, stage)
+		} else {
+			got, err = update.Download(ctx, client, base, p.file, stage)
+		}
+		if err != nil && (t.ValidPublished() || !update.IsNotFound(err)) {
 			return "", "", i18n.Err("devices-deploy.package_bad", i18n.Args{"os": p.goos, "arch": p.arch, "err": err.Error()})
 		}
 	}
@@ -227,12 +242,46 @@ func (d *Devices) fetchDevelopment(ctx context.Context, p nodePackage) (string, 
 // ManagerDevelopmentPackage uses the same verified store as the nodes. Only an
 // independent manager that received the target can obtain its own program.
 func (d *Devices) ManagerDevelopmentPackage(ctx context.Context, t devicewire.DevelopmentTarget) (string, error) {
-	p, err := d.lookupDevelopment(ctx, packageKey{goos: runtime.GOOS, arch: runtime.GOARCH, program: "persona-manager", development: t})
+	k := packageKey{goos: runtime.GOOS, arch: runtime.GOARCH, program: "persona-manager", development: t}
+	p, err := d.lookupDevelopment(ctx, k)
+	if errors.Is(err, errNoPublishedPackage) {
+		return d.managerReleasePackage(ctx, k)
+	}
 	if err != nil {
 		return "", err
 	}
 	name, _, err := d.fetchDevelopment(ctx, p)
 	return name, err
+}
+
+func (d *Devices) managerReleasePackage(ctx context.Context, k packageKey) (string, error) {
+	t := k.development
+	k.base = d.config().NodePackagesURL
+	if k.base == "" {
+		return "", errNoPublishedPackage
+	}
+	m, err := d.fetchManifest(ctx, k.base+"/"+url.PathEscape(t.Version)+"/manifest.json")
+	flat := errors.Is(err, errNoManifest)
+	if flat {
+		m, err = d.fetchManifest(ctx, k.base+"/latest.json")
+	}
+	if err != nil {
+		return "", err
+	}
+	if m.Version != t.Version || m.Build != t.Build || m.Commit != t.Commit {
+		return "", i18n.Err("devices-deploy.hub_changed")
+	}
+	plat := k.goos + "-" + k.arch
+	program, f := k.program, m.Programs[k.program][plat]
+	if f.Name == "" {
+		program, f = "personad", m.Files[plat]
+	}
+	if f.Name != nodeBinaryName(program, plat)+".gz" || f.Size <= 0 || !validDigest(f.SHA256) || !validDigest(f.BinarySHA256) {
+		return "", errNoPublishedPackage
+	}
+	p := remotePackage(k, m, t.Version, f, false)
+	p.Program, p.flat = program, flat
+	return d.fetchPackage(ctx, p)
 }
 
 // CheckDevelopmentTarget rechecks the Hub immediately before activation, including after an idle wait.
@@ -267,6 +316,22 @@ func (d *Devices) DevelopmentTarget() *devicewire.DevelopmentTarget {
 		return nil
 	}
 	return cfg.DevelopmentTarget
+}
+
+// ManagerBuild is what the Hub currently authorizes this manager to follow.
+// With fleet updates disabled the manager checks for a local installation of
+// the same build before taking it.
+func (d *Devices) ManagerBuild() (target *devicewire.DevelopmentTarget, automatic bool) {
+	cfg := d.config()
+	if cfg.DevelopmentHold || !d.busUp() {
+		return nil, false
+	}
+	for _, t := range []*devicewire.DevelopmentTarget{cfg.DevelopmentTarget, cfg.PublishedTarget} {
+		if t != nil && (t.Valid() || t.ValidPublished()) && t.Version == cfg.HubVersion {
+			return t, cfg.AutoUpdateNodes
+		}
+	}
+	return nil, false
 }
 
 func (d *Devices) DevelopmentIdle() bool {

@@ -71,7 +71,7 @@ export async function deliverLaunch(id: string, clearDraft?: string) {
         if (launch.attachments.length) throw new Error(t("lib-new-agent.launcher_no_attachments"));
         let r: { session: Session };
         try {
-          r = await launchOp<{ session: Session }>("/sessions", launch.startPromptOpId, controller.signal, { ...target, name_hint: launch.nameHint, prompt: launch.text || undefined });
+          r = await launchOp<{ session: Session }>("/sessions", launch.startPromptOpId, controller.signal, { ...target, service_tier: launch.serviceTier, name_hint: launch.nameHint, prompt: launch.text || undefined });
         } catch (e) {
           if (!launch.text && e instanceof ApiError && (e.code === "codex_needs_prompt" || e.code === "work_prompt_required")) throw new Error(t("lib-new-agent.launcher_needs_text"));
           throw e;
@@ -86,6 +86,7 @@ export async function deliverLaunch(id: string, clearDraft?: string) {
         try {
           const r = await launchOp<{ session: Session }>("/sessions", launch.startOpId, controller.signal, {
             ...target,
+            service_tier: launch.serviceTier,
             ultracode: launch.ultracode === true ? true : undefined, async: launch.launcher !== "claude-desktop" && launch.launcher !== "codex-app", name_hint: launch.nameHint ?? (launch.text || undefined),
           });
           session = r.session;
@@ -128,8 +129,8 @@ export async function deliverLaunch(id: string, clearDraft?: string) {
           paths.push(quotePath(path));
         }
       }
-      if (spilled.count) toast(t("chat-composer.images_as_files", { max: limits.per_message, count: spilled.count }));
-      if (spilled.bytes) toast(t("chat-composer.images_bytes_as_files", { count: spilled.bytes }));
+      if (spilled.count) toast(t("chat-composeroverlays.images_as_files", { max: limits.per_message, count: spilled.count }));
+      if (spilled.bytes) toast(t("chat-composeroverlays.images_bytes_as_files", { count: spilled.bytes }));
       update({ outgoing: { text: [launch.text, ...paths].filter(Boolean).join("\n"), images } });
     }
     if (!getState().launches[id]) return;

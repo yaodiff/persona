@@ -274,23 +274,26 @@ type leaderScope struct {
 // leaderTaskIn is a worker task as a task leader may plan it: nothing else (no todo_id, attachments, project,
 // user_requested…) is read, an unknown field is refused. Every new worker declares role "worker".
 type leaderTaskIn struct {
-	Title         string   `json:"title"`
-	Prompt        string   `json:"prompt"`
-	Role          string   `json:"role"`
-	Machine       string   `json:"machine"`
-	MachinePolicy string   `json:"machine_policy"`
-	Cwd           string   `json:"cwd"`
-	Launcher      string   `json:"launcher"`
-	Model         string   `json:"model"`
-	Tier          string   `json:"tier"`
-	Effort        string   `json:"effort"`
-	Speed         string   `json:"speed"`
-	Permission    string   `json:"permission"`
-	Readonly      bool     `json:"readonly"`
-	DoneWhen      []string `json:"done_when"`
-	Goal          string   `json:"goal"`
-	ExpectMinutes int      `json:"expect_minutes"`
-	Why           string   `json:"why"`
+	Title            string             `json:"title"`
+	Prompt           string             `json:"prompt"`
+	Role             string             `json:"role"`
+	Machine          string             `json:"machine"`
+	MachinePolicy    string             `json:"machine_policy"`
+	Cwd              string             `json:"cwd"`
+	Launcher         string             `json:"launcher"`
+	Host             string             `json:"host"`
+	Model            string             `json:"model"`
+	Tier             string             `json:"tier"`
+	Effort           string             `json:"effort"`
+	Speed            string             `json:"speed"`
+	Permission       string             `json:"permission"`
+	Readonly         bool               `json:"readonly"`
+	MultiIssueReport bool               `json:"multi_issue_report"`
+	DoneWhen         []string           `json:"done_when"`
+	Goal             string             `json:"goal"`
+	ExpectMinutes    int                `json:"expect_minutes"`
+	Why              string             `json:"why"`
+	DistinctFrom     []TaskDistinctFrom `json:"distinct_from"`
 }
 
 // workerTasks reads a leader's task_plan arguments as worker tasks beneath its task.
@@ -307,8 +310,9 @@ func (l *leaderScope) workerTasks(args json.RawMessage) ([]PlanTask, error) {
 	out := make([]PlanTask, 0, len(in.Tasks))
 	for _, t := range in.Tasks {
 		pt := PlanTask{Title: t.Title, Prompt: t.Prompt, Role: t.Role, Machine: t.Machine, MachinePolicy: t.MachinePolicy, Cwd: t.Cwd,
-			Launcher: t.Launcher, Model: t.Model, Tier: t.Tier, Effort: t.Effort, Speed: t.Speed, Permission: t.Permission, Readonly: t.Readonly,
-			DoneWhen: t.DoneWhen, Goal: t.Goal, ExpectMinutes: t.ExpectMinutes, Why: t.Why, Parent: l.task.ID, Project: l.task.Project}
+			Launcher: t.Launcher, Host: strings.TrimSpace(t.Host), Model: t.Model, Tier: t.Tier, Effort: t.Effort, Speed: t.Speed, Permission: t.Permission, Readonly: t.Readonly, MultiIssueReport: t.MultiIssueReport,
+			DoneWhen: t.DoneWhen, Goal: t.Goal, ExpectMinutes: t.ExpectMinutes, Why: t.Why, Parent: l.task.ID, Project: l.task.Project,
+			DistinctFrom: t.DistinctFrom}
 		if strings.TrimSpace(pt.Machine) == "" {
 			pt.Machine = l.agent.MachineID
 			if strings.TrimSpace(pt.Cwd) == "" {
@@ -495,6 +499,12 @@ func (s *Service) deliverToLeaderAgent(ctx context.Context, lead TodoAgent, list
 		s.ackSupervisePending(batch)
 		return false
 	}
+	entries, kept = s.screenModelSupervision(ctx, leaderRef(lead.MachineID, lead.SessionID), entries, kept, now, prev)
+	batch = append(moot, kept...)
+	if len(entries) == 0 {
+		s.ackSupervisePending(moot)
+		return false
+	}
 	holds := kept
 	session, listed := s.session(ctx, lead.MachineID, lead.SessionID)
 	if !listed {
@@ -514,6 +524,7 @@ func (s *Service) deliverToLeaderAgent(ctx context.Context, lead TodoAgent, list
 	}
 	if len(entries) == 0 {
 		s.ackSupervisePending(batch)
+		s.topicFollowupsTold(ctx, holds)
 		s.todoReadyTold(ctx, holds)
 		s.prMergeWakeTold(ctx, holds)
 		s.parentCloseoutTold(ctx, holds)
@@ -558,8 +569,10 @@ func (s *Service) deliverToLeaderAgent(ctx context.Context, lead TodoAgent, list
 		return false
 	}
 	s.logf("supervise: %d signal(s) to task leader %s", len(entries), short(lead.SessionID))
+	s.ackTopicFollowupDedup(ctx, kept)
 	s.ackSupervisePending(batch)
 	s.parkedDueTold(ctx, kept)
+	s.topicFollowupsTold(ctx, holds)
 	s.estimateDueTold(ctx, kept)
 	s.todoReadyTold(ctx, holds)
 	s.prMergeWakeTold(ctx, holds)
@@ -590,7 +603,7 @@ func (e leaderEscalated) Unwrap() error { return e.err }
 // batch, including members suppressed by delivered dedup history (#5732). sent determines the text actually carried;
 // receipts includes the filtered members whose turn receipts close on delivery.
 func (s *Service) sendToLeader(ctx context.Context, lead TodoAgent, text string, all, sent, receipts []superviseSignal, delivered func(context.Context)) error {
-	if !s.autoSupervisionOn(ctx) {
+	if !supervisionSignalsAllowed(s.supervisionMode(ctx), sent) {
 		return errSupervisionSuppressed // the last look before the send (supervise_switch.go)
 	}
 	ctx = supervisionSourceContext(ctx, sent)
@@ -635,6 +648,8 @@ func (s *Service) leaderDelivered(ctx context.Context, lead TodoAgent, entries [
 	if _, _, _, err := s.reserveSupervision(ctx, entries, sent, time.Now()); err != nil {
 		s.logf("supervise: task leader %s took the message; deduplication not recorded: %v", short(lead.SessionID), err)
 	}
+	s.ackTopicFollowupDedup(ctx, sent)
+	s.topicFollowupsTold(ctx, receipts)
 	s.ackSupervisePending(all)
 	s.parkedDueTold(ctx, sent)
 	s.estimateDueTold(ctx, sent)
@@ -648,7 +663,7 @@ func (s *Service) leaderDelivered(ctx context.Context, lead TodoAgent, entries [
 // sendToLeaderNow is one attempt to put text into the leader's session, resuming it if closed; it waits up to
 // leaderResumeTime. Each attempt has its own time, so it can be called from a goroutine that outlives any request.
 func (s *Service) sendToLeaderNow(ctx context.Context, lead TodoAgent, text string, kept []superviseSignal) error {
-	if !s.autoSupervisionOn(ctx) {
+	if !supervisionSignalsAllowed(s.supervisionMode(ctx), kept) {
 		return errSupervisionSuppressed // also a retry or resume that was already running
 	}
 	ctx = supervisionSourceContext(ctx, kept)
@@ -665,8 +680,8 @@ func (s *Service) sendToLeaderNow(ctx context.Context, lead TodoAgent, text stri
 // acknowledges the complete original batch, including filtered members (#5732, #9607).
 func (s *Service) escalateLeaderMessage(lead TodoAgent, all, sent, receipts []superviseSignal, text string, uncertain bool, delivered func(context.Context)) {
 	ctx := context.Background()
-	if !s.autoSupervisionOn(ctx) {
-		return // automatic supervision messages are off: no escalation and no retry loop
+	if !supervisionSignalsAllowed(s.supervisionMode(ctx), sent) {
+		return // the mode drops it (off, or only routine checks under outcomes): no escalation and no retry loop
 	}
 	for _, g := range sent {
 		if w, ok := s.todoNow(g.Todo); ok {
@@ -719,19 +734,21 @@ func (s *Service) leaderTaskReview(ctx context.Context, machine, session string,
 	return proto.TextResult(res, false)
 }
 
-// leaderReview is the leader agent's task_review on one of its direct workers: accepted closes it, cancelled closes and
-// stops it, rework sends what is missing back to the worker (two rounds, then it goes up), needs_user sends the
-// question to whoever handed the leader its task. No conclusion card, "Please verify" or other card goes to the user,
+// leaderReview is the leader agent's task_review on one of its direct workers: accepted or cancelled closes it and
+// leaves its agent usable until idle after owner inactivity. Rework sends what is missing back to the worker (two
+// rounds, then it goes up); needs_user sends the question to whoever handed the leader its task.
+// No conclusion card, "Please verify" or other card goes to the user,
 // and no other task is reachable: it is the leader's direct worker (its ledger names this leader) or nothing.
 func (s *Service) leaderReview(ctx context.Context, lead TodoAgent, args json.RawMessage) (string, error) {
 	var a struct {
-		TodoID     string        `json:"todo_id"`
-		Verdict    string        `json:"verdict"`
-		ReworkKind string        `json:"rework_kind"`
-		Checks     []ReviewCheck `json:"checks"`
-		Note       string        `json:"note"`
-		Reason     string        `json:"reason"`
-		Recommend  string        `json:"recommend"`
+		TodoID     string         `json:"todo_id"`
+		Verdict    string         `json:"verdict"`
+		ReworkKind string         `json:"rework_kind"`
+		Checks     []ReviewCheck  `json:"checks"`
+		Note       string         `json:"note"`
+		Reason     string         `json:"reason"`
+		Recommend  string         `json:"recommend"`
+		Findings   *findingReview `json:"findings_review"`
 	}
 	dec := json.NewDecoder(bytes.NewReader(args))
 	dec.DisallowUnknownFields()
@@ -741,9 +758,9 @@ func (s *Service) leaderReview(ctx context.Context, lead TodoAgent, args json.Ra
 	a.Note = strings.TrimSpace(a.Note)
 	a.ReworkKind = strings.TrimSpace(a.ReworkKind)
 	switch a.Verdict {
-	case reviewAccepted, reviewRework, reviewNeedsUser, reviewCancelled:
+	case reviewAccepted, reviewRework, reviewNeedsUser, reviewCancelled, reviewFindings:
 	default:
-		return "", errors.New("verdict must be accepted, rework, needs_user or cancelled")
+		return "", errors.New("verdict must be accepted, rework, needs_user, cancelled or findings")
 	}
 	if a.ReworkKind != "" && a.Verdict != reviewRework {
 		return "", errors.New("rework_kind applies to rework only")
@@ -761,8 +778,36 @@ func (s *Service) leaderReview(ctx context.Context, lead TodoAgent, args json.Ra
 	if cur, supervised, reachable := s.leaderSupervisor(t); !supervised || !reachable || cur.MachineID != lead.MachineID || cur.SessionID != lead.SessionID {
 		return "", fmt.Errorf("task %s is not one of your workers: you review the workers you handed out with task_plan, nothing else", t.ID)
 	}
+	if a.Verdict == reviewFindings {
+		return s.reviewInvestigationFindings(ctx, t, a.Findings, a.Checks, lead.SessionID, func(cur Todo) bool {
+			supervisor, supervised, reachable := s.leaderSupervisor(cur)
+			return supervised && reachable && supervisor.MachineID == lead.MachineID && supervisor.SessionID == lead.SessionID
+		})
+	}
+	if a.Findings != nil {
+		return "", errors.New("record findings_review with verdict findings before changing task state")
+	}
 	if t.DoneAt != nil && (a.Verdict == reviewRework || a.Verdict == reviewNeedsUser) {
 		return "", fmt.Errorf("task %s is done already (%s): hand out a new worker for what is left", t.ID, cmp.Or(t.DoneReason, "closed"))
+	}
+	if a.Verdict == reviewAccepted {
+		if err := s.todoCloseDeclineError(ctx, t); err != nil {
+			return "", err
+		}
+	}
+	if a.Verdict == reviewAccepted || a.Verdict == reviewCancelled {
+		if err := s.taskCloseActivityError(ctx, t, time.Now()); err != nil {
+			return "", s.taskCloseToolError(ctx, s.deferTaskReview(ctx, t.ID, err))
+		}
+	}
+	if a.Verdict == reviewAccepted && t.DoneAt == nil {
+		if err := s.closeoutFollowUpError(ctx, t, ""); err != nil {
+			return "", err
+		}
+		if _, why := s.ownerInstructionBlock(ctx, t); why != "" {
+			return "", errors.New("accepted refused: " + why + ". Send the instruction back with rework, or ask the " +
+				"conversation above to collect the owner's explicit confirmation")
+		}
 	}
 	var up string // the conversation a needs_user goes to: whoever handed the leader its task
 	if lt, ok := s.leaderTaskOf(ctx, lead); ok && lt.Supervision != nil {
@@ -780,8 +825,37 @@ func (s *Service) leaderReview(ctx context.Context, lead TodoAgent, args json.Ra
 	}
 	verdict, note := a.Verdict, clip(a.Note, 2000)
 	over, overSafetyCap, overCount := false, false, 0
-	var criteriaErr error
-	v, _, err := s.updateSupervision(ctx, t.ID, func(v *Supervision) bool {
+	var criteriaErr, findingErr error
+	var closing *taskReviewClose
+	if verdict == reviewAccepted || verdict == reviewCancelled {
+		reason := cmp.Or(clip(oneLine(note), 80), "验收通过") // i18n-ignore: done_reason, as a conversation's review writes it
+		if verdict == reviewCancelled {
+			reason = "取消：" + cmp.Or(clip(oneLine(note), 80), "不做了") // i18n-ignore: done_reason, as a conversation's review writes it
+		}
+		closing = &taskReviewClose{reason: reason, accepted: verdict == reviewAccepted}
+	}
+	var cancelCheckedAgents []TodoAgent
+	cancelWorkersGone := false
+	if verdict == reviewCancelled {
+		cancelCheckedAgents, cancelWorkersGone = s.checkStaleInvestigationCancelWorkers(ctx, t)
+	}
+	var guard func(Todo) bool
+	if verdict == reviewAccepted || verdict == reviewCancelled {
+		guard = func(cur Todo) bool {
+			if !(verdict == reviewCancelled && staleInvestigationCancelAllowed(cur, cancelCheckedAgents, cancelWorkersGone)) {
+				findingErr = s.investigationTransitionError(ctx, cur, cur.Supervision, nil)
+			}
+			if findingErr == nil {
+				var acceptedChecks []ReviewCheck
+				if verdict == reviewAccepted {
+					acceptedChecks = checks
+				}
+				findingErr = s.receivedFindingsCloseError(cur, acceptedChecks)
+			}
+			return findingErr == nil
+		}
+	}
+	v, _, err := s.updateSupervisionGuardedWithClose(ctx, t.ID, guard, func(v *Supervision) bool {
 		if verdict == reviewAccepted {
 			if criteriaErr = completeReviewCriteriaError(v.DoneWhen, a.Checks); criteriaErr != nil {
 				return false
@@ -797,15 +871,21 @@ func (s *Service) leaderReview(ctx context.Context, lead TodoAgent, args json.Ra
 			round, stalled := v.applyReworkAccounting(a.ReworkKind)
 			r.Round, r.ReworkKind, r.StalledReworkRounds = round, a.ReworkKind, stalled
 		}
+		if verdict == reviewAccepted && len(s.investigationReceivedFindings(t.ID)) > 0 {
+			v.applyChecks(checks, r.At, "supervisor:"+lead.SessionID)
+		}
 		v.State = verdict
 		v.Reviews = append(v.Reviews, r)
 		if len(v.Reviews) > 20 {
 			v.Reviews = v.Reviews[len(v.Reviews)-20:]
 		}
 		return true
-	})
+	}, closing)
 	if err != nil {
-		return "", err
+		return "", s.taskCloseToolError(ctx, s.deferTaskReview(ctx, t.ID, err))
+	}
+	if findingErr != nil {
+		return "", findingErr
 	}
 	if criteriaErr != nil {
 		return "", criteriaErr
@@ -832,17 +912,9 @@ func (s *Service) leaderReview(ctx context.Context, lead TodoAgent, args json.Ra
 	b.mu.Unlock()
 	switch verdict {
 	case reviewAccepted, reviewCancelled:
-		reason := cmp.Or(clip(oneLine(note), 80), "验收通过") // i18n-ignore: done_reason, as a conversation's review writes it
-		if verdict == reviewCancelled {
-			reason = "取消：" + cmp.Or(clip(oneLine(note), 80), "不做了") // i18n-ignore: done_reason, as a conversation's review writes it
-		}
 		if t.DoneAt == nil || t.StartError != "" {
 			wasOpen := t.DoneAt == nil
-			closed, err := s.reviewDoneTodo(ctx, t.ID, reason, verdict == reviewAccepted)
-			if err != nil {
-				return "", err
-			}
-			if wasOpen && closed && verdict == reviewAccepted { // a failed start was closed already: no acceptance to count
+			if wasOpen && closing.closed && verdict == reviewAccepted { // a failed start was closed already: no acceptance to count
 				s.leaderTaskReviewed(lead, t.ID, verdict, v)
 			}
 		}
@@ -850,8 +922,8 @@ func (s *Service) leaderReview(ctx context.Context, lead TodoAgent, args json.Ra
 			s.sendsAccepted(ctx, t.ID, time.Now()) // what was sent its agent before is answered: closed already, too (#7539)
 		}
 		if verdict == reviewCancelled {
-			s.stopTaskAgents(ctx, t)
-			return fmt.Sprintf("Worker task %s is cancelled and closed; its agent is being stopped (its terminal stays) and archived.", t.ID), nil
+			return fmt.Sprintf("Worker task %s is cancelled and closed; its conversation stays usable until its Agent is idle "+
+				"and the user has been inactive for 10 minutes, then it is stopped and archived (its terminal stays).", t.ID), nil
 		}
 		return fmt.Sprintf("Worker task %s is accepted and closed; its agent is stopped once it stays still (its terminal stays).", t.ID), nil
 	case reviewNeedsUser:
@@ -931,17 +1003,23 @@ func (s *Service) rehomeWorker(ctx context.Context, t Todo) (cur Todo, cancelled
 	}
 	up, _ := s.supervisorAboveTask(ctx, t)
 	if up == "" || s.isLeaderRef(up) {
-		reason := "its task leader is gone, and there is no conversation above it to take it over" // i18n-ignore: done_reason
-		s.logf("task %s: %s; cancelled", t.ID, reason)
-		if _, _, err := s.updateSupervision(ctx, t.ID, func(v *Supervision) bool { v.State = reviewCancelled; return true }); err != nil {
-			s.logf("task %s: rehome: %v", t.ID, err)
+		if err := s.taskCloseActivityError(ctx, t, time.Now()); err != nil {
+			s.logf("task %s: rehome deferred: %v", t.ID, err)
+			return t, false
 		}
-		if _, err := s.reviewDoneTodo(ctx, t.ID, reason, false); err != nil {
+		reason := "its task leader is gone, and there is no conversation above it to take it over" // i18n-ignore: done_reason
+		closing := &taskReviewClose{reason: reason}
+		if _, _, err := s.updateSupervisionWithClose(ctx, t.ID,
+			func(v *Supervision) bool { v.State = reviewCancelled; return true }, closing); err != nil {
 			s.logf("task %s: rehome: %v", t.ID, err)
+			cur, _ = s.todoNow(t.ID)
+			return cur, false
 		}
 		cur, _ = s.todoNow(t.ID)
-		s.stopTaskAgents(ctx, cur)
-		return cur, true
+		if closing.closed {
+			s.logf("task %s: %s; cancelled", t.ID, reason)
+		}
+		return cur, closing.closed
 	}
 	s.logf("task %s: its task leader is gone; %s takes it over", t.ID, up)
 	if _, err := s.editTodo(ctx, t.ID, db.TodoEdit{Origin: &up}); err != nil {

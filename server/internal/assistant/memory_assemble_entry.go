@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"context"
+	"slices"
 	"strings"
 
 	"github.com/nwverse/persona/server/internal/db"
@@ -158,6 +159,8 @@ type memoryExtensionEntry struct {
 	// a standing entry goes to a standing channel (memoryExtensionBatch.standingOnly); the others come in by relevance
 	// (their subjects or text) in a recall, a hand-off or the Inbox.
 	Standing bool
+	// Rank is the extension's importance rank (0..1000), used to order recall and entity-triggered matches.
+	Rank int
 }
 
 // memoryExtensionBatch is what a source hands over at once. Tagged says the extension that wrote the entries sets
@@ -174,14 +177,20 @@ type memoryExtensionBatch struct {
 	StandingBytes int
 }
 
-// standingBudget is the bytes of b's standing entries a standing channel carries (#15312): what the extension stated,
-// at most memoryExtensionStandingMost, else memoryExtensionStandingDefault. It is the extension's own, never spent by
-// the ledger's entries.
-func (b memoryExtensionBatch) standingBudget() int {
-	if b.StandingBytes <= 0 {
-		return memoryExtensionStandingDefault
+// standingBudget is the bytes of b's standing entries a standing channel carries (#15312), with owner the owner's
+// choice (assistant.memory_extension_standing_bytes: 4096, 8192 or 16384; anything else is the default 4096): what the
+// extension stated, at most the larger of owner and memoryExtensionStandingMost, else owner. So the default choice
+// keeps the budgets from before the choice existed (4096 unless stated, a stated one up to 8192), and a larger choice
+// lets an extension that states none, or states more, carry up to that choice. It is the extension's own, never spent
+// by the ledger's entries.
+func (b memoryExtensionBatch) standingBudget(owner int) int {
+	if !slices.Contains(memoryExtensionStandingOptions, owner) {
+		owner = memoryExtensionStandingDefault
 	}
-	return min(b.StandingBytes, memoryExtensionStandingMost)
+	if b.StandingBytes <= 0 {
+		return owner
+	}
+	return min(b.StandingBytes, max(owner, memoryExtensionStandingMost))
 }
 
 // memoryExtensionSource hands the assembler the memory extension's entries: personal says the receiver may see what

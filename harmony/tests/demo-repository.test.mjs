@@ -56,6 +56,7 @@ registerHooks({
 const { DemoRepository } = await import('../entry/src/main/ets/models/DemoRepository.ets');
 const { messageDisplay } = await import('../entry/src/main/ets/models/Compatibility.ets');
 const { parseMessageContent } = await import('../entry/src/main/ets/core/MessageContent.ts');
+const { parseStarredIndexResponse, parseStarredListResponse } = await import('../entry/src/main/ets/core/StarredMessages.ts');
 const { loadMessageImage } = await import('../entry/src/main/ets/models/MessageImage.ets');
 const { loadRemoteDocument } = await import('../entry/src/main/ets/models/RemoteDocument.ets');
 const { ResourceRow } = await import('../entry/src/main/ets/models/Wire.ets');
@@ -314,4 +315,60 @@ test('demo manager permissions, new conversations and the independent AI twin st
  assert.equal((await repo.call(conf)).default_permission_mode,'acceptEdits');
  repo.seed();assert.equal((await repo.call(conf)).default_permission_mode,'default');assert.deepEqual((await repo.call(twin)).purpose.override,{});
  assert.equal(globalThis.__demoTransportCalls,0);
+});
+
+test('read-only demo preview routes serve synthetic files, git diff, screen, metrics, and usage offline', async () => {
+  globalThis.__demoTransportCalls = 0;
+  const repo = new DemoRepository();
+  const fs = await repo.call('/api/v1/machines/demo-mac/fs?path=%2Fdemo%2FReleaseDesk&cwd=%2Fdemo%2FReleaseDesk');
+  assert.equal(fs.path, '/demo/ReleaseDesk');
+  assert.ok(fs.entries.some((entry) => entry.name === 'CHANGELOG.md'));
+
+  const file = await repo.call('/api/v1/machines/demo-mac/file?path=%2Fdemo%2FReleaseDesk%2FCHANGELOG.md&cwd=%2Fdemo%2FReleaseDesk');
+  assert.equal(file.name, 'CHANGELOG.md');
+  assert.match(file.text, /Highlights/);
+
+  const git = await repo.call('/api/v1/machines/demo-mac/git/status?cwd=%2Fdemo%2FReleaseDesk');
+  assert.equal(git.is_repo, true);
+  assert.ok(git.files.length >= 2);
+  const diff = await repo.call('/api/v1/machines/demo-mac/git/diff?cwd=%2Fdemo%2FReleaseDesk&path=src%2Frelease.ts&staged=0');
+  assert.match(diff.diff, /verifyReleaseGate/);
+
+  const screen = await repo.call('/api/v1/sessions/demo-mac/demo-agent-review/screen?lines=60&source=visible');
+  assert.match(screen.text, /42 passed/);
+
+  const metrics = await repo.call('/api/v1/metrics');
+  assert.equal(metrics.machines[0].machine_id, 'demo-mac');
+  assert.equal(metrics.machines[0].system.cores, 12);
+  const detail = await repo.call('/api/v1/machines/demo-mac/metrics?range=1h');
+  assert.ok(detail.metrics.points.length >= 24);
+
+  const usage = await repo.call('/api/v1/usage/windows');
+  assert.equal(usage.accounts.length, 2);
+  assert.equal(globalThis.__demoTransportCalls, 0);
+});
+
+test('seeded demo starred fixtures parse cleanly via StarredMessages list and index parsers', async () => {
+  globalThis.__demoTransportCalls = 0;
+  const repo = new DemoRepository();
+  const listRaw = await repo.call('/api/v1/assistant/starred');
+  const indexRaw = await repo.call('/api/v1/assistant/starred?index=1');
+  const list = parseStarredListResponse(listRaw);
+  const index = parseStarredIndexResponse(indexRaw);
+
+  assert.equal(list.canWrite, true);
+  assert.equal(index.canWrite, true);
+  assert.ok(list.stars.length >= 2);
+  assert.ok(index.refs.length >= 2);
+
+  for (const id of ['demo-star-1', 'demo-star-2']) {
+    const star = list.stars.find((entry) => entry.id === id);
+    assert.ok(star, `missing ${id}`);
+    assert.equal(star.role, 'assistant');
+    assert.ok(star.title.trim().length > 0);
+    assert.ok(star.speaker.trim().length > 0);
+    assert.ok(star.text.trim().length > 0);
+    assert.ok(index.refs.some((ref) => ref.id === id));
+  }
+  assert.equal(globalThis.__demoTransportCalls, 0);
 });

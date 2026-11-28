@@ -3,8 +3,6 @@ package assistant
 import (
 	"context"
 	"testing"
-
-	"github.com/nwverse/persona/server/internal/prompts"
 )
 
 // Conditional guidance and quoted history are not new owner demands; independent direct demands still get through.
@@ -108,7 +106,7 @@ func TestOwnerMarkerConditionalAndQuotedOccurrences(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m := &cannedJSON{answer: `{"verdict":"done","reason":"finished"}`}
-			c, err := judgeTaskDoneWith(context.Background(), m, taskDoneInput{Title: "Write the spec", Replies: []prompts.TaskDoneReply{doneReply(tc.reply)}})
+			c, err := judgeTaskDoneWith(context.Background(), m, taskDoneInput{Title: "Write the spec", Replies: []taskDoneReply{doneReply(tc.reply)}})
 			if err != nil {
 				t.Fatal(err)
 			}

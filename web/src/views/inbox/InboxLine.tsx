@@ -1,7 +1,9 @@
-// "Trail" (#2128, docs/assistant/inbox.md "Relationships: parents and children"): under an item's summary, what it grew out of (its parent's chain, up to a todo or
-// an agent session) and what grew out of it (the items right under it). Each row opens where it lives. Nothing is
-// drawn when the item has neither. A pair whose lower end is an Inbox item can be unlinked; another open item can become this item's parent.
+// "Trail" (#2128, docs/assistant/inbox.md "Relationships: parents and children"): under an item's summary, what it grew out of (its parent's chain, up to
+// a todo, an Agent session or a personal Agent session) and what grew out of it (the items right under it). Each row
+// opens where it lives. Nothing is drawn when the item has neither. A pair whose lower end is an Inbox item can be
+// unlinked; another open item can become this item's parent.
 import { useEffect, useState } from "react";
+import { useAgentList } from "../../lib/agents";
 import { itemRoute, type InboxItem, type InboxParent, type InboxTree } from "../../lib/inbox";
 import { fetchInboxTree, parentRoute } from "../../lib/inbox-page";
 import { openFromInbox } from "../../lib/inbox-nav";
@@ -24,9 +26,15 @@ export type LineRow = { key: string; label: string; title: string; route?: Route
 export type LineLocal = {
   todos?: readonly Todo[];
   session?: (mid: string, sid: string) => Session | undefined;
+  agent?: (id: string) => string | undefined;
 };
 
-const kindLabel: Record<InboxParent["kind"], string> = { inbox: t("inbox-inboxline.kind_inbox"), todo: t("inbox-inboxline.kind_todo"), session: t("inbox-inboxline.kind_session") };
+const kindLabel: Record<InboxParent["kind"], string> = {
+  inbox: t("inbox-inboxline.kind_inbox"),
+  todo: t("inbox-inboxline.kind_todo"),
+  session: t("inbox-inboxline.kind_session"),
+  agent: t("inbox-inboxline.kind_agent"),
+};
 
 /** The rows of a line: the ancestors farthest first (the chain reads top down), then the children oldest first.
  *  `manager`: whose line it is (its items are that manager's: docs/assistant/managers.md "Clients").
@@ -40,6 +48,7 @@ export function lineRows(tree: InboxTree, manager?: string, local: LineLocal = {
       const title = local.todos?.find((td) => td.id === a.id && sameManager(td.manager, manager))?.title.trim();
       return title || undefined;
     }
+    if (a.kind === "agent") return local.agent?.(a.id)?.trim() || undefined;
     if (a.kind !== "session") return undefined;
     const i = a.id.indexOf("/");
     if (i <= 0 || i === a.id.length - 1) return undefined;
@@ -136,6 +145,7 @@ export function InboxLine({ item }: { item: InboxItem }) {
   const [sameOpen, setSameOpen] = useState(false);
   const [pending, setPending] = useState<string>();
   const todos = useStore((s) => s.todos);
+  const agents = useAgentList().sessions;
   const sessions = useStore((s) => s.sessions);
   const summaries = useStore((s) => s.sessionSummaries);
   const conversations = useStore((s) => s.assistant?.conversations);
@@ -156,6 +166,7 @@ export function InboxLine({ item }: { item: InboxItem }) {
   }, [item.id, item.manager, parentKey, revision]);
   const rows = tree ? lineRows(tree, item.manager, {
     todos,
+    agent: (id) => agents.find((s) => s.id === id)?.title,
     session: (mid, sid) => sessions[mid]?.find((s) => s.session_id === sid)
       ?? summaries.find((s) => s.machine_id === mid && s.session_id === sid)
       ?? conversations?.find((s) => s.machine_id === mid && s.session_id === sid),

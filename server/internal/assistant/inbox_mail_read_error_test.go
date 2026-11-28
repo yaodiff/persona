@@ -11,11 +11,10 @@ import (
 	"github.com/nwverse/persona/server/internal/i18n"
 )
 
-// collectedJSON hands the inbox a round as the wire carries it (inbox.collected through the bus's decoding).
+// collectedJSON hands the inbox a round as the wire carries it (inbox.collected through the kernel's decoding).
 func collectedJSON(t *testing.T, h *inboxHub, round string) {
 	t.Helper()
-	decode := func(v any) error { return json.Unmarshal([]byte(round), v) }
-	if _, ok, err := inboxRequest(context.Background(), h.Service, assistantwire.MethodInboxCollected, decode); !ok || err != nil {
+	if _, ok, err := h.kernel.Answer(context.Background(), assistantwire.MethodInboxCollected, json.RawMessage(round)); !ok || err != nil {
 		t.Fatalf("inbox.collected: %v %v", ok, err)
 	}
 }

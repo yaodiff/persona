@@ -21,8 +21,8 @@ import (
 
 // probeLauncherHealth runs launchers.check for launcher on machine; false when the machine could not be asked (no result).
 func (s *Service) probeLauncherHealth(ctx context.Context, machine, launcher string) (healthResult, bool) {
-	if proto.IsExternalLauncher(launcher) {
-		return healthResult{}, false // no automatic calls to an opt-in, main-chat-only source
+	if proto.IsExternalLauncher(launcher) || s.launcherScopeErr(ctx, machine, launcher) != nil {
+		return healthResult{}, false
 	}
 	ctx, cancel := context.WithTimeout(ctx, healthCheckTimeout)
 	defer cancel()
@@ -42,33 +42,37 @@ func (s *Service) probeLauncherHealth(ctx context.Context, machine, launcher str
 }
 
 // healthLaunchers are the launchers to check on machine: those it can start (its ~/.zshrc's, the managed ones) and
-// the default one when every machine has it (plain claude: a default only some have never starts where it isn't,
-// launcher_fit.go); not an API provider's. A runtime's launcher only when the main chat or Agents run on it (#10369):
+// the default one when it needs no inventory lookup (plain claude or an in-scope managed launcher,
+// launcher_fit.go); not an API provider's. An explicit inventory is authoritative for plain Claude; an older
+// node without a catalog still falls back to probing it. A runtime's launcher only when the main chat or Agents run on it (#10369):
 // those are in whileFailing, checked only while their record on machine says they do not work, through the runtime's
 // own launchers.check as the on-demand probe does. So a failure is rechecked and a pass clears it, but no runtime is
 // asked to spend a request each interval, and the record a pass leaves stays while the machine lists the launcher.
 func (s *Service) healthLaunchers(ctx context.Context, machine string) (names []string, whileFailing map[string]bool, err error) {
-	list, err := s.machineLaunchers(ctx, machine)
+	list, _, known, err := s.machineLaunchersOn(ctx, machine, "")
 	if err != nil {
 		return nil, nil, err
 	}
-	names, whileFailing, _ = s.healthLaunchersOf(ctx, list)
+	names, whileFailing, _ = s.healthLaunchersOf(ctx, machine, list, known)
 	return names, whileFailing, nil
 }
 
-// healthLaunchersOf is healthLaunchers from the machine's list as read; runtimes are all its runtimes' launchers.
-func (s *Service) healthLaunchersOf(ctx context.Context, list []proto.Launcher) (names []string, whileFailing map[string]bool, runtimes []string) {
-	for _, l := range list {
+// healthLaunchersOf is healthLaunchers from the machine's list as read; known says whether it is an authoritative
+// catalog rather than an older node's fallback. Runtimes are all its runtimes' launchers.
+func (s *Service) healthLaunchersOf(ctx context.Context, machine string, list []proto.Launcher, known ...bool) (names []string, whileFailing map[string]bool, runtimes []string) {
+	for _, l := range s.launchersWithinScope(ctx, machine, slices.Clone(list)) {
 		switch {
-		case startableLauncher(l):
+		case startableLauncher(l), l.Name == "claude" && l.Source == "builtin":
 			names = append(names, l.Name)
 		case runtimeLauncher(l):
 			runtimes = append(runtimes, l.Name)
 		}
 	}
 	d := s.startLauncher(ctx, "")
-	if !slices.Contains(names, d) && s.launcherEverywhere(ctx, d) {
-		names = append(names, d)
+	if !slices.Contains(names, d) && (d != "claude" || len(known) == 0 || !known[0]) {
+		if agent, _ := s.launcherWithoutInventory(ctx, machine, d); agent.agent != "" {
+			names = append(names, d)
+		}
 	}
 	for _, name := range []string{s.launcherNow(ctx), d} {
 		if slices.Contains(runtimes, name) && !slices.Contains(names, name) {
@@ -159,12 +163,12 @@ func (s *Service) healthRound(ctx context.Context, wait bool) {
 // checkMachine checks machine d's launchers that are due (only: one by that name, at once); the records of launchers
 // it no longer has go. It returns the results and the launchers in scope for this check.
 func (s *Service) checkMachine(ctx context.Context, d Device, cfg healthConfig, cameOnline bool, only string) ([]LauncherHealth, []string) {
-	list, err := s.machineLaunchers(ctx, d.ID)
+	list, _, known, err := s.machineLaunchersOn(ctx, d.ID, "")
 	if err != nil {
 		s.logf("launcher health: %s: launchers: %v", d.ID, err)
 		return nil, nil
 	}
-	names, whileFailing, runtimes := s.healthLaunchersOf(ctx, list)
+	names, whileFailing, runtimes := s.healthLaunchersOf(ctx, d.ID, list, known)
 	// "Test again" of one runtime launcher the machine lists (#14534): a person asked for this check, so it runs
 	// whatever the launcher's record says, though rounds check a runtime's launcher only as whileFailing allows.
 	asked := only != "" && slices.Contains(runtimes, only)
@@ -179,11 +183,17 @@ func (s *Service) checkMachine(ctx context.Context, d Device, cfg healthConfig, 
 	}
 	b := &s.health
 	b.mu.Lock()
+	s.healthLoadLocked(ctx)
+	removed := false
 	for key, r := range b.recs {
 		if r.Machine == d.ID && !slices.Contains(listed, r.Launcher) {
 			delete(b.recs, key)
 			delete(b.recheckAt, key)
+			removed = true
 		}
+	}
+	if removed {
+		s.healthSaveLocked(ctx)
 	}
 	b.mu.Unlock()
 	var out []LauncherHealth
@@ -283,10 +293,13 @@ func (s *Service) healthyMachine(ctx context.Context, launcher, except string, s
 	return best, rank < 3
 }
 
-// launcherOn: machine has launcher (a managed one is on every machine; a failed list says no).
+// launcherOn: machine has launcher (managed launchers need to be in scope; a failed list says no).
 func (s *Service) launcherOn(ctx context.Context, machine, launcher string) bool {
 	if proto.IsExternalLauncher(launcher) {
 		return false // external targets are never automatic relocation candidates
+	}
+	if s.launcherScopeErr(ctx, machine, launcher) != nil {
+		return false
 	}
 	if launcher == "claude" || slices.ContainsFunc(s.storedLaunchers(ctx), func(l storedLauncher) bool { return l.Name == launcher && l.Kind != "api" }) {
 		return true

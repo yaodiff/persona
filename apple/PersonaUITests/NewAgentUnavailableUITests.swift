@@ -46,11 +46,11 @@ final class NewAgentUnavailableUITests: XCTestCase {
             }
         }
         // The first launch after an install pairs first and can come up on Agents without the sheet: once more.
-        if !row("claude").waitForExistence(timeout: 30) {
+        if !row("Claude Code").waitForExistence(timeout: 30) {
             app.terminate()
             app.launchPinned()
         }
-        XCTAssertTrue(row("claude").waitForExistence(timeout: 30), "no launcher list on \(machine):\n\(app.debugDescription.prefix(4000))")
+        XCTAssertTrue(row("Claude Code").waitForExistence(timeout: 30), "no launcher list on \(machine):\n\(app.debugDescription.prefix(4000))")
         sleep(1) // the list settles
     }
 

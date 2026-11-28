@@ -76,7 +76,7 @@ describe("a failed knowledge search", () => {
     expect(host.textContent).toContain(older.name);
     await debounce();
     await fail(last());
-    expect(host.textContent).toContain("连不上 hub");
+    expect(host.textContent).toContain("无法连接 hub");
     expect(host.textContent).not.toContain(older.name);
 
     act(() => retryButton()!.click());
@@ -85,26 +85,26 @@ describe("a failed knowledge search", () => {
     await answer(last(), { results: [{ entry: newer, count: 1 }] });
     expect(host.textContent).toContain(newer.name);
     expect(host.textContent).not.toContain(older.name);
-    expect(host.textContent).not.toContain("连不上 hub");
+    expect(host.textContent).not.toContain("无法连接 hub");
   });
 
   it("shows the error instead of the previous query's empty result", async () => {
     await answer(await search("ab"), { results: [] });
-    expect(host.textContent).toContain("没有找到「ab」");
+    expect(host.textContent).toContain("未找到与「ab」相关的结果");
 
     await fail(await search("abc"));
-    expect(host.textContent).toContain("连不上 hub");
-    expect(host.textContent).not.toContain("没有找到");
+    expect(host.textContent).toContain("无法连接 hub");
+    expect(host.textContent).not.toContain("未找到与");
     expect(retryButton()).toBeDefined();
   });
 
   it("offers retry on a first search that fails", async () => {
     await fail(await search("ab"));
-    expect(host.textContent).toContain("连不上 hub");
+    expect(host.textContent).toContain("无法连接 hub");
     act(() => retryButton()!.click());
     await debounce();
     await answer(last(), { results: [{ entry: newer, count: 1 }] });
     expect(host.textContent).toContain(newer.name);
-    expect(host.textContent).not.toContain("连不上 hub");
+    expect(host.textContent).not.toContain("无法连接 hub");
   });
 });

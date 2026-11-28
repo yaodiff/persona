@@ -20,5 +20,6 @@
   "settings_save_failed": "无法保存市场镜像设置，请重试。",
   "settings_invalid": "镜像 URL 无效。请使用不含凭据、查询或片段的 HTTPS 地址；目录须填写完整 JSON URL。",
   "not_from_market": "这个扩展不是从扩展市场安装的",
-  "refresh_rate_limited": "最近已经要求这个市场重新读取过了，请稍后再试"
+  "refresh_rate_limited": "最近已经要求这个市场重新读取过了，请稍后再试",
+  "no_key": "这个市场没有这把公钥"
 }

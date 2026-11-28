@@ -442,3 +442,19 @@ func TestChannelReceivePreservesGroupTopicRoutingFields(t *testing.T) {
 		t.Fatalf("forwarded message = %+v", got)
 	}
 }
+
+func TestChannelReceiveIgnoresUnknownChatKind(t *testing.T) {
+	w := newChannelWorld(t)
+	p := json.RawMessage(`{"contribution":"examplechat","message":{"id":"future","chat_kind":"future_kind","chat_id":"chat","thread":"legacy"}}`)
+	if _, err := w.h.extensionChannelCall("example-chat", channel.MReceive, p); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, 5*time.Second, "message handed to assistant", func() bool { return len(w.received()) == 1 })
+	var got channel.Message
+	if err := json.Unmarshal(w.received()[0].Message, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.ChatKind != "" || got.Thread != "legacy" || got.ChatID != "chat" {
+		t.Fatalf("forwarded %+v", got)
+	}
+}

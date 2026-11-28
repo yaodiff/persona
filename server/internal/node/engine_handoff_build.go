@@ -107,6 +107,8 @@ func engineName(agent string) string {
 		return "Claude Code"
 	case "codex":
 		return "Codex"
+	case agyAgent:
+		return "Antigravity"
 	}
 	return agent
 }

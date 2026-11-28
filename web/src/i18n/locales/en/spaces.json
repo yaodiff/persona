@@ -110,5 +110,11 @@
   "memory_load_failed": "Couldn't load memory: {error}",
   "load_earlier": "Load earlier messages",
   "close": "Close",
-  "icon_sun": "Sun"
+  "icon_sun": "Sun",
+  "chat_count_one": "{count} conversation",
+  "chat_count_other": "{count} conversations",
+  "new_chat_in": "New conversation in {name}",
+  "edit_md_for": "View or edit SPACE.md for {name}",
+  "expand_space": "Show conversations in {name}",
+  "collapse_space": "Hide conversations in {name}"
 }

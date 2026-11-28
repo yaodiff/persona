@@ -38,14 +38,16 @@ var HubOwn = []string{"cmd/persona-hub", "internal/hub", "internal/hubcli", "int
 // sync's types and dedup rules (Decide, MergeSources): pure values, no store, route or network call; the shared
 // database's sync tables use them. modapi is the stdlib-only module contract shared by prompts, hub and manager
 // without pulling in any manager business package. wireids holds generated stdlib-free contract wire ID types shared
-// by assistantwire and other wire packages. The hub's backup quiesce and
-// path validation use the same shared backup infrastructure as the manager; it pulls in no manager business package.
+// by assistantwire and other wire packages. buswire (the bus methods' names bound to their request and reply types) and
+// recordingwire (the recording's data types) are contract packages too: the hub's handlers and assistantwire use them.
+// The hub's backup quiesce and path validation use the same shared backup infrastructure as the manager; it pulls in
+// no manager business package.
 var Shared = []string{"internal/acceptloop", "internal/agentviewwire", "internal/aiwire", "internal/apierr", "internal/approval", "internal/assistantwire",
-	"internal/bus", "internal/channel", "internal/clitext", "internal/compat", "internal/connectorwire", "internal/conversationlog", "internal/db",
+	"internal/bus", "internal/buswire", "internal/channel", "internal/clitext", "internal/compat", "internal/connectorwire", "internal/conversationlog", "internal/db",
 	"internal/devicewire", "internal/dialogwire", "internal/errreport", "internal/extwire", "internal/i18n",
 	"internal/identity", "internal/kbwire", "internal/larksyncwire", "internal/lazyre", "internal/link", "internal/linkwire", "internal/mailwire", "internal/managerconf", "internal/memtrim", "internal/modapi", "internal/modelretry", "internal/netaddr",
 	"internal/netproxy", "internal/nodeproto", "internal/operations/backup", "internal/osproc", "internal/pgdocker", "internal/preview", "internal/procinfo", "internal/procs", "internal/prompts",
-	"internal/proto", "internal/rpc", "internal/screen", "internal/secretkey", "internal/sessionhistory", "internal/sessionlist", "internal/sessionorigin", "internal/sessionsearch", "internal/streams",
+	"internal/proto", "internal/recordingwire", "internal/rpc", "internal/screen", "internal/secretkey", "internal/sessionhistory", "internal/sessionlist", "internal/sessionorigin", "internal/sessionsearch", "internal/streams",
 	"internal/textfmt", "internal/tokenuse", "internal/transcript", "internal/update", "internal/wireids", "internal/workspaceboard"}
 
 // HubExceptions are manager-side packages the hub still links, and may only shrink: internal/extension (and what it

@@ -54,6 +54,9 @@ func TestPersonaNodeDoesNotLinkTheHubOrTheManager(t *testing.T) {
 				t.Errorf("persona-node (%s) links the manager's modules (%s): a node-side module goes into "+
 					"internal/modules/all/node (docs/architecture/core-and-modules.md \"The node's modules\")", target, dep)
 			}
+			if rel == "internal/modules/lark/larkgate" { // node-side gate rules leaf (internal/modules/all/node/lark.go)
+				continue
+			}
 			for _, f := range forbidden {
 				if rel == f || strings.HasPrefix(rel, f+"/") {
 					t.Errorf("persona-node (%s) depends on %s: the device's program reaches the manager only over the node "+

@@ -22,7 +22,7 @@ func strengthReportTestID(seed string) string {
 
 func strengthReportTestDB(t *testing.T) *db.DB {
 	t.Helper()
-	d, err := db.Open(t.Context(), newDatabase(t), db.ManagerSet)
+	d, err := db.Open(t.Context(), newMigratedDatabase(t, db.ManagerSet), db.ManagerSet)
 	if err != nil {
 		t.Fatal(err)
 	}

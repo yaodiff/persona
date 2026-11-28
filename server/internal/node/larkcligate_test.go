@@ -33,6 +33,7 @@ func fakeRisk(words []string) string {
 // What the gate makes of lark-cli: reads run, writes and unknown commands are confirmed on the phone, logging in and
 // changing lark-cli's setup are refused (docs/plans/plan-lark-cli.md "Gate").
 func TestLarkCLIGate(t *testing.T) {
+	needsLarkGate(t)
 	for _, tc := range []struct{ cmd, want string }{
 		// Reads, by lark-cli's own risk level or because they only print.
 		{`lark-cli im +chat-list --types p2p,group --as user --sort active_time`, "allow"},
@@ -139,6 +140,7 @@ func TestLarkCLIGate(t *testing.T) {
 // Without a way to ask lark-cli (no lark.cli in the hub's config), every lark-cli command that is not one of its own
 // printing commands or named as a read (#11193) is confirmed.
 func TestLarkCLIGateWithoutRisk(t *testing.T) {
+	needsLarkGate(t)
 	v := classifyLark(`lark-cli im +chat-create --name x`, nil, "", nil)
 	if len(v.calls) != 1 || larkDecision(proto.AssistantLark{}, v.calls[0]) != "confirm" {
 		t.Fatalf("unknown risk should be confirmed: %+v", v)
@@ -155,6 +157,7 @@ func TestLarkCLIGateWithoutRisk(t *testing.T) {
 
 // hub.json's lark_gate rules decide lark-cli commands before their risk level.
 func TestLarkCLIRules(t *testing.T) {
+	needsLarkGate(t)
 	rules := []proto.LarkRule{
 		{Method: "CLI", Path: "/im/+messages-send", Action: "allow"},
 		{Method: "CLI", Path: "/docs/**", Action: "deny"},
@@ -200,6 +203,7 @@ func TestLarkCLIInComplexCommands(t *testing.T) {
 
 // The phone card shows what the write does and the command as typed.
 func TestLarkCLISummary(t *testing.T) {
+	needsLarkGate(t)
 	v := classifyLark(`lark-cli im +messages-send --chat-id oc_x --text "下午三点开会" && lark-cli im messages delete --params '{"message_id":"om_x"}' && lark-cli wiki +move --node x && lark-cli im +messages-reply --as bot --message-id om_y --text 收到`, nil, "", fakeRisk)
 	s := larkSummary(nil, v.calls)
 	for _, want := range []string{"以你的身份在飞书上发消息\nlark-cli im +messages-send --chat-id oc_x --text 下午三点开会",

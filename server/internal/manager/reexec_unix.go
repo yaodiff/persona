@@ -4,6 +4,7 @@ package manager
 
 import (
 	"os"
+	"strings"
 	"syscall"
 )
 
@@ -14,5 +15,5 @@ func reexec(env []string) error {
 	if err != nil {
 		return err
 	}
-	return syscall.Exec(exe, os.Args, env)
+	return syscall.Exec(strings.TrimSuffix(exe, " (deleted)"), os.Args, env)
 }

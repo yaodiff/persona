@@ -20,9 +20,11 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/sdk/go/wire"
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/extension"
 	"github.com/nwverse/persona/server/internal/extension/egress"
 	"github.com/nwverse/persona/server/internal/extension/sandbox"
+	"github.com/nwverse/persona/server/internal/extwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -125,8 +127,7 @@ func (ps *extensions) settingsCheck(ctx context.Context, p *extension.Extension,
 	}
 	cctx, cancel := context.WithTimeout(ctx, settingsCheckTimeout)
 	defer cancel()
-	var out wire.SettingsCheckResult
-	err = hp.proc.Call(cctx, "settings.check", params, &out)
+	out, err := buswire.Call(cctx, hp.proc, extwire.SettingsCheckMethod, params)
 	switch {
 	case cctx.Err() != nil && ctx.Err() == nil:
 		return settingsCheckFailed{i18n.T(lang, "hub-extension_settings.check_timeout", i18n.Args{"seconds": int(settingsCheckTimeout / time.Second)})}

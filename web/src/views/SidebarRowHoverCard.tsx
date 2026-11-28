@@ -61,11 +61,11 @@ function SessionDetails({ detail, row }: { detail: Extract<RowHoverDetail, { ses
     const { ix } = rowCards(store.interactions, s.machine_id, s.session_id);
     return { machine, ix, awaiting: awaitsReply(s, store.mutes), finished: justFinished(s, store.mutes) };
   });
-  const state = ix ? "needs_you" : detail.working ? "working" : stateOf(s);
+  const state = s.view ? stateOf(s) : ix ? "needs_you" : detail.working ? "working" : stateOf(s);
   const waiting = backgroundWaiting(s);
   const status = state === "idle" && awaiting ? "awaits_reply" : state === "idle" && finished ? "just_finished" : state === "working" && waiting ? "bg_waiting" : state;
   const draft = detail.draft ?? draftLine({ text: storedPageDraft(`${s.machine_id}/${s.session_id}`), quoted: false });
-  const line = draft ?? (ix && rowLine({ ...s, state: "needs_you" }, ix));
+  const line = draft ?? (s.view ? rowLine(s, ix) : ix && rowLine({ ...s, state: "needs_you" }, ix));
   const question = state === "needs_you" || awaiting ? replyAsk(s) : "";
   const preview = line ? `${line.lead ?? ""}${line.text}` : plainMarkdown(question || sessionPreview(s));
   const tool = s.agent || s.agent_label || s.agent_name || s.source_kind?.startsWith("codex_") ? sessionHarnessLabel(s) : "";

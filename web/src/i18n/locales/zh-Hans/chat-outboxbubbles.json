@@ -1,6 +1,7 @@
 {
-  "failed": "没发出去：{error}",
+  "failed": "发送失败：{error}",
   "clear_and_send": "清空并发送",
+  "open_terminal": "打开终端",
   "retry": "重试",
   "check": "核对",
   "checking": "正在核对…",

@@ -133,7 +133,7 @@ internal/conversationlog core-primitive-signature 17
 internal/conversationlog core-tag 2
 internal/conversationlog core-test-package 2
 internal/conversationlog core-zero-doc 3
-internal/conversationlog out-literal 16
+internal/conversationlog out-literal 15
 internal/db app-lifecycle-write 6
 internal/db app-named-primitive 3
 internal/devices app-exported-record 22

@@ -867,12 +867,14 @@ final class TodoOutbox {
     }
 
     /// Nothing reached the hub's assistant: no connection was made, the request never left (no hub), the assistant is
-    /// away (`assistant_offline`), the hub turned it away unread (408, 425, 429) or said nothing was delivered. A connection
-    /// lost or a timeout once it was sent is not this: the hub may have it.
+    /// away (`assistant_offline`), the hub turned it away unread (408, 425, 429) or a server error said nothing was
+    /// delivered. A 4xx business refusal (such as 422 `todo_close_not_confirmed` or 409 `todo_close_active`) is never
+    /// retried as unsent even when it carries `delivered: "none"`. A connection lost or a timeout once it was sent is
+    /// not this: the hub may have it.
     nonisolated static func reachedNothing(_ error: Error) -> Bool {
         if let api = error as? APIError {
-            return api.status == 0 || [408, 425, 429].contains(api.status) || api.code == "assistant_offline"
-                || api.fields["delivered"] == "none"
+            if api.status == 0 || [408, 425, 429].contains(api.status) || api.code == "assistant_offline" { return true }
+            return api.status >= 500 && api.fields["delivered"] == "none"
         }
         let ns = error as NSError
         return ns.domain == NSURLErrorDomain && [

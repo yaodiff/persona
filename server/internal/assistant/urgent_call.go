@@ -11,6 +11,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
@@ -214,9 +215,8 @@ type callRinger interface {
 
 // CallRing is call.ring: the hub rings the owner's phones once.
 func (b *BusHub) CallRing(ctx context.Context, c assistantwire.CallRing) (assistantwire.CallRingResult, error) {
-	var res assistantwire.CallRingResult
-	err := busError(b.client.Call(ctx, assistantwire.MethodCallRing, assistantwire.CallRingRequest{Call: c}, &res))
-	return res, err
+	res, err := buswire.Call(ctx, b.client, assistantwire.CallRingMethod, assistantwire.CallRingRequest{Call: c})
+	return res, busError(err)
 }
 
 // startOfDay is when the owner's day began, in their time zone.

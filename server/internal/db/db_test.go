@@ -28,6 +28,16 @@ func TestMain(m *testing.M) { os.Exit(dbtest.Main(m)) }
 // and wipes every table so each test starts clean.
 func open(t testing.TB) *DB {
 	t.Helper()
+	d := connectTestDB(t)
+	if err := d.TruncateForTest(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	return d
+}
+
+// connectTestDB opens another pool on the fixture and preserves its rows.
+func connectTestDB(t testing.TB) *DB {
+	t.Helper()
 	url := os.Getenv("PERSONA_TEST_DATABASE_URL")
 	if url == "" {
 		t.Skip("PERSONA_TEST_DATABASE_URL not set")
@@ -37,75 +47,7 @@ func open(t testing.TB) *DB {
 		t.Fatal(err)
 	}
 	t.Cleanup(d.Close)
-	openCascade.once.Do(func() { openCascade.tables, openCascade.err = cascadeOfOpenTables(d) })
-	if openCascade.err != nil {
-		t.Fatal(openCascade.err)
-	}
-	if err := d.truncateNonEmpty(context.Background(), openCascade.tables); err != nil {
-		t.Fatal(err)
-	}
 	return d
-}
-
-// openTables are what open clears (with what refers to them): the union of the integration branch's list and master's
-// TruncateForTest. TruncateForTest alone does not clear lock_tests, client_ops, pair_tokens or device_sessions.
-var openTables = []string{"health_tells", "health_strength_sets", "health_strength_drafts", "health_strength_workouts", "health_strength_exercises", "health_intake", "push_device_retirements", "lock_tests", "client_ops", "devices", "device_tokens", "pair_tokens",
-	"device_sessions", "live_activities", "phone_tools", "node_sessions", "mail_accounts", "interactions", "settings",
-	"inbox_items", "kb_entities", "connector_secrets", "machine_systems", "machine_metrics", "machine_usage",
-	"sent_messages", "todos", "todo_agents", "assistant_always", "sent_as_user", "hub_push_sent", "urgent_calls", "model_usage",
-	"conversation_histories", "assistant_conversation_spaces", "logical_conversations", "conversation_segment_closures", "conversation_prepared_candidates", "assistant_entries", "assistant_captures"}
-
-// open empties what TRUNCATE openTables CASCADE did, a table only the cascade reaches included, and leaves a table
-// that had no row in that cascade its files: it truncates only what has a row.
-func TestOpenTruncatesOnlyTablesWithRows(t *testing.T) {
-	d, ctx := open(t), context.Background()
-	if !slices.Contains(openCascade.tables, "todo_decisions") || slices.Contains(openTables, "todo_decisions") {
-		t.Fatalf("todo_decisions is not a table only the cascade reaches: %v", openCascade.tables)
-	}
-	if _, err := d.pool.Exec(ctx, `INSERT INTO todos (id, title) VALUES ('t1', 'x');
-		INSERT INTO todo_decisions (id, todo_id, question, choice, created_at) VALUES ('d1', 't1', 'q', 'c', now())`); err != nil {
-		t.Fatal(err)
-	}
-	file := func(table string) uint32 {
-		t.Helper()
-		var n uint32
-		if err := d.pool.QueryRow(ctx, `SELECT relfilenode FROM pg_class WHERE oid = to_regclass($1)`, table).Scan(&n); err != nil {
-			t.Fatal(err)
-		}
-		return n
-	}
-	devices := file("devices")
-	d = open(t)
-	var rows int
-	if err := d.pool.QueryRow(ctx, `SELECT (SELECT count(*) FROM todos) + (SELECT count(*) FROM todo_decisions)`).Scan(&rows); err != nil || rows != 0 {
-		t.Fatalf("%d rows left, %v", rows, err)
-	}
-	if file("devices") != devices {
-		t.Fatal("an empty table was truncated")
-	}
-}
-
-// openCascade is what TRUNCATE openTables CASCADE empties, worked out by the first open: each open migrates the same
-// database to the same tables.
-var openCascade struct {
-	once   sync.Once
-	tables []string
-	err    error
-}
-
-// cascadeOfOpenTables is openCascade's tables. Each of openTables must be there: TRUNCATE naming a table the database
-// lacks fails, and truncateCascade alone would leave a renamed or dropped one out without a word.
-func cascadeOfOpenTables(d *DB) ([]string, error) {
-	tables, err := d.truncateCascade(context.Background(), openTables)
-	if err != nil {
-		return nil, err
-	}
-	for _, name := range openTables {
-		if !slices.Contains(tables, name) {
-			return nil, fmt.Errorf("open clears %s, which the migrated database does not have", name)
-		}
-	}
-	return tables, nil
 }
 
 // templates are the databases migratedDatabase copies: one per sets, migrated once per test binary.
@@ -882,6 +824,28 @@ func TestNodeSessions(t *testing.T) {
 	}
 }
 
+func TestNodeSessionOrcaTerminalRoundTrip(t *testing.T) {
+	d, ctx := open(t), context.Background()
+	state := NodeSession{Pane: "orca:tab:leaf", Launcher: "claude", Cwd: "/project",
+		OrcaTerminal: json.RawMessage(`{"pane":"orca:tab:leaf","incarnation":"original"}`)}
+	if err := d.PutNodeSession(ctx, "server", "s1", state); err != nil {
+		t.Fatal(err)
+	}
+	got, err := d.NodeSessions(ctx, "server")
+	var owner map[string]string
+	if err != nil || json.Unmarshal(got["s1"].OrcaTerminal, &owner) != nil || owner["incarnation"] != "original" {
+		t.Fatalf("reloaded Orca ownership = %v, %v", owner, err)
+	}
+	state.Pane, state.OrcaTerminal = "orca:other:leaf", nil
+	if err := d.PutNodeSession(ctx, "server", "s1", state); err != nil {
+		t.Fatal(err)
+	}
+	got, err = d.NodeSessions(ctx, "server")
+	if err != nil || got["s1"].Pane != state.Pane || got["s1"].OrcaTerminal != nil {
+		t.Fatalf("stale ownership survived rebinding: %+v, %v", got["s1"], err)
+	}
+}
+
 // Origin is authorization state needed by node-owned recovery before the manager can re-attest a continuation.
 // Keep it in the existing node_model JSON through a real write/read cycle; no schema migration is involved.
 func TestNodeSessionOriginRoundTrip(t *testing.T) {
@@ -1075,8 +1039,8 @@ func TestMarkInteractionResumableKeepsTheCardAcrossARestart(t *testing.T) {
 		len(kept[0].Questions) != 0 {
 		t.Fatalf("kept %+v, %v", kept, err)
 	}
-	if !slices.Equal(cancelled, []string{"ixkept"}) {
-		t.Fatalf("cancelled %v: only the one never marked", cancelled)
+	if len(cancelled) != 1 || cancelled[0].ID != "ixkept" || !cancelled[0].CreatedAt.Equal(at) {
+		t.Fatalf("cancelled %v: only the one never marked, with its occurrence", cancelled)
 	}
 }
 
@@ -1101,13 +1065,17 @@ func TestInsertResolvedInteraction(t *testing.T) {
 		}
 		return input.Outcome
 	}
-	if err := d.InsertResolvedInteraction(ctx, ix, res); err != nil {
+	if err := d.InsertResolvedInteraction(WithEndedBy(ctx, EndedByAssistant), ix, res); err != nil {
 		t.Fatal(err)
 	}
 	recs, err := d.Interactions(ctx, "server", "s", 10)
 	if err != nil || len(recs) != 1 || recs[0].Status != "resolved" || recs[0].ResolvedAt == nil || recs[0].Resolution == nil ||
 		recs[0].Resolution.AnsweredBy != proto.AnsweredByAssistant {
 		t.Fatalf("resolved history = %+v, %v", recs, err)
+	}
+	var endedBy string
+	if err := d.pool.QueryRow(ctx, `SELECT ended_by FROM interactions WHERE id = $1`, ix.ID).Scan(&endedBy); err != nil || endedBy != EndedByAssistant {
+		t.Fatalf("directly resolved history ended_by = %q, %v; want %q", endedBy, err, EndedByAssistant)
 	}
 	if got := historyOutcome(ix.ID); got != "attempted" {
 		t.Fatalf("initial history outcome = %q, want attempted", got)
@@ -1193,8 +1161,10 @@ func TestInteractions(t *testing.T) {
 	if err != nil || len(kept) != 1 || kept[0].ID != "ix3" || !kept[0].Resumable {
 		t.Fatalf("kept %+v, %v", kept, err)
 	}
-	// The ones it cancelled come back by id: the apps are told they are over (#4568).
-	if slices.Sort(cancelled); !slices.Equal(cancelled, []string{"ix2", "ix4"}) {
+	// The ones it cancelled come back with their occurrence: a delayed withdrawal
+	// cannot end a later interaction that reused the same ID.
+	slices.SortFunc(cancelled, func(a, b proto.Interaction) int { return strings.Compare(a.ID, b.ID) })
+	if !slices.EqualFunc(cancelled, []proto.Interaction{{ID: "ix2"}, {ID: "ix4"}}, func(a, b proto.Interaction) bool { return a.ID == b.ID }) {
 		t.Fatalf("cancelled %v", cancelled)
 	}
 	recs, err := d.Interactions(ctx, "server", "s", 10)
@@ -1257,6 +1227,26 @@ func TestLoopInteractionRestart(t *testing.T) {
 	}
 }
 
+func TestExpireStaleInteractionsCannotCancelAnInsertAfterSnapshot(t *testing.T) {
+	d, ctx := open(t), context.Background()
+	current := proto.Interaction{ID: "ix_current_process_during_expiry", MachineID: "m1", SessionID: "s1",
+		Kind: proto.IxPermission, Resumable: true, CreatedAt: time.Now().UTC(), ExpiresAt: time.Now().Add(time.Hour).UTC()}
+	var insertErr error
+	_, _, err := d.expireStaleInteractions(ctx, func() {
+		insertErr = d.InsertInteraction(ctx, current)
+	})
+	if insertErr != nil {
+		t.Fatal(insertErr)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, _, err := d.InteractionOutcome(ctx, current.ID)
+	if err != nil || status != "pending" {
+		t.Fatalf("startup expiry cancelled a card inserted after its snapshot: status %q, %v", status, err)
+	}
+}
+
 // The startup lookup of pending interactions can use the partial index instead of scanning every past interaction.
 func TestPendingInteractionsIndexed(t *testing.T) {
 	d, ctx := open(t), context.Background()
@@ -1288,6 +1278,268 @@ func TestPendingInteractionsIndexed(t *testing.T) {
 		if plan := strings.Join(lines, "\n"); !strings.Contains(plan, "interactions_pending") {
 			t.Fatalf("%s\nplan:\n%s", q, plan)
 		}
+	}
+}
+
+func TestInsertInteractionRestoresOnlyStartupCancelledOccurrence(t *testing.T) {
+	d, ctx := open(t), context.Background()
+	ix := proto.Interaction{ID: "ix_startup_cancelled_relist", MachineID: "m1", SessionID: "s1",
+		Kind: proto.IxPermission, CreatedAt: time.Unix(1100, 0).UTC()}
+	if err := d.InsertInteraction(ctx, ix); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.FinishInteraction(ctx, ix.ID, "cancelled", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.InsertInteraction(ctx, ix); err != nil {
+		t.Fatal(err)
+	}
+	status, _, err := d.InteractionOutcome(ctx, ix.ID)
+	if err != nil || status != "pending" {
+		t.Fatalf("same-occurrence startup relist = status %q, %v; want pending", status, err)
+	}
+	deny := false
+	if err := d.FinishInteraction(ctx, ix.ID, "resolved", &proto.Resolution{Allow: &deny}); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.InsertInteraction(ctx, ix); err != nil {
+		t.Fatal(err)
+	}
+	status, _, err = d.InteractionOutcome(ctx, ix.ID)
+	if err != nil || status != "resolved" {
+		t.Fatalf("an owner-resolved occurrence reopened: status %q, %v", status, err)
+	}
+}
+
+func TestFinishInteractionOccurrenceRestoresMissingRowAndIsIdempotent(t *testing.T) {
+	d, ctx := open(t), context.Background()
+	at := time.Unix(1100, 0).UTC()
+	ix := proto.Interaction{ID: "ix_finish_missing", MachineID: "m1", SessionID: "s1", Kind: proto.IxPermission, CreatedAt: at}
+	res := &proto.Resolution{Dismiss: true}
+	matched, terminal, err := d.FinishInteractionOccurrence(WithEndedBy(ctx, EndedByDevice), ix, "resolved", res)
+	if err != nil || !matched || !terminal {
+		t.Fatalf("missing occurrence finish = matched %v terminal %v, %v", matched, terminal, err)
+	}
+	rec, err := d.InteractionRecord(ctx, ix.ID)
+	if err != nil || rec == nil || rec.Status != "resolved" || rec.Resolution == nil || !rec.Resolution.Dismiss ||
+		!rec.Interaction.CreatedAt.Equal(at) {
+		t.Fatalf("restored terminal occurrence = %+v, %v", rec, err)
+	}
+	var endedBy string
+	if err := d.pool.QueryRow(ctx, `SELECT ended_by FROM interactions WHERE id = $1`, ix.ID).Scan(&endedBy); err != nil {
+		t.Fatal(err)
+	}
+	if endedBy != EndedByDevice {
+		t.Fatalf("occurrence finish recorded ended_by %q, want %q", endedBy, EndedByDevice)
+	}
+	matched, terminal, err = d.FinishInteractionOccurrence(ctx, ix, "resolved", res)
+	if err != nil || !matched || !terminal {
+		t.Fatalf("idempotent occurrence finish = matched %v terminal %v, %v", matched, terminal, err)
+	}
+	matched, terminal, err = d.FinishInteractionOccurrence(ctx, ix, "dismissed", res)
+	if err == nil || matched || !terminal {
+		t.Fatalf("conflicting terminal finish = matched %v terminal %v, %v; want a conflict", matched, terminal, err)
+	}
+	rec, _ = d.InteractionRecord(ctx, ix.ID)
+	if rec == nil || rec.Status != "resolved" {
+		t.Fatalf("conflicting finish changed the original outcome: %+v", rec)
+	}
+}
+
+func TestFinishInteractionOccurrenceFinalizesDetachableTombstone(t *testing.T) {
+	d, ctx := open(t), context.Background()
+	ix := proto.Interaction{ID: "ix_finish_detachable_tombstone", MachineID: "m1", SessionID: "s1",
+		Kind: proto.IxPermission, Detachable: true, CreatedAt: time.Unix(1150, 0).UTC()}
+	matched, terminal, err := d.FinishInteractionOccurrence(ctx, ix, "resolved", &proto.Resolution{Dismiss: true})
+	if err != nil || !matched || !terminal {
+		t.Fatalf("detachable tombstone = matched %v terminal %v, %v", matched, terminal, err)
+	}
+	rec, err := d.InteractionRecord(ctx, ix.ID)
+	if err != nil || rec == nil || rec.Status != "resolved" {
+		t.Fatalf("detachable tombstone remained actionable: %+v, %v", rec, err)
+	}
+}
+
+func TestFinishInteractionOccurrenceAcceptsJSONBRoundTrip(t *testing.T) {
+	d, ctx := open(t), context.Background()
+	ix := proto.Interaction{ID: "ix_finish_jsonb_order", MachineID: "m1", SessionID: "s1", Kind: proto.IxPermission,
+		Detachable: true, ToolName: "Bash", ExecutionCwd: "/tmp/one",
+		ToolInput: json.RawMessage(`{"z":1,"command":"pwd","x":{"z":2,"a":3}}`), CreatedAt: time.Unix(1175, 0).UTC()}
+	if err := d.InsertInteraction(ctx, ix); err != nil {
+		t.Fatal(err)
+	}
+	before, err := d.InteractionRecord(ctx, ix.ID)
+	if err != nil || before == nil {
+		t.Fatalf("read JSONB fixture: %+v, %v", before, err)
+	}
+	if string(before.Interaction.ToolInput) == string(ix.ToolInput) {
+		t.Fatalf("JSONB did not reorder this regression fixture: %s", before.Interaction.ToolInput)
+	}
+	matched, terminal, err := d.FinishInteractionOccurrence(ctx, ix, "resolved", nil)
+	if err != nil || !matched || !terminal {
+		t.Fatalf("original call versus JSONB row = matched %v terminal %v, %v", matched, terminal, err)
+	}
+}
+
+func TestSameJSONDocumentAcceptsJSONBNumericNormalization(t *testing.T) {
+	for _, tc := range []struct{ before, after string }{
+		{`{"x":1e2}`, `{"x":100}`},
+		{`{"x":1.00}`, `{"x":1}`},
+		{`{"x":[-0.0,0.01]}`, `{"x":[0,1e-2]}`},
+	} {
+		if !sameJSONDocument(json.RawMessage(tc.before), json.RawMessage(tc.after)) {
+			t.Errorf("JSONB-equivalent numbers did not match: %s versus %s", tc.before, tc.after)
+		}
+	}
+	if sameJSONDocument(json.RawMessage(`{"x":100}`), json.RawMessage(`{"x":101}`)) {
+		t.Fatal("different numeric values matched")
+	}
+}
+
+func TestFinishInteractionOccurrencePreservesANewerOccurrence(t *testing.T) {
+	d, ctx := open(t), context.Background()
+	at := time.Unix(1200, 0).UTC()
+	first := proto.Interaction{ID: "ix_finish_reused", MachineID: "m1", SessionID: "s1", Kind: proto.IxPermission, CreatedAt: at}
+	if err := d.InsertInteraction(ctx, first); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.FinishInteraction(WithEndedBy(ctx, EndedByDevice), first.ID, "resolved", nil); err != nil {
+		t.Fatal(err)
+	}
+	later := first
+	later.CreatedAt = at.Add(time.Second)
+	if err := d.InsertInteraction(ctx, later); err != nil {
+		t.Fatal(err)
+	}
+	var replacementEndedBy string
+	if err := d.pool.QueryRow(ctx, `SELECT ended_by FROM interactions WHERE id = $1`, first.ID).Scan(&replacementEndedBy); err != nil {
+		t.Fatal(err)
+	}
+	if replacementEndedBy != "" {
+		t.Fatalf("pending replacement retained earlier ended_by %q", replacementEndedBy)
+	}
+	matched, terminal, err := d.FinishInteractionOccurrence(ctx, first, "dismissed", nil)
+	if err != nil || matched || terminal {
+		t.Fatalf("old finish against a pending newer occurrence = matched %v terminal %v, %v", matched, terminal, err)
+	}
+	rec, _ := d.InteractionRecord(ctx, later.ID)
+	if rec == nil || rec.Status != "pending" || !rec.Interaction.CreatedAt.Equal(later.CreatedAt) {
+		t.Fatalf("old finish changed the newer pending occurrence: %+v", rec)
+	}
+	if err := d.FinishInteraction(ctx, later.ID, "resolved", nil); err != nil {
+		t.Fatal(err)
+	}
+	matched, terminal, err = d.FinishInteractionOccurrence(ctx, first, "dismissed", nil)
+	if err != nil || matched || !terminal {
+		t.Fatalf("old finish against a terminal newer occurrence = matched %v terminal %v, %v", matched, terminal, err)
+	}
+	rec, _ = d.InteractionRecord(ctx, later.ID)
+	if rec == nil || rec.Status != "resolved" || !rec.Interaction.CreatedAt.Equal(later.CreatedAt) {
+		t.Fatalf("old finish changed the newer terminal occurrence: %+v", rec)
+	}
+}
+
+func TestFinishInteractionOccurrenceMatchesDetachableCallBytes(t *testing.T) {
+	d, ctx := open(t), context.Background()
+	at := time.Unix(1300, 0).UTC()
+	original := proto.Interaction{ID: "ix_finish_detachable", MachineID: "m1", SessionID: "s1", Kind: proto.IxPermission,
+		Detachable: true, ToolName: "Bash", ExecutionCwd: "/tmp/one", ToolInput: json.RawMessage(`{"command":"first"}`), CreatedAt: at}
+	different := original
+	different.ToolInput = json.RawMessage(`{"command":"second"}`)
+	if err := d.InsertInteraction(ctx, different); err != nil {
+		t.Fatal(err)
+	}
+	matched, terminal, err := d.FinishInteractionOccurrence(ctx, original, "dismissed", nil)
+	if err != nil || matched || terminal {
+		t.Fatalf("different detachable call = matched %v terminal %v, %v", matched, terminal, err)
+	}
+	rec, _ := d.InteractionRecord(ctx, original.ID)
+	var input struct {
+		Command string `json:"command"`
+	}
+	if rec != nil {
+		_ = json.Unmarshal(rec.Interaction.ToolInput, &input)
+	}
+	if rec == nil || rec.Status != "pending" || input.Command != "second" {
+		t.Fatalf("different call was finalized: %+v", rec)
+	}
+	matched, terminal, err = d.FinishInteractionOccurrence(ctx, different, "resolved", nil)
+	if err != nil || !matched || !terminal {
+		t.Fatalf("exact detachable call = matched %v terminal %v, %v", matched, terminal, err)
+	}
+}
+
+func TestInteractionOccurrencesKeepSubMicrosecondIdentity(t *testing.T) {
+	d, ctx := open(t), context.Background()
+	base := time.Unix(1350, 0).UTC()
+	firstAt := base.Add(100 * time.Nanosecond)
+	laterAt := base.Add(200 * time.Nanosecond)
+
+	t.Run("later insert replaces a terminal row in the same database microsecond", func(t *testing.T) {
+		first := proto.Interaction{ID: "ix_submicro_insert", MachineID: "m1", SessionID: "s1", Kind: proto.IxPermission, CreatedAt: firstAt}
+		if err := d.InsertInteraction(ctx, first); err != nil {
+			t.Fatal(err)
+		}
+		if err := d.FinishInteraction(ctx, first.ID, "resolved", nil); err != nil {
+			t.Fatal(err)
+		}
+		later := first
+		later.CreatedAt = laterAt
+		later.MirrorMain = true
+		if err := d.InsertInteraction(ctx, later); err != nil {
+			t.Fatal(err)
+		}
+		rec, err := d.InteractionRecord(ctx, later.ID)
+		if err != nil || rec == nil || rec.Status != "pending" || !rec.Interaction.CreatedAt.Equal(laterAt) || !rec.Interaction.MirrorMain {
+			t.Fatalf("same-microsecond later occurrence = %+v, %v; want the pending occurrence at %s", rec, err, laterAt)
+		}
+	})
+
+	t.Run("delayed finish cannot end a newer row in the same database microsecond", func(t *testing.T) {
+		first := proto.Interaction{ID: "ix_submicro_finish", MachineID: "m1", SessionID: "s1", Kind: proto.IxPermission, CreatedAt: firstAt}
+		later := first
+		later.CreatedAt = laterAt
+		if err := d.InsertInteraction(ctx, later); err != nil {
+			t.Fatal(err)
+		}
+		matched, terminal, err := d.FinishInteractionOccurrence(ctx, first, "dismissed", nil)
+		if err != nil || matched || terminal {
+			t.Fatalf("old finish against same-microsecond newer occurrence = matched %v terminal %v, %v", matched, terminal, err)
+		}
+		rec, err := d.InteractionRecord(ctx, later.ID)
+		if err != nil || rec == nil || rec.Status != "pending" || !rec.Interaction.CreatedAt.Equal(laterAt) {
+			t.Fatalf("old finish changed the same-microsecond newer occurrence: %+v, %v", rec, err)
+		}
+	})
+}
+
+func TestInteractionLaterOccurrenceReplacesTerminalRow(t *testing.T) {
+	d, ctx := open(t), context.Background()
+	at := time.Unix(1000, 0).UTC()
+	first := proto.Interaction{ID: "ix_reused", MachineID: "m1", SessionID: "s1", Kind: proto.IxPermission, CreatedAt: at}
+	if err := d.InsertInteraction(ctx, first); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.FinishInteraction(ctx, first.ID, "resolved", &proto.Resolution{Dismiss: false}); err != nil {
+		t.Fatal(err)
+	}
+	later := first
+	later.CreatedAt = at.Add(time.Second)
+	later.MirrorMain = true
+	if err := d.InsertInteraction(ctx, later); err != nil {
+		t.Fatal(err)
+	}
+	rec, err := d.InteractionRecord(ctx, later.ID)
+	if err != nil || rec == nil || rec.Status != "pending" || rec.Resolution != nil ||
+		!rec.Interaction.CreatedAt.Equal(later.CreatedAt) || !rec.Interaction.MirrorMain {
+		t.Fatalf("later occurrence = %+v, %v", rec, err)
+	}
+	if err := d.InsertInteraction(ctx, first); err != nil {
+		t.Fatal(err)
+	}
+	rec, _ = d.InteractionRecord(ctx, later.ID)
+	if rec == nil || !rec.Interaction.CreatedAt.Equal(later.CreatedAt) {
+		t.Fatalf("older occurrence replaced the latest row: %+v", rec)
 	}
 }
 

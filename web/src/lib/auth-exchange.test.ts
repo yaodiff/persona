@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ApiError, handleUnauthorized } from "./api";
+import { ApiError, handleUnauthorized, HubUnreachableError } from "./api";
 import { pair } from "./auth";
 import { storeCredentials, storedCredentials } from "./compatibility";
 
@@ -69,7 +69,9 @@ describe.each(["jp_example", "synthetic-master-key"])("pairing exchange for %s",
     const before = { ...stored };
     writes.mockClear();
     fetcher.mockRejectedValueOnce(error);
-    await expect(pair(token)).rejects.toBe(error);
+    // fetch's own TypeError comes out as HubUnreachableError, still a TypeError, carrying the browser's error as its cause
+    if (error instanceof TypeError) await expect(pair(token)).rejects.toSatisfy((e) => e instanceof HubUnreachableError && e.cause === error);
+    else await expect(pair(token)).rejects.toBe(error);
     expect(stored).toEqual(before);
     expect(writes).not.toHaveBeenCalled();
     expect(unauthorized).not.toHaveBeenCalled();

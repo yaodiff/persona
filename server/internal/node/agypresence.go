@@ -101,8 +101,9 @@ func agyPresenceScanSupported() bool {
 	return runtime.GOOS == "linux" || reflect.ValueOf(agyPresenceOf).Pointer() != reflect.ValueOf(agyPresenceLocks).Pointer()
 }
 
-// agyPresenceForPane inspects the foreground processes of a classic herdr pane for an open presence/<uuid>.lock,
-// mirroring herdr-core's withAgyPresence (#13603). Returns nil when zero or multiple conversations are found.
+// agyPresenceForPane inspects the foreground processes of a classic herdr or Orca pane for an open
+// presence/<uuid>.lock, mirroring herdr-core's withAgyPresence (#13603). Returns nil when zero or multiple
+// conversations are found.
 func agyPresenceForPane(ctx context.Context, h host.Host, pane string) *host.AgentSession {
 	if h == nil || pane == "" || !agyPresenceScanSupported() {
 		return nil
@@ -133,11 +134,16 @@ func agyPresenceForPane(ctx context.Context, h host.Host, pane string) *host.Age
 	return &host.AgentSession{Source: agyPresenceSource, Agent: agyAgent, Kind: "id", Value: found}
 }
 
-// enrichHerdrAgyPresence resolves classic herdr agy panes from their foreground process presence lock when neither
+// agyPresenceHosts are the engines whose agy panes enrichAgyPresence names from the presence lock: their
+// PaneProcesses list the pane's agy. herdr-core names its own (withAgyPresence).
+var agyPresenceHosts = map[string]bool{host.Herdr: true, host.Orca: true}
+
+// enrichAgyPresence resolves classic herdr and Orca agy panes from their foreground process presence lock when neither
 // herdr's antigravity_cli integration nor Persona's own agy hook has reported a conversation for the pane (e.g.
-// integration missing, agent_session replaced by custom:persona, hooks opted out, or after a node restart).
-func (n *Node) enrichHerdrAgyPresence(ctx context.Context, h host.Host, agents []host.Agent) {
-	if h == nil || h.Kind() != host.Herdr || !agyPresenceScanSupported() {
+// integration missing, agent_session replaced by custom:persona, hooks opted out, or after a node restart). Without
+// it an Orca pane's conversation stayed unknown, so a message to it met the lock with no pane and was refused (#16531).
+func (n *Node) enrichAgyPresence(ctx context.Context, h host.Host, agents []host.Agent) {
+	if h == nil || !agyPresenceHosts[h.Kind()] || !agyPresenceScanSupported() {
 		return
 	}
 	for i := range agents {
@@ -496,7 +502,7 @@ func (n *Node) agyOpenIn(id string) (pane string, a host.Agent, held bool) {
 	if pane != "" {
 		return pane, a, true
 	}
-	return "", host.Agent{}, agyPresenceHeldWith(n.agyDataRoot(), conversation, func(writtenAt, now time.Time) bool {
+	return "", host.Agent{}, agyPresenceHeldWith(n.agyRootFor(conversation), conversation, func(writtenAt, now time.Time) bool {
 		return n.runtimes.agyCompanionOwnsWrite(conversation, writtenAt, now)
 	})
 }

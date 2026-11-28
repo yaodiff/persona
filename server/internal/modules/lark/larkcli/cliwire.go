@@ -39,6 +39,7 @@ const (
 	KindMissingPermission  = cliwire.KindMissingPermission
 	KindNotInstalled       = cliwire.KindNotInstalled
 	KindNotLoggedIn        = cliwire.KindNotLoggedIn
+	KindBotNotInChat       = cliwire.KindBotNotInChat
 	KindOther              = cliwire.KindOther
 	KindRateLimited        = cliwire.KindRateLimited
 	KindTimeout            = cliwire.KindTimeout

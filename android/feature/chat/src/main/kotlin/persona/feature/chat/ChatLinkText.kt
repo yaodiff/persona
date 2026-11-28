@@ -41,7 +41,7 @@ internal fun ChatContextCard(context: ChatLinkContext, compact: Boolean = false,
     if (context.isForward) { ForwardContextCard(context, compact, onRemove, lines); return }
     val uriHandler = LocalUriHandler.current
     val quote = context.kind == ChatLinkContext.QUOTE
-    val session = context.url.startsWith(SESSION_CONTEXT_URL)
+    val session = isSessionContextUrl(context.url)
     // A quoted message ("Quote") and a session picked with @ say whom they quote (iOS `quoteHeading`); no title line under it.
     val label = when {
         // Words picked in a message ("Select", then Quote) say so, as iOS's `quoteHeading` does.
@@ -78,6 +78,9 @@ internal fun ChatContextCard(context: ChatLinkContext, compact: Boolean = false,
 
 /** Where a session picked with @ points ([sessionQuote]): `persona://session/<machine>/<session>`. */
 internal const val SESSION_CONTEXT_URL = "persona://session/"
+
+internal fun isSessionContextUrl(url: String): Boolean =
+    persona.core.contracts.ProtocolCompatibility.appSchemes.any { url.startsWith("$it://session/") }
 
 /**
  * A forward over the composer (#3901, iOS `QuoteBarRow` with the forward arrow and route): the arrow and "Forwarded from

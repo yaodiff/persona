@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 
@@ -18,6 +19,13 @@ import (
 // companion while none is connected (agy_companion_offline, node/starthost.go); one the hub sent there by itself then
 // starts again in the computer's default host, so a companion that just went away never fails the task. A start that
 // names a host (agy, or an engine host such as herdr) keeps it.
+//
+// An Agent another Agent starts (a2a_send's new Agent, dispatch_start) has nobody at its pane either, and takes the
+// same host (agentStartedHost, #14887). Such a start in plan (an a2a_send launch's mode unless its caller is attested
+// for a higher one) whose launcher cannot be held read-only on the computer is refused as a read-only task is
+// (readonlyLauncherRefusal): when the tool is called, before its A2A task is recorded, and again when the start goes
+// out, since a launch can wait in the queue while its computer is away. A companion that went away meanwhile sends a
+// writable start to the default host; a read-only one fails with the node's reason, as only the companion holds it.
 
 // checkStartHostName refuses a host no start can name: agy, the Antigravity companion, or an engine host. "" is the
 // computer's default host.
@@ -71,4 +79,33 @@ func (s *Service) companionRuns(ctx context.Context, m Device, fit startAgent) b
 // companion is connected there now; the start then goes to the computer's default host without the host.
 func companionAway(err error, chosen bool) bool {
 	return chosen && refusedWith(err, proto.CodeAgyCompanionOffline)
+}
+
+// agentStartedHost readies params, the start of an Agent another Agent starts on m as it will reach the node (its
+// launcher with Model configuration › Agents laid over it, and its permission mode), as a planned task's start is
+// readied: an agy start that names no host goes to m's Antigravity companion where that runs its launcher
+// (companionStartHost; true when it did, for companionAway), and a start in plan whose launcher cannot be held
+// read-only on m is refused (readonlyLauncherRefusal: readonly_unsupported, naming the launchers that can). The
+// launcher is only looked up, as dispatchAllowAll looks it up: one fitLauncher would refuse or replace, or one it
+// cannot tell, goes to the node as before, which judges it.
+func (s *Service) agentStartedHost(ctx context.Context, m Device, params map[string]any) (bool, error) {
+	// The launcher list is read with the same bound as the other decisions around a start: a computer whose
+	// launchers.list is slow must not delay the start, which goes on to the node with what could be told.
+	ctx, cancel := context.WithTimeout(ctx, agentStartListTimeout)
+	defer cancel()
+	launcher, _ := params["launcher"].(string)
+	probe := maps.Clone(params)
+	_, fit, err := s.fitLauncher(ctx, m, startPick{launcher: strings.TrimSpace(launcher)}, probe)
+	if err != nil || probe["launcher"] != params["launcher"] {
+		return false, nil
+	}
+	companion := s.companionStartHost(ctx, m, fit, params)
+	// Only a start that would run the work agent in a terminal needs refusing: a launcher kept in Persona (a managed
+	// agy launcher, isTerminalLauncherSource) starts on its runtime, which holds plan itself.
+	if mode, _ := params["permission_mode"].(string); mode == "plan" && isTerminalLauncherSource(fit.source, fit.agent) {
+		if err := s.readonlyLauncherRefusal(ctx, m, params, fit); err != nil {
+			return false, err
+		}
+	}
+	return companion, nil
 }

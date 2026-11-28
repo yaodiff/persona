@@ -73,7 +73,7 @@
       "type": "string",
       "x-enum": "closed",
       "x-unknown": "count",
-      "enum": ["failed_start", "agent_asks", "interrupted", "decision", "decision_default", "cannot", "awaits_reply", "working", "persona_working", "starting", "background", "parked", "finished", "accepted", "deployed", "pr_open", "usage_limit", "run_waits", "finished_seen", "completed", "canceled", "reported", "superseded", "someday"]
+      "enum": ["failed_start", "agent_asks", "interrupted", "stopped_unfinished", "decision", "decision_default", "cannot", "awaits_reply", "working", "persona_working", "starting", "background", "parked", "finished", "accepted", "deployed", "pr_open", "usage_limit", "run_waits", "finished_seen", "completed", "canceled", "reported", "superseded", "someday"]
     },
     "TodoLineArg": {
       "description": "The argument names produced by this version of the projection. TodoLine.args remains an open string dictionary on the wire.",

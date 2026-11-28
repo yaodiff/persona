@@ -1,13 +1,19 @@
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
+import { initI18n, t } from "../i18n";
 import {
   filterTodosBySharedBlocker,
   findSelectedBlocker,
+  isRawTodoId,
   matchesSharedBlocker,
   parseSharedBlockers,
   resolveSelectedBlockerKey,
   safeBlockerUrl,
   type SharedBlocker,
 } from "./todo-shared-blockers";
+
+beforeAll(async () => {
+  await initI18n("en");
+});
 
 describe("safeBlockerUrl", () => {
   it("accepts valid http and https URLs", () => {
@@ -132,6 +138,78 @@ describe("parseSharedBlockers", () => {
         count: 2,
       },
     ]);
+  });
+
+  it("resolves internal prerequisite todo blockers with server title, todosById fallback, and zero raw todo_... IDs (#17938)", () => {
+    expect(isRawTodoId("todo_e8acf635da201b7a")).toBe(true);
+    expect(isRawTodoId("org/repo#42")).toBe(false);
+
+    const todosById = new Map([
+      ["todo_e8acf635da201b7a", { id: "todo_e8acf635da201b7a", title: "Stabilize Steam extension pipeline" }],
+      ["todo_server_named", { id: "todo_server_named", title: "Local title fallback" }],
+    ]);
+
+    const parsed = parseSharedBlockers(
+      [
+        // Legacy hub emits target:todo_... as external_target with raw ID as label
+        {
+          key: "target:todo_e8acf635da201b7a",
+          kind: "external_target",
+          label: "todo_e8acf635da201b7a",
+          todo_ids: ["t1", "t2"],
+          count: 2,
+        },
+        // Newer hub (#17937) emits kind: "todo" with server-resolved readable label -> prefer server label
+        {
+          key: "todo:todo_server_named",
+          kind: "todo",
+          todo_id: "todo_server_named",
+          label: "Server resolved prerequisite title",
+          todo_ids: ["t1", "t2", "t3"],
+          count: 3,
+        },
+        // Deleted / unloaded prerequisite todo -> never expose raw todo_... ID
+        {
+          key: "target:todo_missing1234",
+          kind: "external_target",
+          label: "todo_missing1234",
+          todo_ids: ["t2", "t3"],
+          count: 2,
+        },
+      ],
+      undefined,
+      todosById,
+    );
+
+    expect(parsed).toEqual([
+      {
+        key: "todo:todo_server_named",
+        kind: "todo",
+        todo_id: "todo_server_named",
+        label: "Server resolved prerequisite title",
+        todo_ids: ["t1", "t2", "t3"],
+        count: 3,
+      },
+      {
+        key: "target:todo_e8acf635da201b7a",
+        kind: "todo",
+        todo_id: "todo_e8acf635da201b7a",
+        label: "Stabilize Steam extension pipeline",
+        todo_ids: ["t1", "t2"],
+        count: 2,
+      },
+      {
+        key: "target:todo_missing1234",
+        kind: "todo",
+        todo_id: "todo_missing1234",
+        label: t("todos.shared_blockers_unknown_todo"),
+        todo_ids: ["t2", "t3"],
+        count: 2,
+      },
+    ]);
+    for (const blocker of parsed) {
+      expect(blocker.label).not.toMatch(/^todo_/i);
+    }
   });
 });
 

@@ -149,6 +149,59 @@ func TestCodexStartAnswersWithTheThread(t *testing.T) {
 	}
 }
 
+// herdr numbers its workspaces again after its server restarts, so a start's new tab can get the pane id of a tab an
+// older session ran in, and the hub hands that session's binding back on every connection (#14682). The Codex started
+// there is its own session only: until its thread is known the pane is not listed as the older session, which then is
+// not left behind in the new folder, and the older session's record no longer names the pane.
+func TestCodexStartInAReusedPaneIsNoOlderSession(t *testing.T) {
+	withCodexLaunchers(t, map[string][]string{"codex": {"codex"}})
+	n, f, cwd, _ := codexStartHerdr(t, time.Second)
+	const older = "5b0e9a52-6f3c-4d21-9a7e-2c8b1d4f6e30" // ran in a tab w1:p2 before herdr's restart
+	n.state.put(older, sessionState{Launcher: "claude", Cwd: mkdir(t, filepath.Join(n.home, "elsewhere")), Pane: "w1:p2"})
+	n.mu.Lock()
+	n.panes["w1:p2"] = older // as the hub's stored bindings come back (fetchState)
+	n.mu.Unlock()
+	typed := make(chan struct{}, 1)
+	f.after(func(c herdrCall) {
+		if c.Method == "pane.send_input" && str(c.Params["pane_id"]) == "w1:p2" {
+			select {
+			case typed <- struct{}{}:
+			default:
+			}
+		}
+	})
+	params, _ := json.Marshal(map[string]any{"cwd": "~/proj", "launcher": "codex", "prompt": "hello"})
+	done := make(chan error, 1)
+	go func() {
+		_, err := n.handle(context.Background(), "session.start", params)
+		done <- err
+	}()
+	select {
+	case <-typed:
+	case err := <-done:
+		t.Fatalf("the start ended before it typed anything: %v", err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("the start typed nothing in 10 s")
+	}
+	// Codex runs in the pane and has written no thread yet: herdr names no session for it.
+	for _, s := range listSessions(t, n) {
+		if s.SessionID == older && (s.Agent == "codex" || s.PaneID != "" || s.Cwd == cwd) {
+			t.Errorf("while the start waits for its thread, the older session is listed as the new tab's: %+v", s)
+		}
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range listSessions(t, n) {
+		if s.SessionID == older && (s.Agent == "codex" || s.PaneID != "" || s.Cwd == cwd) {
+			t.Errorf("after the start, the older session is listed as the new tab's: %+v", s)
+		}
+	}
+	if st, _ := n.state.get(older); st.Pane != "" {
+		t.Errorf("the older session's record still names the pane: %+v", st)
+	}
+}
+
 func TestCodexStartUsesThePurposeModel(t *testing.T) {
 	withCodexLaunchers(t, map[string][]string{"cx": {"codex", "--model=old", "-c", "model_reasoning_effort=low"}})
 	n, _, _, _ := codexStartHerdr(t, 0)
@@ -325,15 +378,19 @@ func TestCodexStartBypassLauncherArguments(t *testing.T) {
 	}
 }
 
-func TestCodexStartRefusals(t *testing.T) {
+func TestCodexStartAsyncRequestReturnsTheRealThread(t *testing.T) {
 	withCodexLaunchers(t, map[string][]string{"codex": {"codex"}})
-	n, _, _, cmds := codexStartHerdr(t, 0)
-	_, err := request(t, n, "session.start", map[string]any{"cwd": "~/proj", "launcher": "codex", "prompt": "hi", "async": true})
-	if code, _ := refusalOf(t, err); code != "codex_needs_prompt" {
-		t.Errorf("async: %v", err)
+	n, _, cwd, cmds := codexStartHerdr(t, 100*time.Millisecond)
+	res, err := request(t, n, "session.start", map[string]any{"cwd": "~/proj", "launcher": "codex", "prompt": "hi", "async": true})
+	if err != nil {
+		t.Fatalf("Codex async request: %v", err)
 	}
-	if len(*cmds) != 0 {
-		t.Errorf("ran %q", *cmds)
+	s := decodeSessions(t, []any{res["session"]})[0]
+	if s.SessionID != startThread || s.Agent != "codex" || s.Cwd != cwd || s.Starting {
+		t.Fatalf("answered %+v, want the completed Codex thread %s", s, startThread)
+	}
+	if len(*cmds) != 1 || !slices.Equal(ran, []string{"codex"}) {
+		t.Fatalf("Codex commands %q, argv %q", *cmds, ran)
 	}
 }
 
@@ -452,9 +509,11 @@ func TestCodexStartFailureShowsATopDialog(t *testing.T) {
 	t.Cleanup(func() { codexStartWait = old })
 	n, f, _, _ := codexStartHerdr(t, time.Hour)
 	tallPane(f, 51)
-	f.setScreen("w1:p2", "  Sign in with ChatGPT\n\n› 1. Sign in with ChatGPT\n  2. Sign in with Device Code\n  3. Sign in another way\n\n  Press enter to continue\n")
+	// A dialog the start does not answer: neither the trust dialog, an update offer nor the sign-in screen, which ends
+	// the start at once (TestCodexStartOnSignInScreenFailsAtOnce).
+	f.setScreen("w1:p2", "  Pick a color theme\n\n› 1. Dark\n  2. Light\n  3. Match the terminal\n\n  Press enter to continue\n")
 	_, err := request(t, n, "session.start", map[string]any{"cwd": "~/proj", "launcher": "codex", "prompt": "hi"})
-	if err == nil || !strings.Contains(err.Error(), "没认出它这次的会话") || !strings.Contains(err.Error(), "Sign in another way") {
+	if err == nil || !strings.Contains(err.Error(), "没认出它这次的会话") || !strings.Contains(err.Error(), "Match the terminal") {
 		t.Errorf("err %v", err)
 	}
 	if keys := f.trace("pane.send_keys"); len(keys) != 0 {
@@ -1051,7 +1110,7 @@ alias dmcc='ANTHROPIC_BASE_URL=http://127.0.0.1:8 claude'
 	}
 	// Plain codex on the PATH is a launcher of its own.
 	list, codex, _, _ = mergeLaunchers(launcherBegin + "\x1d\x1d/usr/local/bin/codex\n" + launcherEnd)
-	if len(list) != 2 || list[1].Name != "codex" || list[1].Agent != "codex" || len(codex["codex"]) != 1 {
+	if len(list) != 1 || list[0].Name != "codex" || list[0].Agent != "codex" || len(codex["codex"]) != 1 {
 		t.Errorf("plain codex: %+v %v", list, codex)
 	}
 }

@@ -141,16 +141,16 @@ describe("ProviderWizard from presets", () => {
     const tests = keyTests();
     expect(tests).toHaveLength(1);
     expect(tests[0]!.body).toEqual({ preset: "builtin/glm", api_key: "sk-test-123456", auth: "bearer" });
-    expect(text()).toContain("Key 能用");
+    expect(text()).toContain("Key 可用");
 
     await act(async () => button("保存")!.click());
     await flush();
     const post = calls.find((c) => c.method === "POST" && c.path.endsWith("/launchers"));
     expect(post?.body).toEqual({ api_key: "sk-test-123456", preset: "builtin/glm", assign: ["assistant", "agent.new"] });
     expect(saved).toHaveBeenCalled();
-    expect(text()).toContain("智谱 GLM 接好了");
-    expect(text()).toContain("现在用它：主对话");
-    expect(text()).toContain("新开的 Agent：没有改");
+    expect(text()).toContain("智谱 GLM 已连接");
+    expect(text()).toContain("已应用于：主对话");
+    expect(text()).toContain("新建 Agent：未更改");
   });
 
   it("tests the key only once it has stopped changing for the whole debounce", async () => {
@@ -168,7 +168,7 @@ describe("ProviderWizard from presets", () => {
     await flush();
     expect(keyTests()).toHaveLength(1);
     expect(keyTests()[0]!.body).toMatchObject({ api_key: "sk-test-123456" });
-    expect(text()).toContain("Key 能用");
+    expect(text()).toContain("Key 可用");
   });
 
   it("says why a key failed and leaves assign out when turned off", async () => {
@@ -185,7 +185,7 @@ describe("ProviderWizard from presets", () => {
     await flush();
     const post = calls.find((c) => c.method === "POST" && c.path.endsWith("/launchers"));
     expect(post?.body).not.toHaveProperty("assign");
-    expect(text()).toContain("到「模型配置」里选");
+    expect(text()).toContain("前往「模型配置」选择");
   });
 
   // #4526: the region, not the key, is the problem (#4482): no retesting, a way back to the list, and the provider is
@@ -198,7 +198,7 @@ describe("ProviderWizard from presets", () => {
     await waitAutoTest();
     expect(text()).toContain("换 Key 也没用");
     expect(button("重新测试")).toBeUndefined();
-    expect(button("换一家")).toBeDefined();
+    expect(button("更换供应商")).toBeDefined();
     const toggle = document.body.querySelector<HTMLButtonElement>('button[role="switch"]')!;
     expect(toggle.getAttribute("aria-checked")).toBe("false");
 
@@ -221,26 +221,26 @@ describe("ProviderWizard from presets", () => {
     expect(post?.body).toMatchObject({ assign: ["assistant", "agent.new"] });
   });
 
-  it("goes back to the providers from a blocked region's 换一家", async () => {
+  it("goes back to the providers from a blocked region's 更换供应商", async () => {
     testAnswer = { ok: false, ms: 120, code: "region_blocked", error: "Anthropic 不对这个地区提供服务" };
     await open();
     act(() => button("智谱 GLM")!.click());
     type(keyInput(), "sk-test-123456");
     await waitAutoTest();
-    act(() => button("换一家")!.click());
+    act(() => button("更换供应商")!.click());
     await flush();
     const rows = [...document.body.querySelectorAll("ul li")].map((li) => li.textContent ?? "");
     expect(rows).toHaveLength(4);
     expect(keyInput()).toBeNull();
   });
 
-  it("does not carry a provider's key to the next one picked after 换一家", async () => {
+  it("does not carry a provider's key to the next one picked after 更换供应商", async () => {
     testAnswer = { ok: false, ms: 120, code: "region_blocked", error: "Anthropic 不对这个地区提供服务" };
     await open();
     act(() => button("智谱 GLM")!.click());
     type(keyInput(), "sk-test-123456");
     await waitAutoTest();
-    act(() => button("换一家")!.click());
+    act(() => button("更换供应商")!.click());
     await flush();
     act(() => button("示例网关")!.click());
     expect(keyInput()!.value).toBe("");
@@ -272,7 +272,7 @@ describe("ProviderWizard from presets", () => {
     await waitAutoTest();
     expect(keyTests()).toHaveLength(1);
     expect(keyTests()[0]!.body).toMatchObject({ preset: "example-gateway/api", api_key: "sk-test-123456" });
-    expect(text()).toContain("Key 能用");
+    expect(text()).toContain("Key 可用");
     expect(button("保存")!.disabled).toBe(false);
   });
 
@@ -283,15 +283,15 @@ describe("ProviderWizard from presets", () => {
     act(() => button("示例 Responses")!.click());
     expect(document.body.querySelector('button[role="switch"]')).toBeNull();
     // said before saving: uses with no model picked may move to it
-    expect(text()).toContain("没有单独选模型的用途，现在可能会改用它");
+    expect(text()).toContain("未单独指定模型的用途现在可能会改用它");
     type(keyInput(), "sk-test-123456");
     await waitAutoTest();
     await act(async () => button("保存")!.click());
     await flush();
     const post = calls.find((c) => c.method === "POST" && c.path.endsWith("/launchers"));
     expect(post?.body).toEqual({ api_key: "sk-test-123456", preset: "example-gateway/api" });
-    expect(text()).toContain("主对话和 Agent 不能用它");
-    expect(text()).not.toContain("要让主对话或 Agent 用它");
+    expect(text()).toContain("主对话和 Agent 无法直接运行在此供应商上");
+    expect(text()).not.toContain("如需在主对话或 Agent 中使用");
     expect(document.body.querySelector('[data-testid="wizard-no-claude"]')).toBeNull();
   });
 
@@ -311,7 +311,7 @@ describe("ProviderWizard from presets", () => {
     type(inputs.find((input) => input.placeholder.includes("my_gateway"))!, "custom");
     type(inputs.find((input) => input.inputMode === "url")!, "https://api.example.com/prefix");
     type(keyInput(), "sk-test-123456");
-    type(document.body.querySelector<HTMLInputElement>('input[aria-label="测试用的模型"]')!, "example-r");
+    type(document.body.querySelector<HTMLInputElement>('input[aria-label="测试模型"]')!, "example-r");
     await act(async () => button("测试连接")!.click());
     await act(async () => button("获取模型列表")!.click());
     expect(keyTests()[0]!.body).toMatchObject({ api: "responses", model: "example-r", base_url: "https://api.example.com/prefix" });
@@ -329,7 +329,7 @@ describe("ProviderWizard from presets", () => {
     type(inputs.find((input) => input.placeholder.includes("my_gateway"))!, "custom");
     type(inputs.find((input) => input.inputMode === "url")!, "https://api.example.com/v1");
     type(keyInput(), "sk-test-123456");
-    type(document.body.querySelector<HTMLInputElement>('input[aria-label="测试用的模型"]')!, "example-chat");
+    type(document.body.querySelector<HTMLInputElement>('input[aria-label="测试模型"]')!, "example-chat");
     await act(async () => button("测试连接")!.click());
     await act(async () => button("获取模型列表")!.click());
     expect(keyTests()[0]!.body).toMatchObject({ api: "chat", model: "example-chat", base_url: "https://api.example.com/v1" });
@@ -384,7 +384,7 @@ describe("ProviderWizard from presets", () => {
     expect(keyTests()[0]!.body).toHaveProperty("headers", "X-Example: value");
     act(() => button("下一步")!.click());
     expect(text()).toContain("上下文限制、分档模型");
-    expect(text()).toContain("模型列表中仍可记录各模型的上下文窗口");
+    expect(text()).toContain("你仍可在模型列表中为各模型记录上下文窗口");
     expect(document.body.querySelector('textarea[placeholder^="X-Name"]')).toBeNull();
     expect(document.body.querySelector('input[placeholder="http://127.0.0.1:7890"]')).toBeNull();
     expect(document.body.querySelector('input[placeholder="localhost,127.0.0.1"]')).toBeNull();
@@ -411,7 +411,7 @@ describe("ProviderWizard from presets", () => {
     expect(document.body.querySelector<HTMLInputElement>('input[aria-label="example-chat 的上下文窗口"]')?.value).toBe("16000");
     expect(document.body.querySelector('[aria-label="example-chat 支持的思考档位"]')).toBeNull();
     expect(document.body.querySelector('[aria-label="example-chat 的默认思考档位"]')).toBeNull();
-    expect(text()).toContain("用途编辑器可以覆盖默认档位；此向导会保留这些设置");
+    expect(text()).toContain("用途编辑器可覆盖该默认设置；本向导会保留这两项配置");
     await act(async () => button("保存")!.click());
     expect(calls.find((c) => c.method === "PUT" && c.path.endsWith("/launchers/chat"))?.body).not.toHaveProperty("models");
   });
@@ -475,7 +475,7 @@ describe("ProviderWizard from presets", () => {
     await open();
     act(() => button("智谱 GLM")!.click());
     expect(document.body.querySelector('button[role="switch"]')?.getAttribute("aria-checked")).toBe("false");
-    expect(text()).toContain("小林的 MacBook 上的 Claude Code，已经能用");
+    expect(text()).toContain("小林的 MacBook 上的 Claude Code 正常工作");
     type(keyInput(), "sk-test-123456");
     await waitAutoTest();
     const before = readinessGets();
@@ -497,7 +497,7 @@ describe("ProviderWizard from presets", () => {
     act(() => button("智谱 GLM")!.click());
     // not known yet: no switch to read as on
     expect(document.body.querySelector('button[role="switch"]')).toBeNull();
-    expect(text()).toContain("正在看主对话现在能不能用");
+    expect(text()).toContain("正在检查主对话当前是否可用");
     type(keyInput(), "sk-test-123456");
     // the key test runs and saving is asked for while the readiness is still out: only the gate releases it
     await waitAutoTest();
@@ -523,7 +523,7 @@ describe("ProviderWizard from presets", () => {
     await act(async () => button("保存")!.click());
     await flush();
     const note = document.body.querySelector('[data-testid="wizard-no-claude"]');
-    expect(note?.textContent).toContain("Key 存好了；要用它，还得先在 小林的 MacBook 上装 Claude Code。");
+    expect(note?.textContent).toContain("Key 已保存。还需在 小林的 MacBook 上安装 Claude Code 后才能使用它。");
   });
 
   it("says the key is saved but the computer still needs Claude Code", async () => {
@@ -540,8 +540,8 @@ describe("ProviderWizard from presets", () => {
     await act(async () => button("保存")!.click());
     await flush();
     const note = document.body.querySelector('[data-testid="wizard-no-claude"]');
-    expect(note?.textContent).toContain("Key 存好了；还要在 小林的 MacBook 上装 Claude Code，主对话才能用它。");
-    act(() => button("怎么装")!.click());
+    expect(note?.textContent).toContain("Key 已保存。还需在 小林的 MacBook 上安装 Claude Code，主对话才能使用它。");
+    act(() => button("如何安装")!.click());
     expect(text()).toContain("claude.ai/install.sh");
   });
 });
@@ -605,12 +605,12 @@ describe("ProviderWizard device scope", () => {
     await edit(scoped);
     toDevices();
     act(() => button("指定电脑")!.click());
-    expect(text()).toContain("至少选一台电脑");
+    expect(text()).toContain("请至少选择一台电脑");
     expect(button("保存")!.disabled).toBe(true);
     await act(async () => button("保存")!.click());
     expect(put()).toBeUndefined();
     act(() => button("Test computer")!.click());
-    act(() => (document.body.querySelector('button[role="switch"][aria-label="每台电脑存一份"]') as HTMLButtonElement).click());
+    act(() => (document.body.querySelector('button[role="switch"][aria-label="在各电脑保存副本"]') as HTMLButtonElement).click());
     expect(button("保存")!.disabled).toBe(false);
     await act(async () => button("保存")!.click());
     expect(put()?.body).toMatchObject({ share: "selected", scope_machines: ["box"], delivery: "push" });
@@ -620,7 +620,7 @@ describe("ProviderWizard device scope", () => {
   it("explains a provider saved before scopes existed", async () => {
     await edit({ ...scoped, delivery: "push", own_service: "use", legacy_scope: true, key_machines: [] });
     toDevices();
-    expect(text()).toContain("这个供应商是在有电脑范围之前存的");
+    expect(text()).toContain("该供应商保存于设备范围功能上线之前");
     await act(async () => button("保存")!.click());
     for (const k of scopeKeys) expect(put()?.body, k).not.toHaveProperty(k);
   });
@@ -631,7 +631,7 @@ describe("ProviderWizard device scope", () => {
     type(keyInput(), "sk-test-123456");
     await waitAutoTest();
     act(() => button("电脑")!.click());
-    act(() => button("不给电脑（只在 hub）")!.click());
+    act(() => button("不分发到电脑（仅 hub 使用）")!.click());
     await act(async () => button("保存")!.click());
     await flush();
     const post = calls.find((c) => c.method === "POST" && c.path.endsWith("/launchers"));
@@ -681,11 +681,11 @@ describe("ProviderWizard names", () => {
     expect(addModelInput()).toBeNull();
     expect(alertText()).toBeUndefined();
     expect(id.getAttribute("aria-invalid")).toBe("true");
-    expect(note(id)).toBe("要填启动 ID");
+    expect(note(id)).toBe("请输入启动 ID");
     expect(url.getAttribute("aria-invalid")).toBe("true");
-    expect(note(url)).toBe("要填地址");
+    expect(note(url)).toBe("请输入地址");
     expect(keyInput().getAttribute("aria-invalid")).toBe("true");
-    expect(note(keyInput())).toBe("要填 API Key");
+    expect(note(keyInput())).toBe("请输入 API Key");
     // a red edge in place of the field's inset (an added edge would lose to the inset)
     for (const input of [id, url, keyInput()]) {
       expect(input.className).toContain("shadow-[inset_0_0_0_1px_var(--red)]");
@@ -693,7 +693,7 @@ describe("ProviderWizard names", () => {
     }
     expect(document.activeElement).toBe(id);
     expect(scrolled.at(-1)?.contains(id)).toBe(true);
-    expect(scrolled.at(-1)?.textContent).toContain("要填启动 ID");
+    expect(scrolled.at(-1)?.textContent).toContain("请输入启动 ID");
     // the next press goes to the first field still wrong
     type(id, "team_relay");
     expect(id.getAttribute("aria-invalid")).toBeNull();
@@ -711,10 +711,10 @@ describe("ProviderWizard names", () => {
     await custom();
     expect(button("更多选项")!.getAttribute("aria-expanded")).toBe("false");
     expect(field("启动 ID")).toBeNull();
-    const display = field("显示名")!;
+    const display = field("显示名称")!;
     expect(display.className).not.toContain("font-mono");
-    expect(note(display)).toBe("选供应商的地方都显示这个名字，用什么语言都行。");
-    expect(display.placeholder).toBe("比如 团队中转");
+    expect(note(display)).toBe("选择供应商时将统一显示此名称，支持任意语言。");
+    expect(display.placeholder).toBe("例如：团队中转");
     connect();
     // left empty, the hub names it after the host
     expect(display.placeholder).toBe("relay.example.com");
@@ -733,14 +733,14 @@ describe("ProviderWizard names", () => {
     await custom();
     expect(button("更多选项")).toBeUndefined();
     const id = field("启动 ID")!;
-    expect(id.placeholder).toBe("比如 my_gateway");
-    type(field("显示名")!, "Team relay");
+    expect(id.placeholder).toBe("例如：my_gateway");
+    type(field("显示名称")!, "Team relay");
     connect();
     act(() => button("下一步")!.click());
     // said under the field, which takes the focus (audit item 19)
     expect(alertText()).toBeUndefined();
     expect(id.getAttribute("aria-invalid")).toBe("true");
-    expect(note(id)).toBe("要填启动 ID");
+    expect(note(id)).toBe("请输入启动 ID");
     expect(document.activeElement).toBe(id);
     type(id, "team_relay");
     act(() => button("下一步")!.click());
@@ -755,14 +755,14 @@ describe("ProviderWizard names", () => {
     const id = field("启动 ID")!;
     expect(id.placeholder).toBe("留空自动生成");
     expect(id.getAttribute("aria-invalid")).toBeNull();
-    expect(note(id)).toBe("字母、数字、_ 和 -。启动命令、Agent 预设和模型配置都按它引用，添加后不能再改。");
+    expect(note(id)).toBe("仅支持字母、数字、_ 和 -。启动命令、Agent 预设和模型配置都会引用此 ID，添加后不可更改。");
     type(id, "1 bad");
     expect(id.getAttribute("aria-invalid")).toBe("true");
-    expect(note(id)).toBe("启动 ID 只能用字母、数字、_ 和 -，以字母或 _ 开头");
+    expect(note(id)).toBe("启动 ID 仅支持字母、数字、_ 和 -，且须以字母或 _ 开头");
     act(() => button("更多选项")!.click());
     expect(button("更多选项")!.getAttribute("aria-expanded")).toBe("false");
     act(() => button("下一步")!.click());
-    expect(note(field("启动 ID")!)).toBe("启动 ID 只能用字母、数字、_ 和 -，以字母或 _ 开头");
+    expect(note(field("启动 ID")!)).toBe("启动 ID 仅支持字母、数字、_ 和 -，且须以字母或 _ 开头");
     expect(button("更多选项")!.getAttribute("aria-expanded")).toBe("true");
     expect(document.activeElement).toBe(field("启动 ID"));
     expect(addModelInput()).toBeNull();
@@ -772,14 +772,14 @@ describe("ProviderWizard names", () => {
     autoName();
     await custom();
     connect();
-    const display = field("显示名")!;
+    const display = field("显示名称")!;
     type(display, "字".repeat(65));
     expect(display.getAttribute("aria-invalid")).toBe("true");
-    expect(note(display)).toBe("显示名最多 64 个字，不能换行");
+    expect(note(display)).toBe("显示名称最多 64 个字符，且不能换行");
     expect(button("测试连接")!.disabled).toBe(false);
     expect(button("获取模型列表")!.disabled).toBe(false);
     act(() => button("下一步")!.click());
-    expect(note(display)).toBe("显示名最多 64 个字，不能换行");
+    expect(note(display)).toBe("显示名称最多 64 个字符，且不能换行");
     expect(document.activeElement).toBe(display);
     type(display, "字".repeat(64));
     expect(display.getAttribute("aria-invalid")).toBeNull();
@@ -793,13 +793,13 @@ describe("ProviderWizard names", () => {
     await loadProviderNames();
     await show({ name: "gw", display_name: "Team relay", base_url: "https://gw.example.com", model: "m1", has_key: true, auth: "bearer", models: [{ id: "m1" }] });
     expect(text()).toContain("编辑 Team relay");
-    const display = field("显示名")!;
+    const display = field("显示名称")!;
     expect(display.value).toBe("Team relay");
     act(() => button("更多选项")!.click());
     const id = field("启动 ID")!;
     expect(id.disabled).toBe(true);
     expect(id.value).toBe("gw");
-    expect(note(id)).toBe("不能改：电脑上的启动命令、Agent 预设和模型配置都按它引用。");
+    expect(note(id)).toBe("不可修改：电脑上的启动命令、Agent 预设和模型配置都会引用此 ID。");
     // cleared, it shows the ID again
     type(display, "");
     expect(display.placeholder).toBe("gw");
@@ -820,7 +820,7 @@ describe("ProviderWizard names", () => {
     await open();
     act(() => button("智谱 GLM")!.click());
     act(() => button("更多选项")!.click());
-    const display = field("显示名")!;
+    const display = field("显示名称")!;
     expect(display.placeholder).toBe("智谱 GLM");
     expect(field("启动 ID")!.placeholder).toBe("留空自动生成");
     type(display, "团队的 GLM");
@@ -836,24 +836,24 @@ describe("ProviderWizard names", () => {
     await open();
     act(() => button("智谱 GLM")!.click());
     act(() => button("更多选项")!.click());
-    type(field("显示名")!, "长".repeat(65));
+    type(field("显示名称")!, "长".repeat(65));
     type(keyInput(), "sk-test-123456");
     await waitAutoTest();
     const alert = () => [...document.body.querySelectorAll('[role="alert"]')].map((a) => a.textContent).join("");
     expect(alert()).toBe("");
     act(() => button("更多选项")!.click());
-    expect(alert()).toBe("显示名最多 64 个字，不能换行");
+    expect(alert()).toBe("显示名称最多 64 个字符，且不能换行");
     expect(button("保存")!.disabled).toBe(true);
   });
 
   it("says a Messages address's trailing /v1 goes by itself, and that other bases are used as typed", async () => {
     await custom();
     const hint = () => note(urlInput());
-    const dropped = "Anthropic Messages 兼容网关的基础地址；末尾的 /v1 会自动去掉。";
+    const dropped = "Anthropic Messages 兼容网关的基础地址，末尾的 /v1 会自动移除。";
     expect(hint()).toBe(dropped);
     for (const [kind, want] of [
-      ["Codex", "Responses 兼容 API 的基础地址，按填写的原样使用（大多以 /v1 结尾）。"],
-      ["Antigravity", "Gemini 兼容 API 的基础地址，按填写的原样使用。"],
+      ["Codex", "Responses 兼容 API 的基础地址，将按填写内容原样使用（通常以 /v1 结尾）。"],
+      ["Antigravity", "Gemini 兼容 API 的基础地址，将按填写内容原样使用。"],
       ["omp", dropped],
       ["直接 API", dropped],
       ["OpenAI Responses", "Responses 兼容 API 的基础地址。"],
@@ -899,7 +899,7 @@ describe("ProviderWizard with many models", () => {
     expect(rows()).toEqual(["gw-x"]);
     type(filter()!, "no-such-model");
     expect(rows()).toEqual([]);
-    expect(text()).toContain("没有匹配的模型。");
+    expect(text()).toContain("未找到匹配的模型。");
   });
 
   it("has no filter for a short list", async () => {

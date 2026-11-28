@@ -65,7 +65,7 @@ describe("LarkDisplayModel", () => {
     expect(m.policy).toEqual(on);
     await m.refresh();
     expect(m.policy).toBe(HIDDEN_DISPLAY);
-    expect(m.state.problem).toContain("没有登录飞书");
+    expect(m.state.problem).toContain("尚未登录飞书");
   });
 
   it("does not trust a reply without an account, and says a hub without the route needs updating", async () => {
@@ -100,7 +100,7 @@ describe("LarkDisplayModel", () => {
     await m.change("anti_recall", true);
     expect(bodies).toEqual([{ account_id: "acct", key: "anti_recall", value: true, expected: false }]);
     expect(m.state.snapshot).toBeUndefined();
-    expect(m.state.problem).toContain("重新加载一下");
+    expect(m.state.problem).toContain("重新加载后再修改");
     await m.change("anti_recall", true); // nothing known: nothing written
     expect(bodies).toHaveLength(1);
   });

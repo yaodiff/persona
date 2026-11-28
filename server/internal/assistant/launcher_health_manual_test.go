@@ -6,7 +6,37 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/proto"
 )
+
+func TestLauncherHealthDropsClaudeWhenDiscoveryNoLongerListsIt(t *testing.T) {
+	s, f := launcherHealthHub(t)
+	ctx := t.Context()
+	setModel(t, s, "agent.new", ModelBinding{Provider: "launcher.claude"})
+	f.devices[2].ClaudeVersion = "2.1.0"
+	f.zshrc = map[string][]proto.Launcher{
+		"l4":  {{Name: "codex", Agent: "codex"}},
+		"box": {{Name: "work"}},
+	}
+	f.checks["box/claude"] = proto.LauncherCheck{Error: "Not logged in · Please run /login"}
+	s.recordHealth(ctx, "l4", "claude", healthResult{err: "Claude Code has not completed its first-run setup", source: healthSourceCheck})
+
+	postJSON(t, s, "/api/v1/launchers/health/check?machine=l4&launcher=claude")
+	if r, ok := s.launcherHealth(ctx, "l4", "claude"); ok {
+		t.Fatalf("Claude warning survived removal from discovery: %+v", r)
+	}
+	if r, ok := reloadHealthService(t, s, f).launcherHealth(ctx, "l4", "claude"); ok {
+		t.Fatalf("removed Claude warning came back from storage: %+v", r)
+	}
+	postJSON(t, s, "/api/v1/launchers/health/check?machine=box&launcher=claude")
+	if len(f.checked) != 1 || f.checked[0] != "box/claude" {
+		t.Fatalf("probe calls: %v, want box/claude only", f.checked)
+	}
+	if r := healthState(s, "box", "claude"); !r.unusable() || r.Kind != errKindAuth {
+		t.Fatalf("installed Claude's real failure was lost: %+v", r)
+	}
+}
 
 // Test availability (the apps' button) runs the same check as a health check: once it passes on a machine, a record of
 // the launcher failing there no longer moves starts off it, with the periodic checks off as by default (#1838). A failed

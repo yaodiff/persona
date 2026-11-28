@@ -180,10 +180,10 @@ class AgentsSourceShotsTest {
             for (s in AppStyle.entries) for (d in listOf(false, true)) {
                 rule.runOnIdle { style = s; dark = d }
                 rule.waitForIdle()
-                // one tag each on the botmux and the herdr agent; the Orca agent carries none
+                // one tag each on the botmux, the herdr and the Orca agent (an Orca terminal is a tab too, #17054)
                 assertEquals(1, rule.onAllNodesWithText("飞书群", useUnmergedTree = true).fetchSemanticsNodes()
                     .count { node -> node.config.getOrElseNullable(androidx.compose.ui.semantics.SemanticsActions.OnClick) { null } != null })
-                assertTrue(rule.onAllNodesWithText("终端", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty())
+                assertTrue(rule.onAllNodesWithText("在标签页中", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty())
                 val list = rule.onNodeWithTag("shot").captureToImage().asAndroidBitmap()
                 val name = "source-${if (compact) "compact" else "list"}-${s.name.lowercase()}-${if (d) "dark" else "light"}.png"
                 File(out(), name).outputStream().use { assertTrue(list.compress(Bitmap.CompressFormat.PNG, 100, it)) }

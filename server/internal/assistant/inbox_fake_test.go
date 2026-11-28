@@ -19,6 +19,7 @@ import (
 	"github.com/nwverse/persona/server/internal/ai"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/connectorwire"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/kb"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -314,16 +315,19 @@ func (in *fakeInbox) answer(ctx context.Context, p AppCall) (json.RawMessage, bo
 		})
 	case assistantwire.InboxReply:
 		var a struct {
-			Source string               `json:"source"`
-			Reply  connector.InboxReply `json:"reply"`
-			SendID string               `json:"send_id"`
+			Source         string               `json:"source"`
+			Reply          connector.InboxReply `json:"reply"`
+			SendID         string               `json:"send_id"`
+			SenderIdentity string               `json:"sender_identity"`
 		}
 		_ = json.Unmarshal(p.Params, &a)
 		inb, ok := connector.As[connector.Inbox](in.conn(a.Source))
 		if !ok {
 			return nil, true, errors.New("this item cannot be replied to")
 		}
-		out, err = in.sendOnce(a.SendID, func() error { return inb.Reply(ctx, a.Reply) })
+		out, err = in.sendOnce(a.SendID, func() error { return inb.Reply(connectorwire.WithSendIdentity(ctx, a.SenderIdentity), a.Reply) })
+	case assistantwire.InboxMessagePolicy:
+		out = map[string]bool{"sender_identity": true}
 	case assistantwire.InboxSettle:
 		var a struct {
 			Source  string   `json:"source"`
@@ -466,6 +470,25 @@ func (s *inboxMemStore) InboxItems(_ context.Context, doneSince time.Time, each 
 		}
 	}
 	return nil
+}
+
+func (s *inboxMemStore) StoredInboxSources(ctx context.Context) ([]string, error) {
+	seen := map[string]bool{}
+	err := s.InboxItems(ctx, time.Time{}, func(raw []byte) error {
+		var it struct {
+			Source string `json:"source"`
+		}
+		if json.Unmarshal(raw, &it) == nil && it.Source != "" {
+			seen[it.Source] = true
+		}
+		return nil
+	})
+	out := make([]string, 0, len(seen))
+	for source := range seen {
+		out = append(out, source)
+	}
+	slices.Sort(out)
+	return out, err
 }
 
 func (s *inboxMemStore) DeleteInboxSource(_ context.Context, source string, ids []string) ([]string, error) {

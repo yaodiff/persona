@@ -356,6 +356,27 @@ class ChatComposerServiceTest {
         } finally { file.delete() }
     }
 
+    @Test fun assistantOfflineDoesNotRecordStaleUnknownOverlay() = runBlocking {
+        val scope = HubScope("test-hub", "generation")
+        val session = SessionKey("machine", "session")
+        val transport = object : MessageTransport {
+            override val readyToSend = MutableStateFlow(true)
+            override val supportsClientOps = true
+            override suspend fun send(request: MessageRequest): MessageTransportResult = error("Unexpected delegate send")
+        }
+        val answers = ArrayDeque(listOf(
+            """{"code":"assistant_offline","error":"assistant offline"}""",
+            """{"code":"assistant_offline","delivered":"none","retryable":true,"error":"assistant offline"}""",
+        ))
+        val service = HttpChatComposerService(scope, transport, request = { _, _, _ ->
+            uploadResponse(503, answers.removeFirst())
+        })
+        service.send(MessageRequest(scope, session, "legacy", "legacy-id"))
+        assertEquals(DeliveryState.WaitingForNetwork, service.deliveries.value["legacy-id"]?.state)
+        service.send(MessageRequest(scope, session, "current", "current-id"))
+        assertEquals(DeliveryState.WaitingForNetwork, service.deliveries.value["current-id"]?.state)
+    }
+
     private fun uploadResponse(code: Int, body: String): Response = Response.Builder()
         .request(Request.Builder().url("https://example.com/").build())
         .protocol(Protocol.HTTP_1_1).code(code).message("test").body(body.toResponseBody()).build()

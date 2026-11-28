@@ -106,8 +106,8 @@ describe("refuseUpload", () => {
   });
 
   it("refuses an empty file and one over the limit", () => {
-    expect(refuseUpload({ name: "a.png", size: 0 })).toContain("是空的");
-    expect(refuseUpload({ name: "big.mov", size: MAX_TERMINAL_UPLOAD + 1 })).toBe("「big.mov」超过 50 MB，没有上传");
+    expect(refuseUpload({ name: "a.png", size: 0 })).toContain("为空文件");
+    expect(refuseUpload({ name: "big.mov", size: MAX_TERMINAL_UPLOAD + 1 })).toBe("「big.mov」超过 50 MB，未上传");
   });
 });
 
@@ -172,7 +172,7 @@ describe("copying", () => {
   it("says why on a page without HTTPS", () => {
     expect(copyNotice("wrote", true)).toEqual({ text: "已复制", tone: "ok" });
     expect(copyNotice("legacy", true).text).toBe("已复制");
-    expect(copyNotice("legacy", false).text).toContain("不是 HTTPS");
+    expect(copyNotice("legacy", false).text).toContain("未使用 HTTPS");
     expect(copyNotice("failed", false)).toMatchObject({ tone: "error", text: expect.stringContaining("HTTPS") });
     expect(copyNotice("failed", true)).toMatchObject({ tone: "error" });
   });

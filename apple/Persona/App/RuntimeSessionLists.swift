@@ -20,13 +20,17 @@ import Observation
     @ObservationIgnored private var countsReads: [String: Task<Void, Never>] = [:]
     @ObservationIgnored private var countsWindows: [String: HintWindow] = [:]
     @ObservationIgnored private var countsHints: [String: String?] = [:]
-    /// The Agents lists in sight now (`AgentsCoverWatch`): while any is, hints read as they come (`HintWindow`).
+    /// The Agents lists in sight now (`AgentsCoverWatch`): while any is, hints share the short in-sight window (`HintWindow`).
     @ObservationIgnored private var inSight = Set<UUID>()
     /// Hub-counted unread parent rows remembered per group's current `list.counts` snapshot (`countsGeneration` +
     /// `revision`) so a newer page update that already reflects a local seen mark does not drop the Unread adjustment
     /// before the separate counts request finishes (#13524).
     @ObservationIgnored private var unreadAtCounts: [String: (generation: UInt64, revision: String?, parents: [SessionKey: Session])] = [:]
-    private var hintWindowLength: Duration { inSight.isEmpty ? HintWindow.length : .zero }
+    private var hintWindowLength: Duration { inSight.isEmpty ? HintWindow.length : HintWindow.inSight }
+    /// Builds the hint windows of the lists, sections and counts here; a unit test builds them on a clock it moves.
+    @ObservationIgnored var makeHintWindow: @MainActor (_ length: @escaping @MainActor () -> Duration) -> HintWindow = { HintWindow(length: $0) }
+    /// A hint window whose length follows whether an Agents list is in sight.
+    func hintWindow() -> HintWindow { makeHintWindow { [weak self] in self?.hintWindowLength ?? .zero } }
 
     /// An Agents list came into sight or went out of it. Coming in, the reads waiting for their windows go at once: a
     /// page out of sight lands what came as soon as it is seen (docs/apple/ios-state.md "Timely").
@@ -101,7 +105,7 @@ import Observation
                 var query = query
                 query.state = "" // all quick-filter counts under the same machine/search scope
                 return try await link.api.sessionListCounts(query)
-            }, hintWindow: HintWindow(length: { [weak self] in self?.hintWindowLength ?? .zero }))
+            }, hintWindow: hintWindow())
         list.changed = { [weak model, weak list] rows in
             guard let model, let list else { return }
             if list.paged {
@@ -155,6 +159,11 @@ import Observation
     }
 
     func isPaged(_ group: String) -> Bool { lists[group]?.paged == true }
+
+    func hasCompleteSessions(_ group: String) -> Bool {
+        guard let list = lists[group] else { return false }
+        return list.loaded && !list.paged
+    }
 
     /// The current windows draw their own rows. An offline mark must reach them as well as the session index.
     func markSeen(_ keys: [SessionKey], model: AppModel) {
@@ -304,7 +313,7 @@ import Observation
             }, counts: { [weak link] query in
                 guard let link else { throw CancellationError() }
                 return try await link.api.sessionListCounts(query)
-            }, hintWindow: HintWindow(length: { [weak self] in self?.hintWindowLength ?? .zero }))
+            }, hintWindow: hintWindow())
         page.changed = { [weak model, weak page] rows in
             guard let model, let page else { return }
             model.landSessionSummaries(rows, group: scope.hub)
@@ -355,7 +364,7 @@ import Observation
         if let held = countsHints[group] { countsHints[group] = held == nil || revision == nil ? .some(nil) : revision }
         else { countsHints[group] = .some(revision) }
         guard countsReads[group] == nil else { return }
-        let window = countsWindows[group] ?? HintWindow(length: { [weak self] in self?.hintWindowLength ?? .zero })
+        let window = countsWindows[group] ?? hintWindow()
         countsWindows[group] = window
         countsReads[group] = Task { [weak self] in
             do { try await window.enter() } catch { return }

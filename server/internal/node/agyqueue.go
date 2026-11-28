@@ -25,6 +25,7 @@ var agyQueuedLineRE = lazyre.New(`(?i)^(.*?)\s+\(([^)\n]+?)\s+to\s+send\s+immedi
 var agyAttachedImagesBlockRE = lazyre.New(`(?s)<attached_images>.*?</attached_images>`)
 
 type agyQueuedItem struct {
+	mu    sync.Mutex // guards watch (and serializes watch.took() / watch.lost outside agyQueues.mu)
 	text  string
 	watch *agySendWatch
 	at    time.Time
@@ -66,7 +67,7 @@ func cleanAgyQueuedPreview(s string) string {
 	s = strings.TrimSpace(s)
 	for {
 		trimmed := s
-		for _, prefix := range []string{"❯", "›", ">", "•", "⎿", "│"} {
+		for _, prefix := range []string{"❯", "›", ">", "•", "▸", "▹", "▶", "‣", "⎿", "│"} {
 			if rest, ok := strings.CutPrefix(trimmed, prefix); ok {
 				trimmed = strings.TrimSpace(rest)
 			}
@@ -164,6 +165,7 @@ func (n *Node) agyQueuedFor(id, pane string) []string {
 	// Check transcript consumption outside q.mu because watch.took reads the transcript file.
 	var consumed []*agyQueuedItem
 	for _, item := range trackedSnap {
+		item.mu.Lock()
 		if item.watch == nil {
 			if w := n.watchAgySend(id, pane, item.text, item.at); w != nil {
 				w.off, w.info, w.rest = 0, nil, nil
@@ -171,7 +173,9 @@ func (n *Node) agyQueuedFor(id, pane string) []string {
 				item.watch = w
 			}
 		}
-		if item.watch != nil && (item.watch.took() || item.watch.lost) {
+		done := item.watch != nil && (item.watch.lost || item.watch.took())
+		item.mu.Unlock()
+		if done {
 			consumed = append(consumed, item)
 		}
 	}
@@ -189,24 +193,30 @@ func (n *Node) agyQueuedFor(id, pane string) []string {
 			consumedSet[item] = true
 		}
 		kept := p.tracked[:0]
+		var removed []*agyQueuedItem
 		for _, item := range p.tracked {
-			if !consumedSet[item] {
+			if consumedSet[item] {
+				removed = append(removed, item)
+			} else {
 				kept = append(kept, item)
 			}
 		}
+		clear(p.tracked[len(kept):])
 		p.tracked = kept
-		// Drop matching stale screen previews immediately so a consumed prompt does not flash back before the next poll.
-		if len(p.screenQueued) > 0 {
-			for _, item := range consumed {
-				for i, preview := range p.screenQueued {
-					if agyPreviewMatchesText(preview, item.text) {
-						p.screenQueued = slices.Delete(p.screenQueued, i, i+1)
-						break
+		if len(removed) > 0 {
+			// Drop matching stale screen previews immediately so a consumed prompt does not flash back before the next poll.
+			if len(p.screenQueued) > 0 {
+				for _, item := range removed {
+					for i, preview := range p.screenQueued {
+						if agyPreviewMatchesText(preview, item.text) {
+							p.screenQueued = slices.Delete(p.screenQueued, i, i+1)
+							break
+						}
 					}
 				}
 			}
+			needPollNow = true
 		}
-		needPollNow = true
 	}
 
 	if !p.reading && (needPollNow || p.screenAt.IsZero() || time.Since(p.screenAt) >= agyQueuePollEvery) {

@@ -151,7 +151,7 @@ describe("Overview computer monitoring cards", () => {
     expect(option("行").getAttribute("aria-checked")).toBe("true");
     expect(option("卡片").getAttribute("aria-checked")).toBe("false");
     expect(host.querySelector("[data-testid='machine-metrics-summary']")).toBeNull();
-    expect(host.querySelector("a[href='/machines/mac']")?.className).toBe("flex items-center gap-3 rounded-card bg-surface px-3 py-2.5 shadow-card transition-colors hover:bg-hover");
+    expect(host.querySelector("a[href='/machines/mac']")?.classList.contains("card-interactive")).toBe(true);
 
     await act(async () => { vi.advanceTimersByTime(10_000); });
     await flush();
@@ -183,7 +183,7 @@ describe("Overview computer monitoring cards", () => {
     act(() => root.render(<OverviewMachineCards machines={machines} agentCounts={new Map([["mac", 2]])} offlineText={offlineText} />));
     await flush();
 
-    expect(host.querySelector("[role=alert]")?.textContent).toContain("读取不到机器的监控");
+    expect(host.querySelector("[role=alert]")?.textContent).toContain("无法加载机器监控数据");
     expect(host.querySelector("[data-testid='machine-metrics-summary']")).toBeNull();
 
     failing = false;
@@ -195,7 +195,7 @@ describe("Overview computer monitoring cards", () => {
     failing = true;
     await act(async () => { vi.advanceTimersByTime(10_000); });
     await flush();
-    expect(host.querySelector("[role=alert]")?.textContent).toContain("显示的是上次的数据");
+    expect(host.querySelector("[role=alert]")?.textContent).toContain("当前显示上次的数据");
     expect(host.querySelector("[role=alert]")?.textContent).toContain("10");
     expect(host.querySelector("[data-testid='machine-metrics-summary']")?.textContent).toContain("42%");
   });
@@ -228,7 +228,7 @@ describe("Overview computer monitoring cards", () => {
       return Promise.resolve(json({ machines: [
         { machine_id: "battery", online: true, latest: { t: now, battery_percent: 82, temp_c: 54.2 }, points: [] },
         { machine_id: "tokens", online: true, points: [], usage: { today: { in: 123 }, per_minute: 0, recent: [] } },
-        { machine_id: "disk", online: true, latest: { t: now, disk_used: 1, disk_total: 2 }, points: [] },
+        { machine_id: "disk", online: true, latest: { t: now, disk_used: 9, disk_total: 10 }, points: [] },
         { machine_id: "empty", online: true, latest: { t: now }, points: [] },
       ] }));
     });
@@ -239,6 +239,7 @@ describe("Overview computer monitoring cards", () => {
     expect(host.querySelector("a[href='/machines/tokens'] [data-testid='machine-metrics-summary']")).not.toBeNull();
     expect(host.querySelector("a[href='/machines/disk'] [data-testid='machine-metrics-summary']")).toBeNull();
     expect(host.querySelector("a[href='/machines/empty'] [data-testid='machine-metrics-summary']")).toBeNull();
+    expect(host.querySelector("a[href='/machines/disk/storage?mode=reclaim']")).not.toBeNull();
     expect(host.querySelector("a[href='/machines/disk']")?.classList.contains("self-start")).toBe(true);
   });
 
@@ -248,7 +249,7 @@ describe("Overview computer monitoring cards", () => {
       const path = String(input).split("?")[0];
       if (path !== "/api/v1/metrics") return Promise.resolve(json({ error: "not found" }, 404));
       if (failing) return Promise.resolve(json({ error: "monitoring unavailable" }, 503));
-      return Promise.resolve(json({ machines: [{ machine_id: "mac", online: true, latest: { t: now, disk_used: 1, disk_total: 2 }, points: [] }] }));
+      return Promise.resolve(json({ machines: [{ machine_id: "mac", online: true, latest: { t: now, disk_used: 9, disk_total: 10 }, points: [] }] }));
     });
     act(() => root.render(<OverviewMachineCards machines={machines.slice(0, 1)} offlineText={offlineText} />));
     await flush();
@@ -258,7 +259,7 @@ describe("Overview computer monitoring cards", () => {
     failing = true;
     await act(async () => { vi.advanceTimersByTime(10_000); });
     await flush();
-    expect(host.querySelector("[role=alert]")?.textContent).toContain("读取不到机器的监控");
-    expect(host.querySelector("[role=alert]")?.textContent).not.toContain("显示的是上次的数据");
+    expect(host.querySelector("[role=alert]")?.textContent).toContain("无法加载机器监控数据");
+    expect(host.querySelector("[role=alert]")?.textContent).not.toContain("当前显示上次的数据");
   });
 });

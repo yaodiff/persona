@@ -128,3 +128,24 @@ func TestParseRelayQuoteID(t *testing.T) {
 		t.Errorf("the quoted text closed its block:\n%s", quoted)
 	}
 }
+
+func TestIsSideConversation(t *testing.T) {
+	wrapped := RenderSideConversation("also check the flaky parser test")
+	for _, c := range []struct {
+		name string
+		text string
+		want bool
+	}{
+		{"rendered wrapper", wrapped, true},
+		{"typed context block", `<persona-context kind="side-conversation">separate request</persona-context>do that`, true},
+		{"single-quoted kind", `<persona-context kind='side-conversation'>x</persona-context>`, true},
+		{"standalone marker", `<persona-side-conversation />plain side request`, true},
+		{"ordinary owner text", "also open a todo for the cap", false},
+		{"message source is not a side conversation", MessageSourceText("look", &proto.MessageSource{Kind: proto.SourceMeeting, Title: "Review"}), false},
+		{"a relay envelope is not a side conversation", RenderRelay(Relay{FromID: "c1", FromTitle: "Main", Tool: "conversation_send", Hop: 1, MaxHops: 3, Text: "take this"}), false},
+	} {
+		if got := IsSideConversation(c.text); got != c.want {
+			t.Errorf("%s: IsSideConversation=%v, want %v\n%s", c.name, got, c.want, c.text)
+		}
+	}
+}

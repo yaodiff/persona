@@ -33,6 +33,8 @@
   "graph_links": "Sessions & links",
   "graph_open_action": "Open",
   "graph_running": "Running",
+  "scene": "3D scene",
+  "scene_reset": "Reset",
   "map": "Map",
   "map_zoom_in": "Zoom in",
   "map_zoom_out": "Zoom out",

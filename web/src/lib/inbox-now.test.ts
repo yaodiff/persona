@@ -1,3 +1,4 @@
+import { registerTestMailbox } from "../test/mailbox-fixture";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -54,6 +55,8 @@ afterEach(async () => {
   else process.env.TZ = realZone;
   await initI18n("zh-Hans");
 }, 30_000);
+
+registerTestMailbox();
 
 for (const lang of LANGS) {
   describe(`nowText (${lang})`, () => {

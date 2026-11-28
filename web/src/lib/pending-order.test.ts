@@ -111,10 +111,10 @@ describe("the main Agents list stays independent of pending ordering", () => {
       [
         "needs-1",
         "needs-2",
+        "working-1",
         "unread-1",
         "unread-2",
         "reply-1",
-        "working-1",
         "idle-1",
         "offline-1",
       ]

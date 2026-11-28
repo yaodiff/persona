@@ -339,6 +339,24 @@ class CollectionTests(unittest.TestCase):
         self.assertEqual(probe["log_fallback"][0]["values"]["hitch_ms_per_s"], {"non_finite": "nan"})
         self.assertFalse(result["acceptance_eligible"])
 
+    def test_malformed_log_identifier_does_not_discard_later_summaries(self):
+        fake = FakeExporter(values={})
+        fake.results = {TEST: "Passed"}
+        ident = TEST.removesuffix("()")
+        log = self.root / "test-example.log"
+        log.write_text(
+            f"perf-frames: {ident} runs=2 fps=60\n"
+            "perf-frames: malformed runs=2 fps=99\n"
+            f"perf-frames: {ident} runs=2 fps=58\n"
+        )
+        result = self.collect(fake)
+        probe = result["tests"][TEST]["probe"]
+        self.assertEqual(probe["source"], "log_fallback_only")
+        self.assertEqual([row["provenance"]["line"] for row in probe["log_fallback"]], [1, 3])
+        self.assertEqual([row["values"]["fps"] for row in probe["log_fallback"]], [60, 58])
+        self.assertIn(f"{log.resolve()}:2: missing or invalid test identifier", result["issues"])
+        self.assertFalse(result["acceptance_eligible"])
+
     def test_wrong_manifest_test_tag_and_shared_run_ids(self):
         wrong = self.collect(FakeExporter(values={OTHER: samples()}))
         self.assertFalse(wrong["complete"])
@@ -434,6 +452,27 @@ class CollectionTests(unittest.TestCase):
         with contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual(reporter.main([str(self.root)]), 2)
         self.assertEqual(path.read_text(), "original")
+
+    def test_invalid_comparison_does_not_publish_report(self):
+        baseline = self.root / "baseline"
+        baseline.mkdir()
+        for payload in ([], {"tests": []}, {"tests": {TEST: {"probe": None}}}):
+            with self.subTest(payload=payload):
+                (baseline / "report.json").write_text(json.dumps(payload))
+                code, out = self.run_main(arguments=("--compare", str(baseline)))
+                self.assertEqual(code, 2)
+                self.assertFalse((out / "report.json").exists())
+
+    def test_comparison_accepts_legacy_and_wrapped_test_maps(self):
+        baseline = self.root / "baseline"
+        baseline.mkdir()
+        tests = {TEST: {"probe": {"fps": 60}}}
+        for payload in (tests, {"tests": tests}):
+            with self.subTest(payload=payload):
+                (baseline / "report.json").write_text(json.dumps(payload))
+                code, out = self.run_main(arguments=("--compare", str(baseline)))
+                self.assertEqual(code, 0)
+                self.assertTrue((out / "report.json").is_file())
 
 
 class LaunchReportTests(unittest.TestCase):

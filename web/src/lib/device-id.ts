@@ -7,13 +7,16 @@ const DEVICE_KEY = "persona.notifyDevice";
 
 const randomId = () => crypto.randomUUID?.() ?? Math.random().toString(36).slice(2);
 
+// This document's instance ties a REST request to its own socket's client_hello. Keep it only in memory: duplicated tabs
+// inherit sessionStorage, so a persisted value would let an older tab borrow the upgraded tab's approval_mirrors capability.
+export const clientInstance = randomId();
+
 /**
  * The id this browser's prefs go by on the hub: made once, kept in this browser (`kept`). The hub ties the row to the
  * device token that wrote it, so revoking this browser in Settings › Devices removes it. Without storage the id would be new
  * on every load: it is this page's own and nothing is sent (`kept: false`), so no browser leaves rows behind or shares
  * one id with another.
  */
-let pageId: string | undefined;
 export function deviceId(): { id: string; kept: boolean } {
   try {
     let id = localStorage.getItem(DEVICE_KEY);
@@ -23,8 +26,7 @@ export function deviceId(): { id: string; kept: boolean } {
     }
     return { id, kept: true };
   } catch {
-    pageId ??= `web-${randomId()}`;
-    return { id: pageId, kept: false };
+    return { id: `web-${clientInstance}`, kept: false };
   }
 }
 

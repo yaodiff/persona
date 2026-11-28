@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http/httptest"
 	"reflect"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -11,11 +12,12 @@ import (
 	"github.com/nwverse/persona/server/internal/assistant/repositorystore"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/repositorywire"
 	"github.com/nwverse/persona/server/internal/workspacenaming"
 )
 
 func TestWorkspaceNamingSettingsWireRoundTrip(t *testing.T) {
-	database, err := db.Open(t.Context(), newDatabase(t), db.ManagerSet)
+	database, err := db.Open(t.Context(), newMigratedDatabase(t, db.ManagerSet), db.ManagerSet)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -34,6 +36,11 @@ func TestWorkspaceNamingSettingsWireRoundTrip(t *testing.T) {
 		var wire map[string]json.RawMessage
 		if err := json.Unmarshal(w.Body.Bytes(), &wire); err != nil {
 			t.Fatal(err)
+		}
+		system := workspacenaming.Defaults()
+		var gotSystem workspacenaming.Rules
+		if err := json.Unmarshal(wire["system_defaults"], &gotSystem); err != nil || gotSystem != system {
+			t.Fatalf("system_defaults = %s; want %+v (error %v)", wire["system_defaults"], system, err)
 		}
 		for field, want := range map[string]map[string]string{"workspace_rules": saved, "effective_workspace_rules": effective} {
 			var got map[string]string
@@ -75,9 +82,30 @@ func TestWorkspaceNamingSettingsWireRoundTrip(t *testing.T) {
 	}
 }
 
+func TestWorkspaceNamingSampleUsesRepositoryDefaultAndDescribesOldNode(t *testing.T) {
+	s, _, calls := namingHTTPFixture(t)
+	path := "/api/v1/assistant/workspace-naming/preview"
+	// The node fixture resolves the plan without the added metadata, like an older node.
+	w := placeDo(s, "", "POST", path,
+		`{"machine_id":"box","layout":"root","workspace_rules":{"branch_template":"persona/{base-branch}/{task-id}"}}`)
+	var preview workspacenaming.Preview
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &preview) != nil || calls.Load() != 1 {
+		t.Fatal(w.Code, w.Body)
+	}
+	if !preview.Sample || preview.Status != "incomplete" || preview.Plan != nil || preview.SystemDefaults == nil || *preview.SystemDefaults != workspacenaming.Defaults() {
+		t.Fatal(w.Body)
+	}
+	if len(preview.BranchSources) != 1 || preview.BranchSources[0] != (workspacenaming.BranchSource{RepoID: "web", Kind: repositorywire.BranchRepositoryDefault}) ||
+		!slices.ContainsFunc(preview.Diagnostics, func(d workspacenaming.Problem) bool {
+			return d.Code == "field_unavailable" && d.Field == "branch_template"
+		}) {
+		t.Fatal(w.Body)
+	}
+}
+
 func namingHTTPFixture(t *testing.T) (*Service, *repositorystore.Store, *atomic.Int32) {
 	t.Helper()
-	database, err := db.Open(t.Context(), newDatabase(t), db.ManagerSet)
+	database, err := db.Open(t.Context(), newMigratedDatabase(t, db.ManagerSet), db.ManagerSet)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +119,9 @@ func namingHTTPFixture(t *testing.T) (*Service, *repositorystore.Store, *atomic.
 		if err := json.Unmarshal(raw, &source); err != nil {
 			return nil, err
 		}
-		return workspacenaming.Resolve(source, workspacenaming.NodeContext{Home: "/home/example"}), nil
+		preview := workspacenaming.Resolve(source, workspacenaming.NodeContext{Home: "/home/example"})
+		preview.SystemDefaults, preview.BranchSources = nil, nil
+		return preview, nil
 	}}
 	return newServiceOn(t, f, database), repositorystore.New(database), calls
 }
@@ -165,7 +195,7 @@ func TestWorkspaceNamingCrossTodoOperationConflictsBeforeNode(t *testing.T) {
 }
 
 func TestWorkspaceNamingSettingsPersistAndOldClientsKeepWorking(t *testing.T) {
-	database, err := db.Open(t.Context(), newDatabase(t), db.ManagerSet)
+	database, err := db.Open(t.Context(), newMigratedDatabase(t, db.ManagerSet), db.ManagerSet)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -204,7 +234,7 @@ func TestWorkspaceNamingSettingsPersistAndOldClientsKeepWorking(t *testing.T) {
 }
 
 func TestWorkspaceNamingAndDispatchPolicySettingsAreAtomic(t *testing.T) {
-	database, err := db.Open(t.Context(), newDatabase(t), db.ManagerSet)
+	database, err := db.Open(t.Context(), newMigratedDatabase(t, db.ManagerSet), db.ManagerSet)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -260,7 +290,7 @@ func TestWorkspaceNamingAndDispatchPolicySettingsAreAtomic(t *testing.T) {
 }
 
 func TestWorkspaceNamingHTTPOverridesAndStableOperationRetry(t *testing.T) {
-	database, err := db.Open(t.Context(), newDatabase(t), db.ManagerSet)
+	database, err := db.Open(t.Context(), newMigratedDatabase(t, db.ManagerSet), db.ManagerSet)
 	if err != nil {
 		t.Fatal(err)
 	}

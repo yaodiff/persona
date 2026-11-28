@@ -143,7 +143,7 @@ func spaceRecordingName(id string, started time.Time, loc *time.Location) string
 }
 
 // putSpaceRecording saves upload u of recording rawID into its track: recordingwire.RecordingStored, RecordingStale (a higher
-// revision is there) or RecordingExpired (it started before recording_days); kb.ErrRecordingDeleted after a delete.
+// revision is there) or RecordingExpired (it started before recording_text_days); kb.ErrRecordingDeleted after a delete.
 // A recording saved into a track stays in it: a later upload goes there whatever it names. The answer's slug is the
 // track it is in.
 func (s *Service) putSpaceRecording(ctx context.Context, rawID string, u recordingwire.RecordingUpload, now time.Time, clean recordingwire.UploadCleaner) (status, slug string, err error) {
@@ -183,7 +183,7 @@ func (s *Service) putSpaceRecording(ctx context.Context, rawID string, u recordi
 			return recordingwire.RecordingStale, slug, nil
 		}
 	}
-	if u.StartedAt.Before(now.UTC().AddDate(0, 0, -s.recordingDaysNow())) {
+	if cut, ok := kb.RetentionCut(now, s.recordingTextDaysNow()); ok && u.StartedAt.Before(cut) {
 		return recordingwire.RecordingExpired, slug, nil
 	}
 	e, ok := s.spaceTrack(ctx, slug)
@@ -265,9 +265,10 @@ func (s *Service) spaceRecordingStates(ctx context.Context) (kept []recordingwir
 	return kept, deleted
 }
 
-// spaceRecordingsSweep applies recording_days to the recordings saved into tracks: one that started before it is
-// deleted (its file removed, its tombstone kept), a deletion whose file is still there is tried again, and tombstones
-// past the window whose file is gone are forgotten. At most once a spaceRecordingSweepEvery.
+// spaceRecordingsSweep applies recording_text_days to the recordings saved into tracks (their file is text): one that
+// started before it is deleted (its file removed, its tombstone kept), a deletion whose file is still there is tried
+// again, and tombstones past the audio window (recording_audio_days, the phone's, as in the knowledge base) whose file
+// is gone are forgotten. At most once a spaceRecordingSweepEvery.
 func (s *Service) spaceRecordingsSweep(ctx context.Context) {
 	st, ok := s.spaceRecordingStore()
 	if !ok {
@@ -286,10 +287,10 @@ func (s *Service) spaceRecordingsSweep(ctx context.Context) {
 		s.logf("space recordings: list: %v", err)
 		return
 	}
-	cutoff := now.UTC().AddDate(0, 0, -s.recordingDaysNow())
+	cutoff, textExpires := kb.RetentionCut(now, s.recordingTextDaysNow())
 	for _, r := range rows {
 		switch {
-		case r.DeletedAt == nil && r.StartedAt.Before(cutoff):
+		case r.DeletedAt == nil && textExpires && r.StartedAt.Before(cutoff):
 			removed := s.removeSpaceRecordingFile(ctx, r) == nil
 			if _, err := st.DeleteSpaceRecording(ctx, r.ID, now.UTC(), removed); err != nil {
 				s.logf("space recordings: expire %s: %v", r.ID, err)
@@ -302,10 +303,14 @@ func (s *Service) spaceRecordingsSweep(ctx context.Context) {
 			}
 		}
 	}
-	if n, err := st.ForgetSpaceRecordings(ctx, cutoff); err != nil {
+	stoneCut, ok := kb.RetentionCut(now, s.recordingAudioDaysNow())
+	if !ok {
+		return
+	}
+	if n, err := st.ForgetSpaceRecordings(ctx, stoneCut); err != nil {
 		s.logf("space recordings: forget: %v", err)
 	} else if n > 0 {
-		s.logf("space recordings: forgot %d tombstone(s) past recording_days", n)
+		s.logf("space recordings: forgot %d tombstone(s) past recording_audio_days", n)
 	}
 }
 

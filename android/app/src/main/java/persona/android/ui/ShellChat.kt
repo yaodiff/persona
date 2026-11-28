@@ -69,7 +69,7 @@ internal fun ShellChat(route: ChatRoute, session: ShellSession, navigator: Navig
         val side = landedSide ?: return@LaunchedEffect
         if (sideShown) return@LaunchedEffect
         sideShown = true
-        val chat = ChatRoute(side.machineId, side.sessionId, ConversationKind.Agent, side = true)
+        val chat = ChatRoute(side.machineId, side.sessionId, ConversationKind.Agent, side = true, decisionSource = route.decisionSource)
         navigator.navigate(requestId?.let { InteractionRoute(chat, it) } ?: chat)
     }
     val key = home.key
@@ -91,6 +91,16 @@ internal fun ShellChat(route: ChatRoute, session: ShellSession, navigator: Navig
     val draftError by (editor?.error ?: remember { MutableStateFlow<Int?>(null) }).collectAsStateWithLifecycle()
     val composer = storedComposer ?: rememberChatComposerState()
     val focus = androidx.compose.ui.platform.LocalFocusManager.current
+    val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
+    val pendingChatFocus by persona.feature.chat.ChatComposerFocus.requests.collectAsStateWithLifecycle()
+    LaunchedEffect(key, pendingChatFocus, composer) {
+        val entry = pendingChatFocus ?: return@LaunchedEffect
+        if (!persona.feature.chat.ChatComposerFocus.take(key, entry)) return@LaunchedEffect
+        kotlinx.coroutines.delay(300)
+        composer.focusRequest++
+        kotlinx.coroutines.delay(100)
+        keyboard?.show()
+    }
     var pane by rememberSaveable { mutableStateOf<FilesPane?>(null) }
     // A path opened from a message or a tool card: the files pane opens straight on it.
     var openedPath by rememberSaveable { mutableStateOf<String?>(null) }
@@ -142,6 +152,11 @@ internal fun ShellChat(route: ChatRoute, session: ShellSession, navigator: Navig
                     onOpenRequest = { chat, request ->
                         val target = waitingRoute(chat, request)
                         if (target.card != null) onOpenCard(target) else navigator.navigate(target.key)
+                    },
+                    decisionSource = route.decisionSource,
+                    onOpenDecisionSource = { chat, toolUseId ->
+                        navigator.navigate(ChatRoute(chat.machineId, chat.sessionId, ConversationKind.Agent, subagentDetail = true,
+                            decisionSource = DecisionSource(toolUseId)))
                     },
                     onOpenAssistant = { navigator.navigate(persona.feature.chat.conversationRoute(it, assistant = true)) },
                     onConnectionDetails = { navigator.navigate(SettingsPageRoute(SettingsPage.Diagnostics)) },

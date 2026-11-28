@@ -8,7 +8,7 @@ import { stateName } from "./state-labels";
 
 // State keys only: the catalogs also hold composition fragments (next, look_again…) and calendar words.
 const NOW_KEYS = new Set([
-  "confirm_reply", "confirm_agent", "decide", "queued", "looking", "agent_working", "waiting", "follow_up_ask", "check_due", "failed",
+  "confirm_reply", "confirm_agent", "confirm_handoff", "decide", "queued", "looking", "agent_working", "waiting", "follow_up_ask", "check_due", "failed",
   "needs_you", "fyi", "folded", "done_replied", "done_manager", "done_user", "done_read", "done_dismissed", "done_muted", "done_superseded",
 ]);
 

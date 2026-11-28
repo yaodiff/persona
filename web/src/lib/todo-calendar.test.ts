@@ -35,7 +35,7 @@ const at = (day: number, hour: number, minute = 0) => new Date(2026, 10, day, ho
 const iso = (ms: number) => new Date(ms).toISOString();
 const todo = (id: string, extra: Partial<Todo> = {}): Todo => ({ id, title: id, agents: [], ...extra }) as Todo;
 const entry = (id: string, start: number, extra: Partial<CalendarEntry> = {}): CalendarEntry => ({
-  id: `todo:${id}`, todoId: id, title: id, start, allDay: false, status: "not_started", statusLabel: "",
+  id: `todo:${id}`, todoId: id, title: id, createdAt: iso(start), updatedAt: iso(start), start, allDay: false, status: "not_started", statusLabel: "",
   done: false, overdue: false, high: false, reminding: false, ...extra,
 });
 const MON = 1, SUN = 0;
@@ -209,4 +209,21 @@ describe("a day the clocks change on (#9851)", () => {
       expect(dropOnAxis(day, minutesInto(ten, day)).at).toBe(ten);
     });
   }
+});
+
+describe("calendar ranges across a midnight DST jump", () => {
+  const saved = process.env.TZ;
+  beforeAll(() => { process.env.TZ = "America/Santiago"; });
+  afterAll(() => {
+    if (saved === undefined) delete process.env.TZ;
+    else process.env.TZ = saved;
+  });
+  it("uses local day boundaries for both ends of the day and week", () => {
+    const jump = new Date(2026, 8, 6);
+    expect(jump.getHours()).toBe(1);
+    const next = new Date(2026, 8, 7).getTime();
+    expect(calendarRange("day", +jump, SUN)).toEqual([+jump, next]);
+    expect(calendarRange("week", +jump, MON)).toEqual([+new Date(2026, 7, 31), next]);
+    expect(calendarRange("week", +jump, SUN)).toEqual([+jump, +new Date(2026, 8, 13)]);
+  });
 });

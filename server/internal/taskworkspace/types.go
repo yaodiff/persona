@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"strings"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/nodeproto"
 	repository "github.com/nwverse/persona/server/internal/repositorywire"
@@ -15,6 +16,28 @@ import (
 
 const Capability = nodeproto.TaskWorkspace
 const MethodPrefix = "task.workspace."
+
+// The preparation budgets live in the repository contract, so contract packages can read them too.
+const (
+	GitTimeout       = repository.TaskWorkspaceGitTimeout
+	ColdFetchTimeout = repository.TaskWorkspaceColdFetchTimeout
+	RPCTimeout       = repository.TaskWorkspaceRPCTimeout
+)
+
+// PrepareTimeout budgets ref discovery and a cold fetch for each sequential
+// remote source, with time for local setup and the reply.
+func PrepareTimeout(remoteRepos int) time.Duration {
+	return repository.TaskWorkspacePrepareTimeout(remoteRepos)
+}
+
+// Capabilities is the response to the read-only task.workspace.capabilities probe.
+type Capabilities = nodeproto.TaskWorkspaceCapabilities
+
+// LocalSourceMethod inspects a source directory without consulting a terminal host.
+const LocalSourceMethod = "workspace.naming.local-source"
+
+type LocalSourceRequest = repository.LocalSourceRequest
+type LocalSource = repository.LocalSource
 
 type Problem struct {
 	Code        string   `json:"code"`
@@ -34,7 +57,7 @@ func Failure(code, stage, operation, repo, path string) *Problem {
 	if code == "operation_conflict" || code == "resource_conflict" {
 		actions = []string{"inspect", "cancel", "cleanup", "prepare_new"}
 	}
-	if code == "ref_not_found" || code == "ref_invalid" || code == "invalid_path" || code == "path_conflict" || code == "naming_incomplete" {
+	if code == "ref_not_found" || code == "ref_invalid" || code == "invalid_path" || code == "path_symlink" || code == "base_scope_denied" || code == "path_conflict" || code == "naming_incomplete" {
 		actions = []string{"inspect", "cancel", "edit_inputs", "prepare_new"}
 	}
 	if stage == "start" && (code == "unsupported" || code == "engine_start_failed") {
@@ -72,6 +95,7 @@ type Launch struct {
 	ExpectedSessionID string `json:"expected_session_id,omitempty"`
 	UseID             string `json:"use_id"`
 	SessionID         string `json:"session_id,omitempty"`
+	TaskDispatch      bool   `json:"task_dispatch,omitempty"`
 }
 type Record struct {
 	Launch              *Launch              `json:"launch,omitempty"`
@@ -97,6 +121,9 @@ type Request struct {
 	Force               bool                 `json:"force,omitempty"`
 	DeleteBranch        bool                 `json:"delete_branch,omitempty"`
 	UseID               string               `json:"use_id,omitempty"`
+	// TaskDispatch preserves ordinary task launcher and terminal placement.
+	// It is sent only on start and is excluded from preparation identity.
+	TaskDispatch bool `json:"task_dispatch,omitempty"`
 	// MirrorRepos names repo IDs in Plan that have an opt-in managed bare mirror enabled on this Node.
 	// Transient per-call hint only; excluded from InputKey and backward-compatible with older Nodes.
 	MirrorRepos      []string `json:"mirror_repos,omitempty"`
@@ -130,8 +157,7 @@ func ValidRequest(r Request) bool {
 		return false
 	}
 	return workspacenaming.CheckPlan(r.Plan) == nil && r.Plan.Source.Manager != "" && r.Plan.Source.MachineID != "" &&
-		len(r.Plan.Repositories) > 0 && len(r.Plan.Repositories) <= repository.MaxTaskRepositories &&
-		len(r.Plan.Repositories) == len(r.Plan.Source.Repositories.Repositories)
+		len(r.Plan.Repositories) <= repository.MaxTaskRepositories
 }
 
 // GitEnv keeps the Node's credential helpers and SSH configuration, but removes
@@ -174,6 +200,9 @@ func ValidateReady(r Record) error {
 			}
 			_, err := repository.NormalizeRef(repository.RequestedRef{Kind: "commit", Value: instance.ResolvedCommit})
 			matched = err == nil && instance.State == "ready" && !instance.Removed && instance.Path == p.AbsolutePath && instance.RelativePath == p.RelativePath && instance.TaskBranch == p.TaskBranch && instance.CommonDir != "" && Hash(instance.Input) == Hash(r.Plan.Source.Repositories.Repositories[i])
+			if local := instance.Input.Local; local != nil {
+				matched = matched && instance.CommonDir == local.CommonDir && instance.ResolvedCommit == local.Commit
+			}
 		}
 		if !matched {
 			return Failure("result_mismatch", "manager", r.OperationID, instance.RepoID, instance.Path)

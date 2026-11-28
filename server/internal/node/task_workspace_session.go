@@ -18,7 +18,10 @@ func (n *Node) lockBackendReceipt(workspace, stage, repo string) (*workspaceExec
 	if !workspacenaming.ValidOperationID(workspace) {
 		return nil, nil, taskworkspace.Failure("invalid_input", stage, "", repo, "")
 	}
-	control := filepath.Join(n.dir, "task-workspaces")
+	control, err := n.workspaceControlDir("task-workspaces")
+	if err != nil {
+		return nil, nil, err
+	}
 	key := taskworkspace.Hash(workspace)
 	path := filepath.Join(control, key, "receipt.json")
 	if err := workspaceNoLinks(path); err != nil {
@@ -42,12 +45,17 @@ func (n *Node) lockBackendReceipt(workspace, stage, repo string) (*workspaceExec
 
 // The index only locates a receipt. After release, the old session must no
 // longer reopen a checkout now used by another plan or removed by its owner.
-func (n *Node) backendSessionIndex(id string) string {
-	return filepath.Join(n.dir, "task-workspaces", "sessions", taskworkspace.Hash(id)+".json")
+func (n *Node) backendSessionIndex(id string) (string, error) {
+	control, err := n.workspaceControlDir("task-workspaces")
+	if err != nil {
+		return "", err
+	}
+	path := filepath.Join(control, "sessions", taskworkspace.Hash(id)+".json")
+	return path, workspaceNoLinks(path)
 }
 func (e *workspaceExecutor) rememberLaunch(id string) error {
-	path := e.n.backendSessionIndex(id)
-	if err := workspaceNoLinks(path); err != nil {
+	path, err := e.n.backendSessionIndex(id)
+	if err != nil {
 		return err
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
@@ -59,7 +67,11 @@ func (n *Node) pinBackendSession(ctx context.Context, id, cwd string, resume boo
 	if id == "" || n.dir == "" {
 		return nil, nil, nil
 	}
-	data, err := os.ReadFile(n.backendSessionIndex(id))
+	path, err := n.backendSessionIndex(id)
+	if err != nil {
+		return nil, nil, err
+	}
+	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil, nil
 	}
@@ -92,5 +104,5 @@ func (n *Node) pinBackendSession(ctx context.Context, id, cwd string, resume boo
 			}
 		}
 	}
-	return &backendLaunch{executor: e, use: j.Launch.UseID}, lock, nil
+	return &backendLaunch{executor: e, use: j.Launch.UseID, taskDispatch: j.Launch.TaskDispatch}, lock, nil
 }

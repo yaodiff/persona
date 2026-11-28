@@ -20,10 +20,28 @@ nonisolated struct SessionLiveRetryPresentation: Hashable, Sendable {
     }
 }
 
+/// The running work line's word while Persona's plugin reports a main-loop compaction. It uses the same `session.live`
+/// push as the web, and goes when `live` clears.
+nonisolated struct SessionLiveCompactionPresentation: Hashable, Sendable {
+    var elapsedS: Int?
+
+    static func of(_ live: SessionLive?, subscribed: Bool = true) -> Self? {
+        guard subscribed, let live, let verb = live.verb,
+              verb.lowercased().hasPrefix("compact") else { return nil }
+        return Self(elapsedS: live.elapsedS)
+    }
+}
+
 /// One chat's retry presentation, observed without redrawing another chat when its attempt changes.
 @Observable final class SessionLiveRetryCell {
     var value: SessionLiveRetryPresentation?
     init(_ value: SessionLiveRetryPresentation? = nil) { self.value = value }
+}
+
+/// One chat's compaction presentation, observed independently of its retry and transcript.
+@Observable final class SessionLiveCompactionCell {
+    var value: SessionLiveCompactionPresentation?
+    init(_ value: SessionLiveCompactionPresentation? = nil) { self.value = value }
 }
 
 nonisolated extension APIErrorInfo {

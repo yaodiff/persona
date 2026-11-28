@@ -46,21 +46,127 @@ describe("QueuePanel row actions", () => {
     render(<QueuePanel session={session} draftKey="qp-edit" canEdit />);
     click(within(1, "[data-queue-edit]"));
     await settle();
-    click(within(2, "[data-queue-delete]"));
+    render(<QueuePanel session={{ ...session, queued: ["第一条", "第三条"] }} draftKey="qp-edit" canEdit />);
+    click(within(1, "[data-queue-delete]"));
     await settle();
     expect(calls()).toEqual([
       ["/sessions/m/s/queue", { keep: [0, 2] }],
-      ["/sessions/m/s/queue", { keep: [0, 1] }],
+      ["/sessions/m/s/queue", { keep: [0] }],
     ]);
+  });
+
+  it("hides deleted rows immediately, hides the whole panel when deleting the last item, and rolls back on failure", async () => {
+    let rejectDelete!: (e: Error) => void;
+    vi.mocked(api).mockReturnValueOnce(new Promise((_r, rej) => { rejectDelete = rej; }));
+    render(<QueuePanel session={{ ...session, queued: ["唯一一条"] }} draftKey="qp-del-last" canEdit />);
+    expect(rows()).toHaveLength(1);
+    click(within(0, "[data-queue-delete]"));
+    // Hidden immediately at 0ms before HTTP resolves, while keeping rollback active on failure.
+    expect(rows()).toHaveLength(0);
+    expect(host.querySelector("[data-queue-panel]")).toBeNull();
+    rejectDelete(new Error("boom"));
+    await settle();
+    expect(texts()).toEqual(["唯一一条"]);
+
+    let resolveDelete!: (v: unknown) => void;
+    vi.mocked(api).mockReturnValueOnce(new Promise((r) => { resolveDelete = r; }));
+    render(<QueuePanel session={session} draftKey="qp-del-multi" canEdit />);
+    click(within(1, "[data-queue-delete]"));
+    expect(texts()).toEqual(["第一条", "第三条"]);
+    expect(rows().every((r) => [...r.querySelectorAll("button")].every((b) => b.hasAttribute("disabled") || b.getAttribute("aria-disabled") === "true"))).toBe(true);
+    resolveDelete({ queue: ["第一条", "第二条", "第三条"] });
+    await settle();
+    // Stays hidden after 200 while waiting for the pushed queue update.
+    expect(texts()).toEqual(["第一条", "第三条"]);
+  });
+
+  it("hides pulled-back and send-now rows once accepted, respecting runtime send-now scope", async () => {
+    let resolvePull!: (v: unknown) => void;
+    vi.mocked(api).mockReturnValueOnce(new Promise((r) => { resolvePull = r; }));
+    render(<QueuePanel session={session} draftKey="qp-pull-hide" canEdit />);
+    click(within(1, "[data-queue-edit]"));
+    // Spinner shows while pulling back; row disappears as soon as pull-back succeeds.
+    expect(texts()).toEqual(["第一条", "第二条", "第三条"]);
+    resolvePull({ queue: ["第一条", "第二条", "第三条"] });
+    await settle();
+    expect(texts()).toEqual(["第一条", "第三条"]);
+
+    // Non-runtime Send now hides all own rows upon acceptance.
+    let resolveSend!: (v: unknown) => void;
+    vi.mocked(api).mockReturnValueOnce(new Promise((r) => { resolveSend = r; }));
+    render(<QueuePanel session={{ ...session, queued: ["甲", "乙"] }} draftKey="qp-sendnow-all" canEdit />);
+    click(within(0, "[data-send-now]"));
+    expect(texts()).toEqual(["甲", "乙"]);
+    resolveSend({});
+    await settle();
+    expect(rows()).toHaveLength(0);
+
+    // Runtime Send now sends only the first queued message, so remaining rows stay visible.
+    let resolveRuntimeSend!: (v: unknown) => void;
+    vi.mocked(api).mockReturnValueOnce(new Promise((r) => { resolveRuntimeSend = r; }));
+    const runtime: Session = { ...session, agent: "agy", source_kind: "runtime", capabilities: { queue_send_now: true }, queued: ["先发", "保留"] };
+    render(<QueuePanel session={runtime} draftKey="qp-sendnow-rt" canEdit />);
+    click(within(0, "[data-send-now]"));
+    resolveRuntimeSend({});
+    await settle();
+    expect(texts()).toEqual(["保留"]);
+  });
+
+  it("hides a withdrawn in-flight optimistic row immediately and still deletes once confirmed", async () => {
+    vi.mocked(api).mockResolvedValue({ queue: ["确认后"] });
+    const cancelQueued = vi.fn(() => false);
+    render(
+      <QueuePanel
+        session={{ ...session, queued: [] }}
+        draftKey="qp-withdraw"
+        canEdit
+        optimistic={[{ id: "opt-1", raw: "确认后" }]}
+        cancelQueued={cancelQueued}
+      />,
+    );
+    expect(texts()).toEqual(["确认后"]);
+    click(within(0, "[data-queue-delete]"));
+    expect(cancelQueued).toHaveBeenCalledWith("opt-1");
+    expect(rows()).toHaveLength(0);
+    expect(host.querySelector("[data-queue-panel]")).toBeNull();
+
+    // Server confirms opt-1 with matching candidate: queued update arrives, triggers delete, and remains hidden.
+    render(
+      <QueuePanel
+        session={{ ...session, queued: ["确认后"] }}
+        draftKey="qp-withdraw"
+        canEdit
+        pending={[{ id: "opt-1", raw: "确认后", before: [] }]}
+        optimistic={[]}
+        cancelQueued={cancelQueued}
+      />,
+    );
+    await settle();
+    expect(calls()).toEqual([["/sessions/m/s/queue", { keep: [] }]]);
+    expect(rows()).toHaveLength(0);
+  });
+
+  it("drops optimistic hold when own count shrinks via queued_relayed even if queued strings stay unchanged", async () => {
+    vi.mocked(api).mockResolvedValue({ queue: ["第一条", "第二条"] });
+    render(<QueuePanel session={{ ...session, queued: ["第一条", "第二条"] }} draftKey="qp-own-shrink" canEdit />);
+    // Delete index 0 so holdOrder is [1] (an index that becomes out-of-bounds once own shrinks to 1).
+    click(within(0, "[data-queue-delete]"));
+    await settle();
+    expect(texts()).toEqual(["第二条"]);
+
+    // Hub increases queued_relayed to 1 while `queued` strings stay identical.
+    render(<QueuePanel session={{ ...session, queued: ["第一条", "第二条"], queued_relayed: 1 }} draftKey="qp-own-shrink" canEdit />);
+    expect(texts()).toEqual(["第一条"]);
+    expect(within(0, "[data-queue-delete]").hasAttribute("disabled")).toBe(false);
   });
 
   it("sends every queued message at one press, with no dialog; its tooltip and description say what happens", async () => {
     vi.mocked(api).mockResolvedValue({});
     render(<QueuePanel session={session} draftKey="qp-send" canEdit />);
     const send = within(2, "[data-send-now]");
-    expect(send.getAttribute("aria-label")).toBe("现在就把排队的消息全部发给 Claude，不用等到下一步");
-    expect(document.getElementById(send.getAttribute("aria-describedby")!)!.textContent).toContain("Claude 会马上收到");
-    expect(send.title).toBe("现在就把排队的消息全部发给 Claude，不用等到下一步\nClaude 会马上收到，不用等到下一步。它正在跑的命令会转到后台继续；正在写的回复会带上你的消息重新开始。");
+    expect(send.getAttribute("aria-label")).toBe("立即将所有排队消息发送给 Claude，无需等待下一步");
+    expect(document.getElementById(send.getAttribute("aria-describedby")!)!.textContent).toContain("Claude 将立即收到这些消息");
+    expect(send.title).toBe("立即将所有排队消息发送给 Claude，无需等待下一步\nClaude 将立即收到这些消息，无需等待下一步。正在运行的命令会转至后台继续执行，正在生成的回复则会结合你的消息重新开始。");
     click(send);
     expect(document.querySelector('[role="dialog"]')).toBeNull();
     expect(calls()).toEqual([["/sessions/m/s/queue/send-now", {}]]);
@@ -78,16 +184,16 @@ describe("QueuePanel row actions", () => {
     const persona = { ...session, agent: undefined, assistant: true, queued: ["我的"] } as unknown as Session;
     render(<QueuePanel session={persona} draftKey="qp-persona-send" canEdit persona="Nova" />);
     const send = within(0, "[data-send-now]");
-    expect(send.getAttribute("aria-label")).toBe("现在就把排队的消息全部发给 Nova，不用等到下一步");
-    expect(document.getElementById(send.getAttribute("aria-describedby")!)!.textContent).toContain("Nova 会马上收到");
+    expect(send.getAttribute("aria-label")).toBe("立即将所有排队消息发送给 Nova，无需等待下一步");
+    expect(document.getElementById(send.getAttribute("aria-describedby")!)!.textContent).toContain("Nova 将立即收到这些消息");
   });
 
   it("explains that a runtime assistant stops its turn and starts only the next queued message", () => {
     const runtime: Session = { ...session, agent: "agy", assistant: true, source_kind: "runtime", capabilities: { queue_send_now: true } };
     render(<QueuePanel session={runtime} draftKey="qp-runtime-assistant-send" canEdit persona="Nova" />);
     const send = within(0, "[data-send-now]");
-    const tip = "停止 Nova 当前这一轮，开始处理下一条排队消息";
-    const body = "Nova 会停止当前这一轮，开始处理下一条排队消息。其余消息仍按原顺序排队。";
+    const tip = "停止 Nova 当前轮次，立即开始处理下一条排队消息";
+    const body = "Nova 将停止当前轮次，开始处理下一条排队消息，其余消息仍按原顺序排队。";
     expect(send.getAttribute("aria-label")).toBe(tip);
     expect(document.getElementById(send.getAttribute("aria-describedby")!)!.textContent).toBe(body);
     expect(send.title).toBe(`${tip}\n${body}`);
@@ -97,14 +203,17 @@ describe("QueuePanel row actions", () => {
     let answer: (v: unknown) => void = () => {};
     vi.mocked(api).mockReturnValue(new Promise((r) => (answer = r)));
     render(<QueuePanel session={session} draftKey="qp-busy" canEdit />);
-    click(within(0, "[data-queue-delete]"));
+    click(within(0, "[data-queue-edit]"));
     expect(rows()[0].querySelector("[data-queue-actions]")).toBeNull();
     expect(within(1, "[data-queue-delete]").hasAttribute("disabled")).toBe(true);
     click(within(1, "[data-queue-delete]"));
     expect(api).toHaveBeenCalledTimes(1);
     answer({ queue: session.queued });
     await settle();
-    expect(within(1, "[data-queue-delete]").hasAttribute("disabled")).toBe(false);
+    // Row 0 is held out after edit succeeded; row 1 becomes the new index 0 and unlocks cleanly.
+    expect(texts()).toEqual(["第二条", "第三条"]);
+    render(<QueuePanel session={{ ...session, queued: ["第二条", "第三条"] }} draftKey="qp-busy" canEdit />);
+    expect(within(0, "[data-queue-delete]").hasAttribute("disabled")).toBe(false);
   });
 
   it("collapses the relayed rows into one line, which opens to their read-only rows (#4342, #6394)", () => {
@@ -291,7 +400,7 @@ describe("QueuePanel relayed group", () => {
     expect(rows().map((r) => r.querySelector("[data-queue-from]")!.textContent)).toEqual(["主对话", "日报"]);
     expect(texts()).toEqual(["帮我看下日程", "汇总"]);
     expect(host.textContent).not.toContain("来自「主对话」：");
-    expect(rows()[0].getAttribute("aria-label")).toBe("排队的第 1 条：来自「主对话」 · 帮我看下日程 · 对话空闲后送达");
+    expect(rows()[0].getAttribute("aria-label")).toBe("第 1 条排队消息：来自「主对话」 · 帮我看下日程 · 对话空闲后送达");
     expect(rows()[0].querySelector("[data-queue-note]")).toBeNull();
   });
 
@@ -304,7 +413,7 @@ describe("QueuePanel relayed group", () => {
     expect(summary().textContent).toBe("1 条消息来自其他对话 · 随下一轮消息送达");
     expect(within(0, "[data-queue-from]").textContent).toBe("日报");
     expect(texts()).toEqual(["备忘"]);
-    expect(rows()[0].getAttribute("aria-label")).toBe("排队的第 1 条：来自「日报」 · 备忘 · 随下一轮消息送达");
+    expect(rows()[0].getAttribute("aria-label")).toBe("第 1 条排队消息：来自「日报」 · 备忘 · 随下一轮消息送达");
     expect(rows()[0].querySelector("button")).toBeNull();
     expect(host.textContent).not.toContain("对话空闲后送达");
   });
@@ -318,9 +427,9 @@ describe("QueuePanel relayed group", () => {
       "随下一轮消息送达", "对话空闲后送达", "对话空闲后送达",
     ]);
     expect(rows().map((row) => row.getAttribute("aria-label"))).toEqual([
-      "排队的第 1 条：来自「日报」 · 备忘 · 随下一轮消息送达",
-      "排队的第 2 条：来自「主对话」 · 帮我看下日程 · 对话空闲后送达",
-      "排队的第 3 条：其他对话 · 督办消息 · 对话空闲后送达",
+      "第 1 条排队消息：来自「日报」 · 备忘 · 随下一轮消息送达",
+      "第 2 条排队消息：来自「主对话」 · 帮我看下日程 · 对话空闲后送达",
+      "第 3 条排队消息：其他对话 · 督办消息 · 对话空闲后送达",
     ]);
   });
 
@@ -346,7 +455,7 @@ describe("QueuePanel relayed group", () => {
     click(summary());
     expect(host.querySelector("[data-queue-from]")).toBeNull();
     expect(texts()).toEqual(["日报的通知", "督办消息"]);
-    expect(rows()[0].getAttribute("aria-label")).toBe("排队的第 1 条：其他对话 · 日报的通知 · 对话空闲后送达");
+    expect(rows()[0].getAttribute("aria-label")).toBe("第 1 条排队消息：其他对话 · 日报的通知 · 对话空闲后送达");
     expect(rows()[0].querySelector("[data-queue-note]")).toBeNull();
   });
 
@@ -429,7 +538,7 @@ describe("QueuePanel status, always-visible Send now and photo thumbnails (#1087
     expect(firstActions.className).not.toContain("opacity-0");
     expect(firstSendNow.className).not.toContain("opacity-0");
     expect(firstSendNow.textContent).toContain("立即发送");
-    expect(firstSendNow.title).toContain("现在就把排队的消息全部发给 Claude");
+    expect(firstSendNow.title).toContain("立即将所有排队消息发送给 Claude");
 
     const secondActions = rows()[1].querySelector<HTMLElement>("[data-queue-actions]")!;
     expect(secondActions.className).toContain("opacity-0");
@@ -556,9 +665,11 @@ describe("QueuePanel pull-back lifecycle and cross-session isolation", () => {
       ]);
       expect(within(0, "[data-queue-edit]").hasAttribute("disabled")).toBe(true);
 
-      // Active A2 delete resolves: unlocks A2 cleanly.
+      // Active A2 delete resolves: row 1 remains held out until the pushed queue arrives, then unlocks cleanly.
       resolveA2({ queue: ["A 第一条", "A 第二条"] });
       await settle();
+      expect(texts()).toEqual(["A 第一条"]);
+      render(<QueuePanel session={{ ...sessionA, queued: ["A 第一条"] }} draftKey="qp-aba-a" canEdit />);
       expect(within(0, "[data-queue-edit]").hasAttribute("disabled")).toBe(false);
     } finally {
       unsubA();

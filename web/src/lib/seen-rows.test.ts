@@ -7,9 +7,9 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { applyFilter, arrangeSpaces, extendKept, filterCounts, removeKept, type AgentFilter } from "./agent-filter";
-import { agentRank, buildAgentGroups, buildSpaces, isHeldSeen, isQuiet, type AgentMutes, type HeldOrderOptions, type HeldPlace } from "./agent-groups";
+import { buildAgentGroups, buildSpaces, isHeldSeen, isQuiet, type AgentMutes, type HeldOrderOptions, type HeldPlace } from "./agent-groups";
 import { api } from "./api";
-import { stateOf } from "./format";
+import { activityOf, viewOf } from "./format";
 import { agentKey, type AgentPins } from "./pins";
 import { getSeenVisit, getShownThisVisitForTest, heldOrderFor, noteShownUnseen, releaseAllSeen, releaseSeen, resetSeenVisit, seenRowsMode, seenRowsNoticed, setSeenRowsMode, setSeenRowsNoticed } from "./seen-rows";
 import { connect, getSession, markSeen, markSeenLocally, reset, viewSession } from "./store";
@@ -57,15 +57,46 @@ interface SortFixture {
 }
 
 const FIXTURE_DIR = resolve(__dirname, "../../../spec/fixtures/sort");
-const loadFixture = (rel: string): SortFixture[] =>
-  (JSON.parse(readFileSync(resolve(FIXTURE_DIR, rel), "utf8")) as { cases: SortFixture[] }).cases;
+// These shared fixtures predate P5. Retained membership, folding and counts stay the
+// same. On Web the old completion sections are Done and Working precedes Done.
+function loadFixture(rel: string): SortFixture[] {
+  const { cases } = JSON.parse(readFileSync(resolve(FIXTURE_DIR, rel), "utf8")) as { cases: SortFixture[] };
+  for (const fixture of cases) {
+    const groups = fixture.expected.groups;
+    if (fixture.input.settings.grouping === "state") {
+      for (const group of groups) {
+        if (group.id === "state/unread" || group.id === "state/just_finished") group.id = "state/done";
+      }
+      const order = ["state/needs", "state/working", "state/done", "state/idle"];
+      groups.sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
+    }
+    // A held, seen row keeps its section. Its rank now comes from its current
+    // view, so it follows live work and unseen replies within that section.
+    const expectedOrder: Record<string, string[]> = {
+      held_set_rows_keep_unread_section_by_status: ["still-unread", "read-one", "read-two"],
+      held_set_unread_filter_by_status: ["b", "a"],
+      held_set_machine_section_shows_read_rows: ["work", "idle", "read"],
+      held_quiet_space_stays_active: ["seen", "held"],
+      held_set_quiet_space_stays_active: ["idle-peer", "read"],
+    };
+    const rows = expectedOrder[fixture.name]?.map((sid) => `machine-a/${sid}`);
+    if (rows) {
+      const group = groups.find((g) => g.rows.includes(rows[0]));
+      if (group) {
+        group.rows = rows;
+        group.visible_rows = rows.filter((key) => group.visible_rows.includes(key));
+      }
+    }
+  }
+  return cases;
+}
 
 const QUICK_MAP: Record<SortFixture["input"]["settings"]["quick"], AgentFilter> = {
   all: "all", needsYou: "needs", unread: "unread", working: "working", backgroundWaiting: "bg_waiting",
 };
 const GROUP_ID_MAP: Record<string, string> = {
   "state:needs": "state/needs",
-  "state:unread": "state/unread",
+  "state:done": "state/done",
   "state:reply": "state/awaiting",
   "state:working": "state/working",
   "state:bg_waiting": "state/background",
@@ -83,7 +114,7 @@ function replayCase(c: SortFixture) {
     ...(settings.held ? { held: settings.held } : {}),
     ...(settings.held_seen ? { heldSeen: settings.held_seen } : {}),
   };
-  const live = c.input.sessions.filter((s) => !s.assistant && stateOf(s) !== "offline");
+  const live = c.input.sessions.filter((s) => !s.assistant && activityOf(s) !== "offline");
   const rawCounts = filterCounts(live, mutes);
   const counts = {
     needsYou: rawCounts.needs,
@@ -93,12 +124,12 @@ function replayCase(c: SortFixture) {
   };
   const filter = QUICK_MAP[settings.quick];
   const filtered = applyFilter(live, filter, mutes, new Set(settings.kept));
-  const unread_shown = filtered.filter((s) => stateOf(s) === "unread").map(agentKey);
+  const unread_shown = filtered.filter((s) => activityOf(s) === "unread").map(agentKey);
 
-  const sortDate = (s: Session) => (stateOf(s) === "working" ? s.state_since || s.updated_at : s.updated_at) ?? "";
+  const sortDate = (s: Session) => (activityOf(s) === "working" ? s.state_since || s.updated_at : s.updated_at) ?? "";
   const ordered = (list: Session[], byRank = filter === "all") =>
     [...list].sort((a, b) =>
-      (byRank ? agentRank(a, mutes, held) - agentRank(b, mutes, held) : 0)
+      (byRank ? viewOf(a).rank - viewOf(b).rank : 0)
       || byTime(sortDate(b), sortDate(a))
       || a.session_id.localeCompare(b.session_id)
       || agentKey(a).localeCompare(agentKey(b)),
@@ -140,7 +171,7 @@ function replayCase(c: SortFixture) {
     const stateCountsOf = (sessions: Session[]) => {
       const sc = { needs_you: 0, working: 0, unread: 0, idle: 0, unknown: 0 };
       for (const s of sessions) {
-        const st = stateOf(s);
+        const st = activityOf(s);
         if (st in sc) sc[st as keyof typeof sc]++;
       }
       return sc;
@@ -402,7 +433,7 @@ describe("visit state machine and store integration", () => {
     markSeen([getSession("m", "a")!, getSession("m", "b")!]);
     expect(getSeenVisit().seen).toEqual({});
     expect([...getShownThisVisitForTest().entries()]).toEqual([["m/c", "unread"]]);
-    expect(stateOf(getSession("m", "b")!)).toBe("idle");
+    expect(activityOf(getSession("m", "b")!)).toBe("idle");
   });
 
   it("leave mode holds only the open row and releases it when the chat closes", () => {

@@ -41,8 +41,22 @@ public enum TierLadder {
             self.pixelsPerPoint = pixelsPerPoint ?? scale
         }
 
-        /// The pixels encoded a second.
-        public var pixelRate: Int { width * height * fps }
+        /// The pixels encoded a second, saturating at `Int.max` instead of trapping on extreme dimensions.
+        public var pixelRate: Int { TierLadder.pixelRate(width: width, height: height, fps: fps) }
+    }
+
+    static func pixelRate(width: Int, height: Int, fps: Int) -> Int {
+        guard width > 0, height > 0, fps > 0 else { return 0 }
+        let (area, overflow1) = width.multipliedReportingOverflow(by: height)
+        if overflow1 { return .max }
+        let (rate, overflow2) = area.multipliedReportingOverflow(by: fps)
+        return overflow2 ? .max : rate
+    }
+
+    static func clampedInt(_ value: Double) -> Int {
+        guard !value.isNaN, value > 0 else { return 0 }
+        if value >= Double(Int.max) { return Int.max }
+        return Int(value)
     }
 
     /// Bits per pixel per frame at a band's floor and at its ceiling. Calibrated on the encoding bench: the floor keeps
@@ -81,9 +95,9 @@ public enum TierLadder {
             let size = CapturePlan.size(points: points, pixels: pixels, scale: step.scale, maxSize: maxSize)
             let fps = CapturePlan.fps(min(step.fps, maxFps))
             if tiers.contains(where: { $0.width == size.width && $0.height == size.height && $0.fps == fps }) { continue }
-            let perSecond = Double(size.width * size.height * fps)
-            let floor = max(CapturePlan.minKbps, Int((perSecond * floorBitsPerPixel * factor / 1000).rounded()))
-            let ceiling = min(cap, max(floor, Int((perSecond * ceilingBitsPerPixel * factor / 1000).rounded())))
+            let perSecond = Double(size.width) * Double(size.height) * Double(fps)
+            let floor = max(CapturePlan.minKbps, Self.clampedInt((perSecond * floorBitsPerPixel * factor / 1000).rounded()))
+            let ceiling = min(cap, max(floor, Self.clampedInt((perSecond * ceilingBitsPerPixel * factor / 1000).rounded())))
             let real = points.width > 0 ? Double(size.width) / Double(points.width) : step.scale
             tiers.append(Tier(scale: step.scale, fps: fps, width: size.width, height: size.height, minKbps: floor,
                               maxKbps: ceiling, pixelsPerPoint: real))

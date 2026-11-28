@@ -22,9 +22,11 @@ import (
 	"github.com/coder/websocket"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/extwire"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/modapi"
 	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -233,6 +235,7 @@ func (h *Hub) features() []string {
 	out = append(out, h.meetingNotesFeatures()...)
 	out = append(out, h.meetingEchoFeatures()...)
 	out = append(out, h.meetingTranscriptionFeatures()...)
+	out = append(out, h.meetingSpeakersFeatures()...)
 	out = append(out, h.recordingDayFeatures()...)
 	out = append(out, h.assistantSearchFeatures()...)
 	out = append(out, h.assistantPagesFeatures()...)
@@ -241,6 +244,7 @@ func (h *Hub) features() []string {
 			out = append(out, f)
 		}
 	}
+	out = h.reportedModules(out)
 	if h.defaultManagerNames(assistantwire.CapabilityHealthTell) {
 		out = append(out, assistantwire.CapabilityHealthTell)
 	}
@@ -267,18 +271,19 @@ func (h *Hub) features() []string {
 	out = append(out, h.todoAsksFeatures()...)
 	out = append(out, h.todoTimelineFeatures()...)
 	out = append(out, h.todoImageFeatures()...)
+	out = append(out, h.previewOriginFeatures()...)
 	// The assistant's card interfaces, always on (docs/assistant/assistant-views.md, #5509): assistant_views is declarative
 	// actions (expected_version), live cards and transcript cards; assistant_html_bridge is …/html-actions. Neither says
 	// a client may run HTML: that is each platform's own security sign-off, else fallback.
 	out = append(out, "assistant_views", "assistant_html_bridge")
 	for _, f := range h.extReport().Features {
 		if f == "modules" || strings.HasPrefix(f, "module.") {
-			continue // only the default manager's hello can publish module presence
+			continue // only the default manager's hello and its approved providers (reportedModules) publish module presence
 		}
 		switch f {
 		case assistantwire.CapabilityHealthTell, assistantwire.CapabilityHealthItems, assistantwire.CapabilityHealthStrength, assistantwire.CapabilityHealthIntake, assistantwire.CapabilityAssistantSegments, featureAgentSessionArchives, featureAgentSessionArchiveClose, featureAgentSessionIdleArchive, featureAgentAutoname, featureMeetingAttendance, featureMeetingConversation,
-			featureMeetingPhotos, featureMeetingLiveView, featureMeetingHighlights, featureMeetingNotes, featureMeetingEcho, featureMeetingTranscription, featureRecordingDay,
-			assistantwire.CapabilityTaskInput, featureAssistantSearch, featureAssistantPages, featureDirectionSessions, featureAssistantStartServiceTier, featureSessionsSideFold, featureRemoteImages, featureTodoView, featureTodoRevision, featureTodoPlaces, featureTodoAsks, featureTodoTimeline:
+			featureMeetingPhotos, featureMeetingLiveView, featureMeetingHighlights, featureMeetingNotes, featureMeetingEcho, featureMeetingTranscription, featureMeetingSpeakers, featureRecordingDay,
+			assistantwire.CapabilityTaskInput, featureAssistantSearch, featureAssistantPages, featureDirectionSessions, featureAssistantStartServiceTier, featureSessionsSideFold, featureRemoteImages, featureTodoView, featureTodoRevision, featureTodoPlaces, featureTodoAsks, featureTodoTimeline, featurePreviewOrigin:
 			continue // only manager hello can promise fleet archives, requested names, meetings, all-day recordings, chat search, dashboards, direction sessions, start speed, the side-session fold, remote images, the To-dos view, its answers and its history
 		}
 		if !slices.Contains(out, f) {
@@ -301,6 +306,41 @@ func (h *Hub) defaultManagerModuleFeatures() []string {
 		}
 	}
 	return nil
+}
+
+// reportedModules is out with the flags of the modules approved installed extensions supply (#16254): from the
+// default manager's report (Report.Modules), only while that manager is connected and its hello carries the modules
+// marker, as for its built-in modules' flags (defaultManagerModuleFeatures). An installed provider decides its module's
+// flag: one that is on adds module.<id>, one that is off removes the built-in module's flag of that id. Only ids of the
+// host's list count (modapi.ExtensionModules); an older manager reports none, and out stays as it was.
+func (h *Hub) reportedModules(out []string) []string {
+	id := h.defaultOwner(context.Background())
+	if h.busConnOf(id) == nil {
+		return out
+	}
+	marker := false
+	for _, manager := range h.busRoster() {
+		if manager.ID == id {
+			marker = slices.Contains(manager.Features, "modules") // the marker (moduleswitch.Marker, not linked into the hub)
+		}
+	}
+	r := h.extReportOf(id)
+	if !marker || r == nil {
+		return out
+	}
+	for _, m := range r.Modules {
+		if !slices.ContainsFunc(modapi.ExtensionModules(), func(x modapi.ExtensionModule) bool { return string(x.ID) == string(m.ID) }) {
+			continue
+		}
+		f := "module." + string(m.ID)
+		switch {
+		case m.On && !slices.Contains(out, f):
+			out = append(out, f)
+		case !m.On:
+			out = slices.DeleteFunc(out, func(g string) bool { return g == f })
+		}
+	}
+	return out
 }
 
 // extrasOf is machine m's Cua, ego and iPhone state as the manager reports it (each nil when not on), read from one
@@ -327,6 +367,20 @@ func decodeExtra[T any](raw json.RawMessage) *T {
 // screenAllowed: the app may open m's screen (cua or ego is on for it).
 func (h *Hub) screenAllowed(m *Machine) bool { return h.extReport().Machines[m.cfg.ID].ScreenPort }
 
+// managerBusCaller binds the manager ID while keeping the hub's bus call policy.
+type managerBusCaller struct {
+	id   string
+	call func(context.Context, string, string, any, any) error
+}
+
+func (c managerBusCaller) Call(ctx context.Context, method string, params, out any) error {
+	return c.call(ctx, c.id, method, params, out)
+}
+
+func (h *Hub) managerCaller(id string) managerBusCaller {
+	return managerBusCaller{id: id, call: h.callBus}
+}
+
 // extCall asks the default manager what the hub's own features need of the extensions (extwire.Hub*).
 func (h *Hub) extCall(ctx context.Context, method string, params, out any) error {
 	return h.extCallTo(ctx, h.defaultOwner(ctx), method, params, out)
@@ -334,11 +388,19 @@ func (h *Hub) extCall(ctx context.Context, method string, params, out any) error
 
 // extCallTo is extCall of manager id's extensions.
 func (h *Hub) extCallTo(ctx context.Context, id, method string, params, out any) error {
+	return callExtensionManager(ctx, h.managerCaller(id), method, params, out)
+}
+
+func callExtensionManager(ctx context.Context, c buswire.Caller, method string, params, out any) error {
 	raw, err := json.Marshal(params)
 	if err != nil {
 		return err
 	}
-	return h.callBus(ctx, id, extwire.MethodHubCall, extwire.HubCall{Method: method, Params: raw}, out)
+	reply, err := buswire.Call(ctx, c, extwire.HubCallMethod, extwire.HubCall{Method: method, Params: raw})
+	if err != nil || out == nil || len(reply) == 0 {
+		return err
+	}
+	return json.Unmarshal(reply, out)
 }
 
 // emitToExtensions tells manager owner's extensions something the hub saw about one of its sessions (agent.finished,
@@ -642,12 +704,15 @@ func (k *keptRecorder) Flush() { _ = http.NewResponseController(k.ResponseWriter
 
 func (k *keptRecorder) Unwrap() http.ResponseWriter { return k.ResponseWriter }
 
-// dialManager opens a relay stream manager id serves HTTP on (extwire.MethodAccept).
+// dialManager opens a relay stream manager id serves HTTP on (extwire.AcceptMethod).
 func (h *Hub) dialManager(ctx context.Context, id string) (net.Conn, error) {
 	if h.busConnOf(id) == nil {
 		return nil, errBusOffline
 	}
-	taken, err := h.handToManagerVia(ctx, id, extwire.MethodAccept, nil)
+	taken, err := h.handToManagerVia(ctx, relayFor{manager: id}, func(ctx context.Context, relayID string) error {
+		_, err := buswire.Call(ctx, h.managerCaller(id), extwire.AcceptMethod, extwire.Accept{ID: extwire.RelayID(relayID)})
+		return err
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -738,28 +803,30 @@ func (h *Hub) authorizeExtension(ctx context.Context, tok string, r *http.Reques
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	// The token is one manager's extension's: each is asked, the default first, until one knows it.
-	var a extwire.Authorized
-	manager := ""
 	sure = true
 	asked := time.Now()
+	query := extwire.Authorize{Hash: hashToken(tok), Pattern: pattern, Method: method, Path: path}
 	for _, id := range h.listManagers(ctx) {
-		a = extwire.Authorized{}
-		err := h.callBus(ctx, id, extwire.MethodAuthorize, extwire.Authorize{Hash: hashToken(tok), Pattern: pattern,
-			Method: method, Path: path}, &a)
-		if err == nil && a.Extension != "" {
-			manager = id
-			break
+		c := h.busConnOf(id)
+		if c == nil { // the default manager, listed first, may be off the bus
+			continue
 		}
-		if err != nil && !errors.Is(err, errBusOffline) { // (the default manager, listed first, may be off the bus)
-			sure = false
+		a, err := buswire.Call(ctx, c, extwire.AuthorizeMethod, query)
+		if err != nil {
+			sure = sure && errors.Is(err, errBusOffline)
+			continue
 		}
+		if a.Extension == "" {
+			continue
+		}
+		p = principal{ID: "extension:" + a.Extension, Name: a.Name, Role: roleExtension, Extension: a.Extension, Scopes: a.Scopes,
+			Manager: id, extHash: query.Hash, extAt: asked}
+		if a.OK {
+			p.extAuthConn, p.extOwner = c, a.Owner
+		}
+		return p, true, a.OK, a.Scope, true
 	}
-	if a.Extension == "" {
-		return principal{}, false, false, "", sure
-	}
-	p = principal{ID: "extension:" + a.Extension, Name: a.Name, Role: roleExtension, Extension: a.Extension, Scopes: a.Scopes,
-		Manager: manager, extHash: hashToken(tok), extAt: asked}
-	return p, true, a.OK, a.Scope, true
+	return principal{}, false, false, "", sure
 }
 
 // tokenHash says whether s is a hash as hashToken makes one.

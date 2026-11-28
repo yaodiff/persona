@@ -520,17 +520,24 @@ func byDirectory(files []File) []partFiles {
 	return groups
 }
 
-// pack is files as a gzipped tar in path order. Every header field that could vary between machines or runs is fixed:
+// pack is files as a gzipped tar in a deterministic order. Every header field that could vary between machines or runs is fixed:
 // the tar entries carry mode 0644, time 0 and no owner; the gzip header (left zero) carries no name and time 0.
 func pack(files []File) ([]byte, error) {
 	sorted := append([]File(nil), files...)
-	// Keep small files and their tar headers together in the gzip window. Paths break ties for reproducibility.
+	// Keep small files and their headers together. Write the large files largest first so the following
+	// files can reuse more of the 32 KiB gzip window. Paths break ties for reproducibility.
+	// The 21 KiB cutoff keeps the current runtime packages within the embedded size budget.
+	const largeFile = 21 << 10
 	sort.Slice(sorted, func(i, j int) bool {
 		a, b := sorted[i], sorted[j]
-		if len(a.Data) != len(b.Data) {
-			return len(a.Data) < len(b.Data)
+		aSize, bSize := len(a.Data), len(b.Data)
+		if aSize == bSize {
+			return a.Path < b.Path
 		}
-		return a.Path < b.Path
+		if aSize >= largeFile && bSize >= largeFile {
+			return aSize > bSize
+		}
+		return aSize < bSize
 	})
 	var buf bytes.Buffer
 	zw, err := gzip.NewWriterLevel(&buf, gzip.BestCompression)

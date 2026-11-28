@@ -72,9 +72,10 @@ var (
 
 // env is what the supervisor touches outside itself, so that tests stand in for it.
 type env struct {
-	self string // personad: the program to run the two with, unless the one of their own beside it (programOf)
-	home string // the data directory
-	out  io.Writer
+	self  string // personad: the program to run the two with, unless the one of their own beside it (programOf)
+	home  string // the data directory
+	out   io.Writer
+	outMu sync.Mutex
 	// execHub replaces this process with the hub, bin with args (the container as it was).
 	execHub func(bin string, args, env []string) error
 	// version is what a program says to `version -v` (update.BuildOf when nil).
@@ -119,6 +120,11 @@ func Run(ctx context.Context, args []string, out io.Writer) error {
 }
 
 func (e *env) logf(format string, args ...any) {
+	if e.out == nil {
+		return
+	}
+	e.outMu.Lock()
+	defer e.outMu.Unlock()
 	fmt.Fprintf(e.out, "supervise: "+format+"\n", args...)
 }
 
@@ -263,10 +269,9 @@ func (e *env) waitService(ctx context.Context) bool {
 			e.logf("%s; waiting (hub.json is read again every %s)", why, modeRecheck)
 			said = true
 		}
-		select {
-		case <-ctx.Done():
+		sleep(ctx, modeRecheck)
+		if ctx.Err() != nil {
 			return false
-		case <-time.After(modeRecheck):
 		}
 	}
 }
@@ -298,22 +303,31 @@ var (
 // supervise runs progs, each started again when it stops, until ctx ends or one's after says to stop; then they are
 // stopped (SIGTERM, then SIGKILL after e.stop) and it returns (ErrStopped with that error, said already).
 func (e *env) supervise(ctx context.Context, progs []*program) error {
-	ctx, cancel := context.WithCancelCause(ctx)
-	defer cancel(nil)
-	var wg sync.WaitGroup
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var (
+		wg     sync.WaitGroup
+		stopMu sync.Mutex
+		stop   error
+	)
 	for _, p := range progs {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if err := e.keep(ctx, p, len(progs) > 1); err != nil {
+			if err := e.keep(runCtx, p, len(progs) > 1); err != nil {
 				e.logf("%v", err)
-				cancel(err)
+				stopMu.Lock()
+				if stop == nil {
+					stop = err
+				}
+				stopMu.Unlock()
+				cancel()
 			}
 		}()
 	}
 	wg.Wait()
-	if err := context.Cause(ctx); err != nil && !errors.Is(err, context.Canceled) {
-		return fmt.Errorf("%w: %w", ErrStopped, err)
+	if stop != nil {
+		return fmt.Errorf("%w: %w", ErrStopped, stop)
 	}
 	return nil
 }
@@ -387,10 +401,12 @@ func (e *env) run(ctx context.Context, p *program) error {
 	if wait <= 0 {
 		wait = stopWait
 	}
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
 	select {
 	case err := <-done:
 		return err
-	case <-time.After(wait):
+	case <-timer.C:
 		e.logf("%s did not stop within %s: killing it", p.name, wait)
 		_ = cmd.Process.Kill()
 		return <-done
@@ -410,9 +426,14 @@ func exitText(err error) string {
 }
 
 func sleep(ctx context.Context, d time.Duration) {
+	if d <= 0 {
+		return
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
 	select {
 	case <-ctx.Done():
-	case <-time.After(d):
+	case <-timer.C:
 	}
 }
 
@@ -423,17 +444,34 @@ func (e *env) bindBuiltin(ctx context.Context, hubURL string) error {
 	if err := waitHealthy(ctx, hubURL, healthWait); err != nil {
 		return err
 	}
-	var minted string
-	traded, err := bindBuiltin(ctx, e.home, hubURL, func(ctx context.Context) (string, error) {
+	var (
+		mintMu sync.Mutex
+		minted []string
+		traded bool
+	)
+	defer func() {
+		mintMu.Lock()
+		codes := append([]string(nil), minted...)
+		mintMu.Unlock()
+		if traded && len(codes) > 0 {
+			codes = codes[:len(codes)-1]
+		}
+		for _, code := range codes {
+			vctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), voidWait)
+			_ = voidCode(vctx, code)
+			cancel()
+		}
+	}()
+	var err error
+	traded, err = bindBuiltin(ctx, e.home, hubURL, func(ctx context.Context) (string, error) {
 		code, err := mintCode(ctx)
-		minted = code
+		if code != "" {
+			mintMu.Lock()
+			minted = append(minted, code)
+			mintMu.Unlock()
+		}
 		return code, err
 	})
-	if minted != "" && !traded {
-		vctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), voidWait)
-		_ = voidCode(vctx, minted)
-		cancel()
-	}
 	if err != nil {
 		return fmt.Errorf("binding the built-in manager to the hub at %s: %w", hubURL, err)
 	}
@@ -458,10 +496,17 @@ func waitHealthy(ctx context.Context, hubURL string, most time.Duration) error {
 	}
 	transport := &http.Transport{Proxy: nil}
 	defer transport.CloseIdleConnections()
-	client := &http.Client{Timeout: 5 * time.Second, Transport: transport}
-	deadline := time.Now().Add(most)
+	client := &http.Client{
+		Timeout:   5 * time.Second,
+		Transport: transport,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, most)
+	defer cancel()
 	for {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+		req, err := http.NewRequestWithContext(waitCtx, http.MethodGet, u, nil)
 		if err != nil {
 			return err
 		}
@@ -475,9 +520,15 @@ func waitHealthy(ctx context.Context, hubURL string, most time.Duration) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		if !time.Now().Before(deadline) {
+		if waitCtx.Err() != nil {
 			return fmt.Errorf("the hub at %s did not answer within %s", hubURL, most)
 		}
-		sleep(ctx, time.Second)
+		sleep(waitCtx, time.Second)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if waitCtx.Err() != nil {
+			return fmt.Errorf("the hub at %s did not answer within %s", hubURL, most)
+		}
 	}
 }

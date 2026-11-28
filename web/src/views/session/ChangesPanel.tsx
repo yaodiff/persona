@@ -61,8 +61,9 @@ function FileTree({ root, collapsed, toggle, select, selected }: {
           const closed = collapsed.has(path);
           return (
             <div key={path}>
-              <button type="button" aria-expanded={!closed} onClick={() => toggle(path)} className="flex h-8 w-full items-center gap-1 rounded-control px-2 text-left text-label font-medium text-ink-2 hover:bg-hover [@media(pointer:coarse)]:min-h-11" style={{ paddingLeft: `${8 + depth * 12}px` }}>
-                <Icon name="chevronRight" size={12} style={{ transform: closed ? undefined : "rotate(90deg)" }} />
+              <button type="button" aria-expanded={!closed} onClick={() => toggle(path)} className="flex h-7 w-full items-center gap-1.5 rounded-md px-2 text-left text-tree-row font-medium text-ink-2 transition-colors hover:bg-hover [@media(pointer:coarse)]:min-h-11" style={{ paddingLeft: `${8 + depth * CHANGES_TREE_INDENT}px` }}>
+                <Icon name="chevronRight" size={12} className="shrink-0 text-ink-3" style={{ transform: closed ? undefined : "rotate(90deg)" }} />
+                <Icon name="folder" size={14} className="shrink-0 text-ink-3" />
                 <span className="truncate">{name}</span>
               </button>
               {!closed && draw(child, `${path}/`, depth + 1)}
@@ -70,10 +71,10 @@ function FileTree({ root, collapsed, toggle, select, selected }: {
           );
         })}
         {[...node.files].sort((a, b) => a.shown.localeCompare(b.shown)).map((file) => (
-          <button key={file.path} type="button" title={file.path} data-change-file={file.path} aria-current={selected === file.path ? "true" : undefined} onClick={() => select(file.path)} className={cx("flex min-h-8 w-full items-center gap-2 rounded-control px-2 py-1 text-left text-label hover:bg-hover [@media(pointer:coarse)]:min-h-11", selected === file.path && "bg-hover text-ink")}>
+          <button key={file.path} type="button" title={file.path} data-change-file={file.path} aria-current={selected === file.path ? "true" : undefined} onClick={() => select(file.path)} className={cx("flex h-7 w-full items-center gap-1.5 rounded-md px-2 text-left text-tree-row text-ink-2 transition-colors hover:bg-hover [@media(pointer:coarse)]:min-h-11", selected === file.path && "bg-hover-2 font-medium text-ink")}>
             <span className="min-w-0 flex-1 overflow-hidden">
-              <span className="flex items-center gap-2" style={{ paddingLeft: `min(${(depth + 1) * CHANGES_TREE_INDENT}px, ${CHANGES_TREE_INDENT_MAX_SHARE * 100}%)` }}>
-                <Icon name="file" size={13} className="shrink-0 text-ink-3" />
+              <span className="flex items-center gap-1.5" style={{ paddingLeft: `min(${(depth + 1) * CHANGES_TREE_INDENT}px, ${CHANGES_TREE_INDENT_MAX_SHARE * 100}%)` }}>
+                <Icon name="file" size={14} className="shrink-0 text-ink-3" />
                 <span className="min-w-0 flex-1 truncate">{file.shown.split(/[\\/]/).pop()}</span>
               </span>
             </span>
@@ -410,7 +411,7 @@ function ChangesPanelView({ mid, sid, opened, onClose, tr }: ChangesPanelProps &
         <nav
           id={treeId}
           aria-label={t("session-changes.files_label")}
-          className="max-h-40 min-h-0 shrink-0 overflow-auto border-b border-line py-1 lg:h-full lg:max-h-none lg:w-(--changes-tree-w) lg:border-b-0"
+          className="scrollbar-thin max-h-40 min-h-0 shrink-0 overflow-auto border-b border-line px-1.5 py-1 lg:h-full lg:max-h-none lg:w-(--changes-tree-w) lg:border-b-0"
           style={{ "--changes-tree-w": `${treePane.width}px` } as React.CSSProperties}
         >
           <FileTree root={tree} collapsed={collapsed} selected={selectedPath} select={selectFile} toggle={(path) => setCollapsed((old) => { const next = new Set(old); if (next.has(path)) next.delete(path); else next.add(path); return next; })} />

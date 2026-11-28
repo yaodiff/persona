@@ -24,7 +24,8 @@ class NodeReconnectTests(unittest.TestCase):
         def call(root, target, action, params=None, **kwargs):
             self.assertEqual(target, self.payload['target'])
             self.assertGreater(kwargs.get('timeout', 50), 0)
-            self.assertLessEqual(kwargs.get('timeout', 50), 50)
+            limit = promoter.COMMIT_WAIT if action == 'commit' else 50
+            self.assertLessEqual(kwargs.get('timeout', 50), limit)
             return handler(original, root, target, action, params, kwargs)
         self.relay = call
 
@@ -91,6 +92,24 @@ class NodeReconnectTests(unittest.TestCase):
         self.assertEqual(len(commits), 1)
         self.assertNotIn('abort', self.calls)
         self.assertEqual(self.calls[-1], 'confirm')
+
+    def test_commit_is_read_as_long_as_the_relay_holds_it(self):
+        # The node answers commit after its first-run self-checks (60 s each); a 50 s read took that for a lost
+        # reply (#12670). The read is still bounded by the original deadline.
+        for deadline, want in ((900, promoter.COMMIT_WAIT), (120, 120)):
+            with self.subTest(deadline=deadline):
+                self.setUp()
+                timeouts = {}
+                def handler(original, root, target, action, params, kwargs):
+                    timeouts.setdefault(action, kwargs.get('timeout', 50))
+                    return original(root, target, action, params)
+                self.fault(handler)
+                self.payload['timeout'] = deadline
+                with patch.object(promoter.time, 'monotonic', return_value=1000.0):
+                    self.assertEqual(self.promote(True)['phase'], 'confirmed')
+                self.assertEqual(timeouts['commit'], want)
+                self.assertLessEqual(timeouts['chunk'], 50)
+        self.assertGreater(promoter.COMMIT_WAIT, 60)
 
     def test_ambiguous_commit_without_matching_handshake_never_confirms(self):
         clock = [0]

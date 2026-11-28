@@ -22,12 +22,27 @@ import (
 
 // extensionTrustStore keeps the trusts and grants (assistant_extension_trust, assistant_extension_grants).
 type extensionTrustStore interface {
+	ExtensionTrustOf(ctx context.Context, extension string) (string, error)
 	ExtensionTrusts(ctx context.Context) (map[string]db.ExtensionTrust, error)
 	SetExtensionTrust(ctx context.Context, extension, trust string, cats []string, by string) error
 	ForgetExtensionTrust(ctx context.Context, extension string) error
 }
 
 var _ extensionTrustStore = (*db.DB)(nil)
+
+// extensionIsOwner checks the current trust row for a token authenticated by this Assistant's extension manager.
+func (s *Service) extensionIsOwner(ctx context.Context, extension string) bool {
+	st, ok := s.store().(extensionTrustStore)
+	if !ok {
+		return false
+	}
+	trust, err := st.ExtensionTrustOf(ctx, extension)
+	if err != nil {
+		s.logf("extension trust: read: %v", err)
+		return false
+	}
+	return trust == assistantwire.ExtensionTrustOwner
+}
 
 // extensionReaderKey carries the grant of the extension that reads, in a request's or an RPC's context
 // (withExtensionReader), read once for the whole request.
@@ -264,7 +279,7 @@ func (s *Service) extensionTrustSet(w http.ResponseWriter, r *http.Request) {
 		apierr.Write(w, http.StatusInternalServerError, err)
 		return
 	}
-	s.publish(context.WithoutCancel(r.Context())) // the hub learns the owners (Profile.ExtensionOwners)
+	s.publish(context.WithoutCancel(r.Context())) // publish Profile.ExtensionOwners for older hubs
 	if cats == nil {
 		cats = []string{}
 	}

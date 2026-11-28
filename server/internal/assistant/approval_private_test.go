@@ -116,7 +116,7 @@ func TestPrivateApprovalRecoveredJournalKeepsJustMe(t *testing.T) {
 	// Private marker while recovering the delivery record.
 	ft.s.approvalJournalFinished(context.Background(), proto.Interaction{
 		ID: "ix_private_recovered", MachineID: "mac", SessionID: "s1", Private: true,
-	}, "cancelled", "nothing was executed")
+	}, "cancelled", "nothing was executed", true)
 	if result := waitApprovalResult(t, ft, "ix_private_recovered"); !strings.Contains(result, "nothing was executed") {
 		t.Fatalf("recovered Private approval result = %q", result)
 	}

@@ -3,6 +3,7 @@ package node
 import (
 	"context"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/i18n"
@@ -11,12 +12,24 @@ import (
 )
 
 type runtimeCompaction struct {
-	runtime   *runtimeConn
-	state     *proto.Compaction
-	revision  int64
-	turnError string
-	sawWork   bool
-	settled   chan string
+	runtime    *runtimeConn
+	state      *proto.Compaction
+	prevStatus string
+	silent     bool
+	revision   int64
+	turnError  string
+	sawWork    bool
+	settled    chan string
+	done       chan struct{}
+	doneOnce   sync.Once
+	mu         sync.Mutex
+	failure    string
+}
+
+func (c *runtimeCompaction) failureMessage() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.failure
 }
 
 func (n *Node) assistantCompactRuntime(ctx context.Context, id string, onlyRunning bool) error {
@@ -46,12 +59,32 @@ func (n *Node) assistantCompactRuntime(ctx context.Context, id string, onlyRunni
 			return errRuntimeAway(label)
 		}
 	}
-	compaction, err := n.runtimes.beginCompaction(ctx, host, id, onlyRunning)
+	_, err := n.startRuntimeCompactionLocked(ctx, host, id, true, false, onlyRunning)
+	return err
+}
+
+func (n *Node) startRuntimeCompactionLocked(ctx context.Context, host *runtimeConn, id string, isAssistant, silent, onlyRunning bool) (*runtimeCompaction, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	callCtx, cancel := context.WithTimeout(ctx, runtimeCallTimeout)
+	defer cancel()
+	compaction, err := n.runtimes.beginCompaction(ctx, host, id, silent, onlyRunning)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	n.publishSessionsSoon()
-	params := map[string]any{"session_id": id, "text": "/compact", "assistant": true}
+	params := map[string]any{"session_id": id, "text": "/compact"}
+	if isAssistant {
+		params["assistant"] = true
+		var st sessionState
+		if n.state != nil {
+			st, _ = n.state.get(id)
+		}
+		if env := n.assistantEnvForRuntime(host, n.runtimeAssistantCwd(id, "", st), id); env != nil {
+			params["env"] = env
+		}
+	}
 	var reply struct {
 		Queued bool `json:"queued"`
 	}
@@ -61,25 +94,40 @@ func (n *Node) assistantCompactRuntime(ctx context.Context, id string, onlyRunni
 	finishAgy(err, false)
 	if err != nil {
 		n.finishRuntimeCompaction(id, compaction, err.Error())
-		return err
+		return nil, err
 	}
 	if host.agent() == agyAgent && n.clearAgyStopped(id, sentAt) {
 		n.publishSessionsSoon()
 	}
-	n.contextCompacted(id)
+	if isAssistant {
+		n.contextCompacted(id)
+	}
 	if reply.Queued {
 		const message = "Compaction was queued, so its completion could not be tracked."
 		n.finishRuntimeCompaction(id, compaction, message)
-		return &rpc.Error{Code: "compaction_queued", Message: message}
+		return nil, &rpc.Error{Code: "compaction_queued", Message: message}
 	}
 	go n.awaitRuntimeCompaction(id, compaction, i18n.From(ctx))
-	return nil
+	return compaction, nil
 }
 
 func (b *runtimeRegistry) compacting(id string) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.compactingLocked(id)
+}
+
+func (b *runtimeRegistry) activeCompaction(id string) *runtimeCompaction {
+	if b == nil || id == "" {
+		return nil
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	current := b.compactions[id]
+	if current == nil || current.state.State != proto.CompactionRunning {
+		return nil
+	}
+	return current
 }
 
 func (b *runtimeRegistry) compactingLocked(id string) bool {
@@ -91,7 +139,7 @@ func runtimeCompactingRefusal(ctx context.Context) error {
 	return refusal("compacting", i18n.T(i18n.From(ctx), "assistant-start.compacting"), nil)
 }
 
-func (b *runtimeRegistry) beginCompaction(ctx context.Context, host *runtimeConn, id string, onlyRunning bool) (*runtimeCompaction, error) {
+func (b *runtimeRegistry) beginCompaction(ctx context.Context, host *runtimeConn, id string, silent, onlyRunning bool) (*runtimeCompaction, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.compactingLocked(id) {
@@ -107,8 +155,13 @@ func (b *runtimeRegistry) beginCompaction(ctx context.Context, host *runtimeConn
 	if onlyRunning {
 		return nil, refusal("not_running", "The runtime cannot confirm this conversation is already running.", nil)
 	}
+	prevStatus := row.Status
+	if prevStatus != proto.StatusIdle && prevStatus != proto.StatusDone {
+		prevStatus = ""
+	}
 	compaction := &runtimeCompaction{
-		runtime: host, revision: row.Rev, turnError: row.TurnError, settled: make(chan string, 1),
+		runtime: host, prevStatus: prevStatus, silent: silent, revision: row.Rev, turnError: row.TurnError,
+		settled: make(chan string, 1), done: make(chan struct{}),
 		state: &proto.Compaction{State: proto.CompactionRunning, StartedAt: time.Now().UTC()},
 	}
 	if b.compactions == nil {
@@ -118,8 +171,32 @@ func (b *runtimeRegistry) beginCompaction(ctx context.Context, host *runtimeConn
 	return compaction, nil
 }
 
+func (c *runtimeCompaction) settle(failure string) {
+	if c.state == nil || c.state.State != proto.CompactionRunning {
+		return
+	}
+	select {
+	case c.settled <- failure:
+	default:
+	}
+}
+
+func (b *runtimeRegistry) settleCompaction(h *runtimeConn, id, failure string) bool {
+	if b == nil || h == nil || id == "" {
+		return false
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	compact := b.compactions[id]
+	if compact == nil || compact.runtime != h || compact.state == nil || compact.state.State != proto.CompactionRunning {
+		return false
+	}
+	compact.settle(failure)
+	return true
+}
+
 func (c *runtimeCompaction) observe(row proto.Session) {
-	if c.state.State != proto.CompactionRunning {
+	if c.state == nil || c.state.State != proto.CompactionRunning {
 		return
 	}
 	switch row.Status {
@@ -127,10 +204,7 @@ func (c *runtimeCompaction) observe(row proto.Session) {
 		c.sawWork = true
 	case proto.StatusIdle, proto.StatusDone:
 		if c.sawWork || row.Rev != c.revision || row.TurnError != c.turnError {
-			select {
-			case c.settled <- row.TurnError:
-			default:
-			}
+			c.settle(row.TurnError)
 		}
 	}
 }
@@ -150,6 +224,9 @@ func (n *Node) awaitRuntimeCompaction(id string, compaction *runtimeCompaction, 
 }
 
 func (n *Node) finishRuntimeCompaction(id string, compaction *runtimeCompaction, failure string) {
+	compaction.mu.Lock()
+	compaction.failure = failure
+	compaction.mu.Unlock()
 	b := n.runtimes
 	b.mu.Lock()
 	finished := *compaction.state
@@ -165,6 +242,11 @@ func (n *Node) finishRuntimeCompaction(id string, compaction *runtimeCompaction,
 		delete(b.compactions, id)
 	}
 	b.mu.Unlock()
+	compaction.doneOnce.Do(func() {
+		if compaction.done != nil {
+			close(compaction.done)
+		}
+	})
 	n.publishSessionsSoon()
 }
 

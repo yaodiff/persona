@@ -18,6 +18,11 @@ type BackgroundTask struct {
 	Status   string     `json:"status,omitempty"`
 	EndedAt  *time.Time `json:"ended_at,omitempty"`
 	ExitCode *int       `json:"exit_code,omitempty"`
+	// MovedFromForeground: a shell whose foreground command hit Claude Code's timeout and was moved to the background
+	// ("Command did not complete within its 120s timeout and was moved to the background"), not one the agent started
+	// there or the user backgrounded by hand. A command the turn meant to wait for and could not is the likeliest to
+	// hang (a cmp reading stdin, #16418), so the node judges it stalled sooner. Absent from older nodes (false).
+	MovedFromForeground bool `json:"moved_from_foreground,omitempty"`
 }
 
 // Workflow is a Claude Code workflow run (the Workflow tool): a script that drives many agents in the background and

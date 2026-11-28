@@ -6,5 +6,11 @@
   "busy": "Waits for this conversation's current work to finish, then goes in",
   "behind": "Waits behind earlier messages that did not go in",
   "may_have_gone_in": "It may already have gone in. Check the conversation before you retry",
-  "not_saved": "This could not be saved. Try again in a moment."
+  "not_saved": "This could not be saved. Try again in a moment.",
+  "awaiting_receipt": "Sent; waiting for the conversation to confirm it got it. If no confirmation comes in time it stops waiting and nothing is sent twice",
+  "behind_unconfirmed": "Waits behind a message whose delivery is not confirmed yet; goes in once that one is confirmed or times out",
+  "switch_pending": "Waits while this conversation moves to another engine; goes in once that is done",
+  "queued": "Queued; goes in next",
+  "receipt_expired": "No confirmation came in time, so it left the send queue and later messages went on. It may have gone in: check the conversation, then Retry or Delete",
+  "not_expired": "This message is still on its way or was already handled; nothing was changed"
 }

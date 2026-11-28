@@ -228,15 +228,25 @@ refresh replaces it, including removals. There is no new setting or model depend
     shorten the name, not the number. Closing a Paseo Agent offers to remove its own worktree as for herdr (#6297): `worktree/status` calls it
     Persona's when it is the folder of a worktree workspace Paseo made, and `worktree/remove` archives that workspace through Paseo with Delete
     worktree's guards (below).
-  - **Creation keeps project identity** (#9726): an explicitly selected workspace supplies its own project ID. With a directory alone,
-    the bridge reads the active projects and compares physical paths for the directory, Git checkout and main checkout. A unique match
-    is passed as `source.projectId`; names and remote URLs are never used to merge independent clones. Multiple matching projects or a
-    failed/malformed project list stop creation. Only a successful list with no match allows Paseo to allocate a project.
+  - **Creation keeps project identity** (#9726, #14844): an explicitly selected workspace supplies its own project ID without
+    re-resolving its folder. With a directory alone, the bridge reads the active projects and compares physical paths for the
+    directory, Git checkout and main checkout. A main-checkout project wins over legacy projects rooted at the linked worktree
+    or its subdirectories. Duplicate active records at the selected physical root (symlink spellings of one directory) resolve
+    independent of registry order: the record registered at the physical path itself, then the one with more workspaces, then
+    the lowest project ID; matches at different non-main roots are `project_ambiguous` for new creation. When no project matches,
+    the bridge hands Paseo the physical path rather than the symlink spelling, so the new project is registered at its canonical
+    root. Names and remote URLs are
+    never used to merge independent clones. A failed or malformed project list stops new creation. Only a successful list with no
+    match allows Paseo to allocate a project. Project discovery is best effort only for an implicit start that already has a
+    worktree workspace: on failure or ambiguity it falls back to the original owner-less workspace lookup, and rethrows the
+    original error only when that lookup finds nothing.
     A direct Agent start that needs a new workspace uses the same resolver: since `agent.create.request` has no project ID, the bridge
-    creates a directory workspace with that ID first, then starts the Agent in it. This stays inside the existing pending-start flow;
-    retries reuse its creation key. If the Agent fails later, the directory workspace remains available for retry.
+    creates a directory workspace with that ID first, then starts the Agent in it. An exact directory workspace already owned by
+    the selected project is reused; with a resolved project, an implicit start never chooses a legacy workspace owned by another
+    project. This stays inside the existing pending-start flow; retries reuse its creation key. If the Agent fails later, the directory workspace remains
+    available for retry.
     Existing groups and sessions are preserved: Paseo 0.16's public workspace commands/protocol have no move or reparent operation.
-    This prevents future duplicates; it does not migrate previously duplicated project groups.
+    The resolver repairs subsequent implicit selection; it does not migrate previously duplicated project groups or workspaces.
   - **Terminals for a Paseo Agent's folder**: a Paseo workspace has no terminal, so Open Terminal Here and a dev server's Start for one of its
     Agents open in the terminal engine's workspace that holds the folder, else in a new workspace there, never in one that only happens to be first;
     the web and iOS offer Start only for sessions with a terminal. For that, Open Terminal Here sends the Agent's Paseo workspace with the folder

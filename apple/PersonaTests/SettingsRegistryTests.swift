@@ -71,6 +71,30 @@ struct SettingsRegistryTests {
         for (id, row) in expected { #expect(ids[id] == row, "\(id)") }
     }
 
+    @Test func moduleRowsAndSearchFollowThePublishingHub() throws {
+        let hub = FakeHub()
+        let model = AppModel(stateFolder: FileManager.default.temporaryDirectory.appending(path: "settings-modules-" + UUID().uuidString))
+        model.linkHooksForTests = (transport: try #require(hub.client.transport), socket: { SyncSocket() })
+        model.connectOnly(ServerConfig(url: URL(string: "http://127.0.0.1:1")!, token: "synthetic"))
+        let meetings = try #require(SettingsCatalog.entries.first { $0.id == "meetings" })
+        let health = try #require(SettingsCatalog.entries.first { $0.id == "health" })
+        // No hello yet, and an older hub without the modules marker, keep today's entries.
+        #expect(meetings.shows(in: model) && health.shows(in: model))
+        for (features, expected) in [
+            (["modules", "module.recording", "module.health"], true),
+            (["modules"], false),
+            (["file_upload"], true),
+        ] {
+            model.handle(.hello(HubHello(features: features)), group: "")
+            #expect(meetings.shows(in: model) == expected)
+            #expect(health.shows(in: model) == expected)
+            #expect(SettingsCatalog.rows(.advanced, in: .assistant, model).contains { $0.id == "meetings" } == expected)
+            #expect(SettingsCatalog.rows(.advanced, in: .device, model).contains { $0.id == "health" } == expected)
+            #expect(SettingsCatalog.search(meetings.title, for: model).contains { $0.id == "meetings" } == expected)
+            #expect(SettingsCatalog.search(health.title, for: model).contains { $0.id == "health" } == expected)
+        }
+    }
+
     /// In demo mode no hub is paired: its connection, version and assistants are left out; Avatar and Devices & Pairing stay.
     @Test func demoModeLeavesOutTheRowsThatNeedAPairedHub() throws {
         let hub = FakeHub()
@@ -83,19 +107,24 @@ struct SettingsRegistryTests {
         #expect(SettingsCatalog.rows(.core, in: .device, model).map(\.id) == ["notifications", "about"])
     }
 
-    /// Settings home draws its rows only through the registry: between its marks `SettingsView` has no link of its own,
-    /// one registry list per scope, and no row but the demo's two buttons (actions, not settings).
+    /// Settings home uses the registry except for its declared Templates and More Settings sections. Between its marks,
+    /// only those two custom links are allowed; every other row comes from the registry, except the demo's two buttons.
     @Test func homeDrawsOnlyTheRegistrysRows() throws {
         let source = try String(contentsOf: Self.settingsView, encoding: .utf8)
         let start = try #require(source.range(of: "// MARK: Settings home's rows"))
         let end = try #require(source.range(of: "// MARK: End of Settings home's rows"))
         let home = String(source[start.upperBound..<end.lowerBound])
-        #expect(!home.contains("NavigationLink(") && !home.contains("SettingsListLink("),
-                "a row on Settings home outside SettingsCatalog: add it to the registry")
+        var registryRows = home
+        for custom in ["SettingsListLink(value: SettingsPage.templates)", "SettingsListLink(value: SettingsPage.advanced)"] {
+            #expect(home.components(separatedBy: custom).count - 1 == 1)
+            registryRows = registryRows.replacingOccurrences(of: custom, with: "")
+        }
+        #expect(!registryRows.contains("NavigationLink(") && !registryRows.contains("SettingsListLink("),
+                "a row on Settings home outside SettingsCatalog and its two declared custom sections")
         #expect(home.components(separatedBy: "SettingsCatalog.rows(.core,").count - 1 == 3)
         // `SettingsRow(` itself, not `ChecklistSettingsRow(` (the steps still to go, a prompt rather than a setting).
         let rows = try NSRegularExpression(pattern: #"(?<![A-Za-z])SettingsRow\("#)
-        #expect(rows.numberOfMatches(in: home, range: NSRange(home.startIndex..., in: home)) == 2,
-                "only the demo's Connect My Hub and Exit Demo Mode")
+        #expect(rows.numberOfMatches(in: home, range: NSRange(home.startIndex..., in: home)) == 4,
+                "the demo's two buttons, Templates and More Settings")
     }
 }

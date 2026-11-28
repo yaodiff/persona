@@ -96,3 +96,89 @@ test('malformed native bucket collections are rejected', () => {
     assert.throws(() => usageAccountFromQuota({ response }, sampledAt), TypeError)
   }
 })
+
+test('userStatus populates signed-in account name and subscription plan with agy 1.5.18 precedence', () => {
+  const quota = { response: { buckets: [{ bucketId: '3p-5h', window: '5h', remainingFraction: 0.75, resetTime: '2026-11-21T04:00:00Z' }] } }
+  const full = usageAccountFromQuota(quota, sampledAt, {
+    userStatus: {
+      name: 'Alice Example',
+      email: 'alice@example.com',
+      planStatus: { planInfo: { teamsTier: 'TEAMS_TIER_PRO', planName: 'Pro' } },
+      userTier: { id: 'g1-ultra-tier', name: 'Google AI Ultra' },
+    },
+  })
+  assert.equal(full.name, 'alice@example.com')
+  assert.equal(full.plan, 'Google AI Ultra')
+  assert.match(full.account_key, /^[0-9a-f]{64}$/)
+
+  const upperEmail = usageAccountFromQuota(quota, sampledAt, {
+    userStatus: { email: '  ALICE@Example.COM \n' },
+  })
+  assert.equal(upperEmail.account_key, full.account_key)
+
+  const displayNameFallback = usageAccountFromQuota(quota, sampledAt, {
+    userStatus: {
+      name: '  Bob\tExample\n',
+      email: '   ',
+      planStatus: { planInfo: { planName: 'Pro' } },
+    },
+  })
+  assert.equal(displayNameFallback.name, 'Bob Example')
+  assert.equal(displayNameFallback.plan, 'Pro')
+  assert.equal('account_key' in displayNameFallback, false)
+
+  const topPlanInfoFallback = usageAccountFromQuota(quota, sampledAt, {
+    userStatus: { email: 'carol@example.com' },
+    planInfo: { planName: 'Enterprise' },
+  })
+  assert.equal(topPlanInfoFallback.name, 'carol@example.com')
+  assert.equal(topPlanInfoFallback.plan, 'Enterprise')
+  assert.notEqual(topPlanInfoFallback.account_key, full.account_key)
+
+  const tierIdFallback = usageAccountFromQuota(quota, sampledAt, {
+    userStatus: { userTier: { id: 'g1-pro-tier' } },
+  })
+  assert.equal(tierIdFallback.name, 'Antigravity')
+  assert.equal(tierIdFallback.plan, 'g1-pro-tier')
+
+  const directUserStatus = usageAccountFromQuota(quota, sampledAt, {
+    email: 'dana@example.com',
+    userTier: { name: 'Google AI Pro' },
+  })
+  assert.equal(directUserStatus.name, 'dana@example.com')
+  assert.equal(directUserStatus.plan, 'Google AI Pro')
+})
+
+test('missing, malformed, or oversized userStatus values fall back and respect 128-byte UTF-8 bounds', () => {
+  const quota = { response: { buckets: [{ bucketId: '3p-5h', window: '5h', remainingFraction: 0.5 }] } }
+  for (const status of [undefined, null, '', 42, [], {}, { userStatus: null }, { userStatus: { email: 123, name: ' \n\t ', userTier: { name: '  ' } } }]) {
+    const account = usageAccountFromQuota(quota, sampledAt, status)
+    assert.equal(account.name, 'Antigravity')
+    assert.equal('plan' in account, false)
+  }
+
+  const longAccount = usageAccountFromQuota(quota, sampledAt, {
+    userStatus: {
+      email: `${'a'.repeat(140)}@example.com`,
+      userTier: { name: `${'🚀'.repeat(40)} Ultra` },
+    },
+  })
+  assert.ok(Buffer.byteLength(longAccount.name) <= 128)
+  assert.equal(Buffer.byteLength(longAccount.name), 128)
+  assert.ok(Buffer.byteLength(longAccount.plan) <= 128)
+  assert.equal(Buffer.byteLength(longAccount.plan), 128)
+  assert.equal(longAccount.plan, '🚀'.repeat(32))
+})
+
+test('epoch-zero resetTime on an untouched bucket omits resets_at instead of dropping the window', () => {
+  const account = usageAccountFromQuota({ response: { groups: [
+    { displayName: 'Claude and GPT models', buckets: [
+      { bucketId: '3p-5h', window: '5h', remainingFraction: 1, resetTime: '1970-01-01T00:00:00Z' },
+      { bucketId: '3p-weekly', window: 'weekly', remainingFraction: 1, resetTime: '1970-01-01T00:00:00Z' },
+    ] },
+  ] } }, sampledAt)
+  assert.deepEqual(account.windows, [
+    { label: '5h', window_minutes: 300, used_percent: 0, model: 'Claude and GPT models' },
+    { label: '7d', window_minutes: 10080, used_percent: 0, model: 'Claude and GPT models' },
+  ])
+})

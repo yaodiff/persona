@@ -30,7 +30,7 @@ vi.mock("../lib/api", async (orig) => ({
 }));
 
 const { getState } = await import("../lib/store");
-const { TodosView } = await import("./Todos");
+const { localParts, safeISO, TodosView, validDay } = await import("./Todos");
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -132,6 +132,54 @@ describe("the to-do page's date fields", () => {
   it("leave the saved day alone when what was typed is the same", async () => {
     const due = field("todo-plan-due");
     await type(due, "5", "2026-12-05");
+    await act(async () => due.blur());
+    await flush();
+    expect(patches()).toEqual([]);
+  });
+
+  it("ignores out-of-range and rollover dates on pure-date due, timed due, and reminder fields without crashing or sticking drafts", async () => {
+    // Pure validators reject out-of-range years, 2-digit year expansion, and V8 silent calendar rollover dates.
+    expect(validDay("2026-12-05")).toBe(true);
+    expect(validDay("275761-01-01")).toBe(false);
+    expect(validDay("2026-02-30")).toBe(false);
+    expect(validDay("0050-01-01")).toBe(false);
+    expect(safeISO("2026-12-05T21:30")).toBe(new Date("2026-12-05T21:30").toISOString());
+    expect(safeISO("275761-01-01T00:00")).toBeUndefined();
+    expect(safeISO("2026-02-30T10:00")).toBeUndefined();
+    expect(safeISO("2026-12-05T25:00")).toBeUndefined();
+    expect(localParts(Date.parse("+010000-01-01T00:00:00.000Z"))).toEqual({ day: "", time: "" });
+    expect(localParts(NaN)).toEqual({ day: "", time: "" });
+
+    // 1. Pure-date todo (no due_at / no due.time): 6-digit year typed in browser-like date field must not fire PATCH.
+    const pureDue = field("todo-plan-due");
+    await type(pureDue, "1", "275761-01-01");
+    await act(async () => pureDue.blur());
+    await flush();
+    expect(patches()).toEqual([]);
+    expect(pureDue.value).toBe("2026-12-05");
+
+    // 2. Reminder rejects out-of-range year and V8 silent rollover date without firing PATCH.
+    const remind = field("todo-plan-remind");
+    await type(remind, "1", "275761-01-01T00:00");
+    await act(async () => remind.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+    await flush();
+    expect(patches()).toEqual([]);
+    expect(remind.value).toBe("");
+
+    await type(remind, "0", "2026-02-30T10:00");
+    await act(async () => remind.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+    await flush();
+    expect(patches()).toEqual([]);
+    expect(remind.value).toBe("");
+
+    // 3. Timed due date rejects out-of-range year and out-of-range persisted remind_at renders cleanly as "" (never "T...").
+    const timedTodo = { ...todo, due_at: "2026-12-05T09:30:00.000Z", remind_at: "+010000-01-01T00:00:00.000Z" } as unknown as Todo;
+    seed({ todos: [timedTodo], todosLoaded: true });
+    await act(async () => root.render(<TodosView selectedId="plan" />));
+    await flush();
+    expect(field("todo-plan-remind").value).toBe("");
+    const due = field("todo-plan-due");
+    await type(due, "1", "275761-01-01");
     await act(async () => due.blur());
     await flush();
     expect(patches()).toEqual([]);

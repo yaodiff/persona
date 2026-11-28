@@ -21,6 +21,7 @@
   "load_diff": "Load diff",
   "load_rest": "Load the rest",
   "markdown_hint": "Markdown supported · ⌘↵ to send",
+  "navigate_hint": "{mod}-click or {mod}+B: go to definition · {alt}+F7: usages · {back}: back",
   "no_changes": "No changes",
   "no_comments": "No comments yet",
   "no_files": "No files",

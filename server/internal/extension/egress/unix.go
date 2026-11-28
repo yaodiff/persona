@@ -28,12 +28,19 @@ func (p *Proxy) Socketed(ext string) bool {
 func (p *Proxy) ListenRuntimeUnix(ext, path string) error { return p.listenUnix(ext, path, true) }
 
 func (p *Proxy) listenUnix(ext, path string, source bool) error {
+	p.unixMu.Lock()
+	defer p.unixMu.Unlock()
 	p.mu.Lock()
-	if old := p.unix[ext]; old != nil {
-		_ = old.Close()
-		delete(p.unix, ext)
+	if p.closed {
+		p.mu.Unlock()
+		return net.ErrClosed
 	}
+	old := p.unix[ext]
+	delete(p.unix, ext)
 	p.mu.Unlock()
+	if old != nil {
+		_ = old.Close()
+	}
 	_ = os.Remove(path)
 	ln, err := osproc.Listen("unix", path)
 	if err != nil {
@@ -41,6 +48,11 @@ func (p *Proxy) listenUnix(ext, path string, source bool) error {
 	}
 	_ = os.Chmod(path, 0o600)
 	p.mu.Lock()
+	if p.closed {
+		p.mu.Unlock()
+		_ = ln.Close()
+		return net.ErrClosed
+	}
 	if source {
 		ln = p.boundLocked(ln)
 	}
@@ -58,12 +70,19 @@ func (p *Proxy) listenUnix(ext, path string, source bool) error {
 // a sandboxed agent runtime's way to this machine's node (#5413), and to nothing else. Unregister closes it.
 // Each connection holds two descriptors and three goroutines here, so the socket is bounded (runtimeListener).
 func (p *Proxy) RelayUnix(ext, path, target string) error {
+	p.unixMu.Lock()
+	defer p.unixMu.Unlock()
 	p.mu.Lock()
-	if old := p.relay[ext]; old != nil {
-		_ = old.Close()
-		delete(p.relay, ext)
+	if p.closed {
+		p.mu.Unlock()
+		return net.ErrClosed
 	}
+	old := p.relay[ext]
+	delete(p.relay, ext)
 	p.mu.Unlock()
+	if old != nil {
+		_ = old.Close()
+	}
 	_ = os.Remove(path)
 	ln, err := osproc.Listen("unix", path)
 	if err != nil {
@@ -71,6 +90,11 @@ func (p *Proxy) RelayUnix(ext, path, target string) error {
 	}
 	_ = os.Chmod(path, 0o600)
 	p.mu.Lock()
+	if p.closed {
+		p.mu.Unlock()
+		_ = ln.Close()
+		return net.ErrClosed
+	}
 	if p.relay == nil {
 		p.relay = map[string]net.Listener{}
 	}

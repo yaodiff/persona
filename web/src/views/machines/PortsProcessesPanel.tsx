@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError, enc, errorText, isAbort } from "../../lib/api";
 import type { Machine } from "../../lib/types";
+import { MachineTool, type MachineToolProps } from "./MachinePicker";
 import { Button, cx, Dialog, Loading, toast } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { t } from "../../i18n";
@@ -135,19 +136,16 @@ function friendlyError(err: unknown): string {
   return errorText(err);
 }
 
-export function PortsProcessesPanel({ machines, initialMachineId }: { machines: Machine[]; initialMachineId?: string }) {
-  const onlineMachines = useMemo(() => machines.filter((m) => m.online), [machines]);
-  const [selectedId, setSelectedId] = useState<string>(() => {
-    if (initialMachineId && onlineMachines.some((m) => m.id === initialMachineId)) return initialMachineId;
-    return onlineMachines[0]?.id ?? "";
-  });
+export function PortsProcessesPanel(props: MachineToolProps) {
+  return (
+    <MachineTool {...props}>
+      {(machine) => <PortsProcesses machine={machine} />}
+    </MachineTool>
+  );
+}
 
-  // Keep selectedId pointing to an online machine when the roster updates.
-  const activeMachine = useMemo(() => {
-    const found = onlineMachines.find((m) => m.id === selectedId);
-    return found ?? onlineMachines[0] ?? null;
-  }, [onlineMachines, selectedId]);
-  const mid = activeMachine?.id ?? "";
+function PortsProcesses({ machine }: { machine?: Machine }) {
+  const mid = machine?.online ? machine.id : "";
 
   const [tab, setTab] = useState<PanelTab>("ports");
   const [protocol, setProtocol] = useState<ProtocolFilter>("");
@@ -269,7 +267,7 @@ export function PortsProcessesPanel({ machines, initialMachineId }: { machines: 
   const updatedAt = tab === "ports" ? portsData?.at : procsData?.at;
   const sigkillReady = confirmTarget?.signal !== "SIGKILL" || confirmPidInput.trim() === String(confirmTarget.pid);
 
-  if (onlineMachines.length === 0) {
+  if (!mid) {
     return (
       <section className="rounded-card bg-surface p-6 text-center shadow-card" data-testid="ports-processes-panel">
         <p className="text-sm font-medium text-ink">{t("machines-procs.title")}</p>
@@ -280,28 +278,13 @@ export function PortsProcessesPanel({ machines, initialMachineId }: { machines: 
 
   return (
     <section className="flex flex-col gap-3 rounded-card bg-surface p-4 shadow-card" data-testid="ports-processes-panel">
-      {/* Header row: title, machine picker, and on-demand refresh */}
+      {/* Report title and on-demand refresh */}
       <div className="flex flex-wrap items-center gap-2 border-b border-line pb-3">
         <div className="min-w-0 flex-1">
           <h2 className="text-sm font-semibold text-ink">{t("machines-procs.title")}</h2>
           <p className="mt-0.5 text-xs text-ink-3">{t("machines-procs.subtitle")}</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <label className="flex items-center gap-1.5 text-xs text-ink-3">
-            <span>{t("machines-procs.machine_label")}</span>
-            <select
-              aria-label={t("machines-procs.machine_label")}
-              value={mid}
-              onChange={(e) => setSelectedId(e.target.value)}
-              className="h-8 rounded-control bg-inset px-2 text-xs text-ink shadow-hairline outline-none"
-            >
-              {onlineMachines.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.name}
-                </option>
-              ))}
-            </select>
-          </label>
           <Button tone="secondary" icon="retry" busy={loading} onClick={() => void load(mid, tab, protocol, sort)}>
             {loading ? t("machines-procs.refreshing") : t("machines-procs.refresh")}
           </Button>

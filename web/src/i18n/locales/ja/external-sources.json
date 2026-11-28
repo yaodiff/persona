@@ -95,6 +95,14 @@
   "defaults_saved": "チャネルの既定値を保存しました",
   "flows": "接続先の作業",
   "no_flows": "接続済みの方向や To-do はありません。",
+  "no_active_flows": "進行中の接続先の作業はありません。",
+  "completed": "完了",
+  "show_more": "さらに {count} 件を表示",
+  "show_fewer": "表示を減らす",
+  "show_completed": "完了済みを表示（{count}）",
+  "hide_completed": "完了済みを隠す",
+  "flows_count_active": "進行中 {count} 件",
+  "flows_count_total_other": "{count} 件",
   "repository_link": "リポジトリのリンク",
   "source_details": "ソースの詳細"
 }

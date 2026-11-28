@@ -197,6 +197,19 @@ describe("the assistant's live text", () => {
     expect(tr.streaming).toBe("Writing the reply");
   });
 
+  it("keeps live progress streaming when a late same-seq wake notice updates an earlier thinking step", async () => {
+    items([said(6, "Full completed reply."), { id: "7@r#0", seq: 7, role: "assistant", kind: "thinking", text: "Checking background task." } as Item], 5);
+    await delta("Running follow-up step...");
+    expect(tr.streaming).toBe("Running follow-up step...");
+    // Retroactive in-place update delivers the #-1 wake notice at seq 7 without clearing live streaming.
+    items([
+      { id: "6@c#-1", seq: 7, role: "system", kind: "notice", wake: true, text: "Background task updated" } as Item,
+      { id: "7@r#0", seq: 7, role: "assistant", kind: "thinking", text: "Checking background task." } as Item,
+    ], 7);
+    expect(tr.streaming).toBe("Running follow-up step...");
+    expect(tr.items.map((i) => i.wake ? "wake" : i.kind)).toEqual(["text", "text", "wake", "thinking"]);
+  });
+
   it("keeps a preview with a late echo until the next input really arrives", async () => {
     items([said(6, "The prior turn has an answer.")], 5);
     await delta("The turn is answering.");
@@ -390,5 +403,17 @@ describe("itemCoalescer coherency across page commits, replays, reads, rewrites,
     act(() => listener!.delta!("Block three.\n\nBlock four.\n"));
     expect(tr.items.find((i) => i.id === "a9#0")?.text).toBe("Block three.");
     expect(tr.streaming).toBe("Block four.\n");
+  });
+
+  it("renders large item batches via transition without dropping items or delaying subsequent live streaming", async () => {
+    await mount();
+    const bulk: Item[] = Array.from({ length: 120 }, (_, i) => said(10 + i, `bulk-${i}`));
+    items(bulk, 5);
+    expect(tr.items.filter((i) => i.id.startsWith("a") && i.text?.startsWith("bulk-"))).toHaveLength(120);
+
+    // Subsequent single live item after the coalesce window still lands immediately.
+    await act(async () => void vi.advanceTimersByTime(100));
+    items([said(130, "live-after-bulk")], 129);
+    expect(tr.items.find((i) => i.id === "a130#0")?.text).toBe("live-after-bulk");
   });
 });

@@ -290,7 +290,8 @@ function PurposeEditor({ manager, id, sourceName, catalog, onClose, onSaved }: {
   // by the provider the draft runs on, not only by the fields the hub sent for the one in effect
   const effortAllowed = !!p && effortOffered(p, chosen, effectiveProvider, followsAgents,
     !!data?.providers.some((provider) => provider.chat_effort === true));
-  const listProvider = p?.kind !== "plugin" && chosen?.kind === "launcher" && supportsField(p!, "model") ? chosen.id : "";
+  const unavailableInboxProvider = p?.id === "inbox.agent" && chosen && p.provider_ids && !p.provider_ids.includes(chosen.id);
+  const listProvider = p?.kind !== "plugin" && chosen?.kind === "launcher" && !unavailableInboxProvider && supportsField(p!, "model") ? chosen.id : "";
   const { list: launcherList, reload: reloadList, hasPicker: picker } = useLauncherModels(listProvider, {
     manager,
     machine: p?.machine_id,
@@ -324,6 +325,7 @@ function PurposeEditor({ manager, id, sourceName, catalog, onClose, onSaved }: {
       : sameEffectiveProvider && !p?.override?.permission_mode ? p?.effective?.permission_mode : undefined;
   const codexRunLauncher = p?.kind === "api" && isModelRunLauncher(chosen) && chosenAgent === "codex";
   const allowed = codexRunLauncher ? ["off", ...CODEX_EFFORTS.map((level) => level.id)]
+    : chosenAgent === "traex" ? CODEX_EFFORTS.map((level) => level.id)
     : p?.kind === "api" ? ["off", ...ALL_EFFORTS] : ALL_EFFORTS;
   const launcherBinding = launcherBindingState(launcherList.list, draft, inherited, { allowed });
   const mainDefaultProvider = draft.provider || p?.effective?.provider;
@@ -346,7 +348,7 @@ function PurposeEditor({ manager, id, sourceName, catalog, onClose, onSaved }: {
   const configDirs = p ? configDirChoices(p, chosenAgent) : [];
   const previewForm = p ? executionForm({ ...p, effective: { ...p.effective, provider: runsOn, runtime: draft.runtime || p.effective?.runtime } }, data?.providers, machines) : undefined;
   const listMachine = machines.find((m) => m.id === launcherList.machine)?.name ?? launcherList.machine;
-  const canSave = !!(writable || candidateChange) && !conflict && !(candidateChange && candidateError);
+  const canSave = !!(writable || candidateChange) && !unavailableInboxProvider && !conflict && !(candidateChange && candidateError);
   // The binding reset saves immediately. Keep a pending candidate draft until Save or Cancel.
   const canReset = writable && !conflict && !candidateChange;
   const save = async (restore = false) => {
@@ -412,7 +414,7 @@ function PurposeEditor({ manager, id, sourceName, catalog, onClose, onSaved }: {
             <span className="mb-1 block text-[12px] font-medium text-ink-2">{t("settings-modelconfiguration.model_provider")}</span>
             <select className={inputClass} value={draft.provider} disabled={busy} onChange={(e) => setDraft((d) => chooseProvider(d, e.target.value))} aria-describedby={claudeCodeOnly(p) ? onlyClaudeID : undefined}>
               <option value="">{follow || t("settings-modelconfiguration.follow_default")}</option>
-              {draft.provider && !candidates.some((v) => v.id === draft.provider) && <option value={draft.provider}>{draft.provider.startsWith("legacy.") ? t("settings-modelconfiguration.not_configured") : t("settings-modelconfiguration.provider_unavailable", { id: providerName(draft.provider, data?.providers) ?? draft.provider })}</option>}
+              {draft.provider && !candidates.some((v) => v.id === draft.provider) && <option value={draft.provider} disabled={unavailableInboxProvider}>{draft.provider.startsWith("legacy.") ? t("settings-modelconfiguration.not_configured") : t("settings-modelconfiguration.provider_unavailable", { id: providerName(draft.provider, data?.providers) ?? draft.provider })}</option>}
               {candidates.map((v) => <option key={v.id} value={v.id}>{v.hidden ? t("settings-modelconfiguration.provider_hidden", { name: modelProviderTitle(v) }) : modelProviderTitle(v)}</option>)}
             </select>
           </label>
@@ -422,7 +424,7 @@ function PurposeEditor({ manager, id, sourceName, catalog, onClose, onSaved }: {
         {previewForm && <div data-execution-preview><Pill wrap>{previewForm.label} · {previewForm.backend}</Pill></div>}
         {directAPI && <DirectAPIEditor key={`${manager}:${chosen.id}:${draft.provider}`} manager={manager} purpose={p} provider={chosen} draft={draft}
           disabled={busy} effortAllowed={effortAllowed} onChange={(patch) => setDraft((value) => ({ ...value, ...patch }))} />}
-        {!directAPI && supportsField(p, "model") && <div className="block">
+        {!directAPI && !unavailableInboxProvider && supportsField(p, "model") && <div className="block">
           <span className="mb-1 block text-[12px] font-medium text-ink-2">{t("settings-modelconfiguration.specific_model")}</span>
           {p.kind === "plugin" ? <select aria-label={t("settings-modelconfiguration.specific_model")} className={inputClass} value={draft.model} disabled={busy || (!!modelsError && models.length === 0)} onChange={(e) => setDraft((d) => ({ ...d, model: e.target.value }))}>
             <option value="">{t("settings-modelconfiguration.follow_extension_default")}</option>
@@ -462,7 +464,7 @@ function PurposeEditor({ manager, id, sourceName, catalog, onClose, onSaved }: {
             </span>
           )}
         </div>}
-        {!directAPI && effortAllowed && (chatEffort ? <DirectEffortSelect state={chatEffort} value={draft.effort} inherited={inheritedEffort} disabled={busy}
+        {!directAPI && !unavailableInboxProvider && effortAllowed && (chatEffort ? <DirectEffortSelect state={chatEffort} value={draft.effort} inherited={inheritedEffort} disabled={busy}
           onChange={(effort) => setDraft((d) => ({ ...d, effort }))} /> : <LauncherEffortSelect
           {...launcherBinding} className={inputClass} disabled={busy || launcherList.status === "loading"}
           onChange={(effort) => setDraft((d) => ({ ...d, ...launcherBinding.pickEffort(effort) }))} />)}

@@ -43,5 +43,8 @@
   "later_handled": "已标记为处理过。",
   "pr_followup_host_not_connected": "未监控：{host} 未连接。",
   "pr_followup_unsupported_host": "未监控：Persona 暂不支持读取 {host} 上的评审或冲突状态。",
-  "pr_followup_unwatched": "未监控：代码托管未连接。"
+  "pr_followup_unwatched": "未监控：代码托管未连接。",
+  "supervision_deferred": "留到早晚报查看的跟进",
+  "supervision_triage_unavailable": "后台模型暂时不可用。",
+  "supervision_triage_invalid": "后台模型未给出有效判断。"
 }

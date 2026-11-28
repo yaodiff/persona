@@ -141,7 +141,7 @@ describe("New agent's Runs (#8916)", () => {
     await act(async () => {
       startCompare({
         mid: "computer", cwd: "/projects/demo", nameHint: "review", branch: "review", count: 2,
-        spec: { launcher: "claude", nameHint }, paseo: false, text: "Private team document", attachments: [],
+        spec: { launcher: "claude", nameHint }, intoWorkspace: false, text: "Private team document", attachments: [],
       });
     });
     for (let n = 1; n <= 2; n++) {

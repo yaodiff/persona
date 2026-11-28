@@ -18,8 +18,9 @@ import (
 // sample (<from>.pcm, contiguous, at most audioChunkMost samples each, never overlapping) and index.json, the spans
 // held as of the last sync. The chunks' names and sizes are the truth (a crash between a chunk and the index loses
 // nothing a sync acknowledged); the index is for people and tools. Knowledge-base backups never enter attachments/
-// (assistant backupKB) and search never does either (find.go), so no backup taken during a meeting outlives the
-// deletion below; nothing of it is in an upload's undo journal.
+// (kbhistory backupKB), operational backups exclude recordings/<id>/attachments/audio/ (operations/backup,
+// update/webdev.py), and search never enters attachments/ either (find.go), so no backup taken during a meeting
+// outlives the deletion below; nothing of it is in an upload's undo journal.
 //
 // The phone's socket writes through an AudioWriter, gap uploads through AudioPut; both store only what is not held.
 // The final pass reads it back (AudioRead). It goes once the minutes made from the final transcript are written (a
@@ -32,7 +33,6 @@ import (
 // Lock order: recMu → meetMu → liveMu → audioRec.mu → recFilesMu → metaMu.
 
 const (
-	audioDir       = "audio"
 	audioIndexFile = "index.json"
 	// audioMost is the first sample the hub keeps no audio from (MaxAudioSeconds).
 	audioMost = int64(MaxAudioSeconds) * AudioRate

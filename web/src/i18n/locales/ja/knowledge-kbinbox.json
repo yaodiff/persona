@@ -1,0 +1,5 @@
+{
+  "title": "受信トレイ",
+  "done_other": "対応済み {count} 件",
+  "open_item": "受信トレイで開く：{title}"
+}

@@ -2,7 +2,7 @@
   "label": "鼠标",
   "mode_program": "交给程序",
   "mode_local": "本地选择",
-  "hint_program": "Shift 选字、右键菜单",
-  "hint_local": "Shift 交给程序",
-  "tooltip": "接管时：交给程序，点击、拖动、右键都给电脑上的程序（没开鼠标的程序收不到），按住 Shift 在这里选字、右键出菜单；本地选择相反，按住 Shift 才交给程序"
+  "hint_program": "Shift：选择文本、右键菜单",
+  "hint_local": "Shift：交给程序",
+  "tooltip": "接管终端时：选择「交给程序」，点击、拖动和右键操作将发送给电脑上的程序（未启用鼠标支持的程序不会接收），按住 Shift 则可在本地选择文本或打开右键菜单。「本地选择」则相反，仅在按住 Shift 时将鼠标操作发送给程序。"
 }

@@ -339,6 +339,10 @@ review #14928, #15202 and #15299.
 | **P9 storage CHECKs** | a migration lint (new enum-like TEXT columns need a CHECK); one PR per old table, `ADD CONSTRAINT … NOT VALID` then `VALIDATE`; CHECK values compared with the schema's closed enums | medium: illegal values already stored fail `VALIDATE`; check data first; migrations named by UTC second | recording and Lark tables after their modules move (they may get module-owned tables) |
 | **P10 delete handwritten mirrors** | per domain, delete the parts of Apple `Models.swift`, Android `Models.kt`, web `types.ts` that have generated types; where a client ratchet reaches 0, the lint turns from a count into a hard block | low to medium | client module packages move with their modules |
 
+P8 part 2a introduces `buswire` and binds the seven `extwire` calls to their request and reply types. Source transfers
+forward the original bundle JSON so newer managers can exchange fields the hub does not know. The existing method names
+and empty-object acknowledgments stay on the wire.
+
 **Order**: P0 → P1 → (P2 and P3 in parallel) → P4 → P5 → P5a–d / P6 (merging with #11679) → P7 → P8 → P9 → P10. P0 to P3
 touch nothing slimming is moving and can start now; before each step from P5 on, check slimming's progress in #15397.
 

@@ -95,8 +95,14 @@ type Interaction struct {
 	Manager string `json:"manager,omitempty"`
 	// Private: a Just me turn raised it (docs/assistant/meeting-minutes.md "Just me"): its push and the Fleet Live
 	// Activity say nothing of what it asks, as a health conversation's card, and it never goes to Lark or a channel.
-	Private      bool      `json:"private,omitempty"`
-	ID           string    `json:"id"`
+	Private bool   `json:"private,omitempty"`
+	ID      string `json:"id"`
+	// MirrorOf identifies the authoritative interaction for a display-only copy in another assistant conversation.
+	// The hub normalizes its actions to that interaction; it is never a second pending operation or aggregate request.
+	MirrorOf string `json:"mirror_of,omitempty"`
+	// MirrorMain is manager-owned intent on the authoritative card: it has a main-conversation display copy.
+	// It lets reconnects preserve that copy after the preference changes. Nodes cannot declare either mirror field.
+	MirrorMain   bool      `json:"mirror_main,omitempty"`
 	MachineID    string    `json:"machine_id"`
 	SessionID    string    `json:"session_id"`
 	SessionTitle string    `json:"session_title,omitempty"`
@@ -121,8 +127,9 @@ type Interaction struct {
 	ToolInput         json.RawMessage `json:"tool_input,omitempty"`
 	// PlanThen is the permission mode recorded at a plan-mode start to use after approval; empty on legacy cards.
 	PlanThen string `json:"plan_then,omitempty"`
-	// EditableText is the outgoing body text a Claude Code Lark send/reply approval card may let the user edit before
-	// allowing. It is set only by that command gate; runtimes and other cards cannot declare it.
+	// EditableText is the outgoing body text an eligible Lark send/reply approval card (Claude Code Bash PreToolUse,
+	// a local assistant_environment runtime command gate, or the node's MCP command-gate tool) may let the user edit
+	// before allowing. Only those command gates set it; untrusted runtimes and other cards cannot declare it.
 	EditableText string `json:"editable_text,omitempty"`
 	// OutwardWrite marks a permission card raised by a trusted connector gate for an outward write acting as
 	// the owner (node/larkgate.go). Runtimes cannot declare it (node/runtimes_events.go clears it), and the
@@ -142,10 +149,20 @@ type Interaction struct {
 	// CanClarify advertises an assistant-owned prepared approval whose owner may ask a question without resolving it.
 	// Only the authoritative creation path sets it; older clients ignore it and keep their existing Allow/Deny behavior.
 	CanClarify bool `json:"can_clarify,omitempty"`
+	// NoHandBack marks a card that has no interactive computer terminal or UI to hand back to (manager-owned approvals,
+	// headless assistant conversations and command gates, and headless ACP companions such as Antigravity (agy),
+	// Grok (grok / grok-chat), and the builtin OpenCode companion (opencode, distinct from the opencode-<pid> TUI
+	// plugin) where dismiss cancels or denies instead of handing back). Only the manager sets it; absent or false
+	// preserves the existing "Leave to computer" action for interactive terminal cards and older hubs.
+	NoHandBack bool `json:"no_hand_back,omitempty"`
 	// Detachable is a node command gate's request to release its initial hook while the owner decides. The manager
 	// honors it only for a permission in one of its assistant conversations with complete input and ExecutionCwd;
 	// a later Allow creates a one-time grant for the exact original call rather than executing it in another process.
 	Detachable bool `json:"detachable,omitempty"`
+	// WriteOperation is the node command gate's classification for display routing:
+	// true only for a known write, never for a GET/HEAD or an unknown command. It
+	// does not authorize execution; the ordinary approval path remains the gate.
+	WriteOperation bool `json:"write_operation,omitempty"`
 	// ExecutionCwd is where this command actually runs, which can differ from the conversation's display directory
 	// (Cwd). The node sets it for a detachable command; the manager requires it and includes it in the exact-call grant.
 	ExecutionCwd string `json:"execution_cwd,omitempty"`

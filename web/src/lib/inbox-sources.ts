@@ -3,10 +3,9 @@
 // account, Feishu set up (feature lark), or a connector that brings items in and is signed in.
 import { useEffect, useState } from "react";
 import { t } from "../i18n";
-import { hubServes, moduleFeature } from "../core/module-host";
 import { api } from "./api";
 import { isEnabled, isSignedIn, listConnectors, otherConnectors, signsInHere, storesData, type HubConnector } from "./connectors";
-import { loadMailAccounts } from "./mail";
+import { loadMailAccounts, useMailboxEnabled } from "./mail";
 import { ownedSub } from "./manager-choice";
 import { larkOn, useStore } from "./store";
 
@@ -18,8 +17,7 @@ export interface SourceOffer {
 }
 
 export interface SourcesInput {
-  /** Mail accounts: undefined on a hub without the mail module (its flag module.mail, the hub flag rule), which has no
-   *  mail to offer. */
+  /** Mail accounts, or undefined when live mail is unavailable. */
   mail?: number;
   /** Feishu: undefined on a hub without it (feature lark), else whether it is set up. */
   lark?: boolean;
@@ -51,7 +49,7 @@ export function inboxSources(input: SourcesInput): { connected: boolean; offers:
  *  keeps its plain "All caught up"). */
 export function useInboxSources(on: boolean): { connected: boolean; offers: SourceOffer[] } | null {
   const lark = useStore(larkOn);
-  const mailOn = useStore((s) => hubServes(moduleFeature("mail"), s));
+  const mailOn = useMailboxEnabled();
   const hasConnectors = useStore((s) => s.features.includes("connectors"));
   const [sources, setSources] = useState<{ connected: boolean; offers: SourceOffer[] } | null>(null);
   useEffect(() => {

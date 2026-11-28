@@ -1,4 +1,8 @@
 {
+  "module_mail": "Mail",
+  "module_mail_hint": "Read and send email from your connected accounts.",
+  "module_office": "Office previews",
+  "module_office_hint": "Preview documents, spreadsheets and presentations.",
   "area_features": "Features",
   "features_group": "Optional features",
   "features_hint": "Turn off a feature you don't use. It disappears from the sidebar and its pages, and nothing of it is loaded in this browser. Your data stays where it is.",

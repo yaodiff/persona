@@ -123,7 +123,9 @@ open class HubService : Service() {
                     val delivery = NotificationDelivery(interactions, sessions, ::suppressed,
                         notifier::postInteraction, notifier::postNotify, notifier::retract,
                         notificationPreferences::refreshPreferences, notifier::deliveredRequests,
-                        showing = notifier::showingRequests)
+                        showing = notifier::showingRequests,
+                        retractOccurrence = { id, occurrence -> notifier.retract(id, occurrence) },
+                        notifiedOccurrences = notifier::deliveredOccurrences)
                     Notify.events.notificationEvents().collect { event ->
                         try {
                             // Bound refresh work without terminating observation on a transient HTTP failure.

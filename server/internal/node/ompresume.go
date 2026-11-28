@@ -13,10 +13,17 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
 const ompResumeUnknownNote = "这个 omp 会话找不到会话文件，请在电脑上恢复，这次没有发送。"
+
+// orcaResumeRefusal refuses a resume Orca does not carry out from the phone: an omp session's. Nothing was started or
+// sent; the hub words it in the request's language (apierr, rpc-errors.orca_resume).
+func orcaResumeRefusal(ctx context.Context) error {
+	return refusal("orca_resume", i18n.T(i18n.From(ctx), "rpc-errors.orca_resume"), nil)
+}
 
 // ompKnownFile is the session file of id the node knows about: from the disk scan, else what herdr reported.
 func (n *Node) ompKnownFile(id string) string {
@@ -110,11 +117,15 @@ func ompResumeParams(ctx context.Context, id, prompt string) json.RawMessage {
 }
 
 // resumeOmp resumes a stopped omp in herdr and sends the phone's message there. Without a usable session file nothing
-// is started and nothing is sent.
+// is started and nothing is sent, nor with Orca the default engine, where resumeInTerminal would start it: an omp is
+// not resumed in Orca (#13597).
 func (n *Node) resumeOmp(ctx context.Context, id string, params json.RawMessage) (any, error) {
 	s, ok := n.ompResumeSession(id)
 	if !ok {
 		return nil, refusal("omp_resume_unknown", ompResumeUnknownNote, nil)
+	}
+	if n.defaultKind() == proto.EngineOrca {
+		return nil, orcaResumeRefusal(ctx)
 	}
 	return n.resumeInTerminal(ctx, s.Cwd, []string{ompAgent, "--resume", s.Path}, id, params,
 		func(owner *runtimeConn) bool { return owner != nil })

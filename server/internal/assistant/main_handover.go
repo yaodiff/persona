@@ -47,6 +47,51 @@ func (s *Service) handOverMainTasks(ctx context.Context, from, to string) int {
 	return moved
 }
 
+type alwaysCopyStore interface {
+	CopyAlways(ctx context.Context, fromSession, toSession string) (int, error)
+}
+
+// isInboxSession reports whether session is recorded as an Inbox-origin conversation on any machine
+// (fail closed when the origin book cannot be loaded).
+func (s *Service) isInboxSession(ctx context.Context, session string) bool {
+	b := &s.origins
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !s.originsLocked(ctx) {
+		return true
+	}
+	o := b.m[session]
+	return o != nil && o.Origin == OriginInbox
+}
+
+// handOverMainAlways copies "Always allow in this conversation" grants from a replaced main conversation to
+// the new main conversation once at replacement time (#16158). It never copies from a leader or Inbox-origin
+// conversation, and is intentionally not called from the periodic handOverFormerMainTasks sweep so revocations
+// made on the new main conversation always stick.
+func (s *Service) handOverMainAlways(ctx context.Context, from, to string) int {
+	if from == "" || to == "" || from == to || s.isLeaderRef(from) || s.isLeader(ctx, from) {
+		return 0
+	}
+	if s.isInboxSession(ctx, from) {
+		return 0
+	}
+	st, ok := s.store().(alwaysCopyStore)
+	if !ok {
+		return 0
+	}
+	cctx, cancel := context.WithTimeout(ctx, historyTimeout)
+	defer cancel()
+	copied, err := st.CopyAlways(cctx, from, to)
+	if err != nil {
+		s.logf("assistant: carry always grants from %s to %s: %v", short(from), short(to), err)
+		return 0
+	}
+	if copied > 0 {
+		s.logf("assistant: %d always-allow grant(s) of the replaced main conversation %s carried to %s", copied, short(from), short(to))
+	}
+	return copied
+}
+
 // mainTargetMachine resolves the machine hosting replacement main conversation to: it trusts an explicit
 // MainMachineID binding first, otherwise locates to among connected devices before falling back to mainRouteMachine.
 func (s *Service) mainTargetMachine(ctx context.Context, cfg Settings, to string) string {
@@ -195,9 +240,7 @@ func (s *Service) handOverTask(ctx context.Context, t Todo, from, to string, hel
 				// A handover can keep the same external-PR review key. Its previous supervisor's
 				// early admission and delivery fingerprint do not acknowledge the new supervisor.
 				s.supervise.mu.Lock()
-				if s.supervise.sent[g.id()] == g.Key {
-					delete(s.supervise.sent, g.id())
-				}
+				s.supervise.forgetToldLocked(g)
 				s.supervise.mu.Unlock()
 				s.signal(g)
 			}

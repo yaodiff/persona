@@ -1,0 +1,32 @@
+{
+  "title": "demo",
+  "layout": "split",
+  "sections": [
+    {
+      "pane": "side",
+      "items": [
+        {
+          "type": "file_tree",
+          "key": "tree",
+          "selected": "main.go",
+          "entries": [{"path": "util", "kind": "dir"}, {"path": "go.mod"}, {"path": "main.go"}],
+          "action": {"id": "open"},
+          "expand": {"id": "expand"}
+        }
+      ]
+    },
+    {
+      "items": [
+        {
+          "type": "code",
+          "key": "code",
+          "path": "main.go",
+          "start_line": 1,
+          "highlight": {"start": 7, "end": 7},
+          "text": "package main\n\nimport \"example.com/demo/util\"\nimport \"fmt\"\n\nfunc main() {\n\tfmt.Println(util.Greet(\"you\"))\n}",
+          "navigate": {"id": "nav"}
+        }
+      ]
+    }
+  ]
+}

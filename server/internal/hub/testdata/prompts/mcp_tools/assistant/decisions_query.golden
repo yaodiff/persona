@@ -1,6 +1,6 @@
 {
   "name": "decisions_query",
-  "description": "memory[] page 1: tag words match text/subjects/facet/categories (AND, ignore case). by/trust/non-active status: memory_omitted=ledger_filters; retry tag alone. scope=ledger-only",
+  "description": "memory[] full scan: tag ranks all-term matches first, backfilling partial/rank hits. by/trust/non-active: memory_omitted=ledger_filters; retry tag alone. scope=ledger-only",
   "input_schema": {
     "type": "object",
     "properties": {

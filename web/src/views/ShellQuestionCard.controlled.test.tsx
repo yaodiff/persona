@@ -68,6 +68,10 @@ const makeArgs = (patch: Record<string, string> = {}): Record<string, string> =>
   ...patch,
 });
 
+// Wall-clock fallback tests omit deps.now and exercise real useNow()/Date.now(), so kept_until must stay relative to the live clock.
+const makeLiveArgs = (patch: Record<string, string> = {}): Record<string, string> =>
+  makeArgs({ kept_until: new Date(Date.now() + 5 * 60_000).toISOString(), ...patch });
+
 const makeQuestion = (patch: Record<string, string> = {}): ShellQuestionModel => shellQuestion(makeArgs(patch))!;
 
 const makeTodo = (patch: Partial<Todo> = {}): Todo => ({
@@ -450,7 +454,7 @@ describe("ShellQuestionCard controlled deps, view separation, and race guards", 
 
   it("still calls resendRefused when continueStart clears shell_waiting and unmounts the card, while fencing target switches and hide-then-reappear", async () => {
     // 1. Default path mirroring ChatView: continueStart clears start_error_code/args synchronously before resolving, unmounting ShellQuestion.
-    let liveSession: Session = makeSession();
+    let liveSession: Session = makeSession({ start_error_args: makeLiveArgs() });
     const storeState = {
       features: [START_CONTINUE_FEATURE],
       sessions: { mac: [liveSession] },
@@ -626,15 +630,16 @@ describe("ShellQuestionCard controlled deps, view separation, and race guards", 
   });
 
   it("preserves default store, continueStart, resendRefused, answerTaskStart, and errorText fallbacks when deps are omitted", async () => {
+    const liveArgs = makeLiveArgs();
     const storeState = {
       features: [START_CONTINUE_FEATURE, TODO_START_ANSWER_FEATURE],
-      sessions: { mac: [makeSession()] },
+      sessions: { mac: [makeSession({ start_error_args: liveArgs })] },
     };
     mocks.useStore.mockImplementation((sel: (s: typeof storeState) => unknown) => sel(storeState));
     mocks.continueStart.mockRejectedValueOnce(new Error("boom")).mockResolvedValueOnce(undefined);
     mocks.answerTaskStart.mockResolvedValueOnce(undefined);
 
-    await act(async () => root.render(<ShellQuestion launch={makeLaunch()} />));
+    await act(async () => root.render(<ShellQuestion launch={makeLaunch({ shellWaiting: { code: SHELL_WAITING, ...liveArgs } })} />));
     expect(mocks.useStore).toHaveBeenCalled();
     await act(async () => choiceBtn("y")!.click());
     await flush();
@@ -647,7 +652,7 @@ describe("ShellQuestionCard controlled deps, view separation, and race guards", 
     expect(mocks.resendRefused).toHaveBeenCalledWith("mac", "sess-a");
 
     const todo = makeTodo();
-    await act(async () => root.render(<ShellQuestion todo={todo} task={makeTask()} />));
+    await act(async () => root.render(<ShellQuestion todo={todo} task={makeTask({ error_args: liveArgs })} />));
     await act(async () => choiceBtn("y")!.click());
     await flush();
     expect(mocks.answerTaskStart).toHaveBeenCalledWith(todo, "y");

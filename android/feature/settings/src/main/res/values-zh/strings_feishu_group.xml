@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Settings › Lark bot › Group access (#16848); words shared with the web (settings-feishubot group_access_*). -->
+<resources>
+    <string name="settings_feishu_group_title">群聊访问</string>
+    <string name="settings_feishu_group_footer">除你之外，谁可以在群里 @ 机器人，以及他们可以使用什么。被屏蔽的人和群在任何模式下都会被拒绝。</string>
+    <string name="settings_feishu_group_mode">谁可以在群里向机器人提问</string>
+    <string name="settings_feishu_group_mode_owner_only">仅我</string>
+    <string name="settings_feishu_group_mode_allowlist">我允许的人</string>
+    <string name="settings_feishu_group_mode_everyone">已允许群中的所有人</string>
+    <string name="settings_feishu_group_detail_owner_only">只有你可以在群里 @ 机器人，其他人的消息会被忽略。</string>
+    <string name="settings_feishu_group_detail_allowlist">只有你添加的人可以 @ 机器人，并且只能在你允许的群里。</string>
+    <string name="settings_feishu_group_detail_everyone">你允许的群里的任何人都可以 @ 机器人。</string>
+    <string name="settings_feishu_group_guest_caution">访客会获得一个独立的助手，看不到你的数据、任务或电脑。它只能使用你在下方开启的工具。</string>
+    <string name="settings_feishu_group_per_hour">每个群每小时的提问数</string>
+    <string name="settings_feishu_group_per_hour_hint">一个群里所有人每小时最多能向机器人提出的问题数。</string>
+    <string name="settings_feishu_group_groups">允许的群</string>
+    <string name="settings_feishu_group_groups_footer">机器人只在这些群里回答访客。把话题群加到这里即可允许。</string>
+    <string name="settings_feishu_group_people">允许的人</string>
+    <string name="settings_feishu_group_people_footer">只有这些人可以在允许的群里 @ 机器人。</string>
+    <string name="settings_feishu_group_none_groups">还没有群</string>
+    <string name="settings_feishu_group_none_people">还没有人</string>
+    <string name="settings_feishu_group_requests">最近的请求</string>
+    <string name="settings_feishu_group_requests_footer">在你未允许的地方 @ 机器人的人。可以在这里允许或屏蔽他们。</string>
+    <string name="settings_feishu_group_blocked">已屏蔽</string>
+    <string name="settings_feishu_group_blocked_footer">屏蔽在任何模式下都优先生效。</string>
+    <string name="settings_feishu_group_blocked_people">人</string>
+    <string name="settings_feishu_group_blocked_groups">群</string>
+    <string name="settings_feishu_group_tools">访客可用的工具</string>
+    <string name="settings_feishu_group_tools_footer">访客回答问题时可以使用的只读连接器工具。会修改任何内容的工具从不提供。</string>
+    <string name="settings_feishu_group_no_tools">尚未安装只读连接器工具</string>
+    <string name="settings_feishu_group_tool_label">%1$s · %2$s</string>
+    <string name="settings_feishu_group_group_id">群 ID</string>
+    <string name="settings_feishu_group_person_id">Open ID</string>
+    <string name="settings_feishu_group_name">名称（可选）</string>
+    <string name="settings_feishu_group_add">添加</string>
+    <string name="settings_feishu_group_add_group">添加群</string>
+    <string name="settings_feishu_group_add_person">添加人员</string>
+    <string name="settings_feishu_group_remove">移除 %1$s</string>
+    <string name="settings_feishu_group_request_actions">%1$s 的操作</string>
+    <string name="settings_feishu_group_allow">允许</string>
+    <string name="settings_feishu_group_block">屏蔽</string>
+    <string name="settings_feishu_group_load_failed">无法读取群聊访问设置：%1$s</string>
+    <string name="settings_feishu_group_save_failed">无法保存群聊访问设置：%1$s</string>
+    <string name="settings_feishu_group_conflict">群聊访问设置已在别处修改，现已显示最新内容。如仍需要，请重新操作。</string>
+    <string name="settings_feishu_group_id_invalid">请使用 1–100 个字符，且不含空格。</string>
+    <string name="settings_feishu_group_id_taken">已在这个列表里。</string>
+    <string name="settings_feishu_group_list_full">这个列表已满。</string>
+</resources>

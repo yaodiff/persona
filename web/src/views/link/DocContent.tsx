@@ -3,7 +3,7 @@
 // say so and point at Feishu). Content colors are left out: the page only uses its own tokens.
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "../../ui/remark-gfm-parse";
-import { bytes } from "../../lib/format";
+import { bytes, safeWebURL } from "../../lib/format";
 import { clickLink, linkHref, prefetchLink } from "../../lib/links";
 import { useLinkManager } from "../../lib/manager-choice";
 import { linkify, markdownComponents, markdownUrl } from "../../ui/Markdown";
@@ -208,7 +208,7 @@ function Block({ node, number }: { node: DocNode; number?: number }) {
       const kind = attr(node, "kind") ?? "";
       const label = ({ sheet: t("link-doccontent.sheet"), bitable: t("link-doccontent.bitable"), base: t("link-doccontent.bitable"), mindnote: t("link-doccontent.mindnote"), chat: t("link-doccontent.chat"), calendarEvent: t("link-doccontent.event") } as Record<string, string>)[kind] ?? t("link-doccontent.embed");
       const href = attr(node, "href");
-      return <LinkCard href={href?.startsWith("http") ? href : undefined} title={attr(node, "title") || label} subtitle={label} />;
+      return <LinkCard href={safeWebURL(href)} title={attr(node, "title") || label} subtitle={label} />;
     }
     case "file": {
       const token = attr(node, "token");
@@ -311,15 +311,16 @@ function Table({ node }: { node: DocNode }) {
 function Image({ node }: { node: DocNode }) {
   const src = attr(node, "src");
   const manager = useLinkManager();
-  if (!src) return <Placeholder text={t("link-doccontent.image_missing")} />;
+  const resolved = src ? mediaURL(src, manager) : "";
+  if (!resolved) return <Placeholder text={t("link-doccontent.image_missing")} />;
   const w = num(node, "width") ?? num(node, "displayWidth");
   const h = num(node, "height");
   const caption = attr(node, "caption");
   return (
     <figure className="my-3">
-      <a href={mediaURL(src, manager)} target="_blank" rel="noreferrer noopener">
+      <a href={resolved} target="_blank" rel="noreferrer noopener">
         <img
-          src={mediaURL(src, manager)}
+          src={resolved}
           alt={attr(node, "alt") || caption || t("link-doccontent.image")}
           loading="lazy"
           width={w}
@@ -347,15 +348,16 @@ function LinkCard({ href, title, subtitle, icon = "link", download }: { href?: s
     </>
   );
   const cls = "my-3 flex items-center gap-2.5 rounded-card bg-surface px-3 py-2 no-underline! shadow-card";
-  if (!href) return <div className={cls}>{body}</div>;
+  const safeHref = href && (download || !href.trim().startsWith("/")) ? linkHref(href) : undefined;
+  if (!safeHref) return <div className={cls}>{body}</div>;
   return (
     <a
-      href={linkHref(href)}
+      href={safeHref}
       target="_blank"
       rel="noreferrer noopener"
       download={download || undefined}
-      onClick={(e) => (download ? undefined : clickLink(e, href, title, manager))}
-      onPointerEnter={() => prefetchLink(href, manager)}
+      onClick={(e) => (download ? undefined : clickLink(e, href!, title, manager))}
+      onPointerEnter={() => prefetchLink(href!, manager)}
       className={`${cls} transition-colors hover:bg-hover`}
     >
       {body}
@@ -364,12 +366,13 @@ function LinkCard({ href, title, subtitle, icon = "link", download }: { href?: s
 }
 
 function Placeholder({ text, href }: { text: string; href?: string }) {
+  const safeHref = safeWebURL(href);
   return (
     <div className="my-3 flex items-center gap-2 rounded-card border border-dashed border-line-strong px-3 py-2 text-[12.5px] text-ink-3">
       <Icon name="info" size={13} />
       <span className="min-w-0 flex-1">{text}</span>
-      {href?.startsWith("http") && (
-        <a href={href} target="_blank" rel="noreferrer noopener" className="shrink-0 whitespace-nowrap">
+      {safeHref && (
+        <a href={safeHref} target="_blank" rel="noreferrer noopener" className="shrink-0 whitespace-nowrap">
           {t("link-doccontent.open")}
         </a>
       )}
@@ -405,9 +408,10 @@ function Run({ node }: { node: DocNode }) {
         return <span className="text-orange">⏰ {Number.isFinite(at) ? formatDate(at, { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }) : label}</span>;
       }
       const href = attr(node, "href");
+      const safeHref = href && !href.trim().startsWith("/") ? linkHref(href) : undefined;
       const text = `${kind === "doc" ? "📄 " : ""}${label}`;
-      return href ? (
-        <a href={linkHref(href)} target="_blank" rel="noreferrer noopener" onClick={(e) => clickLink(e, href, label, manager)} onPointerEnter={() => prefetchLink(href, manager)}>
+      return safeHref ? (
+        <a href={safeHref} target="_blank" rel="noreferrer noopener" onClick={(e) => clickLink(e, href!, label, manager)} onPointerEnter={() => prefetchLink(href!, manager)}>
           {text}
         </a>
       ) : (
@@ -449,10 +453,11 @@ function Marked({ node }: { node: DocNode }) {
         break;
     }
   }
-  if (!href) return <>{out}</>;
-  const to = href;
+  const safeHref = href && !href.trim().startsWith("/") ? linkHref(href) : undefined;
+  if (!safeHref) return <>{out}</>;
+  const to = href!;
   return (
-    <a href={linkHref(to)} target="_blank" rel="noreferrer noopener" onClick={(e) => clickLink(e, to, node.text, manager)} onPointerEnter={() => prefetchLink(to, manager)}>
+    <a href={safeHref} target="_blank" rel="noreferrer noopener" onClick={(e) => clickLink(e, to, node.text, manager)} onPointerEnter={() => prefetchLink(to, manager)}>
       {out}
     </a>
   );

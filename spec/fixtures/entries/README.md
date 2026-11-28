@@ -43,6 +43,9 @@ same input the same way. Rows and wording are each platform's own; the split and
   reviewing, in its order, instead of the `needs_you` or `running` rows above: every task waiting for its supervisor's
   review with nothing of it running or asking, however long it has waited. The web checks `needs_you`, `running` and
   `shelved` without them, and that every `supervisor_review` row is one of them; Android and Apple ignore the field.
+- `expected.web_verify` (optional, absent means none; web only, #15638): the rows the web lists under its calm To
+  verify entry instead of red Needs you: completed tasks awaiting optional owner verification (`user_check`) with no
+  urgent owner decision or interaction card. Android and Apple ignore the field.
 - Not covered here: cards of the conversation's own session (they are always Needs you rows and are added by the
   screen), message cards the user put off (`later`), Android's inbox drafts, and subtasks: Android leaves an Agent
   another one started out of the Agent rows while the Agent above it is shown (#4769, `TaskDockTest`); iOS and the web

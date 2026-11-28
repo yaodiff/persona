@@ -56,7 +56,7 @@ func (p renamedAcme) RepositoryParse(ctx context.Context, provider, remote strin
 // A repository saved before its extension was renamed stays one repository: the catalog does not save it twice, its
 // details stay editable under the provider's current id, and to-do links land on it.
 func TestRepositoriesSavedBeforeAnExtensionRename(t *testing.T) {
-	database, err := db.Open(t.Context(), newDatabase(t), db.ManagerSet)
+	database, err := db.Open(t.Context(), newMigratedDatabase(t, db.ManagerSet), db.ManagerSet)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +110,8 @@ func TestRepositoriesSavedBeforeAnExtensionRename(t *testing.T) {
 	if _, err := s.toolTodoRepositoryLinksAdd(t.Context(), "", "", "todo_repository_links_add", args); err != nil {
 		t.Fatal(err)
 	}
-	s.advanceTaskReply(t.Context(), todoNow(s, todo.ID), "", "", "Opened https://code.acme.test/team/app/reviews/13")
+	const reportedPR = "https://code.acme.test/team/app/reviews/13"
+	repositoryReporter(t, s, todo.ID)("<closeout status=\"not_done\" merged=\"no\" deployed=\"no\">\nartifact: pr "+reportedPR+"\n</closeout>", reportedPR)
 	s.reportedLinks.runs.Wait()
 	set := todoRepositoriesOf(t, s, todo.ID)
 	if len(set.Repositories) != 1 || set.Repositories[0].RepoID != repo.ID || set.Repositories[0].CatalogState != "current" ||
@@ -135,7 +136,7 @@ func TestRepositoriesSavedBeforeAnExtensionRename(t *testing.T) {
 
 // A repository a to-do first gets through a provider's link is cloned from where the provider said.
 func TestProviderLinkedRowsKeepTheProvidersCloneAddress(t *testing.T) {
-	database, err := db.Open(t.Context(), newDatabase(t), db.ManagerSet)
+	database, err := db.Open(t.Context(), newMigratedDatabase(t, db.ManagerSet), db.ManagerSet)
 	if err != nil {
 		t.Fatal(err)
 	}

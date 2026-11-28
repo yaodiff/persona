@@ -1,0 +1,12 @@
+<resources>
+    <string name="chat_to_decide">判断待ち</string>
+    <string name="chat_to_decide_arrived">判断待ち +%1$d</string>
+    <string name="chat_to_decide_view_source">チャットで表示</string>
+    <string name="chat_to_decide_skip">スキップ</string>
+    <string name="chat_to_decide_skip_terminal">この質問にはチャットで回答してください。</string>
+    <string name="chat_to_decide_skip_permission">ツールの実行を止めるには拒否を選んでください。</string>
+    <string name="chat_to_decide_skip_plan">プランを戻すには差し戻しを選んでください。</string>
+    <string name="chat_to_decide_previous">前のカード</string>
+    <string name="chat_to_decide_next">次のカード</string>
+    <string name="chat_to_decide_position">%1$d / %2$d</string>
+</resources>

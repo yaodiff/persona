@@ -128,13 +128,13 @@ describe("the answered line", () => {
   it("says how many and that all were allowed", () => {
     render({ answered: four() });
     expect(summary()?.textContent).toContain("已回答 4 项");
-    expect(summary()?.textContent).toContain("都允许");
+    expect(summary()?.textContent).toContain("全部允许");
   });
 
   it("says a denied one", () => {
     render({ answered: [...four().slice(0, 3), ans("d4", false, T0)] });
     expect(summary()?.textContent).toContain("项拒绝");
-    expect(summary()?.textContent).not.toContain("都允许");
+    expect(summary()?.textContent).not.toContain("全部允许");
   });
 
   it("goes 3 s after the latest answer, and comes back with a newer one", () => {
@@ -187,7 +187,7 @@ describe("narrow", () => {
 
   it("folds into one line while the keyboard is up", () => {
     render({ interactions: ids("a", "b", "c"), narrow: true, keyboard: true });
-    expect(host.textContent).toContain("3 件待处理");
+    expect(host.textContent).toContain("3 项待处理");
     expect(chip()).toBeNull();
   });
 });

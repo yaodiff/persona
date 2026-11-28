@@ -5,8 +5,8 @@
   "remove": "移除过滤「{tag}」",
   "reset": "恢复全部在用标签",
   "done": "完成",
-  "empty": "没有标签过滤项",
+  "empty": "暂无标签过滤项",
   "too_long": "标签最多 {max} 个字符。",
   "count_limit": "最多保留 {max} 个标签过滤项。",
-  "save_failed": "没能保存标签过滤：{error}"
+  "save_failed": "无法保存标签过滤设置：{error}"
 }

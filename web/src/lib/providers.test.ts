@@ -77,23 +77,23 @@ describe("formProblems", () => {
     expect(formProblems(ready(), true)).toEqual({ connect: "", reach: "", models: "", advanced: "" });
   });
   it("checks the connection step", () => {
-    expect(formProblems(ready({ name: "" }), true).connect).toBe("要填启动 ID");
-    expect(formProblems(ready({ name: "1bad" }), true).connect).toMatch(/启动 ID 只能/);
+    expect(formProblems(ready({ name: "" }), true).connect).toBe("请输入启动 ID");
+    expect(formProblems(ready({ name: "1bad" }), true).connect).toMatch(/启动 ID 仅支持/);
     expect(formProblems(ready({ base_url: "ftp://x" }), true).connect).toMatch(/http/);
     expect(formProblems(ready({ base_url: "https://u:p@x.example.com" }), true).connect).toMatch(/凭据/);
-    expect(formProblems(ready({ api_key: "" }), true).connect).toBe("要填 API Key");
+    expect(formProblems(ready({ api_key: "" }), true).connect).toBe("请输入 API Key");
     // editing one that has a key: left empty keeps it
     expect(formProblems(ready({ api_key: "" }), false, true).connect).toBe("");
   });
   it("needs no startup ID where the hub makes one up, but checks a typed one and the display name (#5029)", () => {
     const auto = (over: Partial<ProviderForm>) => formProblems(ready(over), true, false, true);
     expect(auto({ name: "", display_name: "我的中转 站" })).toEqual({ connect: "", reach: "", models: "", advanced: "" });
-    expect(auto({ name: "1bad" }).connect).toMatch(/启动 ID 只能/);
-    expect(auto({ name: "test" }).connect).toBe("不能叫 test");
-    expect(auto({ name: "", display_name: "字".repeat(65) }).connect).toBe("显示名最多 64 个字，不能换行");
+    expect(auto({ name: "1bad" }).connect).toMatch(/启动 ID 仅支持/);
+    expect(auto({ name: "test" }).connect).toBe("不能命名为 test");
+    expect(auto({ name: "", display_name: "字".repeat(65) }).connect).toBe("显示名称最多 64 个字符，且不能换行");
     // an older hub still needs the ID; a saved provider always has its own
-    expect(formProblems(ready({ name: "", display_name: "我的中转 站" }), true).connect).toBe("要填启动 ID");
-    expect(formProblems(ready({ display_name: "Team\nrelay" }), false, true).connect).toBe("显示名最多 64 个字，不能换行");
+    expect(formProblems(ready({ name: "", display_name: "我的中转 站" }), true).connect).toBe("请输入启动 ID");
+    expect(formProblems(ready({ display_name: "Team\nrelay" }), false, true).connect).toBe("显示名称最多 64 个字符，且不能换行");
     // the names never keep the gateway from being reached
     expect(auto({ name: "1bad", display_name: "字".repeat(65) }).reach).toBe("");
   });
@@ -105,7 +105,7 @@ describe("formProblems", () => {
       expect(p.reach).toBe("");
     }
     expect(formProblems(ready({ name: "", base_url: "ftp://x" }), true).reach).toMatch(/http/);
-    expect(formProblems(ready({ name: "", api_key: "" }), true).reach).toBe("要填 API Key");
+    expect(formProblems(ready({ name: "", api_key: "" }), true).reach).toBe("请输入 API Key");
     expect(formProblems(ready({ api_key: "" }), false, true).reach).toBe("");
     // Codex runs without an address or key, so nothing keeps it from being tested
     expect(formProblems(ready({ agent: "codex", base_url: "", api_key: "" }), true).reach).toBe("");
@@ -136,9 +136,9 @@ describe("formProblems", () => {
     expect(formFromView({ name: "gw", kind: "api", via_machine: "laptop" }).via_machine).toBe("laptop");
   });
   it("checks the models step", () => {
-    expect(formProblems(ready({ model: "", models: [] }), true).models).toBe("至少勾选或添加一个模型");
-    expect(formProblems(ready({ model: "" }), true).models).toBe("选一个默认模型");
-    expect(formProblems(ready({ model: "m9" }), true).models).toBe("默认模型要在勾选的模型里");
+    expect(formProblems(ready({ model: "", models: [] }), true).models).toBe("请至少勾选或添加一个模型");
+    expect(formProblems(ready({ model: "" }), true).models).toBe("请选择一个默认模型");
+    expect(formProblems(ready({ model: "m9" }), true).models).toBe("默认模型必须在已勾选的模型中");
     expect(formProblems(ready({ models: [formModel({ id: "m1" }), formModel({ id: "m1" })] }), true).models).toMatch(/重复/);
     expect(formProblems(ready({ models: [{ ...formModel({ id: "m1" }), context_window: "12k" }] }), true).models).toMatch(/上下文窗口/);
     expect(formProblems(ready({ models: [formModel({ id: "m1", efforts: ["low"], default_effort: "max" })] }), true).models).toMatch(/默认思考档位/);
@@ -155,7 +155,7 @@ describe("formProblems", () => {
     expect(formProblems(ready({ headers: "no colon", headers_touched: true }), true).connect).toMatch(/请求头第 1 行/);
     expect(formProblems(ready({ headers: "X-A: 1\n\nX-B: 2", headers_touched: true }), true).connect).toBe("");
     expect(formProblems(ready({ env: "A=1\nbad name=2", env_touched: true }), true).advanced).toMatch(/环境变量第 2 行/);
-    expect(formProblems(ready({ env: Array(51).fill("A=1").join("\n"), env_touched: true }), true).advanced).toMatch(/最多 50/);
+    expect(formProblems(ready({ env: Array(51).fill("A=1").join("\n"), env_touched: true }), true).advanced).toMatch(/最多支持 50/);
     expect(formProblems(ready({ env: "# off for this one\nexport HTTP_PROXY=\nno_proxy=*.example.com\nexport\tB=1\n\uFEFFC=2 # c", env_touched: true }), true).advanced).toBe("");
     expect(formProblems(ready({ env: "\n\nexport =1", env_touched: true }), true).advanced).toMatch(/环境变量第 3 行/);
     expect(formProblems(ready({ proxy: "proxy.example.com" }), true).advanced).toMatch(/代理/);
@@ -247,7 +247,7 @@ describe("providerBody", () => {
     const old: ProviderView = { name: "chat", kind: "api", api: "chat", model: "m1", base_url: "https://gw.example.com", has_key: true };
     const form = formFromView(old);
     expect(providerBody(form, old)).toMatchObject({ kind: "api", api: "chat", auth: "api_key" });
-    expect(formProblems({ ...form, api_key: "" }, true).connect).toBe("要填 API Key");
+    expect(formProblems({ ...form, api_key: "" }, true).connect).toBe("请输入 API Key");
     expect(formProblems(form, false, true).connect).toBe("");
   });
 });
@@ -462,33 +462,33 @@ describe("import preview", () => {
     expect(importMerges([{ ...single, existing: "glm" }], new Set(), new Set())).toBe(false);
   });
   it("says where the aliases came from, what they bring and what they leave out", () => {
-    expect(importFrom(group)).toEqual(["来自 ~/.zshrc 里的 cc_kimi、cc_kimi_fast"]);
+    expect(importFrom(group)).toEqual(["来自 ~/.zshrc 中的 cc_kimi、cc_kimi_fast"]);
     expect(importFrom({ ...single, aliases: ["cc_glm", "cc_x"], sources: [...single.sources!, { alias: "cc_x", file: "~/.zshrc", hide: "none" }] }))
-      .toEqual(["来自 ~/.bashrc 里的 cc_glm", "来自 ~/.zshrc 里的 cc_x"]);
+      .toEqual(["来自 ~/.bashrc 中的 cc_glm", "来自 ~/.zshrc 中的 cc_x"]);
     // an older hub names no file
     expect(importFrom({ name: "a", aliases: ["a", "b"] })).toEqual(["来自 a、b"]);
-    expect(importBrings(single)).toBe("一并带上 DISABLE_TELEMETRY。");
+    expect(importBrings(single)).toBe("将一并导入 DISABLE_TELEMETRY。");
     expect(importBrings(group)).toBe("");
-    expect(importLeftOut(single)).toEqual(["不带上 GLM_TOKEN：看起来是密钥或密码。", "不带上 WORK：值要在 shell 里才能算出来。", "不带上 PATH：只适用于那台电脑。"]);
-    expect(importLeftOut({ ...single, skipped_env: [{ name: "A", reason: "limit" }, { name: "B", reason: "new" }] })).toEqual(["不带上 A：一个供应商最多带 50 个。", "不带上 B。"]);
-    expect(importDiffers(group)).toBe("这几个 alias 的各档模型和代理不一样。");
-    expect(importDiffers({ ...group, differs: ["effort", "someday"] })).toBe("这几个 alias 的默认思考档位和someday不一样。");
+    expect(importLeftOut(single)).toEqual(["已忽略 GLM_TOKEN，密钥和密码不会被一并导入。", "已忽略 WORK，其值需由 shell 动态计算。", "已忽略 PATH，其值仅适用于该电脑。"]);
+    expect(importLeftOut({ ...single, skipped_env: [{ name: "A", reason: "limit" }, { name: "B", reason: "new" }] })).toEqual(["已忽略 A，单个供应商最多保留 50 项。", "已忽略 B。"]);
+    expect(importDiffers(group)).toBe("这些 alias 的各档模型和代理配置不一致。");
+    expect(importDiffers({ ...group, differs: ["effort", "someday"] })).toBe("这些 alias 的默认思考档位和someday配置不一致。");
     expect(importDiffers(single)).toBe("");
   });
   it("speaks for the sources of the providers the picked groups land in", () => {
     const split = importSources([group, single], new Set(["cc_kimi", "cc_glm"]), new Set(["cc_kimi"]));
     expect(split.map((s) => [s.alias, s.hide])).toEqual([["cc_kimi", "ok"], ["cc_kimi_fast", "in_use"], ["cc_glm", "elsewhere"]]);
     expect(importSources([group, single], new Set(["cc_glm"]), new Set())).toEqual(single.sources);
-    expect(importStays(group.sources![1]!)).toBe("cc_kimi_fast 保留：主对话在用它。");
-    expect(importStays(single.sources![0]!)).toBe("cc_glm 保留：新的供应商无法在Mac Studio上替代它。");
-    expect(importStays({ alias: "x", hide: "in_use" })).toBe("x 保留。");
+    expect(importStays(group.sources![1]!)).toBe("保留 cc_kimi_fast，当前正由主对话使用。");
+    expect(importStays(single.sources![0]!)).toBe("保留 cc_glm，新供应商无法在 Mac Studio 上替代它。");
+    expect(importStays({ alias: "x", hide: "in_use" })).toBe("保留 x。");
   });
   it("sums up and words the two errors the hub names", () => {
     expect(importSummary({ created: ["a", "b"], updated: ["c"] })).toBe("新建 2 个，合并 1 个");
     expect(importSummary({ created: ["a", "b"], updated: ["c"], hidden: [], kept: [] })).toBe("新建 2 个，合并 1 个");
-    expect(importSummary({ created: ["a"], updated: [], hidden: ["a", "b"], kept: [{ alias: "c", hide: "in_use", uses: ["主对话"] }] })).toBe("新建 1 个，合并 0 个；隐藏 alias 2 个，保留 1 个");
-    expect(importErrorText(new ApiError(409, "x", { code: "node_outdated" }))).toBe("这台电脑的 Persona 需要更新");
-    expect(importErrorText(new ApiError(503, "x", { code: "offline" }))).toBe("这台电脑不在线");
+    expect(importSummary({ created: ["a"], updated: [], hidden: ["a", "b"], kept: [{ alias: "c", hide: "in_use", uses: ["主对话"] }] })).toBe("新建 1 个、合并 0 个；隐藏 2 个 alias，保留 1 个");
+    expect(importErrorText(new ApiError(409, "x", { code: "node_outdated" }))).toBe("这台电脑上的 Persona 需要更新");
+    expect(importErrorText(new ApiError(503, "x", { code: "offline" }))).toBe("这台电脑当前离线");
     expect(importErrorText(new ApiError(502, "坏了", { code: "internal" }))).toContain("HTTP 502");
     expect(importErrorText(new ApiError(502, "private internal exception", { code: "internal" }))).not.toContain("private internal exception");
   });

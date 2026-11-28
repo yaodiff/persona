@@ -204,8 +204,9 @@ func (m *Meta) backgroundStarted(toolUseID, result string, isError bool, ts time
 	if !ok {
 		if mv := bgMovedRe.FindStringSubmatch(result); mv != nil && !isError {
 			m.removeBackground(mv[1])
+			// Only the timeout's move: a command the turn waited for and could not is the likeliest to hang (#16418).
 			m.Background = append(m.Background, proto.BackgroundTask{ID: mv[1], Kind: "shell", Description: "超时转到后台的命令",
-				OutputFile: outputFile(result), StartedAt: ts})
+				OutputFile: outputFile(result), StartedAt: ts, MovedFromForeground: true})
 		}
 		return
 	}

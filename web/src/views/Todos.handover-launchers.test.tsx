@@ -91,14 +91,14 @@ describe("handing a to-do to a new agent", () => {
     await open();
     const s = select();
     expect(s.value).toBe("claude");
-    expect([...s.options].map((o) => o.textContent)).toEqual(["claude", "work_gw · 这台电脑的终端里用不了"]);
+    expect([...s.options].map((o) => o.textContent)).toEqual(["Claude Code", "work_gw · 无法在该电脑的终端中使用"]);
     expect(document.querySelector('[data-testid="todo-handoff-blocked"]')).toBeNull();
     // still a choice: a start that works clears it; picked, the reason is said under it
     await act(async () => {
       s.value = "work_gw";
       s.dispatchEvent(new Event("change", { bubbles: true }));
     });
-    expect(document.querySelector('[data-testid="todo-handoff-blocked"]')!.textContent).toBe("这台电脑的终端里用不了");
+    expect(document.querySelector('[data-testid="todo-handoff-blocked"]')!.textContent).toBe("无法在该电脑的终端中使用");
   });
 
   it("an older hub's launchers (no health) start with the first, as before", async () => {
@@ -113,7 +113,7 @@ describe("handing a to-do to a new agent", () => {
     await open();
     const s = select();
     expect(s.value).toBe("");
-    expect([...s.options].map((o) => o.textContent)).toEqual(["默认：claude", "work_gw", "codex", "claude"]);
+    expect([...s.options].map((o) => o.textContent)).toEqual(["默认：Claude Code", "work_gw", "Codex", "Claude Code"]);
   });
 
   it("says why when what the default runs can't start here", async () => {
@@ -121,7 +121,7 @@ describe("handing a to-do to a new agent", () => {
     extra = { default: { provider: "work_gw" } };
     await open();
     expect(select().value).toBe("");
-    expect(document.querySelector('[data-testid="todo-handoff-blocked"]')!.textContent).toBe("这台电脑的终端里用不了");
+    expect(document.querySelector('[data-testid="todo-handoff-blocked"]')!.textContent).toBe("无法在该电脑的终端中使用");
   });
 
   it("names a provider by its display name with its ID, an rc alias by its ID (#5029)", async () => {
@@ -134,9 +134,9 @@ describe("handing a to-do to a new agent", () => {
     await open();
     expect([...select().options].map((o) => o.textContent)).toEqual([
       "默认：我的中转 站 · glm-5",
-      "claude",
+      "Claude Code",
       "我的中转 站 (relay-example-com)",
-      "Team relay (team-relay) · 这台电脑的终端里用不了",
+      "Team relay (team-relay) · 无法在该电脑的终端中使用",
     ]);
     expect([...select().options].map((o) => o.value)).toEqual(["", "claude", "relay-example-com", "team-relay"]);
   });

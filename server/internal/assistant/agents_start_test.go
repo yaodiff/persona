@@ -203,6 +203,26 @@ func TestAutonameTabs(t *testing.T) {
 	}
 }
 
+// Orca's tabs are renamed the same way (#17043): "Terminal", the name Orca gives a tab opened without one, is a name
+// nobody chose; a tab someone named is left as it is.
+func TestAutonameOrcaTabs(t *testing.T) {
+	f := newFakeHub()
+	f.tabReply = "fix-login"
+	f.setSessions("box",
+		proto.Session{SessionID: "a", Title: "Fix the login", SpaceKind: "orca", SpaceID: "repo::/work/app", TabID: "tab1", SlotName: "Terminal", Status: proto.StatusIdle},
+		proto.Session{SessionID: "b", Title: "Review", SpaceKind: "orca", SpaceID: "repo::/work/app", TabID: "tab2", SlotName: "persona", Status: proto.StatusDone},
+		proto.Session{SessionID: "c", Title: "named", SpaceKind: "orca", SpaceID: "repo::/work/app", TabID: "tab3", SlotName: "leader", Status: proto.StatusIdle})
+	s := newTestService(t, f)
+	w := serve(s, "POST", "/api/v1/tabs/autoname", `{"dry_run":true}`)
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"from":"Terminal","to":"fix-login"`) ||
+		!strings.Contains(w.Body.String(), `"from":"persona","to":"fix-login-2"`) || strings.Contains(w.Body.String(), `"leader"`) {
+		t.Fatalf("dry run: %d %s", w.Code, w.Body)
+	}
+	if w := serve(s, "POST", "/api/v1/tabs/autoname", `{}`); w.Code != 200 || f.sent() != 2 {
+		t.Fatalf("renamed %d: %s", f.sent(), w.Body)
+	}
+}
+
 // A start in plan mode records the mode that follows its plan (#3784); any other start is left as it is.
 func TestSetPlanThen(t *testing.T) {
 	s := newTestService(t, newFakeHub())

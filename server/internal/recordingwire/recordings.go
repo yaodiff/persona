@@ -261,11 +261,22 @@ type Recording struct {
 	RecapPushFailed bool      `json:"recap_push_failed,omitempty"`
 	// RecapTodos are the to-dos made of its recaps' actions, whatever the version (keepRecapTodos).
 	RecapTodos []RecapTodo `json:"recap_todos,omitempty"`
+	// Writer is the extension that wrote this recording through kb.put_recording (docs/extensions/extensions.md
+	// "Writing recordings and minutes"); nil for one the phone uploaded. Only that extension may write it again.
+	Writer *RecordingWriter `json:"writer,omitempty"`
 	kbwire.Tagging
 
 	// Conv is the recording's meeting.json (meeting.go: its room, private mark and follow-up), read with it; nil
 	// without one. Never written to meta.json.
 	Conv *Meeting `json:"-"`
+}
+
+// RecordingWriter is who wrote an extension's recording and the digest of what it last wrote, so the same write again
+// changes nothing.
+type RecordingWriter struct {
+	By  string    `json:"by"`  // "ext:<extension id>"
+	Sum string    `json:"sum"` // sha256 of the last write's params, hex
+	At  time.Time `json:"at"`
 }
 
 // Trimmed: the transcript went with recording_days; only the metadata and the minutes are left.

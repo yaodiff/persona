@@ -276,8 +276,8 @@ describe("viewer", () => {
     expect(viewKind(file("a.csv", { text: "a,b", mime: "text/csv" }))).toBe("sheet");
     expect(viewKind(file("a.tsv", { text: "a\tb" }))).toBe("sheet");
     expect(viewKind(file("export", { text: "a,b", mime: "text/csv" }))).toBe("sheet");
-    expect(viewKind(file("Book.xlsx", { stream: true, mime: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }))).toBe("sheet");
-    expect(viewKind(file("old.xls", { data: "AA==" }))).toBe("sheet");
+    expect(viewKind(file("Book.xlsx", { stream: true, mime: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }))).toBe("workbook");
+    expect(viewKind(file("old.xls", { data: "AA==" }))).toBe("workbook");
     expect(viewKind(file("clip.mp4", { stream: true, mime: "video/mp4" }))).toBe("video");
     expect(viewKind(file("IMG_0001.MOV", { data: "AA==", mime: "application/octet-stream" }))).toBe("video");
     expect(viewKind(file("memo.m4a", { stream: true, mime: "audio/mp4" }))).toBe("audio");

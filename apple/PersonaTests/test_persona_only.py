@@ -208,10 +208,11 @@ class PersonaOnlyTests(unittest.TestCase):
         for interim in ["persona.control.ask", "persona.control.agents"]:
             self.assertEqual(controls.count(f'configuration(kind: "{interim}")'), 1)
         self.assertEqual(controls.count('Self.configuration(kind: "persona.control.dictate")'), 1)
+        self.assertEqual(controls.count('Self.configuration(kind: "persona.control.message")'), 1)
         self.assertEqual(controls.count('Self.configuration(kind: "persona.control.call")'), 1)
         bundle = source("PersonaWidgets/PersonaWidgetsBundle.swift")
         for widget in ["AskPersonaControl", "PersonaAgentsControl", "DictatePersonaControl", "CallPersonaControl",
-                       "CompatibleAssistantControl", "CompatibleAgentsControl", "FleetLiveActivity",
+                       "MessagePersonaControl", "CompatibleAssistantControl", "CompatibleAgentsControl", "FleetLiveActivity",
                        "CompatibleFleetLiveActivity"]:
             self.assertEqual(len(re.findall(rf"\b{widget}\(\)", bundle)), 1)
 

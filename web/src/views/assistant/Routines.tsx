@@ -4,6 +4,7 @@
 // of runs beside them. A row opens the editor; "New" starts from a template or blank.
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { api, ApiError, credentialOwner, enc, errorText, getToken, subscribeCredentialOwner } from "../../lib/api";
+import { currentListViewKey, listViewCache, useListViewKey } from "../../lib/list-view-cache";
 import { conversationPage } from "../../lib/conversation-page";
 import { chosenManager, onManagerChoice, shownManager, stampedHeaders, useChosenManager } from "../../lib/manager-choice";
 import { namedLauncher, providerIdNote, useProviderNames } from "../../lib/provider-names";
@@ -48,6 +49,9 @@ function taskIcon(task: Task): IconName {
 
 const RUNS_SHOWN = 30;
 
+const taskViews = listViewCache<Task[]>();
+const runViews = listViewCache<Run[]>();
+
 let routinesScope = 0;
 const currentRoutinesScope = () => routinesScope;
 function subscribeRoutinesScope(listener: () => void) {
@@ -58,10 +62,11 @@ function subscribeRoutinesScope(listener: () => void) {
 
 export function Routines({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   const scope = useSyncExternalStore(subscribeRoutinesScope, currentRoutinesScope, currentRoutinesScope);
-  return <RoutinesPage key={scope} scope={scope} onToggleSidebar={onToggleSidebar} />;
+  const viewKey = useListViewKey();
+  return <RoutinesPage key={JSON.stringify([scope, viewKey])} scope={scope} viewKey={viewKey} onToggleSidebar={onToggleSidebar} />;
 }
 
-function RoutinesPage({ scope, onToggleSidebar }: { scope: number; onToggleSidebar: () => void }) {
+function RoutinesPage({ scope, viewKey, onToggleSidebar }: { scope: number; viewKey: string; onToggleSidebar: () => void }) {
   const [origin] = useState(() => ({ manager: shownManager(), chosen: chosenManager(), token: getToken(), owner: credentialOwner() }));
   const alive = useRef(false);
   useLayoutEffect(() => {
@@ -69,15 +74,15 @@ function RoutinesPage({ scope, onToggleSidebar }: { scope: number; onToggleSideb
     return () => { alive.current = false; };
   }, []);
   const current = useCallback(() => alive.current && scope === currentRoutinesScope() && shownManager() === origin.manager &&
-    credentialOwner() === origin.owner, [origin, scope]);
+    currentListViewKey() === viewKey, [origin, scope, viewKey]);
   const readOptions = useMemo(() => ({
     token: origin.token, tokenOwner: origin.owner, headers: stampedHeaders(origin.chosen ?? undefined), isAuthContextCurrent: current,
   }), [current, origin]);
   const assistant = useStore((s) => s.assistant);
   const timezone = (assistant as { timezone?: string } | null)?.timezone;
-  const [tasks, setTasks] = useState<Task[] | null>(null);
+  const [tasks, setTasks] = useState<Task[] | null>(() => taskViews.read(viewKey) ?? null);
   const [launcherNames, setLauncherNames] = useState<Record<string, MachineLaunchers["launchers"]>>({});
-  const [runs, setRuns] = useState<Run[] | null>(null);
+  const [runs, setRuns] = useState<Run[] | null>(() => runViews.read(viewKey) ?? null);
   const [error, setError] = useState("");
   const [runsError, setRunsError] = useState("");
   const [editing, setEditing] = useState<Task | null>(null);
@@ -110,23 +115,30 @@ function RoutinesPage({ scope, onToggleSidebar }: { scope: number; onToggleSideb
     return () => controller.abort();
   }, [tasks, origin]);
 
-  const load = useCallback(async () => {
+  const runSeq = useRef(0);
+  const load = useCallback(() => {
     if (!current()) return;
     const mine = ++seq.current;
-    const [task, r] = await Promise.allSettled([
-      api<{ tasks: Task[] }>("/assistant/tasks", readOptions),
-      api<{ runs: Run[] }>("/assistant/runs", readOptions),
-    ]);
-    if (mine !== seq.current || !current()) return;
-    if (task.status === "fulfilled") {
-      setTasks(task.value.tasks ?? []);
+    const runRead = ++runSeq.current;
+    void api<{ tasks: Task[] }>("/assistant/tasks", readOptions).then((reply) => {
+      if (mine !== seq.current || !current()) return;
+      const tasks = reply.tasks ?? [];
+      taskViews.keep(viewKey, tasks);
+      setTasks(tasks);
       setError("");
-    } else setError(errorText(task.reason));
-    if (r.status === "fulfilled") {
-      setRuns(r.value.runs ?? []);
+    }, (e) => {
+      if (mine === seq.current && current()) setError(errorText(e));
+    });
+    void api<{ runs: Run[] }>("/assistant/runs", readOptions).then((reply) => {
+      if (runRead !== runSeq.current || !current()) return;
+      const runs = reply.runs ?? [];
+      runViews.keep(viewKey, runs);
+      setRuns(runs);
       setRunsError("");
-    } else setRunsError(errorText(r.reason));
-  }, [current, readOptions]);
+    }, (e) => {
+      if (runRead === runSeq.current && current()) setRunsError(errorText(e));
+    });
+  }, [current, readOptions, viewKey]);
 
   useEffect(() => {
     void load();
@@ -146,6 +158,13 @@ function RoutinesPage({ scope, onToggleSidebar }: { scope: number; onToggleSideb
     };
   }, [load]);
 
+  // A revisit also sees confirmed edits. Optimistic rows stay local until the hub accepts them.
+  const updateConfirmedTasks = (update: (list: Task[] | null) => Task[] | null) => {
+    if (!current()) return;
+    const confirmed = update(taskViews.read(viewKey) ?? null);
+    if (confirmed) taskViews.keep(viewKey, confirmed);
+    setTasks(update);
+  };
   const toggle = async (task: Task, on: boolean) => {
     if (!current()) return;
     const next = { ...task, enabled: on };
@@ -154,7 +173,7 @@ function RoutinesPage({ scope, onToggleSidebar }: { scope: number; onToggleSideb
     try {
       const r = await api<{ task: Task }>(`/assistant/tasks/${enc(task.id)}`, { ...readOptions, method: "PUT", json: taskBody(next, task) });
       if (!current()) return;
-      setTasks((list) => list?.map((x) => (x.id === task.id ? r.task : x)) ?? list);
+      updateConfirmedTasks((list) => list?.map((x) => (x.id === task.id ? r.task : x)) ?? list);
     } catch (e) {
       if (!current()) return;
       // put the row back first: the reload below fails too when the hub is unreachable, and keeps the list it has.
@@ -166,11 +185,11 @@ function RoutinesPage({ scope, onToggleSidebar }: { scope: number; onToggleSideb
   };
 
   const saved = (task: Task) => {
-    setTasks((list) => (list ? (list.some((x) => x.id === task.id) ? list.map((x) => (x.id === task.id ? task : x)) : [...list, task]) : [task]));
+    updateConfirmedTasks((list) => (list ? (list.some((x) => x.id === task.id) ? list.map((x) => (x.id === task.id ? task : x)) : [...list, task]) : [task]));
     void load();
   };
   const deleted = (task: Task) => {
-    setTasks((list) => list?.filter((x) => x.id !== task.id) ?? list);
+    updateConfirmedTasks((list) => list?.filter((x) => x.id !== task.id) ?? list);
     void load();
   };
 
@@ -181,6 +200,7 @@ function RoutinesPage({ scope, onToggleSidebar }: { scope: number; onToggleSideb
     try {
       const r = await api<{ session_id: string }>(`/assistant/tasks/${enc(task.id)}/run`, { ...readOptions, method: "POST", json: {} });
       if (!current()) return;
+      if (task.repeat === "once") updateConfirmedTasks((list) => list?.filter((x) => x.id !== task.id) ?? list);
       toast(t("assistant-taskeditor.run_started", { title: taskTitle(task) }), "ok");
       navigate(conversationPage(r.session_id, undefined, origin.manager));
     } catch (e) {
@@ -224,7 +244,7 @@ function RoutinesPage({ scope, onToggleSidebar }: { scope: number; onToggleSideb
         : await api<{ task: Task }>(path, { ...options, method: "POST", json: { at: selected.at } });
       if (!current()) return;
       if (seq.current === mine && reply.task?.id === task.id) {
-        setTasks((list) => list?.map((row) => row.id === task.id ? reply.task : row) ?? list);
+        updateConfirmedTasks((list) => list?.map((row) => row.id === task.id ? reply.task : row) ?? list);
       }
       void load();
     } catch (failure) {
@@ -305,7 +325,7 @@ function RoutinesPage({ scope, onToggleSidebar }: { scope: number; onToggleSideb
                 <Loading />
               </div>
             )}
-            {error && tasks === null && (
+            {error && (
               <Empty icon="info" title={t("assistant-routines.load_failed")}>
                 {error}
               </Empty>
@@ -370,20 +390,23 @@ function RoutinesPage({ scope, onToggleSidebar }: { scope: number; onToggleSideb
             )}
             <section>
               <SectionTitle right={runs && runs.length > 0 ? <span className="text-[11px] text-ink-3 tabular-nums">{t("assistant-routines.run_count", { count: runs.length })}</span> : undefined}>{t("assistant-routines.section_runs")}</SectionTitle>
-              {runsError ? (
+              {runsError && (
                 <div className="flex items-center gap-3 rounded-card bg-surface px-4 py-3 shadow-card">
                   <p role="alert" className="min-w-0 flex-1 text-[12.5px] break-words text-red">{t("assistant-routines.runs_load_failed", { error: runsError })}</p>
                   <Button tone="secondary" icon="retry" onClick={() => void load()}>{t("settings-channels.retry")}</Button>
                 </div>
-              ) : runs === null ? (
+              )}
+              {runs === null && !runsError && (
                 <div className="rounded-card bg-surface px-4 py-6 shadow-card">
                   <Loading />
                 </div>
-              ) : runs.length === 0 ? (
+              )}
+              {runs?.length === 0 && (
                 <div className="rounded-card bg-surface px-4 py-6 text-center text-[12.5px] leading-relaxed text-ink-3 shadow-card">
                   {t("assistant-routines.runs_empty")}
                 </div>
-              ) : (
+              )}
+              {runs && runs.length > 0 && (
                 <div className="flex flex-col gap-3">
                   {runDays(allRuns ? runs : runs.slice(0, RUNS_SHOWN), now).map((d) => (
                     <div key={d.day}>

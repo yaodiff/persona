@@ -122,6 +122,9 @@ type extOp struct {
 	consentedBundle map[string]string
 	// claimed is the preview one install took this operation over with (claimOpOfPreview).
 	claimed string
+	// bundlePreviewIDs are the staged bundle member preview IDs owned by this operation while it
+	// waits for consent, so canceling the operation discards them alongside the primary preview.
+	bundlePreviewIDs []string
 	// cancel stops its preview while it downloads and checks (DELETE, with extension.ErrUserCanceled: its download
 	// stops too when nothing else waits for it); canceling says it was asked to.
 	cancel    context.CancelCauseFunc
@@ -136,6 +139,12 @@ func newOpID() string {
 
 // startOp makes a new operation of kind for extension id and tells the apps.
 func (h *Manager) startOp(kind, id, actor string, l i18n.Lang, ofMarket bool) *extOp {
+	return h.startOpWith(kind, id, actor, l, ofMarket, nil)
+}
+
+// startOpWith makes a new operation of kind for extension id, runs setup under ops.mu before
+// publishing the operation into byID or broadcasting it, and tells the apps.
+func (h *Manager) startOpWith(kind, id, actor string, l i18n.Lang, ofMarket bool, setup func(*extOp)) *extOp {
 	ps := h.extensions
 	now := time.Now()
 	steps := installSteps
@@ -165,6 +174,9 @@ func (h *Manager) startOp(kind, id, actor string, l i18n.Lang, ofMarket bool) *e
 		ps.ops.byID = map[string]*extOp{}
 	}
 	ps.ops.prune(now)
+	if setup != nil {
+		setup(op)
+	}
 	ps.ops.byID[op.v.ID] = op
 	ps.ops.mu.Unlock()
 	h.pushOp(op, true)
@@ -325,6 +337,7 @@ func (h *Manager) opFail(op *extOp, err error) {
 			v.Step = at
 		}
 		now := time.Now()
+		op.bundlePreviewIDs = nil
 		v.State, v.EndedAt, v.PreviewID = opFailed, &now, ""
 		if op.canceling {
 			v.State = opCanceled
@@ -387,6 +400,7 @@ func (h *Manager) opSucceed(op *extOp) {
 			}
 		}
 		now := time.Now()
+		op.bundlePreviewIDs = nil
 		v.State, v.EndedAt, v.Step, v.PreviewID, v.Retryable = opSucceeded, &now, "", "", false
 		return true
 	})
@@ -408,16 +422,47 @@ func (h *Manager) expireOps() {
 	}
 }
 
+// cancelOpLocked cancels a consent-waiting operation with extensionOps.mu held and returns any
+// bundle member preview IDs owned by the operation.
+func cancelOpLocked(op *extOp) ([]string, bool) {
+	v := &op.v
+	if v.State != opNeedsConsent {
+		return nil, false
+	}
+	bundleIDs := op.bundlePreviewIDs
+	op.bundlePreviewIDs = nil
+	setStep(v, extension.StepConsent, extension.StepSkipped)
+	now := time.Now()
+	v.State, v.EndedAt, v.PreviewID, v.Step = opCanceled, &now, "", ""
+	return bundleIDs, true
+}
+
 func (h *Manager) cancelOp(op *extOp) {
-	h.update(op, func(v *ExtensionOperation) bool {
-		if v.State != opNeedsConsent {
-			return false
+	ps := h.extensions
+	var cleanups []func()
+	ps.ops.mu.Lock()
+	previewID := op.v.PreviewID
+	bundleIDs, ok := cancelOpLocked(op)
+	if ok {
+		op.v.UpdatedAt = time.Now()
+		if ps.reg != nil {
+			if c := ps.reg.DetachPreview(previewID); c != nil {
+				cleanups = append(cleanups, c)
+			}
+			for _, bid := range bundleIDs {
+				if c := ps.reg.DetachPreview(bid); c != nil {
+					cleanups = append(cleanups, c)
+				}
+			}
 		}
-		setStep(v, extension.StepConsent, extension.StepSkipped)
-		now := time.Now()
-		v.State, v.EndedAt, v.PreviewID, v.Step = opCanceled, &now, "", ""
-		return true
-	})
+	}
+	ps.ops.mu.Unlock()
+	for _, c := range cleanups {
+		c()
+	}
+	if ok {
+		h.pushOp(op, true)
+	}
 }
 
 func (h *Manager) opByID(id string) *extOp {

@@ -3,7 +3,6 @@ package assistant
 import (
 	"context"
 	"fmt"
-	"net/url"
 	"slices"
 	"sort"
 	"strings"
@@ -36,10 +35,12 @@ type boardRow struct {
 	link     string
 	nudged   bool // the bot nudged under its card in the chat (the lark module's nudge.go, #6084)
 	// machine and session are the chat a card or a question that can wait came from, empty when it came from none; the
-	// apps open it from the brief item (briefing_feed.go).
+	// apps open it from the brief item (modules/briefing/feed.go).
 	machine, session string
 	// asked is when the "Please verify" ask of a to-do waiting to be verified was made (its card, if it has one, went out then) (zero: the row is not one); id is the to-do.
 	asked time.Time
+
+	detail, evidenceLink string // current verification summary and deliverable for the briefing feed
 }
 
 // boardRows are the things waiting, in the order the board shows them: what holds up an Agent first, the longest
@@ -60,10 +61,12 @@ func (s *Service) boardRows(ctx context.Context, l i18n.Lang, web string, now ti
 	}
 	for _, a := range s.awaitingAcceptance(ctx) {
 		summary := i18n.T(l, "assistant-feishu_cards.board_verify", i18n.Args{"title": clip(oneLine(a.title), 40)})
+		verdict := verdictText(l, &a.ask, a.delivery)
 		if a.ask.Conclusion { // the task's conclusion, as its card says it
-			summary = i18n.T(l, "assistant-feishu_cards.board_verdict", i18n.Args{"title": clip(oneLine(a.title), 40), "verdict": verdictText(l, &a.ask, a.delivery)})
+			summary = i18n.T(l, "assistant-feishu_cards.board_verdict", i18n.Args{"title": clip(oneLine(a.title), 40), "verdict": verdict})
 		}
-		rows = append(rows, boardRow{waited: boardWaited(now, a.since), id: a.todo, summary: summary,
+		detail, evidence := a.verificationDetails(web, verdict)
+		rows = append(rows, boardRow{detail: detail, evidenceLink: evidence, waited: boardWaited(now, a.since), id: a.todo, summary: summary,
 			from: s.boardFrom(l, a.machine, a.session, ""), link: todoLink(web, a.todo), asked: a.since})
 	}
 	sort.SliceStable(rows, func(i, j int) bool {
@@ -137,6 +140,7 @@ type awaitingAccept struct {
 	todo, title, machine, session string
 	since                         time.Time
 	ask                           acceptAsk     // its verdict for a conclusion's row (conclusion.go)
+	review                        *TaskReview   // active accepted review for owner verification
 	delivery                      *TodoDelivery // effective delivery state (currentDelivery)
 }
 
@@ -173,7 +177,11 @@ func (s *Service) acceptanceRounds(ctx context.Context, includeReturned bool) []
 		if !includeReturned && (!a.RecheckAt.IsZero() || ownerDecisionReturned(t.Supervision)) {
 			continue
 		}
-		out = append(out, awaitingAccept{todo: id, title: t.Title, machine: a.MachineID, session: a.SessionID, since: a.AskedAt, ask: a, delivery: currentDelivery(t)})
+		var review *TaskReview
+		if r := triageLatestReview(t.Supervision); t.Supervision.state(t) == reviewUserCheck && r != nil && r.Verdict == reviewAccepted {
+			review = r
+		}
+		out = append(out, awaitingAccept{review: review, todo: id, title: t.Title, machine: a.MachineID, session: a.SessionID, since: a.AskedAt, ask: a, delivery: currentDelivery(t)})
 	}
 	slices.SortFunc(out, func(x, y awaitingAccept) int {
 		if c := x.since.Compare(y.since); c != 0 {
@@ -199,12 +207,7 @@ func boardRowMarkdown(l i18n.Lang, n int, r boardRow) string {
 	return b.String()
 }
 
-// boardLinkOK: u is an http(s) address with a host that a Markdown link can hold (card links are documented for
-// http(s) only, as safeLinkButton checks).
-func boardLinkOK(u string) bool {
-	p, err := url.Parse(u)
-	return err == nil && u != "" && (p.Scheme == "http" || p.Scheme == "https") && p.Host != "" && !strings.ContainsAny(u, "() \t\r\n")
-}
+var boardLinkOK = botcard.MarkdownLinkOK
 
 // boardCard is the board and the same as plain text (the fallback when Feishu refuses the card): one line a thing,
 // with what is waiting and a note of when it was written; when nothing is, it says so. said is the card without that

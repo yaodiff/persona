@@ -1,4 +1,5 @@
 {
+  "computer_label": "Computer",
   "reconnecting": "Reconnecting",
   "reconnect_failed": "Couldn't reconnect: {error}",
   "sidebar": "Sidebar",
@@ -41,6 +42,10 @@
   "memory_last_hour": "Memory over the last hour",
   "network_last_hour": "Network over the last hour: download (orange), upload (purple)",
   "view_label": "View",
+  "view_management": "Management",
+  "view_work": "Work",
+  "view_diagnostics": "Diagnostics",
+  "view_back": "Back",
   "view_cards": "Cards",
   "view_capabilities": "Capabilities",
   "view_procs": "Ports & Processes",

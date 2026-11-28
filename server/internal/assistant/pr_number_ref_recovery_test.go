@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nwverse/persona/server/internal/assistant/repositorystore"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -24,12 +25,13 @@ func TestRecoveredNumberedPRUsesReplyRepository(t *testing.T) {
 		{"5", "o/actual#5", "o/r"},
 	} {
 		t.Run("saved_"+tc.saved+"/"+tc.ref, func(t *testing.T) {
-			s, todo := deliveryReviewService(t, &fakeForge{}, nil, false)
+			s, todo := deliveryReviewServiceOn(t, &fakeForge{}, nil, false, repositorystore.New(todoTestDB(t)))
 			f := s.hub.(*fakeHub)
 			ctx := context.Background()
 			s.setTaskStage(ctx, todo.ID, "review", "https://github.com/o/r/pull/"+tc.saved)
-			f.setItems(proto.Item{Role: "assistant", Kind: proto.KindText, Text: "Delivery repository: https://github.com/" + tc.replyRepo + "/issues/5\n" +
-				"<closeout status=\"not_done\" merged=\"no\" deployed=\"no\">\nartifact: pr " + tc.ref + "\n</closeout>"})
+			f.setItems(append(artifactCreationItems(todo, "https://github.com/o/actual/pull/5"),
+				proto.Item{Role: "assistant", Kind: proto.KindText, TS: artifactTurnAt(todo), Text: "Delivery repository: https://github.com/" + tc.replyRepo + "/issues/5\n" +
+					"<closeout status=\"not_done\" merged=\"no\" deployed=\"no\">\nartifact: pr " + tc.ref + "\n</closeout>"})...)
 
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch r.URL.Path {

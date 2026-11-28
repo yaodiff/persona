@@ -53,6 +53,7 @@ func TestMainChatFallbackKeepsTheAgentKind(t *testing.T) {
 	fastLauncherRecovery(t)
 	f.hello.Models.LauncherRecovery = map[string]LauncherRecovery{"server": {WaitSeconds: 1, Fallbacks: map[string][]string{"wrap": {"claude"}}}}
 	f.launcherList = []proto.Launcher{{Name: "cx", Agent: "codex"}}
+	s.invalidateLauncherListCache("server")
 	if p, err := sendMain(t, s); err != nil || p["launcher"] != "claude" || p["model"] != "claude-opus-5-5" {
 		t.Fatalf("gone: %v %v", p, err)
 	}

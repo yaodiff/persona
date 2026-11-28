@@ -27,6 +27,14 @@ const flush = async () => {
   }
 };
 
+function selectComputer(mid: string) {
+  const picker = host.querySelector("select")!;
+  act(() => {
+    picker.value = mid;
+    picker.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+}
+
 const click = (el: Element | null) => {
   if (!el) throw new Error("expected clickable element");
   act(() => {
@@ -301,7 +309,7 @@ describe("StoragePanel", () => {
     expect(hotspotsSignal?.aborted).toBe(false);
 
     // Switch to beta while alpha scan is still pending
-    click(host.querySelector('[data-storage-machine="beta"]'));
+    selectComputer("beta");
     await flush();
     expect(hotspotsSignal?.aborted).toBe(true);
 
@@ -397,7 +405,7 @@ describe("StoragePanel", () => {
     expect(previewSignal?.aborted).toBe(false);
 
     // Switch to beta while preview is still pending
-    click(host.querySelector('[data-storage-machine="beta"]'));
+    selectComputer("beta");
     await flush();
     expect(previewSignal?.aborted).toBe(true);
 
@@ -466,7 +474,7 @@ describe("StoragePanel", () => {
     expect(host.querySelector('[data-mount="/alpha-disk"]')).not.toBeNull();
 
     // Switch to online beta while beta's fetch is still pending: alpha's mount must vanish immediately
-    click(host.querySelector('[data-storage-machine="beta"]'));
+    selectComputer("beta");
     await flush();
     expect(host.querySelector('[data-mount="/alpha-disk"]')).toBeNull();
 
@@ -477,17 +485,7 @@ describe("StoragePanel", () => {
     expect(host.querySelector('[data-testid="storage-mounts-error"]')).not.toBeNull();
 
     // Switch back to alpha, verify mount returns, then switch to offline machine
-    click(host.querySelector('[data-storage-machine="alpha"]'));
-    await flush();
-    expect(host.querySelector('[data-mount="/alpha-disk"]')).not.toBeNull();
-
-    click(host.querySelector('[data-storage-machine="offbox"]'));
-    await flush();
-    expect(host.querySelector('[data-mount="/alpha-disk"]')).toBeNull();
-    expect(host.querySelector('[data-testid="storage-mounts-error"]')).not.toBeNull();
-
-    // Re-select alpha and transition alpha itself to offline: mounts must clear immediately
-    click(host.querySelector('[data-storage-machine="alpha"]'));
+    selectComputer("alpha");
     await flush();
     expect(host.querySelector('[data-mount="/alpha-disk"]')).not.toBeNull();
 
@@ -499,6 +497,10 @@ describe("StoragePanel", () => {
     act(() => root.render(<StoragePanel machines={alphaOffline} />));
     await flush();
     expect(host.querySelector('[data-mount="/alpha-disk"]')).toBeNull();
+    expect(host.textContent).toContain("BetaBox");
+    expect(host.querySelector("select")).toBeNull();
+    act(() => root.render(<StoragePanel machines={mixed.filter((m) => !m.online)} />));
+    await flush();
     expect(host.querySelector('[data-testid="storage-mounts-error"]')).not.toBeNull();
   });
 

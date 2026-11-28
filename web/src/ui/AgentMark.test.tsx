@@ -43,7 +43,7 @@ describe("AgentMark", () => {
   });
 
   it("draws a letter for an agent with no mark, in the same box", () => {
-    for (const [agent, label, letter] of [["traex", undefined, "T"], ["omp", "Oh My Pi", "O"], ["amp", undefined, "A"]] as const) {
+    for (const [agent, label, letter] of [["omp", "Oh My Pi", "O"], ["amp", undefined, "A"]] as const) {
       const html = draw(agent, { label });
       expect(html).toContain('data-agent-mark="letter"');
       expect(html).toContain(`>${letter}</span>`);
@@ -51,7 +51,13 @@ describe("AgentMark", () => {
       expect(html).toContain("width:14px;height:14px");
     }
     expect(draw("omp")).toContain('aria-label="Oh My Pi"');
-    expect(draw("traex")).toContain('aria-label="TRAE CLI"');
+  });
+
+  it("draws the TRAE mark for built-in traex with the TRAE CLI accessible label", () => {
+    const html = draw("traex");
+    expect(html).toContain('data-agent-mark="trae"');
+    expect(html).toContain('aria-label="TRAE CLI"');
+    expect(html).not.toContain('data-agent-mark="letter"');
   });
 
   it("keeps every mark in a box of the size asked, centred, whatever its shape", () => {

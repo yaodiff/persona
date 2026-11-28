@@ -208,13 +208,17 @@ func (p *Proxy) Tick(ctx context.Context, now time.Time, policy *assistantwire.C
 		p.mu.Unlock()
 		return
 	}
+	if p.checking {
+		p.mu.Unlock()
+		return
+	}
 	c := p.last
 	if p.attempts >= policy.MaxRequests {
 		p.forgetLocked()
 		p.mu.Unlock()
 		return
 	}
-	if !idle || p.blocked || p.checking || p.active != 0 || c == nil || now.Before(p.next.Add(time.Duration(policy.IntervalMinutes)*time.Minute)) {
+	if !idle || p.blocked || p.active != 0 || c == nil || now.Before(p.next.Add(time.Duration(policy.IntervalMinutes)*time.Minute)) {
 		p.mu.Unlock()
 		return
 	}
@@ -318,7 +322,23 @@ func (rt roundTripper) RoundTrip(r *http.Request) (*http.Response, error) {
 	}
 	tap := &responseTap{p: p, c: c, valid: valid, stream: strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream")}
 	originalBody := resp.Body
-	resp.Body = &teeBody{Reader: io.TeeReader(originalBody, tap), Closer: closeFunc(func() error { p.mu.Lock(); p.active--; p.mu.Unlock(); return originalBody.Close() })}
+	if originalBody == nil {
+		originalBody = http.NoBody
+	}
+	var closeOnce sync.Once
+	var closeErr error
+	resp.Body = &teeBody{
+		Reader: io.TeeReader(originalBody, tap),
+		Closer: closeFunc(func() error {
+			closeOnce.Do(func() {
+				p.mu.Lock()
+				p.active--
+				p.mu.Unlock()
+				closeErr = originalBody.Close()
+			})
+			return closeErr
+		}),
+	}
 	return resp, nil
 }
 

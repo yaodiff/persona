@@ -20,17 +20,31 @@ const DOT: Record<ConnectorTone, string> = {
   idle: "bg-line-strong",
 };
 
+/** Whether to show the hub-side `manager.json` credential hint for a connector block. */
+export function showHubSideNote(c: HubConnector, authManagedByHost = false): boolean {
+  return !authManagedByHost && c.id !== "imessage" && !signsInHere(c) && !undescribed(c);
+}
+
 /** Connection status, sign-in, fix guide, and sign-out/delete-data for one hub connector. */
 export function ConnectorConnectionBlock({
   connector: c,
   reload,
   loading = false,
   showStatusCard = true,
+  authManagedByHost = false,
+  readOnly = false,
 }: {
   connector: HubConnector;
   reload: () => Promise<void>;
   loading?: boolean;
   showStatusCard?: boolean;
+  readOnly?: boolean;
+  /**
+   * True when the host integration already renders interactive top-level authentication UI
+   * (such as an extension's `AuthGroup`) in the same connection section, so the hub-side
+   * `manager.json` credential hint is suppressed.
+   */
+  authManagedByHost?: boolean;
 }) {
   const a = useActions(c.id, reload);
   const rateLimited = c.status === "rate_limited";
@@ -51,17 +65,17 @@ export function ConnectorConnectionBlock({
         </Group>
       )}
 
-      {c.id !== "imessage" && !signsInHere(c) && !undescribed(c) && (
+      {!readOnly && showHubSideNote(c, authManagedByHost) && (
         <p className="-mt-3 mb-5 px-1 text-submeta leading-relaxed text-ink-3">
           {t("settings-hubconnector.hub_side_note")}
         </p>
       )}
 
-      {c.id === "imessage" && <IMessageSections />}
+      {!readOnly && c.id === "imessage" && <IMessageSections />}
 
-      {c.id === "github" && signsInHere(c) && <GitHubSections c={c} reload={reload} hideFeeds />}
+      {!readOnly && c.id === "github" && signsInHere(c) && <GitHubSections c={c} reload={reload} hideFeeds />}
 
-      {c.id !== "github" && (signsInHere(c) || undescribed(c)) && (
+      {!readOnly && c.id !== "github" && (signsInHere(c) || undescribed(c)) && (
         <>
           <SwitchGroup c={c} a={a} />
           {isEnabled(c) && !isSignedIn(c) && (signsInHere(c) ? (

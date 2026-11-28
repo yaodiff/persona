@@ -15,6 +15,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/ai"
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -194,7 +195,11 @@ func TestAgentStartAsksTheManager(t *testing.T) {
 	h := newTestHub(t)
 	h.store = &newAgentStore{memStore: newMemStore(), b: assistantwire.ModelBinding{Provider: "launcher.work", Model: "m-1"}}
 	useModel(t, h, workModel(t, "fix-login"))
-	_, n := workMachine(t, h)
+	m, n := workMachine(t, h)
+	m.mu.Lock()
+	m.info.Protocol = nodeproto.Version
+	m.info.Capabilities = []string{nodeproto.SessionStartModelAliases}
+	m.mu.Unlock()
 	mux := h.routes()
 	start := func(body string) func(string) string {
 		t.Helper()
@@ -248,6 +253,10 @@ func TestAgentStartAsksTheManager(t *testing.T) {
 		t.Fatalf("with the manager: %q %q %q", p("launcher"), p("model"), p("tab_name"))
 	}
 	p = start(`{"machine_id":"box","cwd":"/code","prompt":"x","launcher":"other","model":"picked","tab_name":"mine"}`)
+	start(`{"machine_id":"box","cwd":"/code","prompt":"x","model_aliases":{"opus_model":"vendor/strong"}}`)
+	if aliases, _ := n.lastStart(t)["model_aliases"].(map[string]any); aliases["opus_model"] != "vendor/strong" {
+		t.Fatal("HTTP start lost model aliases before reaching the node")
+	}
 	if p("launcher") != "other" || p("model") != "picked" || p("tab_name") != "mine" {
 		t.Fatalf("picked for this start: %q %q %q", p("launcher"), p("model"), p("tab_name"))
 	}

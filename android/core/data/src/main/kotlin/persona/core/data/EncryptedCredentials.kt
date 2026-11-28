@@ -54,6 +54,10 @@ internal data class ActivePairing(
     val discarding: Boolean = false,
 )
 
+/** Device credential IDs that could not be revoked when unpairing, keyed by hub ID so re-pairing sends `replaces`. */
+@Serializable
+internal data class UnrevokedTokensDocument(val version: Int = 1, val byHub: Map<String, String> = emptyMap())
+
 internal class EncryptedCredentials(context: Context) {
     val root = File(context.noBackupFilesDir, "hub-data").apply { mkdirs() }
     private val aead: Aead = createAead()
@@ -94,6 +98,12 @@ internal class EncryptedCredentials(context: Context) {
      */
     fun sshKey(scope: CoroutineScope): DataStore<SshKeyDocument> = store(
         File(root, "ssh-key.enc"), scope, SshKeyDocument(), SshKeyDocument.serializer(), { it.version },
+    )
+
+    /** Unrevoked credential IDs from offline sign-outs; unreadable data falls back to empty. */
+    fun unrevokedTokens(scope: CoroutineScope): DataStore<UnrevokedTokensDocument> = store(
+        File(root, "unrevoked-tokens.enc"), scope, UnrevokedTokensDocument(), UnrevokedTokensDocument.serializer(),
+        { it.version }, ReplaceFileCorruptionHandler { UnrevokedTokensDocument() },
     )
 
     private fun <T> store(

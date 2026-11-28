@@ -90,6 +90,11 @@ func (r *replyAudio) speed() (float64, bool) {
 // logLine formats the reply's upstream audio pacing for the call log (empty when the reply had no audio).
 // Numbers and voice id only, never speech text.
 func (r *replyAudio) logLine(voice string, cut bool) string {
+	return r.logLineFor("upstream audio", voice, cut)
+}
+
+// logLineFor formats the reply's audio pacing with source ("upstream audio" or "tts audio") for the call log.
+func (r *replyAudio) logLineFor(source, voice string, cut bool) string {
 	if r.chunks == 0 {
 		return ""
 	}
@@ -125,8 +130,8 @@ func (r *replyAudio) logLine(voice string, cut bool) string {
 	if cut {
 		outcome = "cut off"
 	}
-	return fmt.Sprintf("upstream audio (voice %q, %d Hz): %dms in %dms (%s), %s%s%s, %s",
-		firstNonEmpty(voice, "default"), r.rate, durMS(audioDur), durMS(span), pace, chunksPart, gapPart, ttfaPart, outcome)
+	return fmt.Sprintf("%s (voice %q, %d Hz): %dms in %dms (%s), %s%s%s, %s",
+		source, firstNonEmpty(voice, "default"), r.rate, durMS(audioDur), durMS(span), pace, chunksPart, gapPart, ttfaPart, outcome)
 }
 
 func pcmDuration(n, rate int) time.Duration {
@@ -174,9 +179,13 @@ func (c *conversation) closeReply(cut bool) {
 	}
 }
 
-// finishReplyAudio logs and resets the current reply's upstream audio metrics when any audio arrived (mu held).
+// finishReplyAudio logs and resets the current reply's audio metrics when any audio arrived (mu held).
 func (c *conversation) finishReplyAudio(cut bool) {
-	line := c.replyAudio.logLine(c.voice, cut)
+	source := "upstream audio"
+	if c.tts != nil {
+		source = "tts audio"
+	}
+	line := c.replyAudio.logLineFor(source, c.voice, cut)
 	c.replyAudio = replyAudio{}
 	if line != "" {
 		c.logf("%s", line)

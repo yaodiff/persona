@@ -56,6 +56,12 @@ func (q *sendQueue) enter(ctx context.Context, id string) (func(), error) {
 // inputTurn waits for the session's start, if it is starting (what is written meanwhile goes in once Claude is ready),
 // then takes its input lock, both in the order the callers came (sendQueue). It returns the unlock.
 func (n *Node) inputTurn(ctx context.Context, id string) (unlock func(), err error) {
+	finished := n.typing.input(id)
+	defer func() {
+		if err != nil {
+			finished()
+		}
+	}()
 	leave, err := n.sendOrder.enter(ctx, id)
 	if err != nil {
 		return nil, err
@@ -73,14 +79,48 @@ func (n *Node) inputTurn(ctx context.Context, id string) (unlock func(), err err
 	}
 	unlock = n.typing.lock(id)
 	leave()
-	return unlock, nil
+	release := unlock
+	return func() { release(); finished() }, nil
 }
 
 // typingLocks makes the sends to one session take turns, and remembers what was last typed into each pane.
 type typingLocks struct {
-	mu    sync.Mutex
-	locks map[string]*sync.Mutex
-	last  map[string]typedText
+	mu     sync.Mutex
+	locks  map[string]*sync.Mutex
+	last   map[string]typedText
+	inputs map[string]sessionInput
+}
+
+type sessionInput struct {
+	last    time.Time
+	pending int
+}
+
+// Record arrival before waiting for the typing lock. An automatic stop must not
+// overtake input queued behind another send, even before runtime status changes.
+func (t *typingLocks) input(id string) func() {
+	t.mu.Lock()
+	if t.inputs == nil {
+		t.inputs = map[string]sessionInput{}
+	}
+	v := t.inputs[id]
+	v.last, v.pending = time.Now(), v.pending+1
+	t.inputs[id] = v
+	t.mu.Unlock()
+	return func() {
+		t.mu.Lock()
+		defer t.mu.Unlock()
+		v := t.inputs[id]
+		v.last, v.pending = time.Now(), v.pending-1
+		t.inputs[id] = v
+	}
+}
+
+func (t *typingLocks) inputIdle(id string, idle time.Duration) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	v := t.inputs[id]
+	return v.pending == 0 && (v.last.IsZero() || time.Since(v.last) >= idle)
 }
 
 type typedText struct {

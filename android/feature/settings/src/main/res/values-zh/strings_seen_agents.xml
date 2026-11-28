@@ -1,0 +1,5 @@
+<resources>
+    <string name="settings_seen_agents">已看的 Agent</string>
+    <string name="settings_seen_agents_stay">保留到刷新</string>
+    <string name="settings_seen_agents_leave">关闭聊天后移走</string>
+</resources>

@@ -14,7 +14,77 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistant/repositorystore"
+	"github.com/nwverse/persona/server/internal/db"
 )
+
+func TestPRStatusPublishesAfterBlockerAndMergeTrainWrites(t *testing.T) {
+	st := todoTestDB(t)
+	s, _ := newQuietServiceOn(t, st)
+	ctx := t.Context()
+	setBlockersTodosV2Flag(t, s, true, false)
+	const pr = "https://github.com/example/repo/pull/61"
+	upstream := newMergeTrainTask(t, s, "Upstream PR", pr)
+	waiter, err := s.createTodo(ctx, "Wait for upstream", "", "conv1", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AddTodoBlocker(ctx, waiter.ID, todoBlockerKindExternalPR, pr, ""); err != nil {
+		t.Fatal(err)
+	}
+	todosTold(t, s)
+	type observed struct{ conflict, waiting int }
+	var pushes []observed
+	var mu sync.Mutex
+	s.tpush.mu.Lock()
+	s.tpush.after = func(_ time.Duration, send func()) {
+		train, trainErr := st.ListTodoBlockersByTodo(ctx, upstream.ID)
+		wait, waitErr := st.ListTodoBlockersByTodo(ctx, waiter.ID)
+		mu.Lock()
+		var state observed
+		for _, row := range train {
+			if row.State == db.TodoBlockerStateActive {
+				state.conflict++
+			}
+		}
+		for _, row := range wait {
+			if row.State == db.TodoBlockerStateActive {
+				state.waiting++
+			}
+		}
+		if trainErr != nil || waitErr != nil {
+			t.Errorf("read blockers when publishing: %v, %v", trainErr, waitErr)
+		}
+		pushes = append(pushes, state)
+		mu.Unlock()
+		send()
+	}
+	s.tpush.mu.Unlock()
+	t.Cleanup(func() {
+		s.tpush.mu.Lock()
+		s.tpush.after = nil
+		s.tpush.mu.Unlock()
+	})
+
+	now := time.Now()
+	for _, step := range []struct {
+		status TodoPRStatus
+		want   observed
+	}{
+		{TodoPRStatus{URL: pr, State: "open", HeadOID: "current", Conflicts: true, CheckedAt: now}, observed{1, 1}},
+		{TodoPRStatus{URL: pr, State: "closed", CheckedAt: now.Add(time.Second)}, observed{}},
+	} {
+		if err := s.applyPRStatus(ctx, upstream, step.status); err != nil {
+			t.Fatal(err)
+		}
+		mu.Lock()
+		got := append([]observed(nil), pushes...)
+		pushes = nil
+		mu.Unlock()
+		if len(got) == 0 || got[len(got)-1] != step.want {
+			t.Fatalf("final %s push did not see committed blockers: got %v, want %+v", step.status.State, got, step.want)
+		}
+	}
+}
 
 type statusForge struct {
 	fakeForge
@@ -464,7 +534,19 @@ func pendingPRConflict(s *Service, id string) (superviseSignal, bool) {
 	b := &s.supervise
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	g, ok := b.pending[(superviseSignal{Todo: id, Kind: sigPRConflict}).id()]
+	for _, g := range b.pending {
+		if g.Todo == id && g.Kind == sigPRConflict {
+			return g, true
+		}
+	}
+	return superviseSignal{}, false
+}
+
+func pendingPRConflictFor(s *Service, id, url string) (superviseSignal, bool) {
+	b := &s.supervise
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	g, ok := b.pending[(superviseSignal{Todo: id, Kind: sigPRConflict, PRURL: url}).id()]
 	return g, ok
 }
 
@@ -532,7 +614,7 @@ func TestPRStatusConflictSignalsWithoutRunningAgents(t *testing.T) {
 }
 
 func TestPRStatusConflictQueuedSignalRechecksCurrentFacts(t *testing.T) {
-	for _, changed := range []string{"resolved", "closed", "new head", "new task PR", "new stage PR", "completed", "no status"} {
+	for _, changed := range []string{"resolved", "closed", "new head", "new task PR", "new stage PR", "unlinked", "completed", "no status"} {
 		t.Run(changed, func(t *testing.T) {
 			s, f, task := newPRConflictTask(t, nil)
 			ctx := context.Background()
@@ -559,13 +641,22 @@ func TestPRStatusConflictQueuedSignalRechecksCurrentFacts(t *testing.T) {
 				}
 			case "new task PR":
 				s.setTaskStage(ctx, task.ID, "review", "https://github.com/example/app/pull/13")
+				// The old PR remains followed; remove its facts to model a replaced observation.
+				s.todos.mu.Lock()
+				s.todos.todos[task.ID].OtherPRs = nil
+				s.todos.mu.Unlock()
 			case "new stage PR":
 				b := &s.reports
 				b.mu.Lock()
 				stage := b.stages[task.ID]
-				stage.PR = "https://github.com/example/app/pull/13"
+				stage.PR, stage.PRs = "https://github.com/example/app/pull/13", nil
 				b.stages[task.ID] = stage
 				b.mu.Unlock()
+			case "unlinked":
+				s.todos.mu.Lock()
+				row := s.todos.todos[task.ID]
+				row.PRURL, row.PRs, row.OtherPRs = "https://github.com/example/app/pull/13", nil, []TodoPRStatus{status}
+				s.todos.mu.Unlock()
 			case "completed", "no status":
 				s.todos.mu.Lock()
 				if changed == "completed" {
@@ -600,12 +691,14 @@ func TestPRStatusConflictIgnoresStalePRAndFailedPersistence(t *testing.T) {
 			s, _, task := newPRConflictTask(t, st)
 			switch changed {
 			case "task PR":
-				s.setTaskStage(context.Background(), task.ID, "review", "https://github.com/example/app/pull/13")
+				if err := s.forgetTaskPR(context.Background(), task.ID, task.PRURL, "https://github.com/example/app/pull/13"); err != nil {
+					t.Fatal(err)
+				}
 			case "stage PR":
 				b := &s.reports
 				b.mu.Lock()
 				stage := b.stages[task.ID]
-				stage.PR = "https://github.com/example/app/pull/13"
+				stage.PR, stage.PRs = "https://github.com/example/app/pull/13", nil
 				b.stages[task.ID] = stage
 				b.mu.Unlock()
 			case "persistence":
@@ -814,39 +907,129 @@ func TestPRStatusWakesAPRHoldOnlyAfterEveryPRIsRead(t *testing.T) {
 	}
 }
 
-// Only the current PR raises a conflict signal: an earlier PR of the task that conflicts is shown with its blockers,
-// but the digest revalidates against the task/stage PR, so a signal for it would only be dropped there (#7935).
-func TestPRStatusConflictSignalsOnlyForTheCurrentPR(t *testing.T) {
-	s, _, task := newPRConflictTask(t, nil)
+// Any followed open delivery PR raises a conflict signal (not only the current PR), revalidates against its own facts
+// in digestEntry, and deduplicates per PR+head without overwriting sibling PR conflict signals (#15611).
+func TestPRStatusConflictSignalsEveryFollowedOpenPR(t *testing.T) {
+	st := &memStore{}
+	s, f, task := newPRConflictTask(t, st)
 	ctx := context.Background()
-	current := "https://github.com/example/app/pull/13"
+	first := task.PRURL
+	second := "https://github.com/example/app/pull/13"
+	current := "https://github.com/example/app/pull/14"
+	s.setTaskStage(ctx, task.ID, "review", second)
 	s.setTaskStage(ctx, task.ID, "review", current)
+
+	// Sweep 1: only earlier open PR #12 conflicts while #13 and current #14 are clean.
+	now := time.Now()
 	s.deploy.forge = &prsForge{byNumber: map[int]TodoPRStatus{
-		12: {State: "open", HeadOID: "head-a", Conflicts: true},
-		13: {State: "open", HeadOID: "head-b"},
+		12: {State: "open", HeadOID: "head-12a", Conflicts: true},
+		13: {State: "open", HeadOID: "head-13a"},
+		14: {State: "open", HeadOID: "head-14a"},
 	}}
-	s.sweepPRStatuses(ctx, time.Now())
-	if g, ok := pendingPRConflict(s, task.ID); ok {
-		t.Fatalf("an earlier PR's conflict raised a signal: %+v", g)
+	s.sweepPRStatuses(ctx, now)
+	g12, ok := pendingPRConflictFor(s, task.ID, first)
+	if !ok || g12.Key != first+"@head-12a" || g12.PRURL != first {
+		t.Fatalf("earlier PR conflict signal = %+v, %v", g12, ok)
 	}
-	got := todoNow(s, task.ID)
-	if len(got.OtherPRs) != 1 || !got.OtherPRs[0].Conflicts {
-		t.Fatalf("the earlier PR's conflict was not kept as its fact: %+v", got.OtherPRs)
+	if _, holds := s.digestEntry(ctx, g12, ""); !holds {
+		t.Fatal("earlier PR conflict was dropped by digestEntry revalidation")
 	}
+	sendPendingPRConflicts(s)
+	if notices := f.notices(); len(notices) != 1 || !strings.Contains(notices[0], first) || !strings.Contains(notices[0], "head-12a") {
+		t.Fatalf("supervisor did not receive earlier PR conflict: %q", notices)
+	}
+
+	// Sweep 2: #12 stays conflicting at the same head-12a (must dedup), while #13 and current #14 both conflict simultaneously.
 	s.deploy.forge = &prsForge{byNumber: map[int]TodoPRStatus{
-		12: {State: "open", HeadOID: "head-a", Conflicts: true},
-		13: {State: "open", HeadOID: "head-b", Conflicts: true},
+		12: {State: "open", HeadOID: "head-12a", Conflicts: true},
+		13: {State: "open", HeadOID: "head-13a", Conflicts: true},
+		14: {State: "open", HeadOID: "head-14a", Conflicts: true},
 	}}
-	s.sweepPRStatuses(ctx, time.Now().Add(deployRecheck))
-	if g, ok := pendingPRConflict(s, task.ID); !ok || g.Key != current+"@head-b" {
-		t.Fatalf("the current PR's conflict = %+v, %v", g, ok)
+	s.sweepPRStatuses(ctx, now.Add(deployRecheck))
+	if _, ok := pendingPRConflictFor(s, task.ID, second); !ok {
+		t.Fatal("earlier PR #13 conflict overwritten or missing while sibling #14 also conflicts")
+	}
+	if _, ok := pendingPRConflictFor(s, task.ID, current); !ok {
+		t.Fatal("current PR #14 conflict missing while sibling #13 also conflicts")
+	}
+	sendPendingPRConflicts(s)
+	notices := f.notices()
+	if len(notices) != 2 || !strings.Contains(notices[1], second) || !strings.Contains(notices[1], current) || strings.Contains(notices[1], first) {
+		t.Fatalf("multi-PR conflict batch = %q, want #13 and #14 without re-notifying #12@head-12a", notices)
+	}
+
+	// Sweep 3: repeated sweep with unchanged heads must not spam.
+	s.sweepPRStatuses(ctx, now.Add(2*deployRecheck))
+	sendPendingPRConflicts(s)
+	if got := len(f.notices()); got != 2 {
+		t.Fatalf("repeated multi-PR sweep sent duplicate notices: %d", got)
+	}
+
+	// Sweep 4: resolving #13 drops a queued conflict for #13 during digest revalidation.
+	s.deploy.forge = &prsForge{byNumber: map[int]TodoPRStatus{
+		12: {State: "open", HeadOID: "head-12a", Conflicts: true},
+		13: {State: "open", HeadOID: "head-13b", Conflicts: true},
+		14: {State: "open", HeadOID: "head-14a", Conflicts: true},
+	}}
+	s.sweepPRStatuses(ctx, now.Add(3*deployRecheck))
+	g13b, ok := pendingPRConflictFor(s, task.ID, second)
+	if !ok {
+		t.Fatal("new conflicting head on earlier PR #13 was not queued")
+	}
+	if err := s.applyPRStatus(ctx, todoNow(s, task.ID), TodoPRStatus{
+		URL: second, State: "open", HeadOID: "head-13b", Conflicts: false, CheckedAt: now.Add(3*deployRecheck + time.Second),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, holds := s.digestEntry(ctx, g13b, ""); holds {
+		t.Fatal("resolved earlier PR conflict still held in digestEntry")
 	}
 }
 
-func TestPRStatusConflictStaysQuietDuringItsMergePark(t *testing.T) {
+// A task whose delivery PRs live only in stage.PRs (with PRURL empty, as populated by repository-link following)
+// is still selected by sweepPRStatuses and wakes on merge conflict without repeating for the same head (#15611).
+func TestPRStatusConflictPollsAndWakesPRsOnlyTask(t *testing.T) {
+	st := &memStore{}
+	s, f, task := newPRConflictTask(t, st)
+	ctx := context.Background()
+	linkedPR := "https://github.com/example/app/pull/21"
+	s.reports.mu.Lock()
+	stage := s.reports.stages[task.ID]
+	stage.PR, stage.PRs, stage.PRStatus, stage.EarlierPRStatus = "", []string{linkedPR}, nil, nil
+	s.reports.stages[task.ID] = stage
+	s.reports.mu.Unlock()
+	s.todos.mu.Lock()
+	row := s.todos.todos[task.ID]
+	row.PRURL, row.PRs, row.PRStatus, row.OtherPRs = "", []string{linkedPR}, nil, nil
+	s.todos.mu.Unlock()
+
+	now := time.Now()
+	s.deploy.forge = &prsForge{byNumber: map[int]TodoPRStatus{
+		21: {State: "open", HeadOID: "head-linked-1", Conflicts: true},
+	}}
+	s.sweepPRStatuses(ctx, now)
+	g, ok := pendingPRConflictFor(s, task.ID, linkedPR)
+	if !ok || g.Key != linkedPR+"@head-linked-1" {
+		t.Fatalf("PRs-only task did not queue conflict: %+v, %v", g, ok)
+	}
+	sendPendingPRConflicts(s)
+	if notices := f.notices(); len(notices) != 1 || !strings.Contains(notices[0], linkedPR) || !strings.Contains(notices[0], "head-linked-1") {
+		t.Fatalf("PRs-only task did not wake supervisor: %q", notices)
+	}
+	s.sweepPRStatuses(ctx, now.Add(deployRecheck))
+	sendPendingPRConflicts(s)
+	if len(f.notices()) != 1 {
+		t.Fatalf("PRs-only task repeated conflict for the same head: %q", f.notices())
+	}
+}
+
+// Merge conflicts block upstream merge, so parked merge waits must wake the supervisor once per PR+head
+// (both when observed during the park and when queued just before parking), without repeating for the same head (#15611).
+func TestPRStatusConflictWakesDuringMergeParkAndDeduplicates(t *testing.T) {
 	for _, parkFirst := range []bool{true, false} {
 		t.Run(fmt.Sprintf("park first %t", parkFirst), func(t *testing.T) {
-			s, f, task := newPRConflictTask(t, nil)
+			st := &memStore{}
+			s, f, task := newPRConflictTask(t, st)
 			ctx := context.Background()
 			park := func() {
 				t.Helper()
@@ -857,23 +1040,46 @@ func TestPRStatusConflictStaysQuietDuringItsMergePark(t *testing.T) {
 			if parkFirst {
 				park()
 			}
+			now := time.Now()
 			task, _ = s.todoNow(task.ID)
-			status := TodoPRStatus{URL: task.PRURL, State: "open", HeadOID: "conflicting-head", Conflicts: true, CheckedAt: time.Now()}
+			status := TodoPRStatus{URL: task.PRURL, State: "open", HeadOID: "conflicting-head", Conflicts: true, CheckedAt: now}
 			if err := s.applyPRStatus(ctx, task, status); err != nil {
 				t.Fatal(err)
 			}
 			if !parkFirst {
-				if _, ok := pendingPRConflict(s, task.ID); !ok {
+				if _, ok := pendingPRConflictFor(s, task.ID, task.PRURL); !ok {
 					t.Fatal("ordinary conflict was not queued before the park")
 				}
 				park()
-			} else if _, ok := pendingPRConflict(s, task.ID); ok {
-				t.Fatal("parked conflict queued a standalone signal")
+			} else if _, ok := pendingPRConflictFor(s, task.ID, task.PRURL); !ok {
+				t.Fatal("merge-parked conflict did not queue sigPRConflict")
 			}
 			sendPendingPRConflicts(s)
 			task, _ = s.todoNow(task.ID)
-			if task.PRStatus == nil || !task.PRStatus.Conflicts || task.Supervision.parking() == nil || len(f.notices()) != 0 {
-				t.Fatalf("fact=%+v park=%+v notices=%v", task.PRStatus, task.Supervision.parking(), f.notices())
+			if task.PRStatus == nil || !task.PRStatus.Conflicts || task.Supervision.parking() == nil {
+				t.Fatalf("fact=%+v park=%+v", task.PRStatus, task.Supervision.parking())
+			}
+			if notices := f.notices(); len(notices) != 1 || !strings.Contains(notices[0], task.PRURL) || !strings.Contains(notices[0], "conflicting-head") {
+				t.Fatalf("merge-parked conflict did not wake supervisor once: %q", notices)
+			}
+			// Repeated observation at the same conflicting head must not spam.
+			status.CheckedAt = now.Add(deployRecheck)
+			if err := s.applyPRStatus(ctx, task, status); err != nil {
+				t.Fatal(err)
+			}
+			sendPendingPRConflicts(s)
+			if len(f.notices()) != 1 {
+				t.Fatalf("repeated parked conflict head spammed supervisor: %q", f.notices())
+			}
+			// A new conflicting head notifies once more.
+			status.HeadOID = "conflicting-head-2"
+			status.CheckedAt = now.Add(2 * deployRecheck)
+			if err := s.applyPRStatus(ctx, todoNow(s, task.ID), status); err != nil {
+				t.Fatal(err)
+			}
+			sendPendingPRConflicts(s)
+			if notices := f.notices(); len(notices) != 2 || !strings.Contains(notices[1], "conflicting-head-2") {
+				t.Fatalf("new conflicting head while parked did not wake once: %q", notices)
 			}
 		})
 	}

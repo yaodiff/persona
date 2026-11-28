@@ -46,6 +46,8 @@ type extensionNodes struct {
 	states map[string]map[string]proto.PluginNodeState
 	// packages: "<id>/<version>/<platform>" → the package file sent to machines of that platform.
 	packages map[string]nodePackage
+	// pkgLocks holds the build locks for keys with active or waiting builders.
+	pkgLocks map[string]*pkgLockEntry
 	// syncing: one sync at a time per machine.
 	syncing map[string]*sync.Mutex
 }
@@ -53,6 +55,37 @@ type extensionNodes struct {
 type nodePackage struct {
 	file, digest string
 	size         int64
+}
+
+type pkgLockEntry struct {
+	mu   sync.Mutex
+	refs int // Includes waiters and is guarded by extensionNodes.mu.
+}
+
+func (pn *extensionNodes) lockPkgBuild(key string) func() {
+	pn.mu.Lock()
+	if pn.pkgLocks == nil {
+		pn.pkgLocks = map[string]*pkgLockEntry{}
+	}
+	e := pn.pkgLocks[key]
+	if e == nil {
+		e = &pkgLockEntry{}
+		pn.pkgLocks[key] = e
+	}
+	e.refs++
+	pn.mu.Unlock()
+
+	// A builder can acquire pn.mu while holding the build lock.
+	e.mu.Lock()
+	return func() {
+		e.mu.Unlock()
+		pn.mu.Lock()
+		e.refs--
+		if e.refs == 0 && pn.pkgLocks[key] == e {
+			delete(pn.pkgLocks, key)
+		}
+		pn.mu.Unlock()
+	}
 }
 
 func (pn *extensionNodes) lock(machine string) *sync.Mutex {
@@ -279,13 +312,34 @@ func (ps *extensions) nodePackage(p *extension.Extension, platform string) (node
 			return pkg, nil
 		}
 	}
+	unlockBuild := pn.lockPkgBuild(key)
+	defer unlockBuild()
+	pn.mu.Lock()
+	pkg, ok = pn.packages[key]
+	pn.mu.Unlock()
+	if ok {
+		if _, err := os.Stat(pkg.file); err == nil {
+			return pkg, nil
+		}
+	}
 	dir := filepath.Join(ps.root, "node-packages")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nodePackage{}, err
 	}
 	file := filepath.Join(dir, p.Record.ID+"-"+p.Record.Version+"-"+platform+".tgz")
-	digest, size, err := extension.NodePackageFile(p.Manifest, p.Dir, platform, file)
+	tmpFile, err := os.CreateTemp(dir, p.Record.ID+"-"+p.Record.Version+"-"+platform+".*.tmp")
 	if err != nil {
+		return nodePackage{}, err
+	}
+	tmpPath := tmpFile.Name()
+	_ = tmpFile.Close()
+	digest, size, err := extension.NodePackageFile(p.Manifest, p.Dir, platform, tmpPath)
+	if err != nil {
+		_ = os.Remove(tmpPath)
+		return nodePackage{}, err
+	}
+	if err := os.Rename(tmpPath, file); err != nil {
+		_ = os.Remove(tmpPath)
 		return nodePackage{}, err
 	}
 	pkg = nodePackage{file: file, digest: digest, size: size}

@@ -13,6 +13,56 @@ import (
 	"time"
 )
 
+func TestModelAliasSettingsArePrivateAndIsolated(t *testing.T) {
+	home := t.TempDir()
+	n := &Node{home: home, dir: filepath.Join(home, ".persona")}
+	base := filepath.Join(home, "base.json")
+	writeFile(t, base, `{"model":"main","env":{"ANTHROPIC_DEFAULT_SONNET_MODEL":"original","ANTHROPIC_DEFAULT_HAIKU_MODEL":"default-fast","EXAMPLE_AUTH":"test-value"}}`)
+	start := func(model string) string {
+		t.Helper()
+		path, selected, err := n.claudeModelAliasSettings(t.Context(), "claude", home, base, proto.ModelAliases{"sonnet_model": model}, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		info, err := os.Stat(path)
+		if err != nil || info.Mode().Perm() != 0600 {
+			t.Fatalf("settings must be private: %v", err)
+		}
+		settings := readSettings(t, path)
+		env, _ := settings["env"].(map[string]any)
+		if selected != "main" || settings["model"] != "main" || env["ANTHROPIC_DEFAULT_SONNET_MODEL"] != model ||
+			env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] != "default-fast" || env["EXAMPLE_AUTH"] != "test-value" {
+			t.Fatal("override lost inherited settings or modified the main model")
+		}
+		return path
+	}
+	if start("vendor/one") == start("vendor/two") || readSettings(t, base)["env"].(map[string]any)["ANTHROPIC_DEFAULT_SONNET_MODEL"] != "original" {
+		t.Fatal("a start overwrote shared settings")
+	}
+}
+
+func TestDispatchClaudeEnvNeverInheritsNativeAliases(t *testing.T) {
+	env := map[string]any{
+		"ANTHROPIC_MODEL":                      "claude-opus-5-5",
+		"ANTHROPIC_DEFAULT_SONNET_MODEL":       "vendor/claude-sonnet-5",
+		"ANTHROPIC_DEFAULT_HAIKU_MODEL":        "haiku",
+		"ANTHROPIC_DEFAULT_FABLE_MODEL":        "anthropic.claude-fable-5",
+		"CLAUDE_CODE_SUBAGENT_MODEL":           "claude-haiku-4-5",
+		"CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK": "0",
+	}
+	if model := dispatchClaudeEnv(env, proto.ModelAliases{"opus_model": "claude-opus-5-5"}, "vendor/main"); model != "vendor/main" {
+		t.Fatal("dispatch inherited a native default")
+	}
+	for _, key := range []string{"ANTHROPIC_DEFAULT_SONNET_MODEL", "ANTHROPIC_DEFAULT_HAIKU_MODEL", "ANTHROPIC_DEFAULT_FABLE_MODEL", "CLAUDE_CODE_SUBAGENT_MODEL", "CLAUDE_CODE_WORKFLOW_SUBAGENT_MODEL"} {
+		if env[key] != "vendor/main" {
+			t.Fatalf("unexpected automatic model in %s", key)
+		}
+	}
+	if env["CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK"] != "1" || env["ANTHROPIC_DEFAULT_OPUS_MODEL"] != "claude-opus-5-5" {
+		t.Fatal("dispatch did not disable native fallback or preserve the explicit opt-in")
+	}
+}
+
 // An alias's own --settings is found as the shell would pass it: either form, the last of several, ~ and $HOME
 // left for the node to expand. One without, or a function, has none.
 func TestAliasOwnSettings(t *testing.T) {
@@ -198,5 +248,55 @@ func TestManagedSettingsWithoutPersonasFile(t *testing.T) {
 	writeFile(t, ours, `null`)
 	if env, _ := readSettings(t, n.claudeSettings(context.Background(), "m", ours, home))["env"].(map[string]any); env["ANTHROPIC_API_KEY"] != "k" {
 		t.Errorf("settings that say null: %v", env)
+	}
+}
+
+// A managed launcher's start gets its own settings file (#17035): the launcher's gateway and the model this start
+// runs, with the per-start aliases on top. The shared "<launcher>-env-settings.json" is never changed by a start, so
+// one conversation's alias cannot reach another's, and two starts never share a file.
+func TestModelAliasSettingsForAManagedLauncher(t *testing.T) {
+	home := t.TempDir()
+	n := &Node{home: home, dir: filepath.Join(home, ".persona")}
+	n.setManaged([]proto.ManagedLauncher{{Name: "m", BaseURL: "https://gw.example.com", Model: "gateway-model", APIKey: "secret"}})
+	l, ok := n.managedLauncher("m")
+	if !ok {
+		t.Fatal("the managed launcher is gone")
+	}
+	shared, err := n.mergeManagedSettings("m", l, "", home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The start that brings no alias of its own still runs on the launcher's gateway and model: it cannot use the
+	// shared file itself, since another start's alias must not be in it.
+	provided, selected, err := n.claudeModelAliasSettings(t.Context(), "m", home, shared, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selected != "gateway-model" {
+		t.Fatalf("selected %q, want the gateway's model", selected)
+	}
+	s := readSettings(t, provided)
+	env, _ := s["env"].(map[string]any)
+	if s["model"] != "gateway-model" || env["ANTHROPIC_MODEL"] != "gateway-model" ||
+		env["ANTHROPIC_BASE_URL"] != "https://gw.example.com" || env["ANTHROPIC_API_KEY"] != "secret" {
+		t.Fatalf("the launcher's gateway and model are missing: %v", s)
+	}
+	// A second start with its own alias gets another private file; neither it nor the shared file changes what the
+	// first start wrote.
+	aliased, selected, err := n.claudeModelAliasSettings(t.Context(), "m", home, shared,
+		proto.ModelAliases{"sonnet_model": "vendor/sonnet"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selected != "gateway-model" || aliased == provided {
+		t.Fatalf("second start: settings %q (first %q), selected %q; want its own file", aliased, provided, selected)
+	}
+	if env, _ := readSettings(t, aliased)["env"].(map[string]any); env["ANTHROPIC_DEFAULT_SONNET_MODEL"] != "vendor/sonnet" {
+		t.Fatalf("the per-start alias is missing: %v", env)
+	}
+	for name, path := range map[string]string{"the shared settings": shared, "the first start": provided} {
+		if env, _ := readSettings(t, path)["env"].(map[string]any); env["ANTHROPIC_DEFAULT_SONNET_MODEL"] == "vendor/sonnet" {
+			t.Errorf("a per-start alias reached %s: %v", name, env)
+		}
 	}
 }

@@ -16,7 +16,12 @@ import (
 
 func storageFixture(t *testing.T, d *DB, id string) (extension.Record, extension.StorageScope) {
 	t.Helper()
-	at := time.Now().UTC()
+	return storageFixtureAt(t, d, id, time.Now().UTC())
+}
+
+// storageFixtureAt installs id with one write at at, as the registry writes a fresh installation.
+func storageFixtureAt(t *testing.T, d *DB, id string, at time.Time) (extension.Record, extension.StorageScope) {
+	t.Helper()
 	grant := &extension.StoragePermission{Patterns: []string{"state/*", "queue/*", "media/*"}, Queues: true, Blobs: true}
 	r := extension.Record{ID: id, Source: extension.SourceInstalled, Version: "1.0.0", Manifest: json.RawMessage(`{"id":"` + id + `"}`), Granted: extension.Permissions{Storage: grant}, Enabled: true, InstalledAt: at, UpdatedAt: at}
 	if err := d.PutExtension(t.Context(), r); err != nil {
@@ -377,14 +382,13 @@ func TestStorageLockOrderAcrossInstallations(t *testing.T) {
 
 func TestStorageTimestampPrecisionMatchesPostgresWithoutLosingFences(t *testing.T) {
 	d := open(t)
-	row, scope := storageFixture(t, d, "fixture-storage-nanoseconds")
+	// A fresh registry record keeps time.Now's nanoseconds until a reload, and 731 ns would round up wherever
+	// something rounded instead of truncating. It is written once, as an install writes it: an overwrite that does
+	// not move UpdatedAt past the stored revision gets a later one from the database (#16754), which leaves the
+	// record it was handed stale.
+	at := time.Now().UTC().Truncate(time.Microsecond).Add(731 * time.Nanosecond)
+	row, scope := storageFixtureAt(t, d, "fixture-storage-nanoseconds", at)
 	cleanupStorageFixture(t, d, row.ID)
-	row.InstalledAt = row.InstalledAt.Truncate(time.Microsecond).Add(731 * time.Nanosecond)
-	row.UpdatedAt = row.InstalledAt
-	scope.InstalledAt, scope.UpdatedAt = row.InstalledAt, row.UpdatedAt
-	if err := d.PutExtension(t.Context(), row); err != nil {
-		t.Fatal(err)
-	}
 	if _, err := d.ExtensionStorage(t.Context(), scope, fixtureInitial(), fixtureStorageUpdate("committed")); err != nil {
 		t.Fatal("fresh nanosecond registry record could not bind its real Postgres row", err)
 	}

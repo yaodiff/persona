@@ -2,6 +2,7 @@ package herdr
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -81,6 +82,48 @@ func TestCLIFallbackBacksOffWithoutAServer(t *testing.T) {
 	c.Socket = missing
 	if before := ran(); poll() == nil || ran() != before+1 {
 		t.Fatal("a socket that answered did not end the backoff")
+	}
+}
+
+// A caller whose context ended before herdr's socket answered gets that context's error back, and the CLI is not
+// tried under it: the fallback could only report a failure of its own (with no CLI configured, as in the node's tests,
+// "exec: no command") in place of the caller's deadline (#16008). Each context has ended before the call, so nothing
+// here depends on timing. A live caller without a socket still falls back to the CLI.
+func TestEndedCallerSkipsCLIFallback(t *testing.T) {
+	sock := fakeServer(t, func(string, map[string]any) string { return `"result":{"agents":[],"read":{"text":"hi"}}` })
+	missing := filepath.Join(t.TempDir(), "missing.sock")
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	expired, cancelExpired := context.WithDeadline(context.Background(), time.Unix(1_000_000, 0))
+	defer cancelExpired()
+	for _, tc := range []struct {
+		name string
+		do   func(*Client, context.Context) error
+	}{
+		{"call", func(c *Client, ctx context.Context) error { _, err := c.Agents(ctx); return err }},
+		{"pane read", func(c *Client, ctx context.Context) error {
+			_, err := c.PaneRead(ctx, "w1:p1", "recent", 60)
+			return err
+		}},
+		{"colored pane read", func(c *Client, ctx context.Context) error {
+			_, err := c.PaneReadANSI(ctx, "w1:p1", "recent", 60)
+			return err
+		}},
+	} {
+		// No Bin: a CLI fallback fails with "exec: no command".
+		if err := tc.do(&Client{Socket: sock}, context.Background()); err != nil {
+			t.Fatalf("%s with a live caller and a socket: %v", tc.name, err)
+		}
+		for _, socket := range []string{sock, missing} {
+			for _, ctx := range []context.Context{canceled, expired} {
+				if err := tc.do(&Client{Socket: socket}, ctx); !errors.Is(err, ctx.Err()) {
+					t.Errorf("%s on %s after the caller gave up: %v, want %v", tc.name, filepath.Base(socket), err, ctx.Err())
+				}
+			}
+		}
+		if err := tc.do(&Client{Socket: missing}, context.Background()); err == nil || !strings.Contains(err.Error(), "no command") {
+			t.Errorf("%s with a live caller and no socket: %v, want the CLI fallback's failure", tc.name, err)
+		}
 	}
 }
 

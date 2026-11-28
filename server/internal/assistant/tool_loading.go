@@ -31,13 +31,15 @@ var coreTools = []string{
 }
 
 // leaderCoreTools supplement the shared list for current direction supervisors. Loading
-// these definitions does not change each tool's caller authorization.
-var leaderCoreTools = []string{"leader_progress", "todo_create", "ask_escalate", "direction_name"}
+// these definitions does not change each tool's caller authorization. agent_transfer joins
+// them because a lead hands off its own open tasks with it (#13192): behind lazy loading,
+// leads only discover that path after an extra ToolSearch round.
+var leaderCoreTools = []string{"agent_transfer", "leader_progress", "todo_create", "ask_escalate", "direction_name"}
 
 // The operations taught by persona-work. Match built-in names exactly: an
 // extension sharing a prefix must keep its own loading policy.
 var workGuideTools = []string{
-	"machines_list", "agents_list", "agent_read", "agent_send", "agent_start", "agent_interrupt",
+	"machines_list", "agents_list", "agent_read", "agent_send", "agent_start", "agent_interrupt", "agent_modes",
 	"agent_switch", "agents_switch", "agent_archive", "agent_unarchive", "agent_autoname", "agent_autoname_receipt",
 	"agent_supervise", "agent_transfer", "task_plan", "task_plan_withdraw", "task_scope", "task_retry",
 	"task_start_screen", "task_start_keys", "task_review", "task_decided", "leader_progress", "direction_name",

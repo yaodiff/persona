@@ -6,7 +6,7 @@
 import { TODO_LIST_SECTIONS, TODO_REASONS, type TodoSummary } from "../../../lib/todo-view-wire";
 import type { Triage, TriageRule, TriageSection } from "../../../lib/todo-triage";
 import type { SessionLookup, Todo } from "../../../lib/todos";
-import { stateOf } from "../../../lib/format";
+import { activityOf } from "../../../lib/format";
 import { usageLimitAgent } from "../../../lib/usage-limit";
 
 /** lib/todo-view-wire.ts TODO_PHASES, kept local so the shared first-screen todo-view-wire chunk stays unchanged
@@ -100,7 +100,7 @@ export function rowFacts(todo: Todo, lookup: SessionLookup | undefined, now: num
       continue;
     }
     if (usageLimitAgent(s, now)) out.usageLimit = true;
-    const st = stateOf(s);
+    const st = activityOf(s);
     if (s.awaits_reply && (st === "unread" || st === "idle")) out.awaitsReply = true;
     // the hub's blockedOn: what a turn that is over and not on a card ended blocked on
     const w = s.work;
@@ -132,6 +132,7 @@ export type ByDesign =
   | "run_waits"
   | "usage_limit"
   | "awaits_reply"
+  | "stopped_unfinished"
   | "finished_unseen"
   | "finished_recent"
   | "finished_seen"
@@ -179,6 +180,9 @@ export const BY_DESIGN: readonly { why: ByDesign; holds: (local: Triage, view: T
   { why: "usage_limit", holds: (l, v, f) => f.usageLimit && ((AT_REST.has(l.rule) && RUN_PLACED.has(v.reason)) || (l.rule === "agent_running" && v.reason === "usage_limit")) },
   // row 4: a run that ended on a plain-text question is Can wait, ahead of everything below row 3 but closed work
   { why: "awaits_reply", holds: (l, v, f) => v.reason === "awaits_reply" && f.awaitsReply && !ABOVE_CAN_WAIT.has(l.rule) },
+  // #9823: an unfinished stop unattended for an hour needs follow-up; the legacy page still reads its unread reply
+  // or pending review as a finish. The assistant tray already uses the closeout; this compares the old page only.
+  { why: "stopped_unfinished", holds: (l, v) => v.section === "needs_you" && v.reason === "stopped_unfinished" && l.section === "just_done" && l.rule === "finished_unseen" },
   // row 9: accepted work nobody has seen stays in Just finished however long (the web: Done after 24 h)
   { why: "finished_unseen", holds: (l, v) => v.reason === "finished_unseen" && l.rule === "accepted" && l.section === "done" },
   // row 9: finished work stays in Just finished for 24 h after it was seen (the web: Done once seen), ahead of an open

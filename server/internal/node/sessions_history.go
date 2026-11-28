@@ -13,6 +13,7 @@ import (
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/sessionhistory"
+	"github.com/nwverse/persona/server/internal/transcript"
 )
 
 // Sessions active in a time window, archived, finished and offline ones too (sessions.history; docs/protocol/protocol.md
@@ -80,6 +81,7 @@ func (n *Node) sessionsHistory(ctx context.Context, raw json.RawMessage) (sessio
 	}
 	page, next := sessionhistory.Merge(parts, q.Limit)
 	for _, it := range page {
+		it.V.Session.Title = transcript.ListTitle(it.V.Session.Title) // as the live list's rows (sessionListIn, #16343)
 		ans.Rows = append(ans.Rows, it.V)
 	}
 	if next != nil {
@@ -133,7 +135,9 @@ func runtimeHistory(ctx context.Context, h *runtimeConn, q sessionhistory.Query,
 			rows[r.Session.SessionID] = r
 			sessions = append(sessions, r.Session)
 		}
-		for _, s := range normalizeRuntimeSessions(h, sessions) {
+		// This snapshot can predate the live list, so only its own text belongs in the page.
+		preview := func(_ string, text string) string { return transcript.WithoutBotmuxSentinel(text) }
+		for _, s := range normalizeRuntimeRows(h, sessions, preview) {
 			r := rows[s.SessionID]
 			key := sessionhistory.KeyOf(r.At(), r.NodeKey())
 			if page.Reached == nil || page.Reached.Before(key) {

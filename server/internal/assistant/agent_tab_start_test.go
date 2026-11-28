@@ -160,6 +160,52 @@ func TestLateTabNameWaitsForStartedTab(t *testing.T) {
 	}
 }
 
+// An Orca start is named the same way (#17043): the placeholder Orca shows is the expected name, the tab found once
+// the node lists it, and the rename goes through the node's guarded call.
+func TestOrcaStartTabNamedLater(t *testing.T) {
+	s, f := newQuietService(t)
+	entered, gate := make(chan struct{}), make(chan struct{})
+	f.tabModelEntered, f.tabModelGate, f.tabReply = entered, gate, "Async Login"
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(gate) }) }
+	t.Cleanup(release)
+	listed := proto.Session{SessionID: "s1", SpaceKind: "orca", SlotID: "tab1", TabID: "tab1", SlotName: "inspect-the-failure"}
+	start := agentTabNameStart("box", proto.Session{SessionID: "s1", SpaceKind: "orca"}, "inspect-the-failure", "Inspect the failure")
+	if start.ExpectedTabName != "inspect-the-failure" || start.TabID != "" {
+		t.Fatalf("start = %+v", start)
+	}
+	if got := agentTabNameStart("box", listed, "requested", "x"); got.ExpectedTabName != "inspect-the-failure" || got.TabID != "tab1" {
+		t.Fatalf("an Orca tab's own label is the expected name: %+v", got)
+	}
+	f.sessions["box"] = nil
+	gets := 0
+	f.answerNode(DeviceSessionGet, func(_ string, _ json.RawMessage) (any, error) {
+		gets++
+		if gets == 1 {
+			return map[string]any{"ok": false}, nil
+		}
+		return map[string]any{"ok": true, "session": listed}, nil
+	})
+	s.nameAgentTabLater(start)
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		release()
+		t.Fatal("the naming model was not called")
+	}
+	release()
+	waitAgentTabNaming(t, s)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.sends) != 1 {
+		t.Fatalf("renames = %v", f.sends)
+	}
+	params := f.sends[0]["rename"].(map[string]any)
+	if params["tab_id"] != "tab1" || params["expected_tab_name"] != "inspect-the-failure" || params["tab_name"] != "async-login" {
+		t.Fatalf("guarded rename of the Orca tab = %v", params)
+	}
+}
+
 func waitAgentTabNaming(t *testing.T, s *Service) {
 	t.Helper()
 	done := make(chan struct{})

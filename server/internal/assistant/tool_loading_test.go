@@ -235,7 +235,7 @@ func TestToolLoadingUsesTheConversationRole(t *testing.T) {
 		v.Main = "main0001"
 		v.Leaders = []string{"lead0001", "main0001"} // main is still main even if present here
 	})
-	wantLeader := []string{"leader_progress", "todo_create", "ask_escalate", "direction_name"}
+	wantLeader := []string{"agent_transfer", "leader_progress", "todo_create", "ask_escalate", "direction_name"}
 	if !slices.Equal(leaderCoreTools, wantLeader) {
 		t.Fatalf("leader tool defaults changed: %v", leaderCoreTools)
 	}

@@ -121,7 +121,7 @@ describe("the Inbox's section bar (#9053)", () => {
     expect(sections()).toEqual(["fyi"]);
     const fyi = host.querySelector('[data-section="fyi"]')!;
     expect(fyi.querySelector("h3")?.textContent).toContain("知悉即可");
-    expect([...fyi.querySelectorAll("button")].some((b) => b.textContent === "全部看过")).toBe(true);
+    expect([...fyi.querySelectorAll("button")].some((b) => b.textContent === "全部设为已看")).toBe(true);
     expect([...fyi.querySelectorAll("[data-item]")].map((r) => r.getAttribute("data-item"))).toEqual(["f1", "f2"]);
 
     pick("done");
@@ -174,10 +174,10 @@ describe("the Inbox's section bar (#9053)", () => {
     const empty = host.querySelector<HTMLElement>("[data-inbox-section-empty]")!;
     expect(empty.dataset.inboxSectionEmpty).toBe("action");
     // its own words, and under them where the rest are, as the other empty states draw their line
-    expect(empty.querySelector("p")?.textContent).toBe("没有需要你处理的");
-    expect(empty.querySelector("[data-inbox-empty-hint]")?.textContent).toBe("其余的在上面的其他分区里。");
+    expect(empty.querySelector("p")?.textContent).toBe("暂无需要你处理的事项");
+    expect(empty.querySelector("[data-inbox-empty-hint]")?.textContent).toBe("其余内容可在上方的其他分区中查看。");
     expect(empty.querySelector("[data-inbox-empty-hint]")?.className).toContain("text-ink-3");
-    expect(host.textContent).not.toContain("都处理完了");
+    expect(host.textContent).not.toContain("已全部处理完毕");
     expect(host.querySelector(".bg-green-tint")).toBeNull();
     // no count at zero, and the rows elsewhere are counted right above
     expect(choices().map((b) => b.textContent)).toEqual(["需要你", "知悉即可1", "全部"]);
@@ -191,8 +191,8 @@ describe("the Inbox's section bar (#9053)", () => {
     await flush();
     expect(chosen()).toBe("working");
     expect(choice("working").textContent).toBe("进行中");
-    expect(host.querySelector("[data-inbox-section-empty] p")?.textContent).toBe("没有进行中的");
-    expect(host.querySelector("[data-inbox-section-empty] [data-inbox-empty-hint]")?.textContent).toBe("其余的在上面的其他分区里。");
+    expect(host.querySelector("[data-inbox-section-empty] p")?.textContent).toBe("暂无进行中的事项");
+    expect(host.querySelector("[data-inbox-section-empty] [data-inbox-empty-hint]")?.textContent).toBe("其余内容可在上方的其他分区中查看。");
     // left, it goes: no row and not chosen
     pick("action");
     expect(choice("working")).toBeNull();
@@ -208,20 +208,20 @@ describe("the Inbox's section bar (#9053)", () => {
     expect(chosen()).toBe("done");
     const empty = host.querySelector<HTMLElement>("[data-inbox-section-empty]")!;
     expect(empty.dataset.inboxSectionEmpty).toBe("done");
-    expect(empty.querySelector("p")?.textContent).toBe("还没有已处理的");
-    expect(empty.querySelector("[data-inbox-empty-hint]")?.textContent).toBe("标为已处理的会出现在这里。");
+    expect(empty.querySelector("p")?.textContent).toBe("暂无已处理的事项");
+    expect(empty.querySelector("[data-inbox-empty-hint]")?.textContent).toBe("标为已处理的事项会显示在这里。");
   });
 
   it("says 都处理完了 only when nothing is open anywhere, with 已处理 still a choice", async () => {
     hub.items = [item("d1", { done_at: "2026-11-09T05:00:00Z", done_by: "user" })];
     hub.waiting = false;
     await show();
-    expect(host.textContent).toContain("都处理完了");
+    expect(host.textContent).toContain("已全部处理完毕");
     expect(host.querySelector("[data-inbox-section-empty]")).toBeNull();
     expect(choices().map((b) => b.dataset.barChoice)).toEqual(["action", "done", "all"]);
     // 全部: the same, with 已处理 under it
     pick("all");
-    expect(host.textContent).toContain("都处理完了");
+    expect(host.textContent).toContain("已全部处理完毕");
     expect(sections()).toEqual(["done"]);
   });
 
@@ -267,7 +267,7 @@ describe("the Inbox's section bar (#9053)", () => {
     await typeSearch("   ");
     expect(chosen()).toBe("action");
     expect(host.querySelector("[data-inbox-filtered-empty]")).toBeNull();
-    expect(host.textContent).toContain("都处理完了");
+    expect(host.textContent).toContain("已全部处理完毕");
   });
 
   // a row a few px too long keeps what is in sight legible; a pill half out still reads as going on
@@ -301,5 +301,224 @@ describe("the Inbox's section bar (#9053)", () => {
     await show();
     expect(choice("action").querySelector("[data-count-badge]")?.textContent).toBe("99+");
     expect(choice("action").getAttribute("aria-label")).toBe("需要你，121");
+  });
+});
+
+describe("the Inbox's expandable filter strip (#16990)", () => {
+  const scrollWidthDesc = Object.getOwnPropertyDescriptor(Element.prototype, "scrollWidth");
+  const clientWidthDesc = Object.getOwnPropertyDescriptor(Element.prototype, "clientWidth");
+  let metrics = { scrollWidth: 0, clientWidth: 0 };
+  let resizeCallbacks: Array<{ target: Element; cb: ResizeObserverCallback }> = [];
+
+  const filtersToolbar = () => host.querySelector<HTMLDivElement>('[role="toolbar"][aria-label="筛选"]')!;
+  const expandButton = () => host.querySelector<HTMLButtonElement>("[data-expand-filters]");
+  const triggerResize = async () => {
+    const toolbar = filtersToolbar();
+    await act(async () => {
+      for (const entry of resizeCallbacks) {
+        if (entry.target === toolbar) entry.cb([] as ResizeObserverEntry[], {} as ResizeObserver);
+      }
+    });
+    await flush();
+  };
+
+  beforeEach(() => {
+    metrics = { scrollWidth: 0, clientWidth: 0 };
+    resizeCallbacks = [];
+    Object.defineProperty(Element.prototype, "scrollWidth", {
+      configurable: true,
+      get() {
+        if (this.getAttribute("role") === "toolbar" && this.getAttribute("aria-label") === "筛选") return metrics.scrollWidth;
+        return scrollWidthDesc?.get ? scrollWidthDesc.get.call(this) : 0;
+      },
+    });
+    Object.defineProperty(Element.prototype, "clientWidth", {
+      configurable: true,
+      get() {
+        if (this.getAttribute("role") === "toolbar" && this.getAttribute("aria-label") === "筛选") return metrics.clientWidth;
+        return clientWidthDesc?.get ? clientWidthDesc.get.call(this) : 0;
+      },
+    });
+    class FakeResizeObserver {
+      private cb: ResizeObserverCallback;
+      constructor(cb: ResizeObserverCallback) {
+        this.cb = cb;
+      }
+      observe(target: Element) {
+        resizeCallbacks.push({ target, cb: this.cb });
+      }
+      unobserve(target: Element) {
+        resizeCallbacks = resizeCallbacks.filter((entry) => !(entry.cb === this.cb && entry.target === target));
+      }
+      disconnect() {
+        resizeCallbacks = resizeCallbacks.filter((entry) => entry.cb !== this.cb);
+      }
+    }
+    vi.stubGlobal("ResizeObserver", FakeResizeObserver);
+  });
+
+  afterEach(() => {
+    if (scrollWidthDesc) Object.defineProperty(Element.prototype, "scrollWidth", scrollWidthDesc);
+    if (clientWidthDesc) Object.defineProperty(Element.prototype, "clientWidth", clientWidthDesc);
+    vi.restoreAllMocks();
+  });
+
+  it("hides the expand toggle when collapsed and all chips fit without overflow", async () => {
+    metrics = { scrollWidth: 280, clientWidth: 360 };
+    await show();
+    const toolbar = filtersToolbar();
+    expect(expandButton()).toBeNull();
+    expect(toolbar.className).toContain("flex-nowrap");
+    expect(toolbar.className).toContain("overflow-x-auto");
+    expect(toolbar.className).not.toContain("flex-wrap");
+    expect(toolbar.parentElement?.className).toContain("items-center");
+    expect(toolbar.querySelector(".bg-line-strong")).not.toBeNull();
+  });
+
+  it("shows the expand toggle when overflowing on mount and tracks ResizeObserver changes", async () => {
+    metrics = { scrollWidth: 280, clientWidth: 360 };
+    await show();
+    expect(expandButton()).toBeNull();
+
+    // Narrowing triggers overflow via ResizeObserver.
+    metrics = { scrollWidth: 520, clientWidth: 300 };
+    await triggerResize();
+    const toggle = expandButton()!;
+    const toolbar = filtersToolbar();
+    const cleanAll = host.querySelector<HTMLButtonElement>("[data-clean-all]")!;
+    expect(toggle).not.toBeNull();
+    expect(toolbar.contains(toggle)).toBe(false);
+    expect(toggle.nextElementSibling).toBe(cleanAll);
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(toggle.getAttribute("aria-controls")).toBe(toolbar.id);
+    expect(toggle.getAttribute("aria-label")).toBe("展开筛选");
+    expect(toggle.getAttribute("title")).toBe("展开筛选");
+    expect(toolbar.style.maskImage || toolbar.getAttribute("style") || "").toContain("linear-gradient");
+
+    // Widening back removes overflow and hides the toggle while collapsed.
+    metrics = { scrollWidth: 280, clientWidth: 420 };
+    await triggerResize();
+    expect(expandButton()).toBeNull();
+  });
+
+  it("expands to a wrapped layout without horizontal fade on click and collapses back on second click", async () => {
+    metrics = { scrollWidth: 540, clientWidth: 300 };
+    await show();
+    const toolbar = filtersToolbar();
+    const toggle = expandButton()!;
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(toolbar.getAttribute("style") ?? "").toContain("linear-gradient");
+
+    // Expand
+    await act(async () => toggle.click());
+    await flush();
+    expect(expandButton()?.getAttribute("aria-expanded")).toBe("true");
+    expect(expandButton()?.getAttribute("aria-label")).toBe("收起筛选");
+    expect(expandButton()?.getAttribute("title")).toBe("收起筛选");
+    expect(toolbar.className).toContain("flex-wrap");
+    expect(toolbar.className).not.toContain("flex-nowrap");
+    expect(toolbar.className).not.toContain("overflow-x-auto");
+    expect(toolbar.style.maskImage).toBe("");
+    expect(toolbar.getAttribute("style") ?? "").toBe("");
+    expect(toolbar.parentElement?.className).toContain("items-start");
+    expect(toolbar.querySelector(".bg-line-strong")).toBeNull();
+    expect(localStorage.getItem("inbox.filters.expanded")).toBe("1");
+
+    // Collapse back while still overflowing
+    await act(async () => expandButton()!.click());
+    await flush();
+    expect(expandButton()?.getAttribute("aria-expanded")).toBe("false");
+    expect(expandButton()?.getAttribute("aria-label")).toBe("展开筛选");
+    expect(toolbar.className).toContain("flex-nowrap");
+    expect(toolbar.className).toContain("overflow-x-auto");
+    expect(toolbar.className).not.toContain("flex-wrap");
+    expect(toolbar.parentElement?.className).toContain("items-center");
+    expect(toolbar.querySelector(".bg-line-strong")).not.toBeNull();
+    expect(toolbar.getAttribute("style") ?? "").toContain("linear-gradient");
+    expect(localStorage.getItem("inbox.filters.expanded")).toBeNull();
+
+    // Expanding, widening viewport, then collapsing hides the toggle once everything fits
+    await act(async () => expandButton()!.click());
+    await flush();
+    metrics = { scrollWidth: 260, clientWidth: 420 };
+    await act(async () => expandButton()!.click());
+    await flush();
+    expect(expandButton()).toBeNull();
+  });
+
+  it("restores the persisted expanded preference on remount and tolerates unavailable localStorage", async () => {
+    localStorage.setItem("inbox.filters.expanded", "1");
+    metrics = { scrollWidth: 280, clientWidth: 360 };
+    await show();
+    const toolbar = filtersToolbar();
+    expect(toolbar.className).toContain("flex-wrap");
+    expect(expandButton()?.getAttribute("aria-expanded")).toBe("true");
+    expect(expandButton()?.getAttribute("aria-label")).toBe("收起筛选");
+
+    // Unmount and remount still reads the saved preference.
+    act(() => root.unmount());
+    root = createRoot(host);
+    await show();
+    expect(filtersToolbar().className).toContain("flex-wrap");
+    expect(expandButton()?.getAttribute("aria-expanded")).toBe("true");
+
+    // Unavailable storage falls back cleanly to in-memory toggle state without throwing.
+    act(() => root.unmount());
+    root = createRoot(host);
+    metrics = { scrollWidth: 520, clientWidth: 280 };
+    const origGet = Storage.prototype.getItem;
+    const origSet = Storage.prototype.setItem;
+    const origRemove = Storage.prototype.removeItem;
+    vi.spyOn(Storage.prototype, "getItem").mockImplementation(function (this: Storage, k: string) {
+      if (k === "inbox.filters.expanded") throw new Error("storage disabled");
+      return origGet.call(this, k);
+    });
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(function (this: Storage, k: string, v: string) {
+      if (k === "inbox.filters.expanded") throw new Error("storage disabled");
+      return origSet.call(this, k, v);
+    });
+    vi.spyOn(Storage.prototype, "removeItem").mockImplementation(function (this: Storage, k: string) {
+      if (k === "inbox.filters.expanded") throw new Error("storage disabled");
+      return origRemove.call(this, k);
+    });
+    await show();
+    expect(expandButton()?.getAttribute("aria-expanded")).toBe("false");
+    await act(async () => expandButton()!.click());
+    await flush();
+    expect(expandButton()?.getAttribute("aria-expanded")).toBe("true");
+    expect(filtersToolbar().className).toContain("flex-wrap");
+  });
+
+  it("selects and clears filters cleanly while expanded", async () => {
+    hub.items = [
+      item("l1"),
+      item("m1", { source: "mail", kind: "mail", account: "a1", account_name: "me@example.com", tier: "action", lark: undefined, mail: { account_id: "a1", uids: [1] } as InboxItem["mail"] }),
+    ];
+    hub.waiting = false;
+    metrics = { scrollWidth: 520, clientWidth: 280 };
+    await show();
+    await act(async () => expandButton()!.click());
+    await flush();
+
+    const toolbar = filtersToolbar();
+    expect(toolbar.className).toContain("flex-wrap");
+    const chip = (label: string) => [...toolbar.querySelectorAll<HTMLButtonElement>("button[aria-pressed]")].find((b) => b.textContent?.trim() === label)!;
+
+    await act(async () => chip("飞书").click());
+    await flush();
+    expect(chip("飞书").getAttribute("aria-pressed")).toBe("true");
+    expect([...host.querySelectorAll("[data-item]")].map((r) => r.getAttribute("data-item"))).toEqual(["l1"]);
+    const clearBtn = host.querySelector<HTMLButtonElement>("[data-clear-filters]")!;
+    expect(clearBtn).not.toBeNull();
+    expect(expandButton()?.getAttribute("aria-expanded")).toBe("true");
+
+    await act(async () => clearBtn.click());
+    await flush();
+    expect(host.querySelector("[data-clear-filters]")).toBeNull();
+    expect(chip("飞书").getAttribute("aria-pressed")).toBe("false");
+    expect(document.activeElement).toBe(chip("飞书"));
+    expect([...host.querySelectorAll("[data-item]")].map((r) => r.getAttribute("data-item"))).toEqual(["l1", "m1"]);
+    expect(expandButton()?.getAttribute("aria-expanded")).toBe("true");
+    expect(toolbar.className).toContain("flex-wrap");
   });
 });

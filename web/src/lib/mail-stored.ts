@@ -46,3 +46,25 @@ export function storedMailText(context: string | undefined, preview: string | un
   }
   return kept || (preview?.trim() ?? "");
 }
+
+export interface MailAddress {
+  name?: string;
+  email?: string;
+}
+
+export function addressText(a?: MailAddress): string {
+  return a ? (a.name && a.email ? `${a.name} <${a.email}>` : a.email || a.name || "") : "";
+}
+
+/** Whether the text the hub stored for a mail is all of the newest mail (#15995), from the item's own page:
+ *  - `clipped`: the hub cut it at the 3,000 characters it stores;
+ *  - `whole`: the stored text is the whole text;
+ *  - `unknown`: the hub did not say: a hub from before it sent `mail_body_truncated`, an item stored before the hub
+ *    recorded it, a mail whose text the hub never read, or the list's own copy of the item (which never carries it). */
+export type StoredMailClipping = "clipped" | "whole" | "unknown";
+
+/** `mail_body_truncated` of GET /inbox/{id} as the closed type; anything but a boolean is `unknown`, never `whole`. */
+export function storedMailClipping(item?: { mail_body_truncated?: unknown }): StoredMailClipping {
+  const v = item?.mail_body_truncated;
+  return v === true ? "clipped" : v === false ? "whole" : "unknown";
+}

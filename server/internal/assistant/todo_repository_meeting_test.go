@@ -17,7 +17,7 @@ func TestMeetingRepositoryReadsDoNotImportLegacyLinks(t *testing.T) {
 	for _, entry := range []string{"todo_get", "todo_repositories_get", "agent"} {
 		for _, populated := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/populated=%t", entry, populated), func(t *testing.T) {
-				dsn := newDatabase(t)
+				dsn := newMigratedDatabase(t, db.ManagerSet)
 				database, err := db.Open(t.Context(), dsn, db.ManagerSet)
 				if err != nil {
 					t.Fatal(err)

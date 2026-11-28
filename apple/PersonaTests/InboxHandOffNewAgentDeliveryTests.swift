@@ -29,7 +29,7 @@ struct InboxHandOffNewAgentDeliveryTests {
                 calls.records.append((id, key, kind, title, clientID))
             },
             showMain: { _, _, _ in },
-            plainToMain: { _ in SessionKey(machineID: "m", sessionID: "main") },
+            plainToMain: { _, _ in SessionKey(machineID: "m", sessionID: "main") },
             startNew: { _ in SessionKey(machineID: "m", sessionID: "new") },
             sendToAgent: { _, _, _ in .sent },
             waitForNewAgent: { key, message in

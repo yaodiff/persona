@@ -1,4 +1,4 @@
-Prepare one exact owner-approved batch for side-effecting connector calls, managed persona_settings set/add/remove, model_profile_switch and model_profile_rollback. Use it only when the owner asked to review the batch. Put every complete call in items. The cards show full redacted arguments and each built-in before/after; they, not prose, are the approval authority. After approval, call each item once in the returned order with its canonical arguments unchanged; stop at the first error and read its partial result. Built-in calls consume one-shot grants through their ordinary tools and recheck the approved display and revision. Denial executes nothing; never retry an uncertain result or treat this as Always permission. Reads, capture, unknown tools, non-connector runtime prompts and oversized items are refused; use their ordinary path.{{template "shared/mcp_language" .}}
+Prepare one exact owner-approved batch for connector writes, managed persona_settings set/add/remove, and model_profile_switch, model_profile_rollback, model_profile_deactivate or model_profile_clear. Use it when the owner asks to review a batch. Put each complete call in items. The cards show redacted arguments and built-in previews. The cards authorize each call. After approval, call each item once in the returned order with its canonical arguments unchanged. Stop at the first error and read its partial result. Built-in calls recheck the approved display and revision. Denial executes nothing. Never retry an uncertain result or treat this as Always permission. Reads, capture, unknown tools, other runtime prompts and oversized items are refused.{{template "shared/mcp_language" .}}
 
 ```json
 {
@@ -17,7 +17,7 @@ Prepare one exact owner-approved batch for side-effecting connector calls, manag
         "properties": {
           "tool": {
             "type": "string",
-            "description": "registered connector write, persona_settings, model_profile_switch or model_profile_rollback"
+            "description": "Connector write, managed settings write or supported model profile action"
           },
           "input": {
             "type": "object",

@@ -170,7 +170,7 @@ import PersonaWire
     @Test func aMessageGetsTheDemosAnswer() async throws {
         let k = try #require(try await api.sessions().first { $0.assistant != true }).key
         let before = try await api.items(k, beforeSeq: nil).items.count
-        try await api.send(k, text: "看一下进度")
+        try await api.send(k, text: "看一下进度", clientMsgID: UUID().uuidString)
         let mine = try await api.items(k, beforeSeq: nil).items
         #expect(mine.count == before + 1)
         #expect(mine.last?.text == "看一下进度")

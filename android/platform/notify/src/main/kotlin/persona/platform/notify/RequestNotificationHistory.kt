@@ -11,9 +11,21 @@ internal class RequestNotificationHistory(context: Context) {
 
     fun ids(): Set<String> = store.all.keys.mapNotNullTo(HashSet()) { it.removePrefix(PREFIX).takeIf { id -> it.startsWith(PREFIX) } }
 
-    fun mark(id: String) { store.edit().putBoolean(PREFIX + id, true).apply() }
+    fun occurrences(): Map<String, String?> = store.all.mapNotNull { (key, value) ->
+        key.takeIf { it.startsWith(PREFIX) }?.let {
+            it.removePrefix(PREFIX) to (value as? String)?.takeIf(String::isNotEmpty)
+        }
+    }.toMap()
 
-    fun clear(id: String) { store.edit().remove(PREFIX + id).apply() }
+    fun mark(id: String, createdAt: String? = null) {
+        store.edit().putString(PREFIX + id, createdAt.orEmpty()).apply()
+    }
+
+    /** An exact clear leaves a replacement's record alone; legacy ID-only cleanup remains available to old events. */
+    fun clear(id: String, createdAt: String? = null) {
+        val key = PREFIX + id
+        if (createdAt == null || store.all[key] == createdAt) store.edit().remove(key).apply()
+    }
 
     fun clear() { store.edit().clear().apply() }
 

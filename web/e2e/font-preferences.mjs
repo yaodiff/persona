@@ -6,7 +6,7 @@ const [origin,out]=process.argv.slice(2);
 assert(/^http:\/\/(127\.0\.0\.1|localhost):\d+$/.test(origin??'')&&out,'Provide an owned loopback Vite origin and artifact directory');
 mkdirSync(out,{recursive:true});
 const watchdog=setTimeout(()=>{console.error('TIMEOUT font preferences (240s)');process.exit(124)},240000);
-const browser=await chromium.launch({channel:'chrome'});
+const browser=await chromium.launch(process.env.CHROMIUM_PATH ? {executablePath:process.env.CHROMIUM_PATH} : {channel:'chrome'});
 const results=[];const errors=[];
 try {
 for(const width of [1280,390]) for(const theme of ['light','dark']) for(const size of ['standard','large']) {
@@ -29,12 +29,11 @@ for(const width of [1280,390]) for(const theme of ['light','dark']) for(const si
  await page.evaluate(()=>document.fonts.ready);const before=fonts.length;
  await sans.selectOption('georgia');await mono.selectOption('menlo');
  await page.waitForFunction(()=>getComputedStyle(document.body).fontFamily.startsWith('Georgia'));
- const sample=await page.evaluate(()=>{
-  const el=document.createElement('div');el.className='prose-j';el.innerHTML='<p>Reading sample · 中文 日本語 → ★</p><code>const sample = 42</code>';document.querySelector('[data-settings-row="font"]').append(el);
-  return {sans:getComputedStyle(el).fontFamily,mono:getComputedStyle(el.querySelector('code')).fontFamily};
- });assert(sample.mono.includes('Menlo'));assert(sample.sans.includes('Georgia'));
+ const sample=await page.locator('[data-settings-row="font"] .prose-j').evaluate(el=>({
+  sans:getComputedStyle(el).fontFamily,mono:getComputedStyle(el.querySelector('code')).fontFamily
+ }));assert(sample.mono.includes('Menlo'));assert(sample.sans.includes('Georgia'));
  const second=await context.newPage();await second.goto(`${origin}/settings?tab=general`);await second.getByRole('combobox',{name:'Interface font',exact:true}).waitFor();
- await sans.selectOption('custom');const custom=page.getByRole('textbox',{name:'Interface font: custom family',exact:true});await custom.fill('Arial');
+ await sans.selectOption('custom');const custom=page.getByRole('textbox',{name:'Interface font: custom family',exact:true});await custom.fill('Arial');await page.getByRole('button',{name:'Apply',exact:true}).click();
  await second.waitForFunction(()=>getComputedStyle(document.body).fontFamily.startsWith('Arial'));
  assert.equal(await second.getByRole('textbox',{name:'Interface font: custom family',exact:true}).inputValue(),'Arial');
  await page.evaluate(()=>document.fonts.ready);
@@ -65,7 +64,7 @@ for(const width of [1280,390]) for(const theme of ['light','dark']) for(const si
  assert(paint.first&&paint.first.rootChildren===0);assert(paint.family.startsWith('Arial'));if(paint.paint.length)assert(paint.first.time<=paint.paint[0].time);
  await sans.selectOption('default');await second.waitForFunction(()=>!document.getElementById('persona-font')?.textContent.includes('--font-sans:'));
  await mono.selectOption('default');await second.waitForFunction(()=>!document.getElementById('persona-font'));
- assert.equal(await page.evaluate(()=>localStorage.getItem('persona.font')),null);
+ assert.equal(await page.evaluate(()=>JSON.parse(localStorage.getItem('persona.font')).browser),true);
  results.push({tag,sample,paint,platform,feedback:await page.evaluate(()=>window.fontFeedback),fontRequestsAddedBeforeReload:0});await context.close();console.log('PASS',tag);
 }
 assert.deepEqual(errors,[]);writeFileSync(`${out}/results.json`,JSON.stringify(results,null,2));

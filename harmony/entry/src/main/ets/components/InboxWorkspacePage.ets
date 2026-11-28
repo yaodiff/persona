@@ -13,10 +13,16 @@ import { InboxAttachmentDraft, InboxMailComposeSnapshot, InboxMailMessage, Inbox
 import { ResourceRow, Wire } from '../models/Wire';
 import { BoundRow, reconcileBoundRows } from '../models/RowBinding';
 import { MarkdownText } from './MarkdownText';
+import { NeedsYouPulseDot } from './StatusMotionMarks';
 import { Colors } from '../design/Colors';
+import { Motion } from '../design/Motion';
 import { ButtonStyles, SelectStyles } from '../design/Controls';
 import { Tokens } from '../design/Tokens';
 import { tr } from '../design/Strings';
+import { Haptics } from '../platform/Haptics';
+import { workspaceGridColumns, workspaceGridGutter, workspaceHorizontalPadding } from '../core/WorkspaceGrid';
+import { isHubPageHidden } from '../core/HubModules';
+import { InboxKBChatLink, parseInboxKBChat } from '../core/KBChatInbox';
 
 const MAX_IMAGE_PIXELS: number = 40000000;
 const MAX_IMAGE_EDGE: number = 8192;
@@ -231,9 +237,11 @@ export struct InboxWorkspacePage {
   @Event onComposeAvailability:(enabled:boolean)=>void=()=>{};
   @Event onChanged: () => void = (): void => {};
   @Event onOpen: (row: ResourceRow) => void = (_row: ResourceRow) => {};
+  @Event onOpenResource: (row: ResourceRow) => void = (_row: ResourceRow) => {};
   @Event onHandoff: (row: ResourceRow) => void = (_row: ResourceRow) => {};
   @Event onLink: (address: string) => void = (_address: string) => {};
   @Local environment: NativeEnvironment = nativeEnvironment;
+  @Local private paneWidth: number = 0;
   @Local workspace: InboxWorkspace = new InboxWorkspace();
   @Local grouping: InboxGroupingPreference = inboxGrouping;
   @Local itemRowBindings: BoundRow<ResourceRow>[] = [];
@@ -297,10 +305,10 @@ export struct InboxWorkspacePage {
     if (this.active && this.visible && this.list) this.workspace.refresh().catch(() => undefined);
   }
   @Monitor('composeRevision') composeRequested():void {
-    if (this.active && this.visible && this.list && !this.sheetOpen && this.workspace.canComposeMail()) this.openMailCompose();
+    if (this.active && this.visible && this.list && !this.sheetOpen && this.model.mailModuleAllowed() && this.workspace.canComposeMail()) this.openMailCompose();
   }
-  @Monitor('visible','model.connected','workspace.filterAddresses','workspace.writeState','workspace.handoffBusy','workspace.attachmentBusy') composeAvailabilityChanged():void {
-    if (this.active && this.visible && this.list) this.onComposeAvailability(this.workspace.canComposeMail());
+  @Monitor('visible','model.connected','model.features','workspace.filterAddresses','workspace.writeState','workspace.handoffBusy','workspace.attachmentBusy') composeAvailabilityChanged():void {
+    if (this.active && this.visible && this.list) this.onComposeAvailability(this.model.mailModuleAllowed() && this.workspace.canComposeMail());
   }
   private acknowledged(changed: boolean): void { if (changed && this.active && this.visible) this.onChanged(); }
 
@@ -357,11 +365,26 @@ export struct InboxWorkspacePage {
     const data = row.data(); data['open_handoff'] = true; copy.raw = JSON.stringify(data); this.onOpen(copy);
   }
   private openRow(row: ResourceRow): void {
+    Haptics.tap();
     this.error = '';
     this.onOpen(row);
   }
+  private inboxColumns(): number {
+    return workspaceGridColumns(this.paneWidth, this.environment.fontScale, 2);
+  }
+  private inboxSidePadding(): number {
+    return workspaceHorizontalPadding(this.paneWidth);
+  }
+  private rowNeedsPulse(row: ResourceRow): boolean {
+    if (row.kind === 'session') return true;
+    const data = row.data();
+    return !this.workspace.isHandled(row) && (Wire.bool(data, 'urgent') || inboxTier(data) === 'action');
+  }
   private async refreshList(): Promise<void> { await this.workspace.refresh(); }
-  private openMailCompose(): void { this.activeSheet = 'mail'; this.sheetOpen = true; this.workspace.openMailCompose(); }
+  private openMailCompose(): void {
+    if (!this.model.mailModuleAllowed()) return;
+    this.activeSheet = 'mail'; this.sheetOpen = true; this.workspace.openMailCompose();
+  }
   private openHandoff(): void { if (!this.workspace.canWrite()) return; this.handoffText = this.workspace.handoffDraft || tr('inbox_handoff_preset_summary'); this.activeSheet = 'handoff'; this.sheetOpen = true; }
   private chain(): Record<string, Object>[] { return Wire.rows(this.workspace.detail, 'chain'); }
   private handling(): Record<string, Object> { return Wire.object(this.workspace.detail, 'handling'); }
@@ -545,7 +568,7 @@ export struct InboxWorkspacePage {
       }
       if (!this.toolbarActions) {
         MenuItem({content:tr('refresh')}).enabled(!this.workspace.loading).onClick(() => this.refreshList())
-        MenuItem({content:tr('compose')}).enabled(this.workspace.canComposeMail()).onClick(() => this.openMailCompose())
+        if (this.model.mailModuleAllowed()) MenuItem({content:tr('compose')}).enabled(this.workspace.canComposeMail()).onClick(() => this.openMailCompose())
       }
     }.width(Tokens.popupWidth)
   }
@@ -561,10 +584,14 @@ export struct InboxWorkspacePage {
       .constraintSize({ minHeight: Tokens.touch }).width('100%')
   }
   private pickChoice(key:string): void {
-    this.workspace.statusFilter=key;
+    Haptics.selection();
+    Motion.run(this.getUIContext(), Motion.state(this.environment.reduceMotion), () => {
+      this.workspace.statusFilter=key;
+    });
     if (key === 'done' && this.workspace.haveDoneDays && !this.workspace.doneItems.length && !this.workspace.historyEnded) this.workspace.loadOlderDone();
   }
   private async chooseGrouping(byTime: boolean): Promise<void> {
+    Haptics.selection();
     if (!await this.grouping.choose(byTime)) this.workspace.error = 'cache_unavailable';
   }
   @Builder groupingOptions() {
@@ -607,14 +634,15 @@ export struct InboxWorkspacePage {
               Text(tr(inboxTierLabel(choice.key))).fontSize(14).maxFontScale(Tokens.navigationTextMaxScale).maxLines(1)
                 .fontWeight(!Colors.systemControls && this.workspace.statusFilter === choice.key ? FontWeight.Bold : FontWeight.Medium)
                 .fontColor(this.workspace.statusFilter === choice.key ? Colors.selectedFilterInk : Colors.ink).id('inbox.choice.label.' + choice.key)
-              if (choice.count && ['action','working','fyi'].includes(choice.key)) Text(choice.count > 99 ? '99+' : String(choice.count)).fontSize(12)
+              if (choice.count && ['action','working','fyi'].includes(choice.key)) Text(choice.count > 99 ? '99+' : String(choice.count)).fontSize(Tokens.typeLabel)
                 .maxFontScale(Tokens.navigationTextMaxScale).maxLines(1).fontWeight(FontWeight.Bold)
                 .fontColor(this.countInk(choice.key))
                 .textAlign(TextAlign.Center).padding({left:6,right:6}).constraintSize({minWidth:PhoneStyle.formSize(20.3,23,this.environment.fontScale)})
                 .height(PhoneStyle.formSize(17.7,25.7,this.environment.fontScale))
-                .backgroundColor(this.countFill(choice.key)).borderRadius(Tokens.capsule)
-            }.padding({left:8,right:8}).height(PhoneStyle.formSize(26.3,33.7,this.environment.fontScale)).borderRadius(Tokens.capsule)
+                .backgroundColor(this.countFill(choice.key)).borderRadius(Tokens.radiusCapsule)
+            }.padding({left:8,right:8}).height(PhoneStyle.formSize(26.3,33.7,this.environment.fontScale)).borderRadius(Tokens.radiusCapsule)
               .backgroundColor(this.workspace.statusFilter === choice.key ? Colors.selectedFilterFill : Color.Transparent)
+              .animation(Motion.state(this.environment.reduceMotion))
           }.height(PhoneStyle.sidebarMetric(44,this.environment.fontScale))
             .constraintSize({minWidth:PhoneStyle.sidebarMetric(44,this.environment.fontScale)}).padding(0).backgroundColor(Color.Transparent)
             .accessibilityText([tr(inboxTierLabel(choice.key)),choice.count ? String(choice.count) : ''].filter((v:string) => !!v).join(' · '))
@@ -633,15 +661,19 @@ export struct InboxWorkspacePage {
       Row({space:4}) {
         if (value!=='all') SymbolGlyph(account ? Symbols.inbox : value==='lark' ? Symbols.persona : Symbols.apps)
           .fontSize('13vp').fontColor([this.chipSelected(value,account) ? Colors.onAction : Colors.ink])
-        Text(account ? this.workspace.filterAccountName(value) : this.sourceLabel(value)).fontSize(13)
+        Text(account ? this.workspace.filterAccountName(value) : this.sourceLabel(value)).fontSize(Tokens.typeCaption)
           .maxFontScale(Tokens.navigationTextMaxScale).maxLines(1).fontColor(this.chipSelected(value,account) ? Colors.onAction : Colors.ink)
       }
     }.height(PhoneStyle.formSize(30,37.3,this.environment.fontScale)).responseRegion(this.chipTouchRegion()).padding({left:13,right:13,top:3,bottom:3})
-      .backgroundColor(this.chipSelected(value,account) ? Colors.action : Colors.control).accessibilitySelected(this.chipSelected(value,account))
+      .backgroundColor(this.chipSelected(value,account) ? Colors.action : Colors.control)
+      .animation(Motion.state(this.environment.reduceMotion)).accessibilitySelected(this.chipSelected(value,account))
       .onClick(() => {
+        Haptics.selection();
         const clear=this.chipSelected(value,account);
-        this.workspace.sourceFilter=account || clear ? 'all' : value; this.workspace.accountFilter=account && !clear ? value : 'all';
-        if (value==='all') this.workspace.kindFilter='';
+        Motion.run(this.getUIContext(), Motion.state(this.environment.reduceMotion), () => {
+          this.workspace.sourceFilter=account || clear ? 'all' : value; this.workspace.accountFilter=account && !clear ? value : 'all';
+          if (value==='all') this.workspace.kindFilter='';
+        });
       })
       .id('inbox.'+(account ? 'account.' : 'source.')+value)
   }
@@ -661,13 +693,14 @@ export struct InboxWorkspacePage {
         ForEach(['mention','dm','group','mail','agent'],(kind:string) => {
           Button(tr(kind==='mail' || kind==='agent' ? kind : 'phone_inbox_'+kind),{type:ButtonType.Capsule})
             .height(PhoneStyle.formSize(30,37.3,this.environment.fontScale)).responseRegion(this.chipTouchRegion()).padding({left:13,right:13,top:3,bottom:3})
-            .fontSize(13).maxFontScale(Tokens.interfaceScaleFor(13)).backgroundColor(this.workspace.kindFilter===kind ? Colors.action : Colors.subtle)
+            .fontSize(Tokens.typeCaption).maxFontScale(Tokens.interfaceScaleFor(Tokens.typeCaption)).backgroundColor(this.workspace.kindFilter===kind ? Colors.action : Colors.subtle)
+            .animation(Motion.state(this.environment.reduceMotion))
             .fontColor(this.workspace.kindFilter===kind ? Colors.onAction : Colors.ink).accessibilitySelected(this.workspace.kindFilter===kind)
-            .onClick(() => this.workspace.kindFilter=this.workspace.kindFilter===kind ? '' : kind).id('inbox.kind.'+kind)
+            .onClick(() => { Haptics.selection(); Motion.run(this.getUIContext(), Motion.state(this.environment.reduceMotion), () => { this.workspace.kindFilter=this.workspace.kindFilter===kind ? '' : kind; }); }).id('inbox.kind.'+kind)
         },(kind:string) => kind)
       }
     }.scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Off).width('100%').align(Alignment.Start)
-      .padding({left:Tokens.page,right:Tokens.page}).id('inbox.sources')
+      .padding({left:this.inboxSidePadding(),right:this.inboxSidePadding()}).id('inbox.sources')
   }
 
   private rowTime(row:ResourceRow):string {
@@ -696,17 +729,23 @@ export struct InboxWorkspacePage {
     return this.phoneList && Colors.styleID==='glass' ? Colors.listBackground : Colors.surface;
   }
   @Builder requestAvatar(row:ResourceRow, identity:string) {
-    Stack() {
-      if (this.phoneList && row.kind==='session' && Wire.text(row.data(),'inbox_request_kind')==='question') {
-        SymbolGlyph($r('sys.symbol.message_fill')).fontSize('19vp').fontColor([Colors.needsMark])
-        Text('?').fontSize('11vp').fontWeight(FontWeight.Bold).fontColor($r('app.color.phone_inbox_request_well'))
-          .offset({y:-1}).accessibilityLevel('no')
-      } else {
-        SymbolGlyph(this.rowSymbol(row)).fontSize(this.phoneList && row.kind==='session' ? '17vp' : '18vp')
-          .fontColor([this.phoneList && row.kind==='session' ? Colors.needsMark : Colors.link])
+    Stack({ alignContent: Alignment.TopEnd }) {
+      Stack() {
+        if (this.phoneList && row.kind==='session' && Wire.text(row.data(),'inbox_request_kind')==='question') {
+          SymbolGlyph($r('sys.symbol.message_fill')).fontSize('19vp').fontColor([Colors.needsMark])
+          Text('?').fontSize('11vp').fontWeight(FontWeight.Bold).fontColor($r('app.color.phone_inbox_request_well'))
+            .offset({y:-1}).accessibilityLevel('no')
+        } else {
+          SymbolGlyph(this.rowSymbol(row)).fontSize(this.phoneList && row.kind==='session' ? '17vp' : '18vp')
+            .fontColor([this.phoneList && row.kind==='session' ? Colors.needsMark : Colors.link])
+        }
+      }.width(40).height(40).borderRadius(this.phoneList && row.kind==='session' ? Tokens.radiusCard : Tokens.radiusControl)
+        .backgroundColor(this.phoneList && row.kind==='session' ? $r('app.color.phone_inbox_request_well') : Colors.subtle)
+      if (this.rowNeedsPulse(row)) {
+        NeedsYouPulseDot({ dotSize: 7, tint: Colors.needsMark, surface: Colors.surface, bordered: true })
+          .offset({ x: 3, y: -3 })
       }
-    }.width(40).height(40).flexShrink(0).borderRadius(this.phoneList && row.kind==='session' ? 12 : 10)
-      .backgroundColor(this.phoneList && row.kind==='session' ? $r('app.color.phone_inbox_request_well') : Colors.subtle)
+    }.width(40).height(40).flexShrink(0).clip(false)
       .id('inbox.row.icon.'+identity)
   }
   private rowSymbol(row:ResourceRow):Resource {
@@ -754,11 +793,17 @@ export struct InboxWorkspacePage {
   }
   private toggleSection(section:BoundInboxSection):void {
     if (section.sourceGroup) {
-      this.collapsedSources=this.collapsedSources.includes(section.key) ? this.collapsedSources.filter((s:string) => s!==section.key) :
-        this.collapsedSources.concat([section.key]);
+      Haptics.tap();
+      Motion.run(this.getUIContext(), Motion.state(this.environment.reduceMotion), () => {
+        this.collapsedSources=this.collapsedSources.includes(section.key) ? this.collapsedSources.filter((s:string) => s!==section.key) :
+          this.collapsedSources.concat([section.key]);
+      });
     } else if (this.workspace.statusFilter==='all' && ['done','noise'].includes(section.tier)) {
-      this.expandedTiers=this.expandedTiers.includes(section.tier) ? this.expandedTiers.filter((s:string) => s!==section.tier) :
-        this.expandedTiers.concat([section.tier]);
+      Haptics.tap();
+      Motion.run(this.getUIContext(), Motion.state(this.environment.reduceMotion), () => {
+        this.expandedTiers=this.expandedTiers.includes(section.tier) ? this.expandedTiers.filter((s:string) => s!==section.tier) :
+          this.expandedTiers.concat([section.tier]);
+      });
     } else return;
     this.foldRevision++;
     this.foldLease?.write(JSON.stringify({expanded:this.expandedTiers,collapsed:this.collapsedSources})).catch(() => {});
@@ -767,11 +812,11 @@ export struct InboxWorkspacePage {
     Row({space:5}) {
       if (section.sourceGroup) SymbolGlyph(this.collapsedSources.includes(section.key) ? Symbols.expand : Symbols.down).fontSize('11vp').fontColor([Colors.secondary])
       Text(section.sourceGroup ? this.subheading(section) : tr(inboxTierLabel(section.tier))+' ·')
-        .fontSize(13).maxFontScale(Tokens.interfaceScaleFor(13)).fontWeight(FontWeight.Medium).fontColor(section.sourceGroup ? Colors.secondary : Colors.ink)
-      Text(String(section.count)).fontSize(13).maxFontScale(Tokens.interfaceScaleFor(13)).fontColor(section.sourceGroup ? Colors.secondary : Colors.ink).layoutWeight(1)
+        .fontSize(Tokens.typeSectionHeader).maxFontScale(Tokens.interfaceScaleFor(Tokens.typeSectionHeader)).fontWeight(FontWeight.Medium).fontColor(section.sourceGroup ? Colors.secondary : Colors.ink)
+      Text(String(section.count)).fontSize(Tokens.typeCaption).maxFontScale(Tokens.interfaceScaleFor(Tokens.typeCaption)).fontColor(section.sourceGroup ? Colors.secondary : Colors.ink).layoutWeight(1)
       if (!section.sourceGroup && this.workspace.statusFilter==='all' && ['done','noise'].includes(section.tier))
         SymbolGlyph(this.groupOpen(section.tier) ? Symbols.down : Symbols.expand).fontSize('13vp').fontColor([Colors.secondary])
-    }.constraintSize({minHeight:PhoneStyle.sidebarMetric(44,this.environment.fontScale)}).width('100%').padding({left:16,right:12,top:4,bottom:4})
+    }.constraintSize({minHeight:PhoneStyle.sidebarMetric(44,this.environment.fontScale)}).width('100%').padding({left:4,right:4,top:4,bottom:4})
       .accessibilityGroup(true).onClick(() => this.toggleSection(section)).id('inbox.section.'+section.key)
   }
   @Builder inboxList() {
@@ -780,13 +825,13 @@ export struct InboxWorkspacePage {
         Column() { this.choiceBar() }.layoutWeight(1)
         if (!['done','working'].includes(this.workspace.statusFilter)) this.groupingButton()
         if (!this.toolbarActions) this.inboxActions()
-      }.width('100%').padding({left:16,right:16,top:8})
+      }.width('100%').padding({left:this.inboxSidePadding(),right:this.inboxSidePadding(),top:8})
       Column() { this.sourceBar() }.width('100%').margin({top:5})
-      if (this.workspace.error) Text(tr(this.workspace.error)).fontSize(Tokens.meta).maxFontScale(Tokens.interfaceScaleFor(Tokens.meta)).fontColor($r('app.color.persona_danger')).padding({ left: Tokens.page, right: Tokens.page })
+      if (this.workspace.error) Text(tr(this.workspace.error)).fontSize(Tokens.meta).maxFontScale(Tokens.interfaceScaleFor(Tokens.meta)).fontColor($r('app.color.persona_danger')).padding({ left: this.inboxSidePadding(), right: this.inboxSidePadding() })
       if (this.workspace.loading) LoadingProgress().width(Tokens.touch).height(Tokens.touch)
-      List({ space: 22 }) {
+      List({ space: 10 }) {
         ForEach(this.sections,(section:BoundInboxSection) => {
-          if (!section.sourceGroup || this.groupOpen(section.tier)) ListItemGroup({header:() => this.sectionHeading(section)}) {
+          if (!section.sourceGroup || this.groupOpen(section.tier)) ListItemGroup({header:() => this.sectionHeading(section), space: 8}) {
             if (this.groupOpen(section.tier) && !this.collapsedSources.includes(section.key)) {
         ForEach(section.rows, (binding: BoundRow<ResourceRow>) => {
           ListItem() {
@@ -794,35 +839,42 @@ export struct InboxWorkspacePage {
               this.requestAvatar(binding.value,binding.key)
               Column({ space: 4 }) {
                 Row({space:5}) {
-                  Text(binding.value.title || tr('inbox')).fontSize(17).maxFontScale(Tokens.interfaceFontMaxScale).fontWeight(FontWeight.Medium).fontColor(Colors.ink)
+                  Text(binding.value.title || tr('inbox')).fontSize(Tokens.typeHeading).maxFontScale(Tokens.interfaceFontMaxScale).fontWeight(FontWeight.Medium).fontColor(Colors.ink)
                     .layoutWeight(1).maxLines(binding.value.kind === 'session' ? 1 : 2).textOverflow({overflow:TextOverflow.Ellipsis})
                   if (this.rowTime(binding.value))
-                    Text(this.rowTime(binding.value)).fontSize(12).maxFontScale(Tokens.interfaceScaleFor(12)).fontColor(Colors.secondary)
+                    Text(this.rowTime(binding.value)).fontSize(Tokens.typeLabel).maxFontScale(Tokens.interfaceScaleFor(Tokens.typeLabel)).fontColor(Colors.secondary)
                 }.width('100%').alignItems(VerticalAlign.Top)
-                if (this.rowPreview(binding.value)) Text(this.rowPreview(binding.value)).fontSize(15).maxFontScale(Tokens.interfaceScaleFor(15)).fontColor(binding.value.kind==='session' ? Colors.ink : Colors.secondary).maxLines(2).textOverflow({overflow:TextOverflow.Ellipsis})
+                if (this.rowPreview(binding.value)) Text(this.rowPreview(binding.value)).fontSize(Tokens.typeSecondary).maxFontScale(Tokens.interfaceScaleFor(Tokens.typeSecondary)).fontColor(binding.value.kind==='session' ? Colors.ink : Colors.secondary).maxLines(2).textOverflow({overflow:TextOverflow.Ellipsis})
                 Flex({wrap:FlexWrap.Wrap,space:{main:LengthMetrics.vp(5),cross:LengthMetrics.vp(2)}}) {
-                  Text(binding.value.kind === 'session' ? this.requestLabel(binding.value) : tr(inboxTierLabel(inboxTier(binding.value.data())))).fontSize(12).maxFontScale(Tokens.interfaceScaleFor(12))
+                  Text(binding.value.kind === 'session' ? this.requestLabel(binding.value) : tr(inboxTierLabel(inboxTier(binding.value.data())))).fontSize(Tokens.typeLabel).maxFontScale(Tokens.interfaceScaleFor(Tokens.typeLabel))
                     .fontWeight(FontWeight.Medium).fontColor(Colors.link)
                   Text(binding.value.kind === 'session' ? '· '+(this.model.machineName(binding.value.machine) || tr('agent')) : this.rowSource(binding.value)).fontSize(12).maxFontScale(Tokens.interfaceScaleFor(12))
                     .fontColor(Colors.secondary).id('inbox.row.source.' + binding.key)
                 }.width('100%')
               }.layoutWeight(1).alignItems(HorizontalAlign.Start)
             }.width('100%').constraintSize({minHeight:PhoneStyle.formSize(86,108,this.environment.fontScale)}).alignItems(VerticalAlign.Top)
-              .padding({left:16,right:12,top:12,bottom:12}).backgroundColor(this.listFill)
+              .padding({left:14,right:14,top:12,bottom:12}).backgroundColor(Colors.surface).borderRadius(PhoneStyle.cardRadius)
+              .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.environment.dark),radius:PhoneStyle.cardRadius})
+              .shadow(PhoneStyle.cardElevation(this.environment.dark))
           }.onClick(() => this.openRow(binding.value)).accessibilityGroup(true).id('inbox.' + inboxLineKey(binding.value))
         }, (binding: BoundRow<ResourceRow>) => binding.key)
             }
-          }.divider({strokeWidth:0.5,startMargin:68,endMargin:12,color:Colors.divider})
+          }
         },(section:BoundInboxSection) => section.key)
-        if (this.workspace.statusFilter === 'done' && !this.workspace.historyEnded && (this.workspace.haveDoneDays || this.workspace.doneItems.length)) ListItem() {
-          Button(tr('flow_inbox_older_done'),{buttonStyle:ButtonStyleMode.TEXTUAL}).fontSize(14).maxFontScale(Tokens.interfaceScaleFor(14)).enabled(!this.workspace.historyBusy)
-            .onClick(() => this.workspace.loadOlderDone()).id('inbox.history.more')
+        if (this.workspace.statusFilter === 'done' && !this.workspace.historyEnded && (this.workspace.haveDoneDays || this.workspace.doneItems.length)) ListItemGroup() {
+          ListItem() {
+            Button(tr('flow_inbox_older_done'),{buttonStyle:ButtonStyleMode.TEXTUAL}).fontSize(14).maxFontScale(Tokens.interfaceScaleFor(14)).enabled(!this.workspace.historyBusy)
+              .onClick(() => { Haptics.tap(); this.workspace.loadOlderDone(); }).id('inbox.history.more')
+          }
         }
-        if (!this.itemRowBindings.length && !this.workspace.loading)
+        if (!this.itemRowBindings.length && !this.workspace.loading) ListItemGroup() {
           ListItem() { Text(tr(this.workspace.search.trim() ? 'no_results' : 'flow_inbox_section_empty')).fontSize(15).maxFontScale(Tokens.interfaceScaleFor(15)).fontColor(Colors.secondary).padding(Tokens.page).width('100%') }
-      }.layoutWeight(1).width('100%').margin({top:27}).padding({bottom:Tokens.inset})
-      Row() { this.inboxSearch(true) }.width('100%').padding({left:Tokens.page,right:Tokens.page,top:3,bottom:8})
-    }.width('100%').height('100%').backgroundColor(this.listFill)
+        }
+      }.lanes(this.inboxColumns(), workspaceGridGutter(this.inboxColumns()))
+        .layoutWeight(1).width('100%').margin({top:12}).padding({left:this.inboxSidePadding(),right:this.inboxSidePadding(),bottom:Tokens.inset})
+      Row() { this.inboxSearch(true) }.width('100%').padding({left:this.inboxSidePadding(),right:this.inboxSidePadding(),top:3,bottom:8})
+    }.width('100%').height('100%').backgroundColor(Colors.grouped)
+      .onAreaChange((_old: Area, area: Area) => { const w = Number(area.width); if (Number.isFinite(w) && w > 0 && Math.abs(w - this.paneWidth) > 0.5) this.paneWidth = w; })
   }
 
   @Builder header() {
@@ -842,6 +894,66 @@ export struct InboxWorkspacePage {
       if (Wire.text(this.workspace.detail, 'tier')) Text(tr('inbox_tier_' + Wire.text(this.workspace.detail, 'tier'))).fontSize(Tokens.meta).maxFontScale(Tokens.interfaceScaleFor(Tokens.meta)).fontColor($r('sys.color.font_secondary'))
       if (Wire.text(this.workspace.detail, 'folder')) Text(Wire.text(this.workspace.detail, 'folder')).fontSize(Tokens.meta).maxFontScale(Tokens.interfaceScaleFor(Tokens.meta)).fontColor($r('sys.color.font_secondary'))
     }.width('100%')
+  }
+
+  private linkedKnowledgeChat(): InboxKBChatLink | null {
+    if (this.workspace.isReference()) return null;
+    if (isHubPageHidden('knowledge', this.model.sidebarConfig, this.model.demo)) return null;
+    return parseInboxKBChat(this.workspace.kbChat);
+  }
+
+  private openKnowledgeChat(link: InboxKBChatLink): void {
+    Haptics.tap();
+    const row = new ResourceRow(link.id, this.workspace.selected.title || link.id, 'knowledge');
+    row.path = link.path;
+    row.manager = this.workspace.selected.manager || this.model.profile.manager;
+    row.group = this.workspace.selected.group || this.model.profile.id;
+    this.onOpenResource(row);
+  }
+
+  @Builder kbChatCard() {
+    if (this.linkedKnowledgeChat()) {
+      Button({ type: ButtonType.Normal }) {
+        Row({ space: Tokens.spaceM }) {
+          SymbolGlyph($r('sys.symbol.books_vertical_fill'))
+            .fontSize('18vp')
+            .fontColor([Colors.ai])
+          Column({ space: Tokens.spaceXxs }) {
+            Text(tr('kb_chat_knowledge_page'))
+              .fontSize(Tokens.typeSecondary)
+              .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeSecondary))
+              .fontWeight(FontWeight.Medium)
+              .fontColor(Colors.ink)
+              .maxLines(1)
+            Text(this.workspace.selected.title || this.linkedKnowledgeChat()!.id)
+              .fontSize(Tokens.typeLabel)
+              .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeLabel))
+              .fontColor(Colors.secondary)
+              .maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+          }
+          .layoutWeight(1)
+          .alignItems(HorizontalAlign.Start)
+          SymbolGlyph(Symbols.expand)
+            .fontSize('12vp')
+            .fontColor([Colors.tertiary])
+        }
+        .width('100%')
+        .padding({ left: Tokens.spaceL, right: Tokens.spaceM, top: Tokens.spaceM, bottom: Tokens.spaceM })
+        .alignItems(VerticalAlign.Center)
+      }
+      .width('100%')
+      .padding(0)
+      .backgroundColor(Colors.surface)
+      .borderRadius(PhoneStyle.cardRadius)
+      .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.environment.dark), radius: PhoneStyle.cardRadius })
+      .shadow(PhoneStyle.cardElevation(this.environment.dark))
+      .onClick(() => {
+        const link = this.linkedKnowledgeChat();
+        if (link) this.openKnowledgeChat(link);
+      })
+      .id('inbox.detail.kb_chat')
+    }
   }
 
   @Builder summary() {
@@ -922,7 +1034,9 @@ export struct InboxWorkspacePage {
         }, (entry: Record<string, Object>, index: number) => String(index) + Wire.text(entry, 'edited_at'))
       }
     }.width('100%').padding(Tokens.inset).alignItems(HorizontalAlign.Start)
-      .backgroundColor($r('sys.color.comp_background_tertiary')).border({ width: Tokens.hairline, color: $r('sys.color.font_secondary'), radius: Tokens.fine })
+      .backgroundColor(Colors.surface).borderRadius(PhoneStyle.cardRadius)
+      .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.environment.dark), radius: PhoneStyle.cardRadius })
+      .shadow(PhoneStyle.cardElevation(this.environment.dark))
       .onVisibleAreaChange([0, 1], (visible: boolean, ratio: number) => { if (visible && ratio > 0) this.workspace.markMessageVisible(message); })
   }
 
@@ -991,15 +1105,26 @@ export struct InboxWorkspacePage {
       if (this.workspace.translationError) Text(tr(this.workspace.translationError)).fontSize(Tokens.meta).maxFontScale(Tokens.interfaceScaleFor(Tokens.meta)).fontColor($r('app.color.persona_danger')).width('100%')
       if (this.hasMailTranslation(message) && Wire.bool(this.workspace.mailTranslation, 'clipped')) Text(tr('inbox_translation_clipped')).fontSize(Tokens.meta).maxFontScale(Tokens.interfaceScaleFor(Tokens.meta)).fontColor($r('sys.color.font_secondary'))
     }.width('100%').padding(Tokens.inset).alignItems(HorizontalAlign.Start)
-      .backgroundColor($r('sys.color.comp_background_tertiary')).border({ width: Tokens.hairline, color: $r('sys.color.font_secondary'), radius: Tokens.fine })
+      .backgroundColor(Colors.surface).borderRadius(PhoneStyle.cardRadius)
+      .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.environment.dark), radius: PhoneStyle.cardRadius })
+      .shadow(PhoneStyle.cardElevation(this.environment.dark))
       .onVisibleAreaChange([0, 1], (visible: boolean, ratio: number) => { if (visible && ratio > 0) this.workspace.markMailVisible(message.uid); })
   }
 
   @Builder mailContent() {
     if (this.workspace.isMail()) {
-      Column({ space: Tokens.gap }) {
-        ForEach(this.workspace.mailMessages, (message: InboxMailMessage) => this.mailMessage(message), (message: InboxMailMessage) => String(message.uid))
-      }.width('100%').alignItems(HorizontalAlign.Start)
+      if (this.model.mailModuleAllowed()) {
+        Column({ space: Tokens.gap }) {
+          ForEach(this.workspace.mailMessages, (message: InboxMailMessage) => this.mailMessage(message), (message: InboxMailMessage) => String(message.uid))
+        }.width('100%').alignItems(HorizontalAlign.Start)
+      } else if (Wire.text(this.workspace.detail, 'context')) {
+        Column({ space: Tokens.gap }) {
+          MarkdownText({ text: Wire.text(this.workspace.detail, 'context'), onLink: (address: string) => this.onLink(address) })
+        }.width('100%').padding(Tokens.inset).alignItems(HorizontalAlign.Start)
+          .backgroundColor(Colors.surface).borderRadius(PhoneStyle.cardRadius)
+          .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.environment.dark), radius: PhoneStyle.cardRadius })
+          .shadow(PhoneStyle.cardElevation(this.environment.dark))
+      }
     }
   }
 
@@ -1085,6 +1210,7 @@ export struct InboxWorkspacePage {
             this.conversation()
           } else {
             this.summary()
+            this.kbChatCard()
             this.connectorContent()
             this.mailContent()
             this.conversation()
@@ -1094,15 +1220,15 @@ export struct InboxWorkspacePage {
       }.layoutWeight(1).width('100%').align(Alignment.TopStart)
       if (!this.workspace.isReference()) Row({ space: Tokens.gap }) {
         Button({ type: ButtonType.Circle }) { if (IconActions.busy(this.workspace.isHandled() ? 'reopen' : 'process')) LoadingProgress().width(Tokens.symbol).height(Tokens.symbol).color(Colors.link); else SymbolGlyph(IconActions.symbol(this.workspace.isHandled() ? 'reopen' : 'process')).fontSize(Tokens.symbolFont).fontColor([IconActions.color(this.workspace.isHandled() ? 'reopen' : 'process', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr(this.workspace.isHandled() ? 'reopen' : 'process')).bindTips(tr(this.workspace.isHandled() ? 'reopen' : 'process')).enabled(this.workspace.canWrite())
-          .onClick(() => this.workspace.processInbox().then((changed: boolean) => this.acknowledged(changed)))
-        Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('handoff')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('handoff', true)]) }.attributeModifier(ButtonStyles.iconPrimary).accessibilityText(tr('handoff')).bindTips(tr('handoff')).enabled(this.workspace.canWrite()).onClick(() => this.openHandoff())
+          .onClick(() => { Haptics.tap(); this.workspace.processInbox().then((changed: boolean) => { if (changed) Haptics.success(); this.acknowledged(changed); }); })
+        Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('handoff')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('handoff', true)]) }.attributeModifier(ButtonStyles.iconPrimary).accessibilityText(tr('handoff')).bindTips(tr('handoff')).enabled(this.workspace.canWrite()).onClick(() => { Haptics.tap(); this.openHandoff(); })
       }.width('100%').padding({ left: Tokens.page, right: Tokens.page, bottom: Tokens.footer })
       this.replyBox()
     }.width('100%').height('100%')
   }
 
   @Builder sheetContent() {
-    if (this.activeSheet === 'mail') this.mailComposer()
+    if (this.activeSheet === 'mail' && this.model.mailModuleAllowed()) this.mailComposer()
     else if (this.activeSheet === 'handoff') this.handoffComposer()
   }
 

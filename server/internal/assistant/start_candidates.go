@@ -53,7 +53,7 @@ func (s *Service) candidateSource() startCandidateSource {
 // filtered list, which would hide the reason a preset was passed over.
 type profileCandidateSource struct{ s *Service }
 
-// candidateAgentLookup mirrors fitLauncher's everywhere/last-seen/configured metadata decisions for one inventory.
+// candidateAgentLookup mirrors fitLauncher's managed, last-seen and configured metadata decisions for one inventory.
 // An unknown wrapper stays unknown; only real launcher metadata or a named built-in determines the agent.
 func (s *Service) candidateAgentLookup(ctx context.Context, machine string, list []proto.Launcher, known bool) func(string) string {
 	discovered := make([]ConfiguredLauncher, 0, len(list))
@@ -62,16 +62,8 @@ func (s *Service) candidateAgentLookup(ctx context.Context, machine string, list
 	}
 	agentOf := configuredStartAgentLookup(discovered, s.hello(ctx).Models.Launchers[machine])
 	return func(name string) string {
-		if name == "" || name == "claude" {
-			return "claude"
-		}
-		if s.launcherEverywhere(ctx, name) {
-			for _, l := range s.storedLaunchers(ctx) {
-				if l.Name == name {
-					return l.AgentType()
-				}
-			}
-			return ""
+		if agent, err := s.launcherWithoutInventory(ctx, machine, name); agent.agent != "" || err != nil {
+			return agent.agent
 		}
 		if !known {
 			return s.lastSeenAgent(ctx, machine, name).agent
@@ -107,6 +99,9 @@ func (s *Service) availabilityOn(machine string) *launcherAvailability {
 // check says whether launcher can start on the machine now, why not, and the agent it runs (configured metadata;
 // "" unknown).
 func (a *launcherAvailability) check(ctx context.Context, launcher string) (available bool, reason, agent string) {
+	if err := a.s.launcherScopeErr(ctx, a.machine, launcher); err != nil {
+		return false, err.Error(), ""
+	}
 	if !a.loaded {
 		a.list, a.listKnown = a.s.launchersHere(ctx, a.machine)
 		a.agentOf = a.s.candidateAgentLookup(ctx, a.machine, a.list, a.listKnown)

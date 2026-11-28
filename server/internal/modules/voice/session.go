@@ -85,6 +85,29 @@ type conversation struct {
 	started    bool // the app got its ready
 	outRate    int
 	reconnects int
+	// wantTextOnly asks the upstream for text-only output (no output voice) when the dialect supports it and the
+	// provider has not refused it (set before connect when external TTS speaks the call; unset by default).
+	// textOnly records whether the current upstream session actually started with text-only output granted.
+	wantTextOnly bool
+	textOnly     bool
+	// tts is the per-call streaming TTS bridge when Config.HasTTS() is true on a speaking call (tts_call.go).
+	// ttsOutRate is the fixed output rate (16000 or 24000 Hz) announced in ready.output_rate for the whole call.
+	// ttsLastGen / ttsCancelGen gate bridge callbacks under mu; ttsCurGen/ttsCurReply/ttsCurStart/ttsFedText
+	// track the upstream reply currently feeding text; ttsDropText/ttsCutReply drop late deltas of a cut reply;
+	// ttsTurns tracks active and queued turns in FIFO order for reply boundaries and silent-reply detection.
+	tts             *ttsBridge
+	ttsOutRate      int
+	ttsLastGen      uint64
+	ttsCancelGen    uint64
+	ttsCurGen       uint64
+	ttsReplyHadTurn bool
+	ttsCurReply     string
+	ttsCurStart     time.Time
+	ttsFedText      string
+	ttsDropText     bool
+	ttsCutReply     string
+	ttsCutAt        time.Time
+	ttsTurns        []*ttsCallTurn
 	// down is the last session the service said it cannot serve (error upstream_unavailable, its model's backend is
 	// down) with its words, clipped: it closes that session right after (docs/lessons/voice.md "Errors"), so the
 	// session's loss is the service's, not the network's.
@@ -115,6 +138,10 @@ type conversation struct {
 	queue            []*sentWords          // what waits for the insertion gate
 	userAt           time.Time             // the user's open caption last grew
 	connectedAt      time.Time             // the upstream session came up
+	// kept is everything said in the call for its archive (archive.go, #13249), only with archive_machine set;
+	// keptDropped counts the lines past archiveLinesMost.
+	kept                   []keptLine
+	keptDropped, keptBytes int
 	// askCur is the card the tracker asks by voice (asks.go), askTold whether the model was told it: from then on what
 	// it hands over is the card's answer. askGen is the upstream session (gen) it was last told it in.
 	askCur  string
@@ -185,6 +212,8 @@ func (pl *Plugin) converse(ctx context.Context, app *websocket.Conn, role string
 	c.logf("conversation opened (role %q)", role)
 	pl.active.Add(1)
 	defer pl.active.Add(-1)
+	pl.open.Store(c, struct{}{})
+	defer pl.open.Delete(c)
 	writerDone, loopsDone := make(chan struct{}), make(chan struct{}, 2)
 	go c.writeApp(writerDone)
 	c.runs = newTracker(c, pl.link.listen())
@@ -326,6 +355,16 @@ func (c *conversation) begin() error {
 			return errNoLiveUpstream // dictation uses the existing live-dialect text-only negotiation, not another protocol
 		}
 	}
+	var ttsBridgeInst *ttsBridge
+	var ttsOutRate int
+	var resolvedVoice string
+	useTTS := !c.dictation && c.pl.cfg.HasTTS()
+	if useTTS {
+		tts := c.pl.cfg.TTS()
+		ttsOutRate = ttsCallOutputRate(tts)
+		resolvedVoice = c.resolveTTSVoice(c.ctx, start.Voice, tts)
+		ttsBridgeInst = c.newCallTTSBridge(tts, ttsOutRate)
+	}
 	c.mu.Lock()
 	c.p, c.w, c.model, c.modelID = p, w, model, p.ID+"/"+model
 	c.gate.echoes = start.EchoCancellation != nil && !*start.EchoCancellation
@@ -334,7 +373,12 @@ func (c *conversation) begin() error {
 	// so only what the owner just said in Talk (or typed) does, never anything kept for a later tap.
 	c.gate.off = start.SpeechGate != nil && !*start.SpeechGate && (c.role == "" || c.role == roleFull) && c.meeting == nil
 	c.sendsAnyway = start.SpeechGate != nil && c.meeting == nil
-	if voicePattern.MatchString(start.Voice) && !gone { // a voice of the other upstream's may not exist here
+	if useTTS {
+		c.wantTextOnly = true
+		c.tts = ttsBridgeInst
+		c.ttsOutRate = ttsOutRate
+		c.voice = resolvedVoice
+	} else if voicePattern.MatchString(start.Voice) && !gone { // a voice of the other upstream's may not exist here
 		c.voice = start.Voice
 	}
 	c.mu.Unlock()
@@ -507,6 +551,10 @@ func (c *conversation) shutdown() {
 		return
 	}
 	c.closed = true
+	tts := c.tts
+	if tts != nil {
+		c.cancelTTSLocked(false)
+	}
 	c.finishReplyAudio(true)
 	up, w := c.up, c.w
 	lines := callLines{user: c.userSeq, model: c.asstSeq, pauses: c.sus.pauses, holds: c.sus.holds, meeting: c.meeting.meetingLog()}
@@ -514,8 +562,15 @@ func (c *conversation) shutdown() {
 		t.Stop()
 		delete(c.pending, id)
 	}
+	archive := c.archive()
 	c.mu.Unlock()
+	if tts != nil {
+		tts.Close()
+	}
 	c.logf("conversation closed %s", c.summary(lines))
+	if archive != nil {
+		c.pl.startArchive(archive)
+	}
 	if up != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		_ = writeJSON(ctx, up, w.close())

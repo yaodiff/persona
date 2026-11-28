@@ -1,8 +1,8 @@
 {
   "preview_mine": "我：{text}",
   "preview_sender": "{sender}：{text}",
-  "not_logged_in": "hub 连接的飞书网关没有登录飞书。在 hub 所在的机器上登录后再试。",
-  "not_configured": "hub 还没接飞书：在 hub 所在的机器上运行飞书网关，并在助手的 manager.json 的 lark 里填上它。",
-  "load_failed": "读不到飞书会话：{error}",
+  "not_logged_in": "hub 连接的飞书网关尚未登录飞书，请在 hub 所在机器上登录后重试。",
+  "not_configured": "hub 尚未接入飞书：请在 hub 所在机器上运行飞书网关，并在助手的 manager.json 的 lark 字段中完成配置。",
+  "load_failed": "无法加载飞书会话：{error}",
   "account_changed": "飞书账号已切换"
 }

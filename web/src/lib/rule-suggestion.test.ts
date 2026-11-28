@@ -75,7 +75,7 @@ describe("what Always stores, in words", () => {
 
   it("in Simplified Chinese and Japanese too", async () => {
     await initI18n("zh-Hans");
-    expect(ruleJoin(ruleCreates(ruleSuggestion(standing)!))).toBe("点「总是」会为 Example node 的 /code/example 新增一条长期授权：合入改动。仅在满足这些条件时：所有检查通过、无合并冲突。记为你的原话：「Merge the PR now? → Yes」。");
+    expect(ruleJoin(ruleCreates(ruleSuggestion(standing)!))).toBe("选择「总是」将为 Example node 的 /code/example 新增一条长期授权：合入改动。仅在满足以下条件时生效：所有检查通过、无合并冲突。已按你的原话记录：「Merge the PR now? → Yes」。");
     await initI18n("ja");
     expect(ruleCreates(ruleSuggestion(plan)!)[0]).toContain("この種類のタスクを記憶します");
     expect(ruleCreates(ruleSuggestion(delegate)!)[0]).not.toMatch(/agents\.delegate|manager\.json/);

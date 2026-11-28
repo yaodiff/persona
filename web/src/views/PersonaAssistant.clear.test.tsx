@@ -58,7 +58,7 @@ import { PersonaAssistant } from "./PersonaAssistant";
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const WORDS = "帮我规划一下这个周末的行程";
-const WELCOME = "有什么要我做的？";
+const WELCOME = "有什么我可以帮你的？";
 let host: HTMLDivElement;
 let root: Root;
 

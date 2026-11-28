@@ -58,8 +58,8 @@ func (n *Node) checkTaskDirectory(id, cwd, launcher string) error {
 		st.Cwd, st.Launcher, ok = row.Cwd, previous, true
 	}
 	if !ok {
-		if _, _, known := n.runtimes.belongs(id); known {
-			return i18n.Err("assistant-schedule.execution_context_unavailable") // known ownership is not proof of a gone conversation
+		if _, _, known := n.runtimes.belongs(id); known || n.runtimeResumablePending(id, launcher) {
+			return i18n.Err("assistant-schedule.execution_context_unavailable") // known or still-starting runtime ownership is not proof of a gone conversation
 		}
 		return fmt.Errorf("conversation %s is gone", id)
 	}

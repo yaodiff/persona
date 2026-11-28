@@ -24,7 +24,7 @@ import { Button, copyText, cx, IconButton, Spinner, useNow } from "../../ui/atom
 import { Icon, type IconName } from "../../ui/icons";
 import { PanelHeader } from "../../ui/PanelHeader";
 import { taskStatusWord } from "./TaskCard";
-import { WorkflowCard } from "./WorkflowCard";
+import { WorkflowCard } from "./WorkflowRun";
 import { BackgroundCommandDetail } from "./BackgroundCommandDetail";
 
 /** When a run started, or 0 when the hub does not say. */

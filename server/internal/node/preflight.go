@@ -405,6 +405,11 @@ func tccRefused(msg string) bool {
 	return strings.Contains(strings.ToLower(msg), "operation not permitted")
 }
 
+// symlinkLoop says whether msg is a circular symlink error (ELOOP).
+func symlinkLoop(msg string) bool {
+	return strings.Contains(strings.ToLower(msg), "too many levels of symbolic links")
+}
+
 // launchedVia says what started this process, for macOS privacy (TCC) wording: TCC holds a read to account against
 // the "responsible" program, which is sshd-keygen-wrapper for anything started over ssh, the program itself for a
 // LaunchAgent's (launchd sets XPC_SERVICE_NAME to the agent's label), and the terminal or app otherwise.
@@ -608,6 +613,10 @@ func preflightCheckIn(o preflightOutcome, items []preflightItem, env preflightEn
 		c.Detail = i18n.T(lang, "node-doctor.preflight_detail_with_count", i18n.Args{"detail": c.Detail, "count": len(problems)})
 	}
 	if tcc < 0 {
+		if symlinkLoop(first.msg) {
+			c.Hint = i18n.T(lang, "node-doctor.preflight_symlink_loop_hint")
+			return c
+		}
 		c.Hint = i18n.T(lang, "node-doctor.preflight_mount_hint")
 		if onVolume != "" { // macOS asks before a program reads a network or removable volume, too
 			c.Hint = i18n.T(lang, "node-doctor.preflight_volume_hint", i18n.Args{

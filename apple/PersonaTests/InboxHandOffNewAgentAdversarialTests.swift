@@ -33,7 +33,7 @@ struct InboxHandOffNewAgentAdversarialTests {
             handOff: { _, _, _ in self.key },
             record: { _, key, _, _, _ in calls.records.append(key) },
             showMain: { _, _, _ in },
-            plainToMain: { _ in self.key },
+            plainToMain: { _, _ in self.key },
             startNew: { _ in self.key },
             sendToAgent: { _, _, _ in .sent },
             waitForNewAgent: { key, message in

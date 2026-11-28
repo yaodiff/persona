@@ -92,10 +92,10 @@ describe("backgroundStall (#13744)", () => {
   const base = { ...session, state: "working" as const, background_working: true, background_stalled_since: "2026-11-13T01:00:00Z" };
   const at = (min: number) => Date.parse("2026-11-13T01:00:00Z") + min * 60_000;
   it("says how long a Working background session has been quiet, in one unit", () => {
-    expect(backgroundStall(base, at(12))?.text).toBe("后台命令 12 分钟没有动静");
-    expect(backgroundStall(base, at(185))?.text).toBe("后台命令 3 小时没有动静");
-    expect(backgroundStall(base, at(60 * 24 * 3))?.text).toBe("后台命令 3 天没有动静");
-    expect(backgroundStall(base, at(12))?.title).toContain("仍按「工作中」计算");
+    expect(backgroundStall(base, at(12))?.text).toBe("后台命令已 12 分钟无活动");
+    expect(backgroundStall(base, at(185))?.text).toBe("后台命令已 3 小时无活动");
+    expect(backgroundStall(base, at(60 * 24 * 3))?.text).toBe("后台命令已 3 天无活动");
+    expect(backgroundStall(base, at(12))?.title).toContain("当前状态仍计为「工作中」");
   });
   it("shows nothing without a stall, or for a session that is not Working in the background", () => {
     expect(backgroundStall({ ...base, background_stalled_since: undefined }, at(12))).toBeNull();

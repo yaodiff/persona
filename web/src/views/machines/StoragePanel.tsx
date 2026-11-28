@@ -6,6 +6,7 @@ import { t } from "../../i18n";
 import { api, ApiError, enc, errorText, isAbort, pastHub } from "../../lib/api";
 import { bytesBin, percent } from "../../lib/machine-detail";
 import type { Machine } from "../../lib/types";
+import { MachineTool, type MachineToolProps } from "./MachinePicker";
 import { Button, cx, Dialog, Loading } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { UsageMap } from "./UsageMap";
@@ -201,29 +202,16 @@ export interface StorageFocus {
   seq: number;
 }
 
-export function StoragePanel({ machines, initialMachineId, focus }: { machines: Machine[]; initialMachineId?: string; focus?: StorageFocus }) {
-  const orderedMachines = useMemo(() => {
-    return [...machines].sort((a, b) => Number(b.online) - Number(a.online) || a.name.localeCompare(b.name));
-  }, [machines]);
+export function StoragePanel({ focus, ...props }: MachineToolProps & { focus?: StorageFocus }) {
+  return (
+    <MachineTool {...props} key={focus?.seq} initialMachineId={focus?.mid ?? props.initialMachineId}>
+      {(machine) => <Storage machine={machine} focus={focus} />}
+    </MachineTool>
+  );
+}
 
-  const [selectedId, setSelectedId] = useState<string>(() => {
-    if (initialMachineId && machines.some((m) => m.id === initialMachineId)) return initialMachineId;
-    return orderedMachines[0]?.id ?? "";
-  });
-
-  useEffect(() => {
-    if (!machines.some((m) => m.id === selectedId)) {
-      setSelectedId(orderedMachines[0]?.id ?? "");
-    }
-  }, [machines, orderedMachines, selectedId]);
-
-  // a disk alert's "See what's using space" picks its computer, even with the panel already open
-  useEffect(() => {
-    if (focus && machines.some((m) => m.id === focus.mid)) setSelectedId(focus.mid);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [focus?.seq]);
-
-  const machine = useMemo(() => machines.find((m) => m.id === selectedId), [machines, selectedId]);
+function Storage({ machine, focus }: { machine?: Machine; focus?: StorageFocus }) {
+  const selectedId = machine?.id ?? "";
 
   // Mount stats state (fast statfs read-only)
   const [mountsLoading, setMountsLoading] = useState(false);
@@ -280,7 +268,7 @@ export function StoragePanel({ machines, initialMachineId, focus }: { machines: 
       cleanupCtrlRef.current?.abort();
       cleanupCtrlRef.current = null;
     };
-  }, [selectedId]);
+  }, [selectedId, machine?.online]);
 
   // Fetch fast per-mount statfs report when machine changes or refresh is clicked.
   useEffect(() => {
@@ -393,7 +381,7 @@ export function StoragePanel({ machines, initialMachineId, focus }: { machines: 
   };
 
   const requestPreview = async () => {
-    if (!machine || chosenTargetIds.length === 0) return;
+    if (!machine?.online || chosenTargetIds.length === 0) return;
     const mid = machine.id;
     const targets = [...chosenTargetIds];
     previewCtrlRef.current?.abort();
@@ -422,7 +410,7 @@ export function StoragePanel({ machines, initialMachineId, focus }: { machines: 
   };
 
   const confirmCleanup = async () => {
-    if (!machine || !confirmState || confirmState.targets.length === 0) return;
+    if (!machine?.online || !confirmState || confirmState.targets.length === 0) return;
     const mid = machine.id;
     const targets = [...confirmState.targets];
     cleanupCtrlRef.current?.abort();
@@ -454,56 +442,21 @@ export function StoragePanel({ machines, initialMachineId, focus }: { machines: 
     }
   };
 
-  if (machines.length === 0) {
+  if (!machine) {
     return null;
   }
 
   return (
     <div className="space-y-4" data-testid="storage-panel">
-      {/* Machine selector */}
-      <section className="rounded-card bg-surface px-4 py-3 shadow-card">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div>
-            <h2 className="text-sm font-semibold text-ink">{t("machines-storage.title")}</h2>
-            <p className="text-submeta text-ink-3">{t("machines-storage.subtitle")}</p>
-          </div>
-          {machine?.online && (
-            <Button tone="secondary" icon="retry" busy={mountsLoading} onClick={() => setMountRefreshTick((n) => n + 1)} testId="storage-refresh-mounts">
-              {t("machines-storage.refresh_mounts")}
-            </Button>
-          )}
-        </div>
-        <div className="mt-3 flex flex-wrap gap-1.5" role="tablist" aria-label={t("machines-storage.machine_picker")}>
-          {orderedMachines.map((m) => {
-            const active = m.id === selectedId;
-            return (
-              <button
-                key={m.id}
-                type="button"
-                role="tab"
-                aria-selected={active}
-                data-storage-machine={m.id}
-                onClick={() => setSelectedId(m.id)}
-                className={cx(
-                  "inline-flex items-center gap-1.5 rounded-control px-2.5 py-1 text-meta transition-colors",
-                  active ? "bg-accent-tint font-medium text-accent-ink shadow-hairline" : "bg-inset text-ink-2 hover:bg-hover hover:text-ink",
-                )}
-              >
-                <span className={cx("size-1.5 rounded-full", m.online ? "bg-green" : "bg-ink-3")} aria-hidden />
-                <span className="truncate">{m.name}</span>
-              </button>
-            );
-          })}
-        </div>
-      </section>
-
-      {/* The disk map (#14576): the lists below stay as they are */}
-      {machine && <UsageMap key={machine.id} machine={machine} focus={focus && focus.mid === machine.id ? { mode: focus.mode, seq: focus.seq } : undefined} />}
+      {machine && <UsageMap key={String(machine.online)} machine={machine} focus={focus && focus.mid === machine.id ? { mode: focus.mode, seq: focus.seq } : undefined} />}
 
       {/* Per-mount capacity & inode utilization */}
       <section className="rounded-card bg-surface px-4 py-3.5 shadow-card" data-testid="storage-mounts-section">
         <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
           <h3 className="text-sm font-medium text-ink">{t("machines-storage.mounts_title")}</h3>
+          {machine.online && <Button tone="secondary" icon="retry" busy={mountsLoading} onClick={() => setMountRefreshTick(n => n + 1)} testId="storage-refresh-mounts">
+            {t("machines-storage.refresh_mounts")}
+          </Button>}
           {activeMountsReport && activeMountsReport.supported && (
             <span className="text-submeta text-ink-3 tabular-nums">
               {t("machines-storage.collected_ms", { ms: activeMountsReport.collected_ms })}
@@ -600,10 +553,10 @@ export function StoragePanel({ machines, initialMachineId, focus }: { machines: 
       </section>
 
       {/* On-demand hotspot analysis & selective safe cleanup */}
-      <section className="rounded-card bg-surface px-4 py-3.5 shadow-card" data-testid="storage-hotspots-section">
+      <details className="rounded-card bg-surface px-4 py-3.5 shadow-card" data-testid="storage-hotspots-section">
+        <summary className="cursor-pointer py-2 text-label font-medium text-ink">{t("machines-storage.hotspots_title")}</summary>
         <div className="flex flex-wrap items-start justify-between gap-2">
           <div>
-            <h3 className="text-sm font-medium text-ink">{t("machines-storage.hotspots_title")}</h3>
             <p className="text-submeta text-ink-3">{t("machines-storage.hotspots_hint")}</p>
           </div>
           <Button tone="primary" icon="search" disabled={!machine?.online || hotspotsLoading || cleanupBusy} busy={hotspotsLoading} onClick={() => void scanHotspots()} testId="storage-scan-hotspots">
@@ -739,7 +692,7 @@ export function StoragePanel({ machines, initialMachineId, focus }: { machines: 
             </ul>
           </div>
         )}
-      </section>
+      </details>
 
       {/* Confirmation dialog populated from frozen server dry-run preview */}
       <Dialog

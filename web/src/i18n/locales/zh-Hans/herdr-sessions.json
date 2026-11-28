@@ -1,8 +1,8 @@
 {
   "title": "命名 herdr 会话",
-  "footer": "选择所选电脑上要从 Persona 中排除的命名 herdr 会话（herdr --session <name>）。屏蔽后，Persona 不再展示或采集其中的窗格、工作区、hook、授权卡片、运行中的进程和已记住的会话记录，herdr 本身继续运行。取消屏蔽即可重新显示。默认 server 与 persona-* 数据目录会话由系统自动管理。",
+  "footer": "在所选电脑上选择需要在 Persona 中隐藏的命名 herdr 会话（herdr --session <name>）。屏蔽后，Persona 将不再显示该会话的标签页、空间、钩子、审批卡片、运行中的进程和已保存的对话记录，herdr 本身仍会继续运行。取消屏蔽即可重新显示。默认服务和 persona-* 数据目录会话由系统自动管理。",
   "machine": "电脑",
-  "session": "会话名",
+  "session": "会话名称",
   "placeholder": "agent",
   "block": "屏蔽",
   "unblock": "取消屏蔽",
@@ -12,11 +12,11 @@
   "running_blocked": "运行中 · 已屏蔽",
   "stopped_blocked": "未运行 · 已屏蔽",
   "not_detected_blocked": "已屏蔽 · 未检测到",
-  "empty": "这台电脑上没有检测到或已屏蔽的命名 herdr 会话。",
-  "offline_note": "电脑离线或节点版本较旧：仅显示已保存的屏蔽列表。",
-  "failed": "无法读取或保存 herdr 会话：{error}",
+  "empty": "这台电脑上暂未检测到或屏蔽任何命名 herdr 会话。",
+  "offline_note": "电脑离线或节点版本较旧，仅显示已保存的屏蔽会话。",
+  "failed": "无法加载或保存 herdr 会话：{error}",
   "retry": "重试",
   "name_invalid": "仅支持字母、数字、-、_ 或 .",
-  "name_reserved": "默认 server 和 persona-* 会话不能在这里配置",
+  "name_reserved": "默认服务和 persona-* 会话无法在此配置",
   "name_exists": "已在屏蔽列表中"
 }

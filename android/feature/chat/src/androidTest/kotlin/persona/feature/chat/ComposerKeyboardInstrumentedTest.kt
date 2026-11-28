@@ -68,13 +68,19 @@ class ComposerKeyboardInstrumentedTest {
             connection = rule.activity.currentFocus?.onCreateInputConnection(EditorInfo())
         }
         assertNotNull(connection)
-        instrumentation.runOnMainSync { connection!!.setComposingRegion(0, state.value.text.length) }
-        rule.waitForIdle()
-        assertNotNull(state.value.composition)
-        enter(KeyEvent.ACTION_DOWN, 0, KeyEvent.META_CTRL_ON)
-        enter(KeyEvent.ACTION_UP, 0, KeyEvent.META_CTRL_ON)
-        assertEquals(0, sent)
-        instrumentation.runOnMainSync { connection!!.finishComposingText() }
+        // Keep setComposingRegion and the composing Ctrl+Return chord in one main-thread turn:
+        // pumping the looper via waitForIdle() lets the system IME (Gboard on API 35) receive
+        // updateSelection and send an asynchronous RemoteInputConnectionImpl.finishComposingText()
+        // that clears our synthetic composing span before the chord is dispatched.
+        instrumentation.runOnMainSync {
+            connection!!.setComposingRegion(0, state.value.text.length)
+            assertNotNull(state.value.composition)
+            val target = rule.activity.currentFocus ?: rule.activity.findViewById(android.R.id.content)
+            target.dispatchKeyEvent(KeyEvent(0, 0, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER, 0, KeyEvent.META_CTRL_ON))
+            target.dispatchKeyEvent(KeyEvent(0, 0, KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ENTER, 0, KeyEvent.META_CTRL_ON))
+            assertEquals(0, sent)
+            connection!!.finishComposingText()
+        }
         rule.waitForIdle()
         assertNull(state.value.composition)
         // Composition owns the first chord and may commit it as a newline. The committed chord must add nothing else.

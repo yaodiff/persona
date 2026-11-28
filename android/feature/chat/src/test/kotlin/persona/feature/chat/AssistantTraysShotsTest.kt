@@ -384,7 +384,10 @@ class AssistantTraysShotsTest {
                     if (s == AppStyle.Glass) {
                         assertTrue("Glass DockCapsule height ($height <= ${JChipTokens.height})", height <= JChipTokens.height)
                     } else {
-                        assertEquals(JChipTokens.height, height)
+                        assertTrue(
+                            "$s tray entry height ($height) stays compact (${AssistantTrayTokens.entryMinimumHeight}..<${JChipTokens.height})",
+                            height >= AssistantTrayTokens.entryMinimumHeight && height < JChipTokens.height,
+                        )
                     }
                 }
                 rule.onNodeWithTag("assistant-entry-agents").assertDoesNotExist()
@@ -699,7 +702,7 @@ class AssistantTraysShotsTest {
                         ReplacedTallEntry("Progress", 2, AssistantTrayTone.Progress)
                         ReplacedTallEntry("Agents", 3, AssistantTrayTone.Agents)
                     }
-                    androidx.compose.material3.Text("Now: Needs you / In progress as JChip", style = caption, color = PersonaTheme.palette.ink3)
+                    androidx.compose.material3.Text("Now: compact AssistantTrayEntry", style = caption, color = PersonaTheme.palette.ink3)
                     Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
                         AssistantTrayEntry("Needs you", 4, AssistantTrayTone.Pending, false, "", {}, Modifier.testTag("entry-needs"))
                         AssistantTrayEntry("In progress", 2, AssistantTrayTone.Progress, true, "", {}, Modifier.testTag("entry-running"))
@@ -721,7 +724,10 @@ class AssistantTraysShotsTest {
                 if (s == AppStyle.Glass) {
                     assertTrue("$tag on Glass uses compact DockCapsule height ($height <= $historical)", height <= historical)
                 } else {
-                    assertEquals(tag, historical, height)
+                    assertTrue(
+                        "$tag on $s stays compact (${AssistantTrayTokens.entryMinimumHeight}..<$historical, got $height)",
+                        height >= AssistantTrayTokens.entryMinimumHeight && height < historical,
+                    )
                 }
             }
             assertEquals(44.dp, rule.onNodeWithTag("replaced-entry").getUnclippedBoundsInRoot().height)

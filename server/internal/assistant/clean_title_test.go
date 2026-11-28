@@ -7,6 +7,26 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
+func TestOldNodeStartScriptTitleFallsBack(t *testing.T) {
+	const title = ". /Users/u/.persona-nas/agent-start-3456784508.sh && true"
+	sess := proto.Session{SessionID: "s1", MachineID: "mac", Title: title, Cwd: "/work/demo", Status: proto.StatusIdle}
+	ix := proto.Interaction{MachineID: "mac", SessionID: "s1", SessionTitle: title, Cwd: sess.Cwd, Kind: proto.IxScreen}
+	if got := cleanTitle(ix).SessionTitle; got != "demo" {
+		t.Errorf("card title = %q, want demo", got)
+	}
+	if got := sessionTitle(&sess); got != "demo" {
+		t.Errorf("session title = %q, want demo", got)
+	}
+	ft := newFleetTest(t)
+	if got, _, _ := ft.s.feishuAgentPlaceParts(t.Context(), ix); got != "demo" {
+		t.Errorf("Feishu agent label without a listed session = %q, want demo", got)
+	}
+	ft.d.setSessions("mac", []proto.Session{sess})
+	if got, _, _ := ft.s.feishuAgentPlaceParts(t.Context(), ix); got != "demo" {
+		t.Errorf("Feishu agent label with the legacy row = %q, want demo", got)
+	}
+}
+
 // A card's conversation title made by clipping a first message inside its injected tag (an older node's).
 func TestCleanTitleDropsInjectedTags(t *testing.T) {
 	for title, want := range map[string]string{

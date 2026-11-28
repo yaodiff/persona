@@ -1,4 +1,4 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="designsystem_agent_stopped">这个 Agent 已停止。它的对话和终端都还在，但它不再接收消息。</string>
+    <string name="designsystem_agent_stopped">此会话已结束。仍可查看对话和终端，恢复后可发送消息。</string>
 </resources>

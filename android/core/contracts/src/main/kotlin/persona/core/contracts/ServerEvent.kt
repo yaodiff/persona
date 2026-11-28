@@ -163,6 +163,8 @@ data class InteractionResolvedEvent(
     val reason: String? = null,
     /** By question text; raw, so a value that is not text drops alone and not the whole answer (iOS `Delegated.answers(in:)`). */
     @SerialName("answers") val answersJson: JsonElement? = null,
+    /** The occurrence that ended; absent from an older hub, whose ID-only behavior stays unchanged. */
+    @WireTime @SerialName("created_at") val createdAt: String? = null,
 ) : ServerEvent {
     val byAssistant: Boolean get() = answeredBy == DelegatedAnswer.ASSISTANT
     val answers: Map<String, String> get() = textValues(answersJson)

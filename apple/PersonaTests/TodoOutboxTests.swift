@@ -444,6 +444,56 @@ struct TodoOutboxTests {
         #expect(TodoOutbox.outcome(URLError(.cannotConnectToHost), of: .done(true)) == .notSent)
         #expect(TodoOutbox.outcome(URLError(.networkConnectionLost), of: .create(title: "A", notes: nil)) == .unknown)
         #expect(TodoOutbox.outcome(URLError(.timedOut), of: .create(title: "A", notes: nil)) == .unknown)
+        // Active-work close refusals (422 todo_close_not_confirmed, 409 todo_close_active) and 4xx refusals carrying
+        // `delivered: "none"` are definitive refusals, never retried as unsent; 5xx with `delivered: "none"` still retries.
+        let unconfirmed = APIError(status: 422, message: "Confirm before closing", fields: ["code": "todo_close_not_confirmed"])
+        let unconfirmedNothing = APIError(status: 422, message: "Confirm before closing",
+                                          fields: ["code": "todo_close_not_confirmed", "delivered": "none"])
+        let closeActive = APIError(status: 409, message: "Active work running",
+                                   fields: ["code": "todo_close_active", "delivered": "none"])
+        let outsidePending = APIError(status: 409, message: "Decision pending",
+                                      fields: ["code": "outside_decision_pending", "delivered": "none"])
+        let ask = TodoOutbox.AskAnswer(ask: "todo:decision@1", kind: OwnerAskKind.decision, round: "1", label: "Pass")
+        #expect(TodoOutbox.outcome(unconfirmed, of: .done(true)) == .refused("Confirm before closing"))
+        #expect(TodoOutbox.outcome(unconfirmedNothing, of: .done(true)) == .refused("Confirm before closing"))
+        #expect(TodoOutbox.outcome(unconfirmedNothing, of: .answer(ask)) == .refused("Confirm before closing"))
+        #expect(TodoOutbox.outcome(closeActive, of: .done(true)) == .refused("Active work running"))
+        #expect(TodoOutbox.outcome(outsidePending, of: .delete) == .refused("Decision pending"))
+        #expect(TodoOutbox.outcome(APIError(status: 503, message: "unreachable", fields: ["delivered": "none"]),
+                                   of: .done(true)) == .notSent)
+    }
+
+    /// A close refused for unconfirmed active work (422 `todo_close_not_confirmed`) sends with `todoCloseConfirmWait`,
+    /// drops the entry immediately, surfaces the refusal, and never retries on later list reads.
+    @Test func aCloseRefusedForActiveWorkIsDroppedAndNotRetried() async throws {
+        let hub = FakeHub()
+        hub.on("PATCH", "/api/v1/todos/t1") { _ in
+            throw APIError(status: 422, message: "The task stays open until you confirm.",
+                           fields: ["code": "todo_close_not_confirmed", "delivered": "none"])
+        }
+        let store = TodoStore(cachedTodos: [TodoItem(id: "t1", title: "Deploy check")], cacheWriter: nil, hubListChanged: {})
+        defer { store.forget() }
+        let probe = OutboxProbe()
+        let outbox = TodoOutbox(deps: .init(
+            load: { [] },
+            save: { _, _ in Task {} },
+            hub: { "g" },
+            send: { entry, answered in await store.send(entry, answered: answered, api: hub.client) },
+            refused: { _, message, _ in probe.refusals.append(message) },
+            standing: { id in
+                store.byID[id].map { .init(title: $0.title, updatedAt: $0.updatedAt, done: $0.isDone, someday: false) }
+            },
+            listed: { store.todos }
+        ))
+        await outbox.ready()
+        outbox.add(.done(true), todo: "t1", manager: nil, hold: .zero)
+        try await waitForOutbox { !probe.refusals.isEmpty && outbox.entries.isEmpty }
+        let patch = try #require(hub.sent("PATCH", "/api/v1/todos/t1").first)
+        #expect(patch.timeout == APIClient.todoCloseConfirmWait && patch.timeout > 45)
+        #expect(probe.refusals == ["The task stays open until you confirm."])
+        outbox.hubAnswered(read: 1)
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(hub.sent("PATCH", "/api/v1/todos/t1").count == 1 && outbox.entries.isEmpty)
     }
 
     /// A new to-do kept on disk before a write carried the place it was made in (#10465) still loads, made nowhere in

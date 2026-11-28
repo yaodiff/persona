@@ -33,6 +33,12 @@ const (
 	LayoutContainer Layout = "container"
 )
 
+// ValidLayout allows only a single repository to occupy the task root.
+// A container can also be an empty task folder.
+func ValidLayout(layout Layout, count int) bool {
+	return layout == LayoutRoot && count == 1 || layout == LayoutContainer && count >= 0
+}
+
 // TaskWorkflow declares a repository's optional default task-collaboration cadence.
 // Unset ("") and TaskWorkflowIsolated preserve existing default behavior; TaskWorkflowSharedBranch
 // cooperates with serial workspace queueing (#13142) and multi-repository container workspaces (#13143).
@@ -98,6 +104,15 @@ func NormalizeLinkRole(role string) (string, Problem) {
 	}
 }
 
+// LinkProvenance records whether a saved link carries explicit delivery intent.
+type LinkProvenance string
+
+const (
+	LinkProvenanceUnknown  LinkProvenance = "" // Rows saved before provenance was recorded.
+	LinkProvenanceUnbound  LinkProvenance = "unbound"
+	LinkProvenanceExplicit LinkProvenance = "explicit"
+)
+
 type LinkInput struct {
 	URL    string `json:"url,omitempty"`
 	Kind   string `json:"kind,omitempty"`
@@ -122,6 +137,8 @@ type TaskLink struct {
 	Title        string `json:"title,omitempty"`
 	// Role is delivery (default, including rows saved before roles existed) or reference.
 	Role string `json:"role,omitempty"`
+	// Provenance is persisted by the manager's store and stays out of the wire contract.
+	Provenance LinkProvenance `json:"-"`
 }
 type TaskInput struct {
 	RepoID         string       `json:"repo_id"`
@@ -201,10 +218,13 @@ func IsWindowsReservedName(name string) bool {
 
 // RepositoryPath maps only explicitly selected layouts; legacy cwd requests never use it.
 func RepositoryPath(layout Layout, alias string, count int) (string, error) {
-	if layout == LayoutRoot && count == 1 {
+	if count == 0 || !ValidLayout(layout, count) {
+		return "", Problem("invalid")
+	}
+	if layout == LayoutRoot {
 		return ".", nil
 	}
-	if layout != LayoutContainer || alias == "" {
+	if alias == "" {
 		return "", Problem("invalid")
 	}
 	if err := ValidateAlias(alias); err != nil {
@@ -377,6 +397,7 @@ func extensionLink(identity Identity, in LinkInput, role string) (TaskLink, erro
 		link.Title = ""
 	}
 	link.Role = role
+	link.Provenance = LinkProvenanceUnknown
 	// Storage keeps the delivery default as the empty value.
 	if link.Role == LinkRoleDelivery {
 		link.Role = ""
@@ -384,25 +405,31 @@ func extensionLink(identity Identity, in LinkInput, role string) (TaskLink, erro
 	return link, nil
 }
 
-// PreserveLinkTitles keeps metadata when older clients send only link identities. The raw inputs carry whether a role
-// was present at all: NormalizeLink stores an explicit delivery role as the empty value, so only input[i].Role can
-// tell a role-less edit apart from an explicit switch back to delivery. Removing a link still removes its title; a
-// nonempty title replaces the saved title.
-func PreserveLinkTitles(current, next []TaskLink, input []LinkInput) {
+// ReconcileLinkEdits preserves omitted titles and roles for retained links. A newly added delivery link or one that
+// switched to delivery is an explicit binding. Saving the same link with the same role preserves its provenance.
+func ReconcileLinkEdits(current, next []TaskLink, input []LinkInput) {
 	for i := range next {
-		roleSent := i < len(input) && input[i].Role != ""
-		for _, old := range current {
-			if old.Kind == next[i].Kind && old.Number == next[i].Number {
-				if next[i].Title == "" {
-					next[i].Title = old.Title
-				}
-				// A role-less edit (older clients, report imports) must not reset a role an explicit edit set,
-				// while an explicit role (including delivery) always replaces the stored one.
-				if !roleSent {
-					next[i].Role = old.Role
-				}
-				break
+		link := &next[i]
+		index := slices.IndexFunc(current, func(old TaskLink) bool { return old.Kind == link.Kind && old.Number == link.Number })
+		if index >= 0 {
+			old := current[index]
+			if link.Title == "" {
+				link.Title = old.Title
 			}
+			// Only the input distinguishes an omitted role from an explicit delivery role.
+			if input[i].Role == "" {
+				link.Role = old.Role
+			}
+			role, _ := NormalizeLinkRole(link.Role)
+			oldRole, _ := NormalizeLinkRole(old.Role)
+			if link.CanonicalURL == old.CanonicalURL && role == oldRole {
+				link.Provenance = old.Provenance
+				continue
+			}
+		}
+		link.Provenance = LinkProvenanceUnbound
+		if role, _ := NormalizeLinkRole(link.Role); role == LinkRoleDelivery {
+			link.Provenance = LinkProvenanceExplicit
 		}
 	}
 }
@@ -492,7 +519,7 @@ func Bind(current []TaskRepository, input []TaskInput, catalog Catalog) ([]TaskR
 			if err != nil {
 				return nil, err
 			}
-			PreserveLinkTitles(previous, row.Links, in.Links)
+			ReconcileLinkEdits(previous, row.Links, in.Links)
 		}
 		if row.Links == nil {
 			row.Links = []TaskLink{}
@@ -522,7 +549,54 @@ type PreparationRepository struct {
 	DirectoryAlias string         `json:"directory_alias,omitempty"`
 	RequestedRef   RequestedRef   `json:"requested_ref"`
 	SourceSnapshot SourceSnapshot `json:"source_snapshot"`
+	Local          *LocalCheckout `json:"local,omitempty"`
 }
+
+// LocalCheckout is a computer-resolved Git source for a single root worktree.
+// It carries the selected commit even when the source has a moving HEAD.
+type LocalCheckout struct {
+	CommonDir      string `json:"common_dir"`
+	Commit         string `json:"commit"`
+	ExistingBranch bool   `json:"existing_branch,omitempty"`
+}
+type LocalSourceRequest struct {
+	Cwd        string `json:"cwd"`
+	TaskBranch string `json:"task_branch,omitempty"`
+}
+
+type LocalSource struct {
+	Repository   *PreparationRepository `json:"repository,omitempty"`
+	ExistingPath string                 `json:"existing_path,omitempty"`
+	Error        LocalSourceError       `json:"error,omitempty"`
+}
+
+type LocalSourceError string
+
+const (
+	LocalSourceInvalidPath LocalSourceError = "invalid_path"
+	LocalSourceInvalid     LocalSourceError = "source_invalid"
+	LocalSourceUnavailable LocalSourceError = "source_unavailable"
+	LocalSourceInvalidRef  LocalSourceError = "ref_invalid"
+	LocalSourceNoCommits   LocalSourceError = "no_commits"
+)
+
+type RepositoryID string
+
+type BranchSourceKind string
+
+const (
+	BranchRepositoryDefault BranchSourceKind = "repository_default"
+	BranchExplicit          BranchSourceKind = "explicit_branch"
+	BranchOtherRef          BranchSourceKind = "non_branch_ref"
+)
+
+// BranchSource describes the input available to a branch template. A default ref has no known branch yet.
+type BranchSource struct {
+	RepoID RepositoryID     `json:"repo_id"`
+	Kind   BranchSourceKind `json:"kind"`
+	Branch string           `json:"branch,omitempty"`
+}
+
 type PreparationSnapshot struct {
 	SchemaVersion int                     `json:"schema_version"`
 	Manager       string                  `json:"manager"`
@@ -547,9 +621,30 @@ func Snapshot(manager, todo string, revision int64, rows []TaskRepository, selec
 			return out, Problem("not_found")
 		}
 		r := rows[index]
-		out.Repositories = append(out.Repositories, PreparationRepository{r.RepoID, r.DirectoryAlias, r.RequestedRef, r.SourceSnapshot})
+		out.Repositories = append(out.Repositories, PreparationRepository{RepoID: r.RepoID, DirectoryAlias: r.DirectoryAlias, RequestedRef: r.RequestedRef, SourceSnapshot: r.SourceSnapshot})
 	}
 	slices.SortFunc(out.Repositories, func(a, b PreparationRepository) int { return strings.Compare(a.RepoID, b.RepoID) })
+	return digestPreparationSnapshot(out)
+}
+
+// LocalSnapshot binds a computer-resolved source without changing the to-do's
+// catalog associations. Local and catalog sources are mutually exclusive.
+func LocalSnapshot(manager, todo string, repo PreparationRepository) (PreparationSnapshot, error) {
+	var out PreparationSnapshot
+	if repo.Local == nil || repo.SourceSnapshot != (SourceSnapshot{}) || repo.Local.CommonDir == "" ||
+		repo.RepoID != "local" || repo.DirectoryAlias == "" || ValidateAlias(repo.DirectoryAlias) != nil {
+		return out, Problem("invalid")
+	}
+	ref, err := NormalizeRef(repo.RequestedRef)
+	commit, commitErr := NormalizeRef(RequestedRef{Kind: "commit", Value: repo.Local.Commit})
+	if err != nil || ref != repo.RequestedRef || commitErr != nil || commit.Value != repo.Local.Commit ||
+		(ref.Kind != "branch" && (ref.Kind != "commit" || ref.Value != commit.Value || repo.Local.ExistingBranch)) {
+		return out, Problem("invalid")
+	}
+	return digestPreparationSnapshot(PreparationSnapshot{SchemaVersion: 1, Manager: manager, TodoID: todo, Repositories: []PreparationRepository{repo}})
+}
+
+func digestPreparationSnapshot(out PreparationSnapshot) (PreparationSnapshot, error) {
 	payload := struct {
 		SchemaVersion int                     `json:"schema_version"`
 		Manager       string                  `json:"manager"`
@@ -584,12 +679,25 @@ func DefaultAlias(identity Identity) string {
 
 // ParseTaskLink derives a credential-free source from an exact issue/PR URL, offline.
 func ParseTaskLink(raw string) (Identity, TaskLink, error) {
-	provider := "github"
-	if strings.Contains(raw, "/merge_requests/") || strings.Contains(raw, "/-/issues/") {
-		provider = "gitlab"
+	u, err := url.Parse(raw)
+	if err != nil {
+		return Identity{}, TaskLink{}, Problem("invalid")
 	}
-	if provider == "gitlab" && !strings.Contains(raw, "/-/") {
-		raw = strings.Replace(raw, "/merge_requests/", "/-/merge_requests/", 1)
+	provider := "github"
+	if end := strings.LastIndexByte(u.Path, '/'); end >= 0 {
+		route := u.Path[:end]
+		switch {
+		case strings.HasSuffix(route, "/-/merge_requests"), strings.HasSuffix(route, "/-/issues"):
+			provider = "gitlab"
+		case strings.EqualFold(u.Hostname(), "gitlab.com") && strings.HasSuffix(route, "/merge_requests"):
+			// The legacy route is an alias on GitLab. A different host may use it as its actual MR address.
+			if u.RawPath != "" {
+				return Identity{}, TaskLink{}, Problem("invalid")
+			}
+			provider = "gitlab"
+			u.Path = strings.TrimSuffix(route, "/merge_requests") + "/-/merge_requests" + u.Path[end:]
+			raw = u.String()
+		}
 	}
 	identity, err := Parse(raw, provider)
 	if err != nil {
@@ -606,7 +714,7 @@ func MergeTaskLinks(current []TaskRepository, urls []string, catalog Catalog) ([
 	for _, raw := range urls {
 		input = append(input, LinkInput{URL: raw})
 	}
-	return MergeTaskLinkDetails(current, input, catalog)
+	return MergeTaskLinkDetails(current, input, catalog, LinkProvenanceUnbound)
 }
 
 // ParseTaskLinkInput accepts an exact URL and optional title, without a remote lookup. A link the service resolved
@@ -631,8 +739,9 @@ func ParseTaskLinkInput(in LinkInput) (Identity, TaskLink, error) {
 	return identity, link, err
 }
 
-// MergeTaskLinkDetails adds references or refreshes known titles without erasing them.
-func MergeTaskLinkDetails(current []TaskRepository, input []LinkInput, catalog Catalog) ([]TaskRepository, error) {
+// MergeTaskLinkDetails adds links or refreshes existing metadata. The caller supplies the default provenance for
+// imported delivery links. An explicit delivery role binds the link, and automatic imports preserve existing bindings.
+func MergeTaskLinkDetails(current []TaskRepository, input []LinkInput, catalog Catalog, provenance LinkProvenance) ([]TaskRepository, error) {
 	out := slices.Clone(current)
 	for i := range out {
 		out[i].Links = slices.Clone(out[i].Links)
@@ -641,6 +750,13 @@ func MergeTaskLinkDetails(current []TaskRepository, input []LinkInput, catalog C
 		identity, link, err := ParseTaskLinkInput(in)
 		if err != nil {
 			return nil, err
+		}
+		link.Provenance = provenance
+		switch in.Role {
+		case LinkRoleDelivery:
+			link.Provenance = LinkProvenanceExplicit
+		case LinkRoleReference:
+			link.Provenance = LinkProvenanceUnbound
 		}
 		index := slices.IndexFunc(out, func(r TaskRepository) bool { return r.SourceSnapshot.Identity == identity })
 		if index < 0 {
@@ -683,12 +799,19 @@ func MergeTaskLinkDetails(current []TaskRepository, input []LinkInput, catalog C
 		}
 		existing := slices.IndexFunc(out[index].Links, func(l TaskLink) bool { return l.Kind == link.Kind && l.Number == link.Number })
 		if existing >= 0 {
+			old := &out[index].Links[existing]
 			if link.Title != "" {
-				out[index].Links[existing].Title = link.Title
+				old.Title = link.Title
 			}
-			// Additive imports never flip a role an explicit edit or an earlier import set.
-			if link.Role != "" {
-				out[index].Links[existing].Role = link.Role
+			if old.Provenance == LinkProvenanceExplicit && provenance != LinkProvenanceExplicit && in.Role != LinkRoleDelivery {
+				continue
+			}
+			if in.Role != "" {
+				old.Role = link.Role
+			}
+			old.Provenance = link.Provenance
+			if role, _ := NormalizeLinkRole(old.Role); role != LinkRoleDelivery {
+				old.Provenance = LinkProvenanceUnbound
 			}
 			continue
 		}

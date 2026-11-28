@@ -21,6 +21,8 @@
 "browser.cookies.clear"
 "browser.cookies.import"
 "browser.cookies.list"
+"browser.download_chunk"
+"browser.download_info"
 "browser.install"
 "browser.open"
 "browser.status"

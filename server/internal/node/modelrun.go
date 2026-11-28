@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,6 +19,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/aiwire"
 	"github.com/nwverse/persona/server/internal/modelhttp"
+	"github.com/nwverse/persona/server/internal/osproc"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 	"github.com/nwverse/persona/server/internal/shellcmd"
@@ -96,19 +99,23 @@ func (n *Node) modelRun(ctx context.Context, params json.RawMessage) (any, error
 	if err := validModesFor(agent, "", p.Effort); err != nil {
 		return nil, err
 	}
-	dir, err := os.MkdirTemp("", launcherCheckDir) // a check's name: the session list drops what a run leaves (launchercheck.go)
-	if err != nil {
-		return nil, err
-	}
-	defer os.RemoveAll(dir)
-
 	switch agent {
 	case "claude":
+		dir, err := mkModelRunTempDir()
+		if err != nil {
+			return nil, err
+		}
+		defer os.RemoveAll(dir)
 		return n.modelRunClaude(ctx, p, dir, timedOut)
 	case "codex":
+		dir, err := mkModelRunTempDir()
+		if err != nil {
+			return nil, err
+		}
+		defer os.RemoveAll(dir)
 		return n.modelRunCodex(ctx, p, dir, timedOut)
 	case agyAgent:
-		return n.modelRunAgy(ctx, p, dir, builtinAgyBacked, timedOut)
+		return n.modelRunAgy(ctx, p, builtinAgyBacked, timedOut)
 	default:
 		return nil, fmt.Errorf("model.run: unsupported agent %q", agent)
 	}
@@ -140,6 +147,10 @@ func (n *Node) builtinAgyExecutable() string {
 		}
 	}
 	return findAgyExecutable()
+}
+
+func mkModelRunTempDir() (string, error) {
+	return os.MkdirTemp("", launcherCheckDir) // a check's name: the session list drops what a run leaves (launchercheck.go)
 }
 
 func writeTempFile(dir, name, text string) (string, error) {
@@ -532,8 +543,11 @@ func (n *Node) prepareAgyIsolatedHome(dir string) (string, error) {
 	realData := n.agyDataRoot()
 	for _, entry := range []string{"antigravity-oauth-token", "installation_id", "bin", "builtin"} {
 		src := filepath.Join(realData, entry)
-		if _, err := os.Stat(src); err == nil {
-			_ = os.Symlink(src, filepath.Join(isoData, entry))
+		if st, err := os.Stat(src); err == nil {
+			dst := filepath.Join(isoData, entry)
+			if err := os.Symlink(src, dst); err != nil && runtime.GOOS == "windows" {
+				_ = copyAgyIsolatedEntry(src, dst, st)
+			}
 		}
 	}
 	if runtime.GOOS == "darwin" && n.home != "" {
@@ -548,8 +562,70 @@ func (n *Node) prepareAgyIsolatedHome(dir string) (string, error) {
 	return isoHome, nil
 }
 
-// modelRunAgy executes a single isolated turn via `agy --input-format stream-json --output-format stream-json`.
-func (n *Node) modelRunAgy(ctx context.Context, p proto.ModelRunParams, dir string, builtinAgyBacked bool, timedOut error) (proto.ModelRunAnswer, error) {
+// copyAgyIsolatedEntry provides a read-only copy fallback on Windows when symlink creation is unavailable.
+// External symlinks inside directory trees are never followed.
+func copyAgyIsolatedEntry(src, dst string, st os.FileInfo) error {
+	if !st.IsDir() {
+		return copyIsolatedFile(src, dst, 0o600)
+	}
+	return filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.Type()&os.ModeSymlink != 0 {
+			return nil
+		}
+		rel, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(dst, rel)
+		if d.IsDir() {
+			return os.MkdirAll(target, 0o700)
+		}
+		mode := fs.FileMode(0o600)
+		if info, statErr := d.Info(); statErr == nil && info.Mode()&0o111 != 0 {
+			mode = 0o700
+		}
+		return copyIsolatedFile(path, target, mode)
+	})
+}
+
+func copyIsolatedFile(src, dst string, mode fs.FileMode) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
+	if err != nil {
+		return err
+	}
+	_, copyErr := io.Copy(out, in)
+	closeErr := out.Close()
+	if copyErr != nil {
+		return copyErr
+	}
+	return closeErr
+}
+
+// modelRunAgy answers an Antigravity model.run request, reusing the Node's on-demand warm `agy acp` worker when all
+// zero-side-effect guardrails hold and transparently falling back to modelRunAgyCold otherwise.
+func (n *Node) modelRunAgy(ctx context.Context, p proto.ModelRunParams, builtinAgyBacked bool, timedOut error) (proto.ModelRunAnswer, error) {
+	if ans, handled, err := n.modelRunAgyWarm(ctx, p, builtinAgyBacked, timedOut); handled {
+		return ans, err
+	}
+	return n.modelRunAgyCold(ctx, p, builtinAgyBacked, timedOut)
+}
+
+// modelRunAgyCold executes a single isolated turn via `agy --input-format stream-json --output-format stream-json`.
+func (n *Node) modelRunAgyCold(ctx context.Context, p proto.ModelRunParams, builtinAgyBacked bool, timedOut error) (proto.ModelRunAnswer, error) {
+	dir, err := mkModelRunTempDir()
+	if err != nil {
+		return proto.ModelRunAnswer{}, err
+	}
+	defer os.RemoveAll(dir)
+
 	// Write the workspace-scoped zero-tool custom agent definition (system prompt lives in its Markdown body).
 	agentDir := filepath.Join(dir, ".agents", "agents", agyModelRunAgentName)
 	if err := os.MkdirAll(agentDir, 0o700); err != nil {
@@ -617,13 +693,21 @@ func (n *Node) modelRunAgy(ctx context.Context, p proto.ModelRunParams, dir stri
 	// Override HOME only on the agy invocation (after loginShell sources ~/.zshrc) so shell aliases/PATH still resolve
 	// while agy itself reads zero global hooks/MCP from ~/.gemini/config and persists nothing into the real ~/.gemini/antigravity-cli.
 	script := "cd " + scriptPath(dir) + " && HOME=" + scriptPath(isoHome) + " " + launcherCmd + b.String() + " < " + scriptPath(inPath)
-	runCtx, cancelRun := context.WithCancel(ctx)
-	defer cancelRun()
+	runCtx, cancelRun := context.WithCancelCause(ctx)
+	defer cancelRun(nil)
 
 	cmd := loginShell(runCtx, script)
 	killGroupOnCancel(cmd)
-	raw, loggedOutFast, runErr := runWithEarlyAuthDetect(cancelRun, cmd, isAgyInteractiveAuthPrompt)
-	if ctx.Err() != nil {
+	return runAgyModelCommand(runCtx, cancelRun, cmd, p, timedOut)
+}
+
+var errAgyInteractiveAuth = errors.New("agy requested interactive authentication")
+
+func runAgyModelCommand(ctx context.Context, cancel context.CancelCauseFunc, cmd *exec.Cmd, p proto.ModelRunParams, timedOut error) (proto.ModelRunAnswer, error) {
+	raw, runErr := runWithEarlyAuthDetect(ctx, cancel, cmd, isAgyInteractiveAuthPrompt)
+	// Preserve the first cancellation cause even if the parent deadline expires during process cleanup.
+	cause := context.Cause(ctx)
+	if cause != nil && cause != errAgyInteractiveAuth {
 		return proto.ModelRunAnswer{}, timedOut
 	}
 	text := strings.TrimSpace(string(raw))
@@ -635,7 +719,7 @@ func (n *Node) modelRunAgy(ctx context.Context, p proto.ModelRunParams, dir stri
 			Usage: res.usage,
 		}, nil
 	}
-	if loggedOutFast {
+	if cause == errAgyInteractiveAuth {
 		return proto.ModelRunAnswer{}, &rpc.Error{Code: proto.CodeModelRunLoggedOut, Message: "model.run: " + p.Launcher + " is not logged in here"}
 	}
 	errText := cmp.Or(res.errMsg, text)
@@ -655,30 +739,35 @@ func (n *Node) modelRunAgy(ctx context.Context, p proto.ModelRunParams, dir stri
 
 // runWithEarlyAuthDetect captures combined stdout+stderr and cancels the process immediately if matchLine detects an
 // interactive login prompt (e.g. agy waiting 60 seconds for an OAuth browser callback when signed out).
-func runWithEarlyAuthDetect(cancel context.CancelFunc, cmd *exec.Cmd, matchLine func(string) bool) ([]byte, bool, error) {
+func runWithEarlyAuthDetect(ctx context.Context, cancel context.CancelCauseFunc, cmd *exec.Cmd, matchLine func(string) bool) ([]byte, error) {
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return nil, false, err
+		return nil, err
 	}
 	cmd.Stderr = cmd.Stdout
 	if err := cmd.Start(); err != nil {
-		return nil, false, err
+		return nil, err
 	}
+	// A descendant can retain the write end after the launcher dies. WaitDelay cannot interrupt Scan before Wait.
+	stopReading := context.AfterFunc(ctx, func() { _ = stdout.Close() })
+	defer stopReading()
 	var buf bytes.Buffer
-	var authTriggered bool
 	sc := bufio.NewScanner(stdout)
 	sc.Buffer(make([]byte, 64*1024), 4*1024*1024)
 	for sc.Scan() {
 		line := sc.Text()
 		buf.WriteString(line)
 		buf.WriteByte('\n')
-		if !authTriggered && matchLine(line) {
-			authTriggered = true
-			cancel()
+		if ctx.Err() == nil && matchLine(line) {
+			cancel(errAgyInteractiveAuth)
 		}
 	}
 	waitErr := cmd.Wait()
-	return buf.Bytes(), authTriggered, waitErr
+	if ctx.Err() != nil {
+		// A child forking during the first group signal can survive it on macOS (#5942).
+		osproc.SweepGroup(cmd.Process.Pid, time.Second)
+	}
+	return buf.Bytes(), waitErr
 }
 
 type agyStreamOut struct {

@@ -104,9 +104,26 @@ func TestAnAllowClaudeTakesChangesNothing(t *testing.T) {
 	f.mu.Lock()
 	reads := len(f.readLines)
 	f.mu.Unlock()
-	if reads != 1 {
+	if reads != 2 {
 		t.Fatalf("read the pane %d times", reads)
 	}
+}
+
+func TestAllowWatchFindsDialogAfterReadFailureAndBlankScreen(t *testing.T) {
+	shortAllowWatch(t)
+	const id = "0d000000-0000-4000-8000-000000003755"
+	f := &fakePane{readFailures: 1, clearAfter: 1, screens: []string{
+		"", screenFixture(t, "claude-2.1.316-danger-rm-120.txt"),
+	}}
+	n, _ := testNode(t)
+	n.hosts = herdrHosts(f.serve(t))
+	n.agents = map[string]host.Agent{id: {Agent: "claude", PaneID: "w1:p1", Cwd: "/work/repo", AgentStatus: proto.StatusWorking}}
+	n.watchAllow(id, "w1:p1")
+	waitSession(t, n, id, proto.StatusBlocked, "Bash command")
+	f.mu.Lock()
+	f.screens[1] = ""
+	f.mu.Unlock()
+	waitSession(t, n, id, proto.StatusWorking, "")
 }
 
 // A newer allow on the same session takes over from the one before; the watch never outlives allowWatchFor.

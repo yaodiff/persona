@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="settings_ext_map">地图</string>
+    <string name="settings_ext_map_expand">打开地图</string>
+    <string name="settings_ext_map_zoom_in">放大</string>
+    <string name="settings_ext_map_zoom_out">缩小</string>
+    <string name="settings_ext_map_reset">重置地图</string>
+    <string name="settings_ext_map_route">路线 %1$d</string>
+    <string name="settings_ext_map_minutes">%1$d 分钟</string>
+    <string name="settings_ext_map_meters">%1$d 米</string>
+    <string name="settings_ext_map_kilometers">%1$s 公里</string>
+</resources>

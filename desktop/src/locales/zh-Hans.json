@@ -23,7 +23,7 @@
   "hint_link_pair_now": "立即配对 Persona Link",
   "hint_link_use_hub": "仅填入 Hub 地址",
   "help_toggle": "从哪里获取配对链接？",
-  "help_step_1": "在手机或已登录的浏览器中，打开「设置 › 设备 › 连接新设备」。",
+  "help_step_1": "在已登录的手机或浏览器的设置中找到设备，选择「连接新设备」。Apple 和网页端的设备入口在「高级」中。",
   "help_step_2": "复制配对链接并粘贴到上方输入框，无需二次登录。",
   "help_step_3": "也可以在 Hub 电脑终端运行 personad hub pair 生成链接。",
   "link_entry_btn": "在这台电脑上运行 Agent",

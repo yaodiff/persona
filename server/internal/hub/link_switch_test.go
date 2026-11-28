@@ -113,7 +113,7 @@ func busBegin(h *Hub, c *busConn, p devicewire.LinkSwitchBegin) (devicewire.Link
 	if err != nil {
 		return devicewire.LinkSwitchBegun{}, err
 	}
-	return *out.(*devicewire.LinkSwitchBegun), nil
+	return out.(devicewire.LinkSwitchBegun), nil
 }
 
 func busEnd(h *Hub, c *busConn, p devicewire.LinkSwitchEnd) error {

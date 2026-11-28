@@ -112,6 +112,9 @@ func (n *Node) waitCodexBox(ctx context.Context, pane string, maxWait time.Durat
 		if err := n.codexStartupFailure(ctx, pane, text, exit); err != nil {
 			return err
 		}
+		if codexSignInScreen(text) { // no input box comes before someone signs in (codex_start.go)
+			return codexNotLoggedIn()
+		}
 		if n.answerCodexStartDialog(ctx, pane, text) {
 			continue
 		}
@@ -173,7 +176,7 @@ func codexSkipUpdateKeys(text string) []string {
 // openCodexWait makes the waiting row of a Codex the start opened with no message and answers with it.
 func (n *Node) openCodexWait(ctx context.Context, pane, cwd, launcher, mode string, execution modelExecution, began time.Time) *proto.Session {
 	w := &codexWait{id: codexWaitID(), pane: pane, cwd: cwd, began: began}
-	st := sessionState{Pane: pane, Launcher: launcher, Cwd: cwd, StartedAt: began.UTC(), Model: execution.Model, ModelEffort: execution.Effort}
+	st := sessionState{Pane: pane, Launcher: launcher, Cwd: cwd, StartedAt: began.UTC(), Model: execution.Model, ModelEffort: execution.Effort, CodexStartTier: execution.ServiceTier}
 	if mode == "plan" { // as a start with a message keeps it (codex_start.go), for the thread to take
 		st.AppMode = mode
 	}
@@ -351,9 +354,20 @@ func (n *Node) codexHeldThreads() codexHeld {
 	held.ok = listed && read
 	for _, p := range tuis {
 		home := canonicalCodexHome(firstNonEmpty(p.home, n.codexHome()), n.home)
-		pane := ""
-		if p.pane != "" {
-			pane = n.herdrPaneIn(p.pane, p.herdrSession)
+		var pane string
+		switch {
+		case p.pane != "":
+			if n.hosts != nil {
+				pane = n.herdrPaneIn(p.pane, p.herdrSession)
+			} else {
+				pane = p.pane
+			}
+		case p.herdrCore != "":
+			pane = host.PaneRef{Kind: host.HerdrCore, ID: p.herdrCore}.String()
+		case p.ternPane != "":
+			pane = host.PaneRef{Kind: host.Tern, ID: p.ternPane}.String()
+		case p.orcaPane != "":
+			pane = host.PaneRef{Kind: host.Orca, ID: p.orcaPane}.String()
 		}
 		for _, path := range open[p.pid] {
 			if !pathWithin(path, home) {
@@ -693,7 +707,7 @@ func (n *Node) attachCodexWait(ctx context.Context, w *codexWait, thread, how st
 	// would find the pane still bound to the row's id and make the row again (codexWaitOf).
 	if !w.manual {
 		st, _ := n.state.get(w.id)
-		n.state.put(thread, sessionState{Pane: w.pane, Launcher: st.Launcher, Cwd: st.Cwd, Model: st.Model, ModelEffort: st.ModelEffort,
+		n.state.put(thread, sessionState{Pane: w.pane, Launcher: st.Launcher, Cwd: st.Cwd, Model: st.Model, ModelEffort: st.ModelEffort, CodexStartTier: st.CodexStartTier,
 			StartedAt: st.StartedAt, AppMode: st.AppMode, AppModeExplicit: st.AppModeExplicit, CreationID: st.CreationID, Incarnation: st.Incarnation})
 	}
 	n.mu.Lock()
@@ -862,10 +876,14 @@ func (n *Node) codexBoxFor(ctx context.Context, pane string) error {
 
 // codexWaitCalls answers what a waiting row has no thread for: an empty conversation, nothing to watch, no modes.
 // Its terminal calls are the pane's as usual (handled false).
-func (n *Node) codexWaitCalls(method, id string) (any, error, bool) {
+func (n *Node) codexWaitCalls(method, id string, userInputs bool) (any, error, bool) {
 	switch method {
 	case "session.items":
-		return map[string]any{"items": []proto.Item{}, "has_more": false, "history": "codex-wait:" + id, "to_seq": 0}, nil, true
+		history := "codex-wait:" + id
+		if userInputs {
+			return proto.UserInputIndex{Inputs: []proto.UserInputPosition{}, History: history}, nil, true
+		}
+		return map[string]any{"items": []proto.Item{}, "has_more": false, "history": history, "to_seq": 0}, nil, true
 	case "session.item", "session.image", "session.visualization":
 		return nil, fmt.Errorf("no item"), true
 	case "session.watch", "session.unwatch":

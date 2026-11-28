@@ -167,7 +167,7 @@ func holdEvents(q *extensionEvents) {
 // waitEventQueuesEmpty waits until the workers have handed everything queued to the extensions.
 func waitEventQueuesEmpty(t *testing.T, h *Manager) {
 	t.Helper()
-	for _, q := range []*extensionEvents{&h.extensions.events, &h.extensions.todoEvents} {
+	for _, q := range []*extensionEvents{&h.extensions.events, &h.extensions.todoEvents, &h.extensions.larkEvents} {
 		waitLong(t, "the event queue to empty", func() bool {
 			q.mu.Lock()
 			defer q.mu.Unlock()

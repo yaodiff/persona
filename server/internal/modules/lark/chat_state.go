@@ -61,6 +61,9 @@ type botState struct {
 	// Topics are the latest message the owner said in each topic (chat/thread -> message), what a reply into the thread
 	// goes by (thread_posts.go).
 	Topics map[string]*topicAnchor `json:"topics,omitempty"`
+	// TopicSessions maps "<chat_id>/<thread_id>" to the conversation bound to that topic (space-bound topic groups
+	// and scheduled-task thread deliveries).
+	TopicSessions map[string]*botThread `json:"topic_sessions,omitempty"`
 	// Board is the standing "waiting for you" card: its message and when it was sent (the core's feishu_board.go). Only
 	// the bot's `board` switch uses it.
 	Board *assistantwire.ChatBoardRef `json:"board,omitempty"`
@@ -220,7 +223,11 @@ func (s core) loadBotLocked(ctx context.Context) {
 	if b.st.Threads == nil {
 		b.st.Threads = map[string]*botThread{}
 	}
-	pruneBotThreads(b.st.Threads, b.clock()) // a long quiet chat: the stale ones go before the first route
+	if b.st.TopicSessions == nil {
+		b.st.TopicSessions = map[string]*botThread{}
+	}
+	pruneBotThreads(b.st.Threads, b.clock())       // a long quiet chat: the stale ones go before the first route
+	pruneBotThreads(b.st.TopicSessions, b.clock()) // keep topic-session bindings bounded the same way
 	if b.st.Current.Kind == "" {
 		b.st.Current = botTarget{Kind: targetMain}
 	}
@@ -232,7 +239,7 @@ func (s core) loadBotLocked(ctx context.Context) {
 			}
 			b.cards[id] = botCard{MessageID: ref.MessageID, Thread: ref.Thread, ChatID: ref.ChatID, At: ref.At, NudgedAt: ref.NudgedAt, SkippedAt: ref.SkippedAt, Tries: ref.Tries, TriedAt: ref.TriedAt,
 				DeadlineNudge: ref.DeadlineNudge,
-				Ix: proto.Interaction{ID: id, Kind: ref.Kind, MachineID: ref.MachineID, SessionID: ref.SessionID, ExpiresAt: ref.ExpiresAt,
+				Ix: proto.Interaction{ID: id, Kind: ref.Kind, MachineID: ref.MachineID, SessionID: ref.SessionID, CreatedAt: ref.CreatedAt, ExpiresAt: ref.ExpiresAt,
 					ApprovalBatchID: ref.ApprovalBatchID, ApprovalItemID: ref.ApprovalItemID, OwnerProposal: ref.OwnerProposal, Resumable: ref.Resumable, NoExpiry: ref.NoExpiry}}
 		}
 	}
@@ -291,7 +298,7 @@ func (s core) keepBotCardLocked(id string, card *botCard) {
 	if at.IsZero() {
 		at = b.clock()
 	}
-	b.st.Cards[id] = &botCardRef{MessageID: card.MessageID, Kind: card.Ix.Kind, MachineID: card.Ix.MachineID, SessionID: card.Ix.SessionID,
+	b.st.Cards[id] = &botCardRef{MessageID: card.MessageID, Kind: card.Ix.Kind, MachineID: card.Ix.MachineID, SessionID: card.Ix.SessionID, CreatedAt: card.Ix.CreatedAt.UTC(),
 		Thread: card.Thread, ChatID: card.ChatID, At: at.UTC(), ExpiresAt: card.Ix.ExpiresAt.UTC(), NudgedAt: card.NudgedAt.UTC(),
 		ApprovalBatchID: card.Ix.ApprovalBatchID, ApprovalItemID: card.Ix.ApprovalItemID, OwnerProposal: card.Ix.OwnerProposal,
 		Resumable: card.Ix.Resumable, NoExpiry: card.Ix.NoExpiry,
@@ -310,6 +317,7 @@ func (s core) saveBotStateLocked() {
 		b.st.Seen = b.st.Seen[len(b.st.Seen)-botSeenKeep:]
 	}
 	pruneBotThreads(b.st.Threads, b.clock())
+	pruneBotThreads(b.st.TopicSessions, b.clock())
 	pruneTopicAnchors(b.st.Topics, b.clock())
 	s.trimBotCardsLocked()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -358,10 +366,7 @@ func (s core) feishuStatus(ctx context.Context) (FeishuStatus, error) {
 // the state was written (the hub's feishu.owner may have come while the assistant was away): back to the main
 // conversation, no threads, no cards, nothing waiting. A state from before pairings were recorded takes the one now.
 func (s core) feishuReconcile(st FeishuStatus) {
-	key := ""
-	if st.Owner != "" {
-		key = st.Owner + "@" + strconv.FormatInt(st.PairedAt.Unix(), 10)
-	}
+	key := pairingKey(st)
 	b := s.fbot()
 	b.mu.Lock()
 	s.loadBotLocked(context.Background())
@@ -371,7 +376,7 @@ func (s core) feishuReconcile(st FeishuStatus) {
 	}
 	fresh := b.st.Pairing != nil // nil: recorded for the first time, the state stays
 	if fresh {
-		b.st = botState{Current: botTarget{Kind: targetMain}, Threads: map[string]*botThread{}, Seen: b.st.Seen}
+		b.st = botState{Current: botTarget{Kind: targetMain}, Threads: map[string]*botThread{}, TopicSessions: map[string]*botThread{}, Seen: b.st.Seen}
 		b.cards, b.ended = nil, nil
 	}
 	b.st.Pairing = &key
@@ -381,6 +386,13 @@ func (s core) feishuReconcile(st FeishuStatus) {
 		s.logf("bots: the bot's pairing changed: the chat starts afresh")
 		s.h.ForgetTurns()
 	}
+}
+
+func pairingKey(st FeishuStatus) string {
+	if st.Owner == "" {
+		return ""
+	}
+	return st.Owner + "@" + strconv.FormatInt(st.PairedAt.Unix(), 10)
 }
 
 // feishuStatusKept is feishuStatus kept a moment: for what looks every second (a run's sink, the cards' links).
@@ -478,7 +490,7 @@ func (s core) feishuReset() {
 	b.mu.Lock()
 	s.loadBotLocked(context.Background())
 	pairing := b.st.Pairing
-	b.st = botState{Current: botTarget{Kind: targetMain}, Threads: map[string]*botThread{}, Seen: b.st.Seen, Pairing: pairing}
+	b.st = botState{Current: botTarget{Kind: targetMain}, Threads: map[string]*botThread{}, TopicSessions: map[string]*botThread{}, Seen: b.st.Seen, Pairing: pairing}
 	b.cards, b.ended = nil, nil
 	b.status = nil
 	s.saveBotStateLocked()
@@ -710,6 +722,40 @@ func (s core) forgetTopicMessage(ctx context.Context, chatID, threadID, id strin
 		delete(b.st.Topics, chatID+"/"+threadID)
 		s.saveBotStateLocked()
 	}
+}
+
+// rememberTopicSession binds a group chat topic to a conversation target so follow-up replies in that topic route back to it.
+func (s core) rememberTopicSession(ctx context.Context, chatID, threadID string, t botTarget, title string) {
+	if chatID == "" || threadID == "" || t.Kind == "" {
+		return
+	}
+	b := s.fbot()
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	s.loadBotLocked(ctx)
+	if !b.loaded {
+		return
+	}
+	if b.st.TopicSessions == nil {
+		b.st.TopicSessions = map[string]*botThread{}
+	}
+	b.st.TopicSessions[chatID+"/"+threadID] = &botThread{Target: t, Title: title, At: b.clock().UTC()}
+	s.saveBotStateLocked()
+}
+
+// topicSession returns the conversation target bound to a group chat topic, if any.
+func (s core) topicSession(ctx context.Context, chatID, threadID string) (botTarget, bool) {
+	if chatID == "" || threadID == "" {
+		return botTarget{}, false
+	}
+	b := s.fbot()
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	s.loadBotLocked(ctx)
+	if t := b.st.TopicSessions[chatID+"/"+threadID]; t != nil && t.Target.Kind != "" {
+		return t.Target, true
+	}
+	return botTarget{}, false
 }
 
 // chatBook is the chat's records as the core reads and writes them (assistantwire.ChatBook), under b.mu.

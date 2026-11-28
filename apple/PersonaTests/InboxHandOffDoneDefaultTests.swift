@@ -36,7 +36,7 @@ struct InboxHandOffDoneDefaultTests {
                 if !calls.recordFailures.isEmpty { throw calls.recordFailures.removeFirst() }
             },
             showMain: { _, _, _ in },
-            plainToMain: { _ in SessionKey(machineID: "server", sessionID: "main-1") },
+            plainToMain: { _, _ in SessionKey(machineID: "server", sessionID: "main-1") },
             startNew: { _ in calls.started += 1; return SessionKey(machineID: "server", sessionID: "new-1") },
             sendToAgent: { _, _, file in
                 calls.files.append(file)

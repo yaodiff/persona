@@ -111,7 +111,7 @@ describe("Link to to-do", () => {
     expect(rows().map((r) => r.querySelector("span span")?.textContent)).toEqual(["博客迁移到 Astro"]);
     type(search, "没有这个");
     expect(rows()).toHaveLength(0);
-    expect(dialog()!.textContent).toContain("没有符合的待办");
+    expect(dialog()!.textContent).toContain("没有匹配的未完成待办");
   });
 
   it("Escape in the search empties it and keeps the dialog; with nothing typed, Escape closes the dialog", async () => {

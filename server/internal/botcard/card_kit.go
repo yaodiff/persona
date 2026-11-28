@@ -7,6 +7,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/assistantwire"
 )
 
 // The parts every card is drawn with (docs/extensions/bots.md "Cards"): the header's color is the state, its
@@ -232,9 +234,12 @@ func (c *Card) MarkdownID(id, s string) *Card {
 // Streaming makes the card one that CardKit streams text into (feishubot's CardStream): its text comes in letter by
 // letter, and the chat list shows its summary meanwhile.
 func (c *Card) Streaming() *Card {
-	c.Config["streaming_mode"] = true
-	c.Config["streaming_config"] = map[string]any{"print_frequency_ms": map[string]any{"default": 50},
-		"print_step": map[string]any{"default": 2}, "print_strategy": "fast"}
+	c.Config.StreamingMode = true
+	c.Config.StreamingConfig = &assistantwire.BotCardStreaming{
+		PrintFrequencyMS: assistantwire.BotCardPrintDefault{Default: 50},
+		PrintStep:        assistantwire.BotCardPrintDefault{Default: 2},
+		PrintStrategy:    "fast",
+	}
 	return c
 }
 
@@ -243,7 +248,7 @@ func (c *Card) Clone() *Card {
 	var cp Card
 	_ = json.Unmarshal([]byte(c.JSON()), &cp)
 	if cp.Config == nil {
-		cp.Config = map[string]any{}
+		cp.Config = &assistantwire.BotCardConfig{}
 	}
 	if cp.Body.Elements == nil {
 		cp.Body.Elements = []any{}
@@ -253,7 +258,9 @@ func (c *Card) Clone() *Card {
 
 // EndStreaming takes the streaming settings off again (a card written whole).
 func (c *Card) EndStreaming() *Card {
-	delete(c.Config, "streaming_mode")
-	delete(c.Config, "streaming_config")
+	if c.Config != nil {
+		c.Config.StreamingMode = false
+		c.Config.StreamingConfig = nil
+	}
 	return c
 }

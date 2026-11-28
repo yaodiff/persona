@@ -1,23 +1,28 @@
 // Settings › Advanced › Appearance's "Theme color", "Font" and "Sidebar icons" (#13398), and General's "Text size"
 // (ui/look.ts; the app's ThemeColorPicker and StyleSettingsPage's "Text size"), plus General's "Recent chats in the
 // sidebar" (lib/sidebar-recent.ts). Moving the rows changed no component and no browser storage key.
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useState, useSyncExternalStore } from "react";
 import { t } from "../../i18n";
-import { cx } from "../../ui/atoms";
+import { Button, cx } from "../../ui/atoms";
 import { pageToken } from "../../ui/extension-theme";
 import { useActiveExtensionTheme } from "../../ui/ExtensionThemePicker";
 import { Icon } from "../../ui/icons";
 import {
-  ACCENT_PRESETS, accentTokens, PRESET_COLORS, setAccentChoice, setTextSize, TEXT_SIZES, useAccentChoice, usePersonaAccent, useTextSize,
-  type AccentChoice, type TextSize,
+  ACCENT_PRESETS, accentTokens, PRESET_COLORS, setAccentChoice, setGlassTranslucency, setSurfaceStyle, setTextSize,
+  SURFACE_STYLES, TEXT_SIZES, useAccentChoice, useGlassTranslucency, usePersonaAccent, useSurfaceStyle, useTextSize,
+  type AccentChoice, type SurfaceStyle, type TextSize,
 } from "../../ui/look";
 import { RECENT_COUNTS, setRecentCount, useRecentCount } from "../../lib/sidebar-recent";
 import { setSidebarUsageShown, useSidebarUsageShown } from "../../lib/sidebar-usage";
 import { setSidebarIconMode, SIDEBAR_ICON_MODES, useSidebarIconMode, type SidebarIconMode } from "../../lib/sidebar-icons";
+import { PHONE_NAV_MODES, setPhoneNavMode, usePhoneNavMode, type PhoneNavMode } from "../../lib/phone-nav";
 import { usePersona } from "../assistant/Persona";
 import { Segmented } from "../assistant/parts";
+import { Slider } from "../../ui/Slider";
 import { Row, Switch } from "./SettingsParts";
-import { FONT_PRESETS, quoteFont, setFontChoice, useFontPreference, validFontFamily, type FontChoice, type FontKind } from "../../ui/font-preference";
+import { FONT_FALLBACKS, FONT_PRESETS, FONT_SERIF, fontFamily, quoteFont, setBrowserFonts, useFontSettings, validFontFamily, type FontChoice, type FontKind, type FontPreference } from "../../ui/font-preference";
+import { useFontAvailability } from "../../ui/font-availability";
+import { refreshSharedFonts, saveFontChoice, useFontSync } from "../../ui/font-sync";
 
 function subscribeScheme(l: () => void) {
   const o = new MutationObserver(l);
@@ -104,46 +109,136 @@ export function RecentChatsRow() {
   );
 }
 
-/** Local fonts are opt-in; a missing face keeps its choice and uses the normal fallback stack. */
+const fontKinds = ["sans", "mono"] as const;
+const fontField = "h-11 min-w-0 max-w-full rounded-control bg-field px-2.5 text-label text-ink shadow-inset-field";
+type LocalFontWindow = Window & { queryLocalFonts?: () => Promise<{ family: string }[]> };
+
 export function FontRows() {
-  const saved = useFontPreference();
+  const { fonts, browser } = useFontSettings();
+  const sync = useFontSync();
+  const [drafts, setDrafts] = useState<Partial<FontPreference>>({});
+  const [failed, setFailed] = useState<{ kind: FontKind; choice: FontChoice }>();
+  const [localError, setLocalError] = useState(false);
+  const draft = (kind: FontKind, choice?: FontChoice) => setDrafts((current) => ({ ...current, [kind]: choice }));
+  const commit = async (kind: FontKind, choice: FontChoice) => {
+    draft(kind, choice);
+    setFailed(undefined);
+    setLocalError(false);
+    if (await saveFontChoice(kind, choice)) draft(kind);
+    else setFailed({ kind, choice });
+  };
+  const preview = { ...fonts, ...Object.fromEntries(fontKinds.flatMap((kind) => {
+    const choice = drafts[kind];
+    return choice && (choice.preset !== "custom" || validFontFamily(choice.family)) ? [[kind, choice]] : [];
+  })) };
   return <div data-settings-row="font">
     <div className="px-4 pt-3 text-meta font-medium text-ink">{t("ui-look.font")}</div>
-    {(["sans", "mono"] as const).map((kind) => <FontRow key={kind} kind={kind} choice={saved[kind]} />)}
+    {sync !== "local" && <Row label={t("ui-look.font_browser")} hint={t("ui-look.font_browser_hint")} wrapHint stackOnNarrow>
+      <Switch label={t("ui-look.font_browser")} on={browser} disabled={sync === "saving"} onChange={(on) => {
+        if (setBrowserFonts(on)) {
+          setDrafts({});
+          setFailed(undefined);
+          setLocalError(false);
+          if (!on) void refreshSharedFonts();
+        } else setLocalError(true);
+      }} />
+    </Row>}
+    {fontKinds.map((kind) => <FontRow key={kind} kind={kind} choice={drafts[kind] ?? fonts[kind]} saved={fonts[kind]}
+      disabled={sync === "saving"} onDraft={(choice) => { if (failed?.kind === kind) setFailed(undefined); draft(kind, choice); }} onSave={(choice) => void commit(kind, choice)} />)}
+    {(failed || localError || sync === "saving") && <div className="flex flex-wrap items-center gap-2 px-4 pb-2">
+      <p className="text-submeta text-ink-2" role="status">
+        {t(sync === "saving" ? "ui-look.font_saving" : "ui-look.font_save_failed")}
+      </p>
+      {failed && <Button className="touch-hit whitespace-nowrap" onClick={() => void commit(failed.kind, failed.choice)}>{t("settings.retry")}</Button>}
+    </div>}
+    <FontPreview fonts={preview} />
   </div>;
 }
-function FontRow({ kind, choice }: { kind: FontKind; choice: FontChoice }) {
-  const [custom, setCustom] = useState(choice.preset === "custom");
-  const [draft, setDraft] = useState(choice.family ?? "");
-  useEffect(() => { setCustom(choice.preset === "custom"); setDraft(choice.family ?? ""); }, [choice.preset, choice.family]);
-  const valid = validFontFamily(draft);
-  let unavailable = false;
-  if (custom && valid) {
-    try { unavailable = document.fonts?.check(`1em ${quoteFont(draft.trim())}`) === false; }
-    catch { /* Font availability checks are only advisory, never a reason to discard a choice. */ }
-  }
+
+function FontRow({ kind, choice, saved, disabled, onDraft, onSave }: {
+  kind: FontKind;
+  choice: FontChoice;
+  saved: FontChoice;
+  disabled: boolean;
+  onDraft: (choice: FontChoice) => void;
+  onSave: (choice: FontChoice) => void;
+}) {
   const label = t(`ui-look.font_${kind}`);
+  const family = choice.family ?? "";
+  const valid = validFontFamily(family);
   return <div>
-    <Row label={label} hint={t("ui-look.font_hint")} wrapHint stackOnNarrow>
-      <select aria-label={label} className="h-11 max-w-full rounded-control bg-field px-2.5 text-label text-ink shadow-inset-field outline-none" value={custom ? "custom" : choice.preset} onChange={(event) => {
+    <Row label={label} hint={kind === "mono" ? t("ui-look.font_mono_hint") : undefined} wrapHint stackOnNarrow>
+      <select aria-label={label} className={fontField} value={choice.preset} disabled={disabled} onChange={(event) => {
         const preset = event.target.value;
-        setCustom(preset === "custom");
-        if (preset !== "custom") setFontChoice(kind, { preset });
+        if (preset === "custom") onDraft({ preset, family: saved.family ?? "" });
+        else onSave({ preset });
       }}>
         <option value="default">{t("ui-look.default")}</option>
-        {Object.entries(FONT_PRESETS[kind]).map(([preset, family]) => <option key={preset} value={preset}>{preset === "system" ? t(`ui-look.font_system_${kind}`) : family}</option>)}
+        {Object.entries(FONT_PRESETS[kind]).map(([preset, name]) => <option key={preset} value={preset}>
+          {preset === "system" ? t(`ui-look.font_system_${kind}`) : preset === "serif" ? t("ui-look.font_serif") : name}
+        </option>)}
         <option value="custom">{t("ui-look.font_custom")}</option>
       </select>
     </Row>
-    {custom && <div className="space-y-1 px-4 pb-3">
-      <label className="block text-label text-ink-2">{t("ui-look.font_family")}
-        <input aria-label={t("ui-look.font_custom_label", { kind: label })} aria-invalid={draft.length > 0 && !valid} value={draft} maxLength={100} spellCheck={false} autoComplete="off" className="mt-1 h-11 w-full rounded-control bg-field px-2.5 text-label text-ink shadow-inset-field outline-none" onChange={(event) => {
-          const family = event.target.value;
-          setDraft(family);
-          if (validFontFamily(family)) setFontChoice(kind, { preset: "custom", family });
-        }} />
-      </label>
-      <p className="text-submeta text-ink-3" role={draft.length > 0 && !valid ? "alert" : undefined}>{draft.length > 0 && !valid ? t("ui-look.font_invalid") : unavailable ? t("ui-look.font_unavailable") : t("ui-look.font_local")}</p>
+    {choice.preset === "custom" && <div className="space-y-2 px-4 pb-3">
+      <form className="flex flex-wrap items-end gap-2" onSubmit={(event) => { event.preventDefault(); if (valid && !disabled) onSave(choice); }}>
+        <label className="min-w-0 flex-1 text-label text-ink-2">{t("ui-look.font_family")}
+          <input aria-label={t("ui-look.font_custom_label", { kind: label })} aria-invalid={family.length > 0 && !valid}
+            value={family} maxLength={100} spellCheck={false} autoComplete="off" disabled={disabled}
+            className={cx("mt-1 w-full", fontField)} onChange={(event) => onDraft({ preset: "custom", family: event.target.value })} />
+        </label>
+        <Button type="submit" className="touch-hit whitespace-nowrap" disabled={disabled || !valid || family.trim() === saved.family}>{t("ui-look.font_apply")}</Button>
+      </form>
+      {family.length > 0 && !valid && <p className="text-submeta text-ink-3" role="alert">{t("ui-look.font_invalid")}</p>}
+      {typeof (window as LocalFontWindow).queryLocalFonts === "function" &&
+        <LocalFontPicker label={label} disabled={disabled} onSelect={(family) => onDraft({ preset: "custom", family })} />}
+    </div>}
+  </div>;
+}
+
+function LocalFontPicker({ label, disabled, onSelect }: { label: string; disabled: boolean; onSelect: (family: string) => void }) {
+  const [families, setFamilies] = useState<string[]>();
+  const [pending, setPending] = useState(false);
+  const browse = async () => {
+    setPending(true);
+    try {
+      const fonts = await (window as LocalFontWindow).queryLocalFonts!();
+      setFamilies([...new Set(fonts.map((font) => font.family).filter(validFontFamily))].sort((a, b) => a.localeCompare(b)));
+    } catch {
+      setFamilies([]);
+    } finally {
+      setPending(false);
+    }
+  };
+  return <div className="flex flex-wrap items-center gap-2">
+    <Button className="touch-hit whitespace-nowrap" disabled={disabled || pending} onClick={() => void browse()}>{t("ui-look.font_browse")}</Button>
+    {families?.length ? <select aria-label={t("ui-look.font_local_label", { kind: label })} value="" disabled={disabled} className={fontField}
+      onChange={(event) => onSelect(event.target.value)}>
+      <option value="" disabled>{t("ui-look.font_choose_local")}</option>
+      {families.map((family) => <option key={family} value={family}>{family}</option>)}
+    </select> : families && <p role="status" className="text-submeta text-ink-3">{t("ui-look.font_browse_unavailable")}</p>}
+  </div>;
+}
+
+function FontPreview({ fonts }: { fonts: FontPreference }) {
+  const sans = useFontAvailability("sans", fonts.sans);
+  const mono = useFontAvailability("mono", fonts.mono);
+  const stack = (kind: FontKind) => {
+    const family = fontFamily(kind, fonts[kind]);
+    const fallback = document.documentElement.style.getPropertyValue(`--font-${kind}`) || FONT_FALLBACKS[kind];
+    if (!family) return fallback;
+    return `${fonts[kind].preset === "system" ? family : quoteFont(family)}, ${fallback}`;
+  };
+  const codeStyle = { fontFamily: stack("mono") };
+  return <div className="mx-4 mb-3 rounded-control bg-field px-3 py-2">
+    <div className="text-label font-medium text-ink">{t("ui-look.font_preview")}</div>
+    <div className="prose-j" style={{ fontFamily: fonts.sans.preset === "serif" ? FONT_SERIF : stack("sans") }}>
+      <p>{t("ui-look.font_sample")} <code style={codeStyle}>hello()</code></p>
+      <pre><code style={codeStyle}>const hello = () =&gt; "Hello!";</code></pre>
+    </div>
+    {(sans !== null || mono !== null) && <div className="flex flex-wrap gap-x-3 text-submeta text-ink-3" role="status">
+      {([sans, mono] as const).map((available, i) => available === null ? null :
+        <span key={fontKinds[i]}>{t(available ? "ui-look.font_available" : "ui-look.font_unavailable", { kind: t(`ui-look.font_${fontKinds[i]}`) })}</span>)}
     </div>}
   </div>;
 }
@@ -156,6 +251,48 @@ export function SidebarIconsRow() {
     <Row label={t("ui-look.sidebar_icons")} hint={t("ui-look.sidebar_icons_hint")} wrapHint stackOnNarrow anchor="sidebar-icons">
       <Segmented<SidebarIconMode> label={t("ui-look.sidebar_icons")} value={mode} options={SIDEBAR_ICON_MODES.map((v) => ({ v, label: t(`ui-look.sidebar_icons_${v}`) }))} onChange={setSidebarIconMode} />
     </Row>
+  );
+}
+
+/** "Phone navigation" (lib/phone-nav.ts): the top bar's switch, the default, or a tab bar along the bottom. */
+export function PhoneNavRow() {
+  const mode = usePhoneNavMode();
+  return (
+    <Row label={t("ui-look.phone_nav")} hint={t("ui-look.phone_nav_hint")} wrapHint stackOnNarrow anchor="phone-nav">
+      <Segmented<PhoneNavMode> label={t("ui-look.phone_nav")} value={mode} options={PHONE_NAV_MODES.map((v) => ({ v, label: t(`ui-look.phone_nav_${v}`) }))} onChange={setPhoneNavMode} />
+    </Row>
+  );
+}
+
+/** "Window style" (#16607): Default (opaque surfaces) or Liquid Glass (translucent frosted material + macOS vibrancy). */
+export function SurfaceStyleRow() {
+  const style = useSurfaceStyle();
+  const translucency = useGlassTranslucency();
+  const label = (v: SurfaceStyle) => (v === "liquid-glass" ? t("ui-look.surface_liquid_glass") : t("ui-look.surface_default"));
+  return (
+    <>
+      <Row label={t("ui-look.surface_style")} hint={t("ui-look.surface_style_hint")} wrapHint stackOnNarrow anchor="surface-style">
+        <Segmented<SurfaceStyle> label={t("ui-look.surface_style")} value={style} options={SURFACE_STYLES.map((v) => ({ v, label: label(v) }))} onChange={setSurfaceStyle} />
+      </Row>
+      {style === "liquid-glass" && (
+        <Row label={t("ui-look.glass_translucency")} hint={t("ui-look.glass_translucency_hint")} wrapHint stackOnNarrow anchor="glass-translucency">
+          <div className="flex items-center gap-3">
+            <Slider
+              value={translucency}
+              min={0}
+              max={100}
+              step={5}
+              label={t("ui-look.glass_translucency")}
+              valueText={`${translucency}%`}
+              onInput={setGlassTranslucency}
+              onCommit={setGlassTranslucency}
+              className="w-36 sm:w-44"
+            />
+            <span className="w-9 text-right text-label font-medium tabular-nums text-ink-2">{translucency}%</span>
+          </div>
+        </Row>
+      )}
+    </>
   );
 }
 

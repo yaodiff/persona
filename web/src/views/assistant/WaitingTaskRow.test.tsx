@@ -136,6 +136,19 @@ describe("a delivery held for the owner's OK in Needs you", () => {
     expect(host.querySelector("[data-pr-link]")).toBeNull();
     expect(host.textContent).not.toContain(t("assistant-tasks.delivery_ok"));
   });
+
+  it("drops PR links carrying userinfo, backslash confusion, or trailing non-digit path suffixes", () => {
+    for (const bad of [
+      "https://user:pass@example.com/example/demo/pull/42",
+      "https://evil.example\\@example.com/example/demo/pull/42",
+      "https:/example/demo/pull/42",
+      "https://example.com/example/demo/pull/42abc",
+    ]) {
+      todo = { ...todo, pr_url: bad };
+      render();
+      expect(prLink(), bad).toBeNull();
+    }
+  });
 });
 
 const todo_held = () => "todo_held";

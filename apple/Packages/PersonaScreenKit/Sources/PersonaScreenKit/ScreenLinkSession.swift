@@ -105,7 +105,8 @@ public actor ScreenLinkSession {
         var unansweredPings = 0
         /// A relay to replace (#8709): it left on an interface the phone no longer uses, or it went silent.
         var stale: Stale?
-        /// When it was added (direct ones: an attach unanswered by `attachWithin` is lost, #9218).
+        /// When it was added (a direct connection or reattaching relay whose attach goes unanswered by `attachWithin`
+        /// is lost, #9218).
         var added = -Double.infinity
     }
 
@@ -114,10 +115,9 @@ public actor ScreenLinkSession {
 
     /// A direct route with a ping out this long and nothing heard is lost (the design's "1.5 s silent").
     public static let silentAfter = 1.5
-    /// A direct connection whose attach isn't answered this long after it was added is lost (#9218). It is never pinged
-    /// before it attaches, so without this it stayed forever: a redial whose answer went missing (a network that drops
-    /// packets for a moment) left the route counted as open, it was never dialed again, and the stream stayed on the
-    /// hub's relay.
+    /// A direct connection or reattaching relay whose attach isn't answered this long after it was added is lost
+    /// (#9218). Unattached links are never pinged, so without this a direct redial or reopened relay whose answer went
+    /// missing stayed open indefinitely.
     public static let attachWithin = 3.0
     /// A relay is taken as stuck when its oldest unanswered ping is this old, or four of its round trips if longer, and
     /// at least two pings went unanswered (#8709). It is longer than a direct route's limit because a relay's round
@@ -240,7 +240,7 @@ public actor ScreenLinkSession {
         nextLink += 1
         let (stream, writer) = AsyncStream.makeStream(of: Data.self)
         links[id] = Link(transport: t, writer: writer, relayFor: relayFor, route: route, kind: kind, via: via,
-                         attached: attached ?? (relayFor != nil))
+                         attached: attached ?? (relayFor != nil), added: now())
         Task { [weak self] in
             for await frame in stream {
                 do { try await t.send(frame) } catch { await self?.lose(id); return }
@@ -335,7 +335,6 @@ public actor ScreenLinkSession {
     public func addDirect(_ t: ScreenLinkTransport, route: String, kind: LinkStats.Kind, via: LinkStats.Via) {
         guard !ended, let token = paths?.token else { t.close(); return }
         let id = register(t, relayFor: nil, route: route, kind: kind, via: via)
-        links[id]?.added = now()
         out(id, .attach(token: token))
     }
 
@@ -693,8 +692,8 @@ public actor ScreenLinkSession {
     private func tick() -> Bool {
         guard !ended else { return false }
         let t = now()
-        for (id, l) in links where l.route != nil {
-            if let since = l.unanswered, t - since >= Self.silentAfter { lose(id) }
+        for (id, l) in links {
+            if l.route != nil, let since = l.unanswered, t - since >= Self.silentAfter { lose(id) }
             else if !l.attached, t - l.added >= Self.attachWithin { lose(id) } // its attach went unanswered (#9218)
         }
         // A relay gone quiet (#8709): Wi-Fi without a way out, or a network that left without a word. It stays
@@ -722,16 +721,18 @@ public actor ScreenLinkSession {
         }
         guard t - lastLook >= 1 else { return true }
         lastLook = t
+        let liveRelay = chans[ScreenLinkWire.rfb]?.home.flatMap { links[$0] }.flatMap { $0.attached ? $0 : nil }
         if lastRoute == nil { // the stream's first route: the relay
             lastRoute = Self.relayRoute
-            let relay = links.values.first { $0.relayFor == ScreenLinkWire.rfb }?.meter.stats(kind: .relay, via: relayVia, at: t)
+            let relay = liveRelay?.meter.stats(kind: .relay, via: relayVia, at: t)
             emit.yield(.moved(PathChange(from: nil, to: relay ?? LinkStats(kind: .relay, via: relayVia), reason: .start)))
         }
         var routes: [String: LinkStats] = [:]
+        if let relay = liveRelay {
+            routes[Self.relayRoute] = relay.meter.stats(kind: .relay, via: relayVia, at: t)
+        }
         for l in links.values {
-            if l.relayFor == ScreenLinkWire.rfb {
-                routes[Self.relayRoute] = l.meter.stats(kind: .relay, via: relayVia, at: t)
-            } else if let r = l.route, l.attached {
+            if let r = l.route, l.attached {
                 routes[r] = l.meter.stats(kind: l.kind, via: l.via, at: t)
             }
         }
@@ -836,14 +837,16 @@ extension ScreenLinkSession {
         }
     }
 
-    private func sendFlow(_ route: String, _ m: ScreenUDPMessage) {
-        guard var f = flows[route], let socket = f.socket else { return }
+    @discardableResult
+    private func sendFlow(_ route: String, _ m: ScreenUDPMessage) -> Bool {
+        guard var f = flows[route], let socket = f.socket else { return false }
         guard let p = f.sealer.seal(m.encoded()) else {
             leaveFlow(route, .lost) // the packet numbers ran out: never reuse a nonce
-            return
+            return false
         }
         flows[route] = f
         socket.send(p)
+        return true
     }
 
     private func sendHello(_ route: String) {
@@ -996,7 +999,11 @@ extension ScreenLinkSession {
                 }
                 continue
             }
-            if t - f.lastPing >= 1 { pingFlow(route); f = flows[route]! }
+            if t - f.lastPing >= 1 {
+                pingFlow(route)
+                guard let refreshed = flows[route] else { continue }
+                f = refreshed
+            }
             if let since = f.unanswered, t - since >= Self.flowSilent {
                 leaveFlow(route, .lost)
                 continue
@@ -1004,7 +1011,8 @@ extension ScreenLinkSession {
             if f.carrying == nil, f.meter.lastPongAt != nil, let v = currentVideo, let c = chans[v], c.active == f.parent,
                !c.waitingResume, c.flow == nil {
                 startCarrying(route, v)
-                f = flows[route]!
+                guard let refreshed = flows[route] else { continue }
+                f = refreshed
             }
             guard let ch = f.carrying, var rx = f.receiver else { continue }
             if f.waitingResume {
@@ -1015,27 +1023,32 @@ extension ScreenLinkSession {
                 if t - f.lastUse >= 0.1 {
                     f.lastUse = t
                     flows[route] = f
-                    sendFlow(route, .use([ScreenLinkOffset(ch, rx.expected)]))
+                    guard sendFlow(route, .use([ScreenLinkOffset(ch, rx.expected)])), let refreshed = flows[route] else { continue }
+                    f = refreshed
                 }
             }
+            let givenUpBefore = rx.givenUp
             let req = rx.requests(at: t, rtt: (f.meter.srttMs ?? 20) / 1000, jitter: (f.meter.jitterMs ?? 0) / 1000)
             f.receiver = rx
-            if req.skip != nil {
+            let newGiveUp = rx.givenUp > givenUpBefore
+            if newGiveUp {
                 f.giveUps.append(t)
                 f.giveUps.removeAll { t - $0 > Self.flowGiveUpWindow }
             }
             flows[route] = f
             if let off = req.skip {
-                if f.giveUps.count > Self.flowGiveUps {
+                if newGiveUp, f.giveUps.count > Self.flowGiveUps {
                     leaveFlow(route, .degraded)
                     continue
                 }
-                sendFlow(route, .skip(channel: ch, offset: off))
+                guard sendFlow(route, .skip(channel: ch, offset: off)) else { continue }
             }
-            if let w = req.want { sendFlow(route, .want(channel: ch, from: w.from, to: w.to)) }
+            if let w = req.want {
+                guard sendFlow(route, .want(channel: ch, from: w.from, to: w.to)) else { continue }
+            }
             var nack = req.nack[...]
             while !nack.isEmpty {
-                sendFlow(route, .nack(channel: ch, Array(nack.prefix(80))))
+                guard sendFlow(route, .nack(channel: ch, Array(nack.prefix(80)))) else { break }
                 nack = nack.dropFirst(80)
             }
         }
@@ -1072,7 +1085,7 @@ extension ScreenLinkSession {
         f.useAt = t
         f.lastUse = t
         flows[route] = f
-        sendFlow(route, .use([ScreenLinkOffset(ch, boundary)]))
+        guard sendFlow(route, .use([ScreenLinkOffset(ch, boundary)])) else { return }
         emit.yield(.moved(PathChange(from: flowStats(f, .tcp), to: flowStats(f, .udp), reason: .faster)))
     }
 

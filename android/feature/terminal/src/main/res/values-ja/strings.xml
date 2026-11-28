@@ -57,18 +57,18 @@
     <string name="terminal_note_unsupported">このコンピューターは閲覧のみで、引き継ぎはできません</string>
     <string name="terminal_note_taken">ターミナルが引き継がれました。現在は閲覧のみです</string>
     <string name="terminal_notice_keys_not_sent">キーを送信できませんでした。もう一度お試しください。</string>
-    <string name="terminal_panes_title">ターミナル</string>
-    <string name="terminal_panes_summary">エージェントも通常のシェルもターミナルとして開けます。操作中はペインがスマートフォンのサイズになり、離れると元に戻ります。</string>
+    <string name="terminal_panes_title">タブ</string>
+    <string name="terminal_panes_summary">タブを開くとターミナルを使えます。操作中はスマートフォンのサイズに合わせ、閉じると元のサイズに戻ります。</string>
     <string name="terminal_panes_refresh">リストを更新</string>
     <string name="terminal_panes_offline">オフライン</string>
     <string name="terminal_panes_loading">読み込み中…</string>
-    <string name="terminal_panes_no_panes">このコンピュータで開いているターミナルはありません。</string>
-    <string name="terminal_panes_no_panes_agent">このコンピュータで Agent を開始すると、ここにターミナルが表示されます。</string>
+    <string name="terminal_panes_no_panes">このコンピューターに開いているタブはありません。</string>
+    <string name="terminal_panes_no_panes_agent">このコンピューターでエージェントを起動すると、ここにタブが表示されます。</string>
     <string name="terminal_panes_no_computers">コンピューターがまだありません</string>
-    <string name="terminal_panes_no_computers_detail">コンピューターを接続すると、ここにそのターミナルが表示されます。</string>
+    <string name="terminal_panes_no_computers_detail">コンピューターを接続すると、ここにタブが表示されます。</string>
     <string name="terminal_panes_tab">タブ「%1$s」</string>
-    <string name="terminal_panes_untitled">ターミナル</string>
+    <string name="terminal_panes_untitled">シェル</string>
     <string name="terminal_panes_new_tab">新しいタブ</string>
-    <string name="terminal_panes_new_terminal">新規ターミナル</string>
+    <string name="terminal_panes_new_terminal">新しいシェル</string>
     <string name="terminal_panes_new_tab_failed">新しいタブを開けませんでした：%1$s</string>
 </resources>

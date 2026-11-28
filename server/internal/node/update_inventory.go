@@ -273,8 +273,24 @@ func (n *Node) updateSourceCoverage(ctx context.Context, processes []*assistantP
 	if n.runtimes == nil {
 		return errors.New("runtime registry unavailable")
 	}
+	// The built-in Orca bridge's sessions are Orca's chats: Orca's own update read covers them (it refuses any,
+	// hostorca_update.go), so neither its connection nor the chats it once listed is a runtime of its own here.
+	orcaBridge, orcaRead := n.runtimeHost.orcaBridgeInstance(), n.orcaUpdateRead()
 	n.runtimes.mu.Lock()
-	runtimes := len(n.runtimes.conns) + len(n.runtimes.known)
+	runtimes := 0
+	for _, c := range n.runtimes.conns {
+		c.mu.Lock()
+		bridge := orcaRead && orcaBridge != "" && c.ready && c.hello.Runtime == orcaRuntimeID && c.hello.Instance == orcaBridge
+		c.mu.Unlock()
+		if !bridge {
+			runtimes++
+		}
+	}
+	for _, k := range n.runtimes.known {
+		if !orcaRead || k.runtime != orcaRuntimeID {
+			runtimes++
+		}
+	}
 	n.runtimes.mu.Unlock()
 	if runtimes > 0 {
 		return errors.New("connected runtime lacks authoritative update inventory")

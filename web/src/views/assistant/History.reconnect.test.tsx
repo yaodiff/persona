@@ -77,7 +77,7 @@ const hello = async (msg: Record<string, unknown> = { type: "hello" }) => {
   await flush();
 };
 const retryButton = () => [...host.querySelectorAll("button")].find((b) => b.textContent?.trim() === "重试");
-const failedBlock = () => host.textContent?.includes("读不到对话") ?? false;
+const failedBlock = () => host.textContent?.includes("无法加载对话列表") ?? false;
 const partialLine = () => host.querySelector('[role="status"]')?.textContent ?? "";
 const archivedHeading = () => [...host.querySelectorAll("button[aria-expanded]")].find((b) => b.textContent?.includes("已归档"))?.textContent ?? "";
 
@@ -156,7 +156,7 @@ describe("All chats when its read failed", () => {
     await mount();
     expect(failedBlock()).toBe(false);
     expect(host.textContent).toContain("对话 keep");
-    expect(partialLine()).toContain("有些对话没读到");
+    expect(partialLine()).toContain("部分对话加载失败");
     expect(retryButton()).toBeDefined();
     expect(archivedHeading()).toBe("");
 

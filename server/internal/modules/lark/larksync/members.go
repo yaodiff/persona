@@ -40,11 +40,15 @@ type chatMemberList struct {
 	pages  int               // pages read
 	done   bool              // the list ended, was cut at chatMembersPagesMost, or cannot be read
 	denied bool              // the chat-members permission is missing
+	// stalled: a page failed for a passing reason (a rate limit, a broken connection) this run. The list is not
+	// done, so a later run resumes at the same page; this run reads no more of it.
+	stalled bool
 }
 
 // find reads chatID's members until want (an open id; "" reads the whole list) is among them, the list ends or the
 // budget is spent, and says want's name. A missing permission ends the list without an error; a fatal or context
-// error is returned.
+// error is returned, and so is a rate limit or a passing failure, which leaves the list stalled (not done) for this
+// run.
 func (l *chatMemberList) find(ctx context.Context, sess *session, chatID, want string, overBudget func() bool) (string, error) {
 	if l.names == nil {
 		l.names = map[string]string{}
@@ -55,7 +59,7 @@ func (l *chatMemberList) find(ctx context.Context, sess *session, chatID, want s
 				return name, nil
 			}
 		}
-		if l.done {
+		if l.done || l.stalled {
 			return "", nil
 		}
 		if l.pages >= chatMembersPagesMost {
@@ -87,6 +91,10 @@ func (l *chatMemberList) find(ctx context.Context, sess *session, chatID, want s
 				return "", ctx.Err()
 			}
 			if fatal(err) {
+				return "", err
+			}
+			if e := asSyncError(err); e != nil && (e.Kind == larksyncwire.ErrKindRateLimited || e.Kind == larksyncwire.ErrKindTransient) {
+				l.stalled = true
 				return "", err
 			}
 			l.done = true

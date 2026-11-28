@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"encoding/json"
+	"path"
 	"path/filepath"
 	"strings"
 
@@ -137,23 +138,23 @@ func safeReadonlySegment(words []string, cwd string) bool {
 	case "grep":
 		return safeReadonlySearch(words[1:], cwd, false)
 	case "cat":
-		return safeReadonlyFileTool(words[1:], cwd, false, false, nil)
+		return safeReadonlyFileTool(words[1:], cwd, false, false, false, nil)
 	case "head":
-		return safeReadonlyFileTool(words[1:], cwd, false, false, map[string]bool{
+		return safeReadonlyFileTool(words[1:], cwd, false, false, false, map[string]bool{
 			"-n": true, "-c": true, "--lines": true, "--bytes": true,
 		})
 	case "tail":
-		return safeReadonlyFileTool(words[1:], cwd, true, false, map[string]bool{
+		return safeReadonlyFileTool(words[1:], cwd, true, false, false, map[string]bool{
 			"-n": true, "-c": true, "--lines": true, "--bytes": true,
 		})
 	case "ls":
 		// Do not include --color (optional =WHEN only, never consumes the next token) or -w / -I
-		// (take no argument on BSD/macOS ls).
-		return safeReadonlyFileTool(words[1:], cwd, false, false, map[string]bool{
+		// (take no argument on BSD/macOS ls). Reject -L/-H/--dereference symlink following.
+		return safeReadonlyFileTool(words[1:], cwd, false, false, true, map[string]bool{
 			"--ignore": true, "--time-style": true, "--sort": true, "--format": true, "--width": true,
 		})
 	case "wc":
-		return safeReadonlyFileTool(words[1:], cwd, false, true, nil)
+		return safeReadonlyFileTool(words[1:], cwd, false, true, false, nil)
 	case "pwd":
 		for _, a := range words[1:] {
 			if a != "-L" && a != "-P" {
@@ -170,6 +171,7 @@ func safeReadonlyGit(args []string, cwd string) bool {
 	if readonlyGuardedDir(cwd) {
 		return false
 	}
+	curCwd := cwd
 	i := 0
 	for i < len(args) {
 		a := args[i]
@@ -178,7 +180,26 @@ func safeReadonlyGit(args []string, cwd string) bool {
 			continue
 		}
 		if a == "-C" {
-			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") || !safeReadonlyPath(args[i+1], cwd) {
+			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
+				return false
+			}
+			next := args[i+1]
+			if filepath.IsAbs(next) {
+				if !safeReadonlyPath(next, cwd) {
+					return false
+				}
+				curCwd = filepath.Clean(next)
+			} else {
+				if !safeReadonlyPath(next, curCwd) {
+					return false
+				}
+				if curCwd != "" {
+					curCwd = filepath.Join(curCwd, filepath.FromSlash(normalizeReadonlySlash(next)))
+				} else {
+					curCwd = next
+				}
+			}
+			if readonlyGuardedDir(curCwd) {
 				return false
 			}
 			i += 2
@@ -244,6 +265,15 @@ func safeReadonlyGit(args []string, cwd string) bool {
 						matchesLongFlagPrefix(flag, "--ignore-revs-file", len("--ignore-r")) {
 						return false
 					}
+				case "ls-files":
+					if matchesLongFlagPrefix(flag, "--exclude-from", len("--exclude-f")) ||
+						matchesLongFlagPrefix(flag, "--exclude-per-directory", len("--exclude-p")) {
+						return false
+					}
+				case "rev-parse":
+					if matchesLongFlagPrefix(flag, "--resolve-git-dir", len("--resolve-g")) {
+						return false
+					}
 				case "grep":
 					if matchesLongFlagPrefix(flag, "--file", len("--fil")) ||
 						matchesLongFlagPrefix(flag, "--open-files-in-pager", len("--op")) ||
@@ -264,23 +294,42 @@ func safeReadonlyGit(args []string, cwd string) bool {
 				if strings.HasPrefix(a, "-o") || strings.HasPrefix(a, "-x") {
 					return false
 				}
-				if sub == "blame" {
+				switch sub {
+				case "diff", "show", "log":
 					bundle := a[1:]
 					for k := 0; k < len(bundle); k++ {
 						ch := bundle[k]
-						if ch == 'S' {
+						if ch == 'o' || ch == 'O' || ch == 'x' {
+							return false
+						}
+						if strings.ContainsRune("nUSGLMCBl", rune(ch)) {
+							break
+						}
+					}
+				case "ls-files":
+					bundle := a[1:]
+					for k := 0; k < len(bundle); k++ {
+						ch := bundle[k]
+						if ch == 'o' || ch == 'x' || ch == 'X' {
+							return false
+						}
+					}
+				case "blame":
+					bundle := a[1:]
+					for k := 0; k < len(bundle); k++ {
+						ch := bundle[k]
+						if ch == 'S' || ch == 'o' || ch == 'x' {
 							return false
 						}
 						if ch == 'L' || ch == 'C' || ch == 'M' {
 							break
 						}
 					}
-				}
-				if sub == "grep" {
+				case "grep":
 					bundle := a[1:]
 					for k := 0; k < len(bundle); k++ {
 						ch := bundle[k]
-						if ch == 'f' || ch == 'O' {
+						if ch == 'f' || ch == 'O' || ch == 'o' || ch == 'x' {
 							return false
 						}
 						if ch == 'e' {
@@ -311,11 +360,53 @@ func safeReadonlyGit(args []string, cwd string) bool {
 				continue
 			}
 		}
-		if !safeReadonlyGitArg(a, cwd) {
+		if !safeReadonlyGitArg(a, curCwd) {
 			return false
 		}
 	}
 	return true
+}
+
+func gitArgEmbeddedPaths(arg string) []string {
+	var out []string
+	add := func(p string) {
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	if strings.HasPrefix(arg, ":") {
+		s := arg[1:]
+		if strings.HasPrefix(s, "(") {
+			if end := strings.IndexByte(s, ')'); end >= 0 {
+				add(s[end+1:])
+			}
+		} else {
+			// Short pathspec magic (:!, :^, :/) or stage syntax (:0:path).
+			trimmed := strings.TrimLeft(s, "!^/")
+			add(trimmed)
+		}
+	}
+	for i := 0; i < len(arg); i++ {
+		if arg[i] != ':' {
+			continue
+		}
+		after := arg[i+1:]
+		if after == "" {
+			continue
+		}
+		if strings.HasPrefix(after, "(") {
+			if end := strings.IndexByte(after, ')'); end >= 0 {
+				add(after[end+1:])
+				continue
+			}
+		}
+		if i == 0 && strings.HasPrefix(after, "/") {
+			add(strings.TrimLeft(after, "/"))
+			continue
+		}
+		add(after)
+	}
+	return out
 }
 
 // safeReadonlyGitArg validates a non-flag git argument (revision, pathspec, or diff operand)
@@ -326,9 +417,22 @@ func safeReadonlyGitArg(arg, cwd string) bool {
 	if arg == "" || strings.ContainsRune(arg, '\x00') || strings.HasPrefix(arg, "~") || strings.ContainsRune(arg, '$') {
 		return false
 	}
-	for _, seg := range strings.Split(filepath.ToSlash(arg), "/") {
+	if strings.ContainsRune(arg, '\\') || isUnsafeCrossOSOrUNCPath(arg) || hasWindowsDrivePrefix(arg) || readonlyGuardedTarget(arg, cwd) {
+		return false
+	}
+	for _, seg := range strings.Split(normalizeReadonlySlash(arg), "/") {
 		if seg == ".." || readonlyCredentialSegment(seg) {
 			return false
+		}
+	}
+	for _, sub := range gitArgEmbeddedPaths(arg) {
+		if strings.HasPrefix(sub, "~") || strings.ContainsRune(sub, '\\') || isUnsafeCrossOSOrUNCPath(sub) || hasWindowsDrivePrefix(sub) || readonlyGuardedTarget(sub, cwd) {
+			return false
+		}
+		for _, seg := range strings.Split(normalizeReadonlySlash(sub), "/") {
+			if seg == ".." || readonlyCredentialSegment(seg) {
+				return false
+			}
 		}
 	}
 	if filepath.IsAbs(arg) {
@@ -341,13 +445,36 @@ func safeReadonlyGitArg(arg, cwd string) bool {
 		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
 			return false
 		}
-		for _, seg := range strings.Split(filepath.ToSlash(rel), "/") {
+		for _, seg := range strings.Split(normalizeReadonlySlash(rel), "/") {
 			if seg == ".." || readonlyCredentialSegment(seg) {
 				return false
 			}
 		}
 	}
 	return true
+}
+
+func ghShortValueFlags(cmd, sub string) string {
+	switch cmd + " " + sub {
+	case "pr view", "pr status", "issue view", "issue status":
+		return "Rqt"
+	case "pr diff":
+		return "Re"
+	case "pr list":
+		return "RqtAaBHlLSs"
+	case "pr checks":
+		return "Rqti"
+	case "issue list":
+		return "RqtAalLSsm"
+	case "repo view":
+		return "qtb"
+	case "run view":
+		return "Rqtaj"
+	case "run list":
+		return "RqtbceLsu"
+	default:
+		return ""
+	}
 }
 
 func safeReadonlyGH(args []string) bool {
@@ -380,6 +507,7 @@ func safeReadonlyGH(args []string) bool {
 	default:
 		return false
 	}
+	valFlags := ghShortValueFlags(args[0], args[1])
 	for j := 2; j < len(args); j++ {
 		a := args[j]
 		if a == "--" {
@@ -399,10 +527,13 @@ func safeReadonlyGH(args []string) bool {
 				if ch == 'w' || ch == 'o' {
 					return false
 				}
-				// Stop scanning once a value-taking gh short flag starts so its attached value
-				// (e.g. -Rowner/repo) is not mistaken for bundled short flags.
-				if strings.ContainsRune("RqtAaBHlLSsjube", rune(ch)) {
-					if k == len(short)-1 && !strings.ContainsRune(a, '=') && j+1 < len(args) {
+				// Stop scanning only when a short flag actually takes a value for this subcommand
+				// so boolean flags (e.g. `gh run view -e`) cannot skip a following --web/-w/--watch.
+				if strings.ContainsRune(valFlags, rune(ch)) {
+					if k == len(short)-1 && !strings.ContainsRune(a, '=') {
+						if j+1 >= len(args) {
+							return false
+						}
 						j++
 					}
 					break
@@ -561,7 +692,7 @@ func safeReadonlySearch(args []string, cwd string, isRG bool) bool {
 	return hasPattern
 }
 
-func safeReadonlyFileTool(args []string, cwd string, noFollow, rejectFiles0 bool, valueFlags map[string]bool) bool {
+func safeReadonlyFileTool(args []string, cwd string, noFollow, rejectFiles0, noDeref bool, valueFlags map[string]bool) bool {
 	if readonlyGuardedDir(cwd) {
 		return false
 	}
@@ -581,6 +712,9 @@ func safeReadonlyFileTool(args []string, cwd string, noFollow, rejectFiles0 bool
 				if rejectFiles0 && matchesLongFlagPrefix(flag, "--files0-from", len("--f")) {
 					return false
 				}
+				if noDeref && (strings.HasPrefix(flag, "--dereference") || matchesLongFlagPrefix(flag, "--dereference", len("--de"))) {
+					return false
+				}
 				if valueFlags[flag] && !hasVal {
 					if i+1 >= len(args) {
 						return false
@@ -591,6 +725,9 @@ func safeReadonlyFileTool(args []string, cwd string, noFollow, rejectFiles0 bool
 			}
 			if strings.HasPrefix(a, "-") && len(a) > 1 {
 				if noFollow && strings.ContainsAny(a[1:], "fF") {
+					return false
+				}
+				if noDeref && strings.ContainsAny(a[1:], "LH") {
 					return false
 				}
 				if valueFlags[a] {
@@ -609,17 +746,52 @@ func safeReadonlyFileTool(args []string, cwd string, noFollow, rejectFiles0 bool
 	return true
 }
 
+func normalizeReadonlySlash(p string) string {
+	return strings.ReplaceAll(filepath.ToSlash(p), "\\", "/")
+}
+
+func hasWindowsDrivePrefix(p string) bool {
+	return len(p) >= 2 && ((p[0] >= 'A' && p[0] <= 'Z') || (p[0] >= 'a' && p[0] <= 'z')) && p[1] == ':'
+}
+
+func isUnsafeCrossOSOrUNCPath(arg string) bool {
+	if strings.HasPrefix(arg, `\`) {
+		return true
+	}
+	norm := normalizeReadonlySlash(arg)
+	if strings.HasPrefix(norm, "//") {
+		return true
+	}
+	if strings.HasPrefix(norm, "/") && !filepath.IsAbs(arg) {
+		return true
+	}
+	return false
+}
+
+func readonlyGuardedTarget(arg, cwd string) bool {
+	normArg := normalizeReadonlySlash(arg)
+	if readonlyGuardedDir(normArg) {
+		return true
+	}
+	if cwd != "" && !filepath.IsAbs(arg) && !strings.HasPrefix(normArg, "/") {
+		if readonlyGuardedDir(normalizeReadonlySlash(cwd) + "/" + normArg) {
+			return true
+		}
+	}
+	return false
+}
+
 func safeReadonlyPath(arg, cwd string) bool {
 	if arg == "" || strings.ContainsRune(arg, '\x00') {
 		return false
 	}
-	if strings.HasPrefix(arg, "~") || strings.ContainsAny(arg, "*?[]{}$") {
+	if strings.HasPrefix(arg, "~") || strings.ContainsAny(arg, "*?[]{}$") || hasWindowsDrivePrefix(arg) || isUnsafeCrossOSOrUNCPath(arg) {
 		return false
 	}
-	if readonlyGuardedDir(cwd) {
+	if readonlyGuardedDir(cwd) || readonlyGuardedTarget(arg, cwd) {
 		return false
 	}
-	for _, seg := range strings.Split(filepath.ToSlash(arg), "/") {
+	for _, seg := range strings.Split(normalizeReadonlySlash(arg), "/") {
 		if seg == ".." || readonlyCredentialSegment(seg) {
 			return false
 		}
@@ -634,7 +806,7 @@ func safeReadonlyPath(arg, cwd string) bool {
 		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
 			return false
 		}
-		for _, seg := range strings.Split(filepath.ToSlash(rel), "/") {
+		for _, seg := range strings.Split(normalizeReadonlySlash(rel), "/") {
 			if seg == ".." || readonlyCredentialSegment(seg) {
 				return false
 			}
@@ -647,8 +819,10 @@ func readonlyGuardedDir(dir string) bool {
 	if dir == "" {
 		return false
 	}
-	slash := strings.ToLower(filepath.ToSlash(filepath.Clean(dir)))
-	if strings.HasSuffix(slash, "/.config/gh") || strings.Contains(slash, "/.config/gh/") ||
+	slash := strings.ToLower(path.Clean(normalizeReadonlySlash(dir)))
+	if slash == ".config/gh" || strings.HasPrefix(slash, ".config/gh/") ||
+		strings.HasSuffix(slash, "/.config/gh") || strings.Contains(slash, "/.config/gh/") ||
+		slash == ".config/gcloud" || strings.HasPrefix(slash, ".config/gcloud/") ||
 		strings.HasSuffix(slash, "/.config/gcloud") || strings.Contains(slash, "/.config/gcloud/") {
 		return true
 	}

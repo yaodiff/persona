@@ -686,3 +686,33 @@ it("filters hidden rows before folding and restores them when the rule is disabl
   expect(host.textContent).toBe("parent");
   expect(fixture.api).not.toHaveBeenCalled();
 });
+
+describe("useFullAgentSessions hidden-tab pause", () => {
+  const setVisibility = (state: "visible" | "hidden") => {
+    Object.defineProperty(document, "visibilityState", { configurable: true, get: () => state });
+    document.dispatchEvent(new Event("visibilitychange"));
+  };
+
+  afterEach(() => {
+    setVisibility("visible");
+  });
+
+  it("holds sessions_list refreshes while the tab is hidden and catches up once when visible again", async () => {
+    const { hub, revision, change } = pagingHub(3);
+    await mount();
+    expect([hub.baselines, hub.deltas]).toEqual([1, 0]);
+
+    setVisibility("hidden");
+    for (let i = 1; i <= 5; i++) {
+      change(i);
+      await act(async () => { push("sessions_list", { revision: revision() }); });
+      await advance(3_500);
+    }
+    expect([hub.baselines, hub.deltas]).toEqual([1, 0]);
+
+    setVisibility("visible");
+    await advance(0);
+    expect([hub.baselines, hub.deltas]).toEqual([1, 1]);
+    expect(host.querySelector("output")!.dataset.titles).toContain("round 5");
+  });
+});

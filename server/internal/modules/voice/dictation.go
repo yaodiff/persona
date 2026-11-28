@@ -12,11 +12,22 @@ import (
 
 const modeDictation = "dictation"
 
+// refusesTextOnly reports whether provider p's service is already known to refuse text-only output
+// (shared across calls, dictation and meeting transcription, per provider id and address).
+func refusesTextOnly(p *Provider) bool {
+	return trMemoOf(p).noTextOnly.Load()
+}
+
+// forgoTextOnly remembers that provider p's service refused text-only output; returns true the first time.
+func forgoTextOnly(p *Provider) bool {
+	return trMemoOf(p).noTextOnly.CompareAndSwap(false, true)
+}
+
 // startDictation starts one unbound, text-only session. A service that refuses the interim-caption extension or
 // output_modalities gets a replacement without it, as meeting transcription does; no other failure opens another session.
 func (c *conversation) startDictation(ctx context.Context, up upLink, p *Provider, w wire, model, instructions string) (int, bool, upLink, error) {
 	partial := true
-	textOnly := !trMemoOf(p).noTextOnly.Load()
+	textOnly := !refusesTextOnly(p)
 	for {
 		s := session{Model: model, InputRate: p.inputRate(), Instructions: instructions, Dictation: true, DictationCaptions: partial, TextOnly: textOnly}
 		granted := false
@@ -40,7 +51,7 @@ func (c *conversation) startDictation(ctx context.Context, up upLink, p *Provide
 			if !textOnly {
 				return 0, false, up, err
 			}
-			if trMemoOf(p).noTextOnly.CompareAndSwap(false, true) {
+			if forgoTextOnly(p) {
 				c.logf("provider %s: the service refused text-only output (%s): dictation output audio is discarded, but billed", p.ID,
 					firstNonEmpty(refused.code, "no code"))
 			}

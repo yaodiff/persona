@@ -129,7 +129,7 @@ describe("the sidebar's assistant switcher", () => {
     expect(head().textContent).toContain("在线 · server");
     expect(head().querySelector("[data-avatar-status=green]")).not.toBeNull();
     expect(head().querySelector("[data-avatar-waiting]")).not.toBeNull();
-    expect(head().getAttribute("aria-label")).toContain("别的助手有事等你处理");
+    expect(head().getAttribute("aria-label")).toContain("其他助手有事项等待你处理");
     expectDescribedStatus("在线 · server");
     // on 工作 itself: what waits is its own (its pages count it), and the default's one inbox item is another's
     act(() => chooseManager("m-1"));
@@ -150,7 +150,7 @@ describe("the sidebar's assistant switcher", () => {
     expect(radios[1].querySelector("[data-menu-badge]")?.textContent).toBe("3");
     expect(radios[0].querySelector("[data-menu-badge]")).toBeNull();
     expect(radios[2].textContent).toContain("离线 · 最后同步于");
-    expect(row("测试").textContent).toContain("安装中 · 码 7 分钟后过期");
+    expect(row("测试").textContent).toContain("安装中 · 安装码 7 分钟后过期");
     expect(rows().map((r) => r.textContent).filter((x) => x === "新建助手" || x === "管理助手…")).toEqual(["新建助手", "管理助手…"]);
   });
 
@@ -245,7 +245,7 @@ describe("the sidebar's assistant switcher", () => {
     expect(radios[0].textContent).toContain("助手");
     expect(radios[0].textContent).not.toContain("默认");
     expect(radios[0].querySelector("[data-menu-badge]")).toBeNull();
-    expect(rows().slice(1).map((r) => r.textContent)).toEqual(["新建助手", "管理助手…", "跟随系统", "浅色", "深色", "设置", "断开这个浏览器…"]);
+    expect(rows().slice(1).map((r) => r.textContent)).toEqual(["新建助手", "管理助手…", "跟随系统", "浅色", "深色", "设置", "断开当前浏览器…"]);
     await choose("设置");
     expect(navigate).toHaveBeenCalledWith({ name: "settings" });
   });
@@ -336,7 +336,7 @@ describe("the sidebar's assistant switcher", () => {
     await open();
     expect(document.body.querySelector<HTMLElement>("[role=menu]")!.style.width).toBe("220px");
     expect(menuHeader()).toBe("外观");
-    expect(rows().map((r) => r.textContent)).toEqual(["跟随系统", "浅色", "深色", "设置", "断开这个浏览器…"]);
+    expect(rows().map((r) => r.textContent)).toEqual(["跟随系统", "浅色", "深色", "设置", "断开当前浏览器…"]);
   });
 
   it("uses the same product form when the fresh roster has only an installing assistant", async () => {
@@ -393,7 +393,7 @@ describe("the sidebar's assistant switcher", () => {
     await open();
     expect(document.body.querySelector<HTMLElement>("[role=menu]")!.style.width).toBe("220px");
     expect(menuHeader()).toBe("外观");
-    expect(rows().map((r) => r.textContent)).toEqual(["跟随系统", "浅色", "深色", "设置", "断开这个浏览器…"]);
+    expect(rows().map((r) => r.textContent)).toEqual(["跟随系统", "浅色", "深色", "设置", "断开当前浏览器…"]);
     expect(rows().some((r) => r.textContent === "新建助手")).toBe(false);
   });
 
@@ -479,9 +479,9 @@ describe("the sidebar's assistant switcher", () => {
     act(() => root.render(<AssistantSwitcher phase="unreachable" online={0} total={3} route={{ name: "persona" }} />));
     await flush();
     expect(head().textContent).toContain("助手");
-    expect(head().textContent).toContain("连不上 hub");
+    expect(head().textContent).toContain("无法连接 hub");
     expect(head().querySelector("[data-avatar-status]")).toBeNull();
-    expectDescribedStatus("连不上 hub");
+    expectDescribedStatus("无法连接 hub");
   });
 
   it("keeps the default Persona face, subtitle, and mounted switcher node while the roster reloads", async () => {

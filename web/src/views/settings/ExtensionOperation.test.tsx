@@ -42,7 +42,7 @@ describe("OperationSteps", () => {
       steps: [{ id: "download", state: "failed", bytes: 1 << 20, total: 16 << 20 }, { id: "verify", state: "pending" }],
     };
     const html = renderToStaticMarkup(<OperationSteps op={failed} onRetry={async () => {}} />);
-    expect(html).toContain("卡在「下载」");
+    expect(html).toContain("在「下载」步骤中断");
     expect(html).toContain("原因：下载卡住了");
     expect(html).toContain("重试");
     expect(renderToStaticMarkup(<OperationSteps op={{ ...failed, retryable: false }} onRetry={async () => {}} />)).not.toContain("重试");
@@ -59,14 +59,13 @@ describe("OperationSteps", () => {
       ],
     };
     const html = renderToStaticMarkup(<OperationSteps op={op} />);
-    expect(html).toContain("安装命令行");
+    expect(html).toContain("安装命令行工具");
     expect(html).toContain("node");
-    expect(html).toContain("用这台机器上的");
+    expect(html).toContain("使用本机已有版本");
     expect(html).toContain("example-cli");
     expect(html).toContain('aria-label="example-cli"');
     expect(html).toContain('aria-valuenow="25"');
     const failed = renderToStaticMarkup(<OperationSteps op={{ ...op, state: "failed", step: "tools", error: "example-cli：校验不对", error_code: "tools_failed" }} />);
-    expect(failed).toContain("命令行程序没装上：example-cli：校验不对");
+    expect(failed).toContain("命令行工具安装失败：example-cli：校验不对");
   });
 });
-

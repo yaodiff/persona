@@ -1,5 +1,5 @@
 {
-  "start_code_launcher_terminal": "{launcher} 在这台电脑的终端里开不起来",
-  "start_code_worktree_path_taken": "上次没开起来时留下的工作区还占着位置",
-  "retry_launcher_unsupported": "hub 还不能换启动器重试，请先更新 hub 上的 Persona，或者直接重试"
+  "start_code_launcher_terminal": "{launcher} 无法在这台电脑的终端中启动",
+  "start_code_worktree_path_taken": "上次启动失败遗留的工作区目录仍被占用",
+  "retry_launcher_unsupported": "当前 hub 暂不支持切换启动器重试。请先更新 hub 上的 Persona，或直接重试。"
 }

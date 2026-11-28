@@ -65,6 +65,29 @@ func (h *Hub) requestHasElicitation(r *http.Request) bool {
 	return false
 }
 
+func (h *Hub) requestHasApprovalMirrors(r *http.Request) bool {
+	who, rc := principalOf(r.Context()), requestClientOf(r.Context())
+	if rc.Platform == "" {
+		return false
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for c := range h.clients {
+		c.mu.Lock()
+		matches := c.device == who.ID && c.meta.Platform == rc.Platform && c.meta.Version == rc.Version
+		if rc.Platform == "web" {
+			// Every tab says web/1 and shares the browser credential. Only the
+			// requesting tab's own hello can opt its REST snapshot into copies.
+			matches = matches && rc.Instance != "" && c.meta.Instance == rc.Instance
+		}
+		c.mu.Unlock()
+		if matches && c.wants(featureApprovalMirrors) {
+			return true
+		}
+	}
+	return false
+}
+
 func visibleInteractions(ixs []proto.Interaction, elicitation bool) []proto.Interaction {
 	out := make([]proto.Interaction, 0, len(ixs))
 	for _, ix := range ixs {
@@ -89,9 +112,25 @@ func (h *Hub) withMuted(ixs []proto.Interaction) []proto.Interaction {
 // sendPendingInteractions queues the pending cards for c. The snapshot is taken and queued under h.mu, where
 // broadcastTo queues: an interaction_resolved for a card in it is queued after it, never before (#3937).
 func (h *Hub) sendPendingInteractions(c *client, elicitationOnly bool) {
+	h.sendPendingInteractionSelection(c, elicitationOnly, false)
+}
+
+// sendPendingMirrorInteractions completes a pre-hello authoritative snapshot
+// once the client declares display-copy support in client_hello.
+func (h *Hub) sendPendingMirrorInteractions(c *client) {
+	h.sendPendingInteractionSelection(c, false, true)
+}
+
+func (h *Hub) sendPendingInteractionSelection(c *client, elicitationOnly, mirrorsOnly bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for _, ix := range h.pendingInteractions() {
+		if mirrorsOnly && ix.MirrorOf == "" {
+			continue
+		}
+		if ix.MirrorOf != "" && !c.wants(featureApprovalMirrors) {
+			continue
+		}
 		if c.role == roleReadOnly && h.hiddenFromReadOnly(ix) {
 			continue
 		}

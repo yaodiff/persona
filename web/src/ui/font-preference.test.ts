@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { applyFonts, FONT_FALLBACKS, FONT_KEY, FONT_PRESETS, fontPreference, normalizeFonts, quoteFont, setFontChoice, validFontFamily } from "./font-preference";
+import { applyFonts, cacheSharedFonts, fontSettings, setBrowserFonts, FONT_FALLBACKS, FONT_KEY, FONT_PRESETS, fontPreference, normalizeFonts, quoteFont, setFontChoice, validFontFamily } from "./font-preference";
 
 const bootstrap = [...readFileSync("index.html", "utf8").matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]).find((s) => s.includes('"persona.font"'))!;
 new Function(bootstrap)();
@@ -10,7 +10,7 @@ beforeEach(() => { localStorage.clear(); document.documentElement.removeAttribut
 afterEach(() => { localStorage.clear(); document.documentElement.removeAttribute("style"); applyFonts(); });
 
 describe("browser-local font preference", () => {
-  it("adds nothing by default, changes families independently, and removes both the key and stylesheet on reset", () => {
+  it("adds nothing by default, changes families independently, and removes the stylesheet on reset", () => {
     expect(style()).toBeNull();
     setFontChoice("sans", { preset: "georgia" });
     expect(style()!.textContent).toContain('"Georgia", ' + FONT_FALLBACKS.sans);
@@ -21,7 +21,7 @@ describe("browser-local font preference", () => {
     expect(style()!.textContent).not.toContain("--font-sans:");
     setFontChoice("mono", { preset: "default" });
     expect(style()).toBeNull();
-    expect(localStorage.getItem(FONT_KEY)).toBeNull();
+    expect(fontSettings().browser).toBe(true);
   });
   it("keeps the theme default behind an explicit choice, notices late theme changes, and restores it without touching the inline token", async () => {
     document.documentElement.style.setProperty("--font-sans", "Arial, sans-serif");
@@ -62,6 +62,23 @@ describe("browser-local font preference", () => {
       expect(style()?.textContent ?? null, JSON.stringify(value)).toBe(expected);
       expect(document.querySelectorAll("#persona-font").length).toBeLessThanOrEqual(1);
     }
+  });
+
+  it("keeps a legacy choice local and caches Hub defaults behind it until the override is disabled", () => {
+    localStorage.setItem(FONT_KEY, JSON.stringify({ sans: { preset: "georgia" }, mono: { preset: "consolas" } }));
+    const shared = normalizeFonts({ sans: { preset: "inter" }, mono: { preset: "jetbrains" } });
+    cacheSharedFonts(shared);
+    expect(fontSettings()).toEqual({
+      fonts: normalizeFonts({ sans: { preset: "georgia" }, mono: { preset: "consolas" } }),
+      shared,
+      browser: true,
+    });
+    setBrowserFonts(false);
+    expect(fontSettings()).toEqual({ fonts: shared, shared, browser: false });
+    const css = style()?.textContent;
+    style()?.remove();
+    dispatchEvent(new StorageEvent("storage", { key: FONT_KEY }));
+    expect(style()?.textContent).toBe(css);
   });
   it("retains CJK and symbol fallbacks and makes no font download declaration", () => {
     setFontChoice("sans", { preset: "custom", family: "Arial" });

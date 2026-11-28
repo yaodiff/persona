@@ -8,6 +8,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/connectorwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -42,7 +43,7 @@ func inboxVisibilityMatch(it *InboxItem, cfg *assistantwire.InboxVisibilityConfi
 		switch it.Kind {
 		case "dm", "bot":
 			direct, known = true, true
-		case "group", "mention":
+		case "group", "mention", connectorwire.OwnerPromiseKind:
 			known = true
 		}
 	}

@@ -67,7 +67,11 @@ func todoStores(t *testing.T, body func(t *testing.T, e *todoEnv, database *db.D
 
 // do is an app's request as the hub relays it, from a device with role ("" a full one).
 func (e *todoEnv) doAs(role, method, path, body string) *httptest.ResponseRecorder {
-	r := httptest.NewRequest(method, path, strings.NewReader(body))
+	return e.doAsContext(context.Background(), role, method, path, body)
+}
+
+func (e *todoEnv) doAsContext(ctx context.Context, role, method, path, body string) *httptest.ResponseRecorder {
+	r := httptest.NewRequestWithContext(ctx, method, path, strings.NewReader(body))
 	if role != "" {
 		r.Header.Set(RoleHeader, role)
 	}
@@ -835,8 +839,8 @@ type pausingAutoDoneStore struct {
 	stored, release chan struct{}
 }
 
-func (p *pausingAutoDoneStore) AutoDoneTodo(ctx context.Context, id, reason string, at, workSince time.Time) (*db.TodoRow, bool, error) {
-	r, ok, err := p.DB.AutoDoneTodo(ctx, id, reason, at, workSince)
+func (p *pausingAutoDoneStore) AutoDoneTodo(ctx context.Context, id, reason string, at, workSince time.Time, guard func() error) (*db.TodoRow, bool, error) {
+	r, ok, err := p.DB.AutoDoneTodo(ctx, id, reason, at, workSince, guard)
 	p.stored <- struct{}{}
 	<-p.release
 	return r, ok, err

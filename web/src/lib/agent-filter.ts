@@ -3,7 +3,7 @@
 // keeps its place, so the next one is still right below it.
 import { t } from "../i18n";
 import { sessionHost, sessionSource, type AgentMutes } from "./agent-groups";
-import { backgroundWaiting, stateOf } from "./format";
+import { activityOf, backgroundWaiting, stateOf } from "./format";
 import { agentKey, isSpacePinned, type AgentPins } from "./pins";
 import { isMuted } from "./session-actions";
 import { unseen } from "./seen-outbox";
@@ -25,8 +25,6 @@ export const AGENT_FILTERS: { key: AgentFilter; label: string; state?: AgentStat
   { key: "terminal", label: t("lib-agent-filter.terminal") },
 ];
 
-const SOURCE_FILTERS = { feishu: "feishu", terminal: "terminal" } as const;
-
 export function agentFilter(value: string | null): AgentFilter {
   return AGENT_FILTERS.find((f) => f.key === value)?.key ?? "all";
 }
@@ -45,11 +43,13 @@ export function filterState(f: AgentFilter): AgentState | undefined {
 /** A muted agent that is working or finished unread is not counted or listed under "Unread" / "Working" (it sits under "Muted");
  * one that needs you still is, the same as the list's order. */
 export function matchesFilter(s: Session, f: AgentFilter, mutes: AgentMutes): boolean {
-  if (f === "feishu" || f === "terminal") return sessionSource(s) === SOURCE_FILTERS[f];
+  if (f === "terminal") return sessionSource(s) === "terminal" && activityOf(s) !== "offline";
+  if (f === "feishu") return sessionSource(s) === "feishu";
   const state = filterState(f);
   if (!state) return true;
   if (state === "working" && backgroundWaiting(s) !== (f === "bg_waiting")) return false;
-  return stateOf(s) === state && (state === "needs_you" || !isMuted(s, mutes));
+  if (f === "needs" && s.view) return s.view.counted === true;
+  return activityOf(s) === state && (state === "needs_you" || !isMuted(s, mutes));
 }
 
 export type FilterCounts = Record<Exclude<AgentFilter, "all">, number>;
@@ -65,10 +65,10 @@ export function shownFilters(selection: AgentFilter, counts: FilterCounts): Agen
   return AGENT_FILTERS.map((f) => f.key).filter((k) => k === "all" || (k === selection && k !== "feishu") || counts[k] > 0);
 }
 
-/** The agents a filter shows: what matches now, and what it showed when it was chosen (`kept`). */
+/** The tab filter tracks current membership. Other filters can also retain rows shown earlier in the visit. */
 export function applyFilter(sessions: Session[], f: AgentFilter, mutes: AgentMutes, kept: ReadonlySet<string>): Session[] {
   if (f === "all") return sessions;
-  return sessions.filter((s) => matchesFilter(s, f, mutes) || kept.has(agentKey(s)));
+  return sessions.filter((s) => matchesFilter(s, f, mutes) || (f !== "terminal" && kept.has(agentKey(s))));
 }
 
 /** What a filter matches now, by key (what `kept` starts from when it is chosen). */

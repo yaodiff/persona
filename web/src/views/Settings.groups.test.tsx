@@ -3,6 +3,7 @@
 // assistant's avatar and a Switch that opens the sidebar's list, "This device" and "Hub", in that order, with their lines;
 // the first group's pages ask the current assistant only, read again for another, and an item of theirs open when the
 // pick changes goes back to its list.
+import { installedMailbox, preloadMailbox } from "../test/installed-mailbox";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -26,7 +27,7 @@ vi.mock("./settings/StartPage", () => ({ StartPageGroup: () => <div data-page="s
 vi.mock("../lib/pwa", async (original) => ({ ...(await original<typeof import("../lib/pwa")>()), useInstall: () => "installed" }));
 vi.mock("./settings/AgentSettings", () => ({ AgentSettings: ({ agent }: { agent: string }) => <div data-page="agent" data-agent={agent} /> }));
 vi.mock("./settings/Extensions", () => ({
-  Extensions: ({ open }: { open: string | null }) => <div data-page="extensions" data-open={open ?? ""} />,
+  Extensions: ({ open, prefill }: { open: string | null; prefill?: unknown }) => <div data-page="extensions" data-open={open ?? ""} data-prefill={prefill ? JSON.stringify(prefill) : ""} />,
 }));
 vi.mock("./settings/FeishuBot", () => ({ FeishuBot: () => null }));
 vi.mock("./settings/HubConnector", () => ({ ConnectorList: () => <div data-page="connector-list" />, ConnectorDetail: () => <div data-page="connector-detail" /> }));
@@ -120,9 +121,9 @@ describe("Settings' groups", () => {
     expect(groups[1].textContent).toContain(t("settings-nav.group_device"));
     expect(groups[2].textContent).toContain(t("settings-nav.group_hub"));
     expect(groups[2].textContent).toContain(t("settings-nav.hub_footer"));
-    // the rows: the assistant's profile in the first, the assistant list in the hub's, never called like a group
+    // the rows: the assistant's profile in the first, the hub's own page in the last named group, never called like a group
     expect(groups[0].textContent).toContain(t("settings-nav.tab_profile"));
-    expect(groups[2].textContent).toContain(t("settings-nav.tab_managers"));
+    expect(groups[2].textContent).toContain(t("settings-nav.tab_hub"));
     // Labs on its own: only its row, no title or line of a group
     expect(groups[3].textContent).toBe(t("settings-nav.tab_labs"));
   });
@@ -180,10 +181,11 @@ describe("the current assistant's pages", () => {
   });
 
   it("ask the current assistant for its mail accounts on Connectors, and leave other pages' requests alone", async () => {
+    await preloadMailbox("Settings");
     setRoster(ROSTER);
     await switchTo("m-1");
     await mount("/settings?tab=connectors");
-    expect(asked("/api/v1/mail/accounts")).toEqual(["m-1"]);
+    expect(asked("/api/v1/mail/accounts")).toEqual(installedMailbox ? ["m-1"] : []);
     // a page outside the group: nothing pinned
     await act(async () => root.render(null));
     calls = [];
@@ -225,6 +227,14 @@ describe("the current assistant's pages", () => {
     await switchTo("m-1");
     expect(host.querySelector('[data-page="extensions"]')?.getAttribute("data-open")).toBe("");
     expect(location.search).toBe("?tab=extensions");
+  });
+
+  it("passes an extension settings link's proposed values to the page", async () => {
+    setRoster(ROSTER);
+    await mount(`/settings?tab=extensions&extension=example&set=${encodeURIComponent(JSON.stringify({ machine: "studio" }))}`);
+    const page = host.querySelector('[data-page="extensions"]');
+    expect(page?.getAttribute("data-open")).toBe("example");
+    expect(JSON.parse(page?.getAttribute("data-prefill") ?? "null")).toEqual({ machine: "studio" });
   });
 
   it("keep a page of this device's as it is when the pick changes", async () => {

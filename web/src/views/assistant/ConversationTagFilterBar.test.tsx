@@ -66,6 +66,6 @@ describe("ConversationTagFilterBar (#12018)", () => {
     await flush();
     expect(input.value).toBe("keep me");
     act(() => root.render(<ConversationTagFilterBar entries={[]} active="" customized={true} editing={false} onSelect={vi.fn()} onChange={onChange} onDone={vi.fn()} />));
-    expect(host.textContent).toContain("没有标签过滤项");
+    expect(host.textContent).toContain("暂无标签过滤项");
   });
 });

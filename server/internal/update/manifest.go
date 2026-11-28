@@ -15,19 +15,24 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/nodeproto"
 )
 
 // Manifest is latest.json: the release the publisher put up (docs/operations/hub-update.md "Release manifest and signature").
 type Manifest struct {
-	Version     string          `json:"version"`
-	Build       int64           `json:"build"`
-	Commit      string          `json:"commit"`
-	Released    time.Time       `json:"released"`
-	MinAppBuild int             `json:"min_app_build,omitempty"`
-	Protocol    int             `json:"protocol"`
-	Notes       string          `json:"notes,omitempty"`
-	Channel     string          `json:"channel,omitempty"` // absent: the existing stable feed; beta: prereleases only
-	Files       map[string]File `json:"files"`             // "linux-amd64" -> its download
+	Version     string    `json:"version"`
+	Build       int64     `json:"build"`
+	Commit      string    `json:"commit"`
+	Released    time.Time `json:"released"`
+	MinAppBuild int       `json:"min_app_build,omitempty"`
+	Protocol    int       `json:"protocol"`
+	Notes       string    `json:"notes,omitempty"`
+	Channel     string    `json:"channel,omitempty"` // absent: the existing stable feed; beta: prereleases only
+	// Edition is the edition of every download listed (nodeproto.Edition.Marker): left out for the full build,
+	// "core" for Persona Core alone, which is served as core-latest.json and never read by a full install.
+	Edition string          `json:"edition,omitempty"`
+	Files   map[string]File `json:"files"` // "linux-amd64" -> its download
 	// Ancestors is every commit the release's code contains (EncodeAncestors of git rev-list <commit>): a hub installs
 	// it by itself only when its own commit is one of them (Build.Hold).
 	Ancestors string `json:"ancestors,omitempty"`
@@ -143,6 +148,9 @@ type File struct {
 	Size         int64  `json:"size"`   // of the .gz
 	SHA256       string `json:"sha256"` // of the .gz
 	BinarySHA256 string `json:"binary_sha256"`
+	// Served is the name the download is fetched under when that is not Name (Remote): the core edition's
+	// core-personad-linux-amd64.gz. Left out in a full release's manifest.
+	Served string `json:"served,omitempty"`
 }
 
 // ParseManifest reads latest.json.
@@ -252,7 +260,33 @@ func BuildManifest(dir string, m Manifest) (*Manifest, error) {
 		return nil, fmt.Errorf("no personad-*.gz in %s", dir)
 	}
 	compatiblePrograms(&m)
+	edition, ok := nodeproto.ParseEdition(m.Edition)
+	if !ok {
+		return nil, fmt.Errorf("unknown edition %q", m.Edition)
+	}
+	m.Edition = edition.Marker()
+	m.serveAs(edition)
 	return &m, nil
+}
+
+// serveAs names what every download of m is served under for edition e (File.Served): nothing for the full edition,
+// core-<name> for the core's, which shares one flat namespace with the full release.
+func (m *Manifest) serveAs(e nodeproto.Edition) {
+	each := func(files map[string]File) {
+		for plat, f := range files {
+			if f.Served = e.Served(f.Name); f.Served == f.Name {
+				f.Served = ""
+			}
+			files[plat] = f
+		}
+	}
+	each(m.Files)
+	each(m.Links)
+	for _, group := range []map[string]map[string]File{m.Programs, m.Nodes, m.Helpers} {
+		for _, files := range group {
+			each(files)
+		}
+	}
 }
 
 func describe(gz string) (File, error) {
@@ -273,8 +307,17 @@ func describe(gz string) (File, error) {
 	if err != nil {
 		return File{}, fmt.Errorf("%s: %w", gz, err)
 	}
+	defer zr.Close()
 	inner := sha256.New()
-	if _, err := io.Copy(inner, zr); err != nil {
+	limit := unpackedBinaryLimit()
+	unpacked, err := io.Copy(inner, io.LimitReader(zr, limit+1))
+	if err != nil {
+		return File{}, fmt.Errorf("%s: %w", gz, err)
+	}
+	if unpacked > limit {
+		return File{}, fmt.Errorf("%s: unpacked binary exceeds %d bytes", gz, limit)
+	}
+	if err := zr.Close(); err != nil {
 		return File{}, fmt.Errorf("%s: %w", gz, err)
 	}
 	return File{Name: filepath.Base(gz), Size: n, SHA256: hex.EncodeToString(outer.Sum(nil)), BinarySHA256: hex.EncodeToString(inner.Sum(nil))}, nil

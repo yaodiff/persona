@@ -42,21 +42,33 @@ export function loadKBDetailParts(kind: string): Promise<ComponentType<ModuleKBD
 /** The page of a knowledge entry, with the parts the module that names its kind adds. */
 export function ModuleKBDetail({ readOnly: ReadOnly, ...props }: ModuleKBDetailProps & { readOnly?: ComponentType<ModuleKBDetailProps> }) {
   const id = useKBKindModule(props.kind);
-  const [Parts, setParts] = useState<ComponentType<ModuleKBDetailProps> | null>(() => (id ? drawn.get(id) ?? null : null));
+  const [loaded, setLoaded] = useState<{ id: string; Component: ComponentType<ModuleKBDetailProps> | null } | null>(() =>
+    id ? { id, Component: drawn.get(id) ?? null } : null,
+  );
   const { kind } = props;
   useEffect(() => {
-    if (!id) return setParts(null);
+    if (!id) {
+      setLoaded(null);
+      return;
+    }
+    const cached = drawn.get(id) ?? null;
+    setLoaded({ id, Component: cached });
+    if (cached) return;
     let live = true;
     loadKBDetailParts(kind).then(
-      (parts) => live && setParts(() => parts),
+      (parts) => live && setLoaded({ id, Component: parts }),
       // the page stays as it is without the module's parts: its own sections still work
-      (err) => console.error(err),
+      (err) => {
+        if (live) setLoaded({ id, Component: null });
+        console.error(err);
+      },
     );
     return () => {
       live = false;
     };
   }, [id, kind]);
   if (!id) return ReadOnly ? <ReadOnly {...props} /> : <>{props.children(NO_PARTS)}</>;
+  const Parts = loaded?.id === id ? loaded.Component : drawn.get(id) ?? null;
   if (!Parts) return <>{props.children(NO_PARTS)}</>;
   return <Parts {...props} />;
 }

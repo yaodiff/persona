@@ -3,5 +3,6 @@
   "no_store": "設定を保存するストレージがありません",
   "need_on": "onが必要です",
   "need_autostart": "autostartが必要です",
-  "not_herdr": "このコンピューターでは herdr エンジンが有効になっていません"
+  "not_herdr": "このコンピューターでは herdr エンジンが有効になっていません",
+  "orca_chat_starts_read_only": "このデバイスでは、このコンピューターで新しい Agent を開始する方法を変更できません"
 }

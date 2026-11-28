@@ -4,13 +4,18 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/extension"
+	"github.com/nwverse/persona/server/internal/extension/host"
 	pserve "github.com/nwverse/persona/server/internal/extension/serve"
 )
 
@@ -155,4 +160,238 @@ func TestConnectorSwitchRestartsItsExtension(t *testing.T) {
 	}
 	up(5, "examplelive")
 	page()
+}
+
+// Regression test: real HTTP requests (whose r.Context() is canceled by net/http as soon as the handler returns) and
+// direct calls with short-lived canceled contexts must never bind the restarted extension process's lifetime to the
+// request context. The process must stay running and serve follow-up RPC/UI calls after request cancellation, and must
+// still exit cleanly when the manager's own lifecycle context is canceled.
+func TestConnectorSwitchRestartSurvivesRequestCancel(t *testing.T) {
+	_ = t.TempDir()
+	h := newTestManager(t)
+	h.store = newExtensionStore()
+	h.connectors = connector.NewRegistry(nil)
+	h.extensions = newExtensionsWith(h.cfg.dir, nil, h.logf, h.modules())
+	h.extensions.sandboxes.noDefault = true
+	mgrCtx, stopMgr := context.WithCancel(context.Background())
+	t.Cleanup(func() {
+		stopMgr()
+		for _, p := range h.extensions.reg.List() {
+			if hp := h.extensions.get(p.Record.ID); hp != nil && hp.proc != nil {
+				hp.proc.Stop()
+			}
+		}
+	})
+	h.startTokenRecord(mgrCtx)
+	h.startConnectors(mgrCtx)
+	h.startExtensions(mgrCtx)
+
+	srv := httptest.NewServer(h.routes())
+	t.Cleanup(srv.Close)
+	client := srv.Client()
+	master := h.cfg.Token
+
+	httpCall := func(method, path, body string) (int, map[string]any) {
+		t.Helper()
+		req, err := http.NewRequestWithContext(context.Background(), method, srv.URL+path, strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Authorization", "Bearer "+master)
+		res, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		out := map[string]any{}
+		_ = json.NewDecoder(res.Body).Decode(&out)
+		return res.StatusCode, out
+	}
+
+	log := filepath.Join(t.TempDir(), "active.log")
+	installForTest(t, h, livePackage(t, log))
+
+	starts := func() []string {
+		raw, _ := os.ReadFile(log)
+		lines := strings.Split(string(raw), "\n")
+		return lines[:len(lines)-1]
+	}
+	assertRunning := func(n int, active string) *hubExtension {
+		t.Helper()
+		waitLong(t, fmt.Sprintf("start %d", n), func() bool {
+			hp := h.extensions.get("example-live")
+			return len(starts()) >= n && hp != nil && hp.proc != nil && hp.proc.Ready()
+		})
+		if got := starts(); len(got) != n || got[n-1] != active {
+			t.Fatalf("started %q, want %d starts, the last with %q active", got, n, active)
+		}
+		hp := h.extensions.get("example-live")
+		// Watch proc.Changes() across an observation window so an async cancellation shutdown cannot slip past.
+		timer := time.NewTimer(150 * time.Millisecond)
+		defer timer.Stop()
+		for {
+			state, why := hp.proc.Status()
+			if state != host.StateRunning || why != "" || !hp.proc.Ready() {
+				t.Fatalf("start %d exited after request ended: state=%q err=%q ready=%v", n, state, why, hp.proc.Ready())
+			}
+			select {
+			case <-hp.proc.Changes():
+			case <-timer.C:
+				code, out := httpCall("POST", "/api/v1/extensions/example-live/-/ui/panel", `{}`)
+				if code != http.StatusOK || !strings.Contains(fmt.Sprint(out["view"]), "live page") {
+					t.Fatalf("follow-up UI call after start %d failed: %d %v", n, code, out)
+				}
+				return hp
+			}
+		}
+	}
+
+	assertRunning(1, "examplelive")
+
+	// 1. Real HTTP contribution toggle off (net/http cancels r.Context() when ServeHTTP returns).
+	if code, out := httpCall("PUT", "/api/v1/extensions/example-live/-/contributions/channel/examplelive", `{"enabled": false}`); code != http.StatusOK {
+		t.Fatalf("contribution off: %d %v", code, out)
+	}
+	assertRunning(2, "")
+
+	// 2. Real HTTP Settings › Connectors toggle on.
+	if code, out := httpCall("PUT", "/api/v1/connectors/examplelive/settings", `{"enabled": true}`); code != http.StatusOK {
+		t.Fatalf("connector settings on: %d %v", code, out)
+	}
+	assertRunning(3, "examplelive")
+
+	// 3. Direct setConnectorEnabled with an immediately canceled request context.
+	reqCtx, cancelReq := context.WithCancel(context.Background())
+	if err := h.setConnectorEnabled(reqCtx, "examplelive", false); err != nil {
+		cancelReq()
+		t.Fatal(err)
+	}
+	cancelReq()
+	assertRunning(4, "")
+
+	// 4. Real HTTP channel bind (switches connector on, restarts extension, calls login.step).
+	if code, out := httpCall("POST", "/api/v1/channels/examplelive/bind", `{}`); code != http.StatusOK || out["hint"] != "from the program" || out["error"] != nil {
+		t.Fatalf("channel bind: %d %v", code, out)
+	}
+	assertRunning(5, "examplelive")
+
+	// 5. Direct connectorSwitched with an immediately canceled request context.
+	reqCtx, cancelReq = context.WithCancel(context.Background())
+	h.extensions.connectorSwitched(reqCtx, "examplelive", true)
+	cancelReq()
+	assertRunning(6, "examplelive")
+
+	// 6. Direct roleChanged with an immediately canceled request context.
+	reqCtx, cancelReq = context.WithCancel(context.Background())
+	h.extensions.roleChanged(reqCtx)
+	cancelReq()
+	hp := assertRunning(7, "examplelive")
+
+	// 7. Canceling the manager's own lifecycle context must still stop the restarted extension cleanly.
+	stopMgr()
+	waitLong(t, "restarted extension stops when manager context is canceled", func() bool {
+		state, _ := hp.proc.Status()
+		return state == host.StateStopped && !hp.proc.Ready()
+	})
+}
+
+func TestExtensionRuntimeContextFallbackAndExplicitDisable(t *testing.T) {
+	type ctxKey struct{}
+
+	t.Run("manager context governs lifecycle", func(t *testing.T) {
+		mgrCtx, stopMgr := context.WithCancel(context.Background())
+		defer stopMgr()
+		reqCtx, cancelReq := context.WithCancel(context.Background())
+
+		ps := &extensions{ctx: mgrCtx}
+		got := ps.runtimeContext(reqCtx)
+		cancelReq()
+		if got != mgrCtx || got.Err() != nil {
+			t.Fatalf("runtimeContext followed canceled request instead of ps.ctx: err=%v", got.Err())
+		}
+		stopMgr()
+		if got.Err() != context.Canceled {
+			t.Fatalf("runtimeContext outlived canceled ps.ctx: err=%v", got.Err())
+		}
+
+		mgrCtx2, stopMgr2 := context.WithCancel(context.Background())
+		defer stopMgr2()
+		psFromManager := &extensions{h: &Manager{ctx: mgrCtx2}}
+		reqCtx2, cancelReq2 := context.WithCancel(context.Background())
+		got2 := psFromManager.runtimeContext(reqCtx2)
+		cancelReq2()
+		if got2 != mgrCtx2 || got2.Err() != nil {
+			t.Fatalf("runtimeContext did not fall back to h.ctx: err=%v", got2.Err())
+		}
+		stopMgr2()
+		if got2.Err() != context.Canceled {
+			t.Fatalf("runtimeContext outlived canceled h.ctx: err=%v", got2.Err())
+		}
+	})
+
+	t.Run("detached fallback without manager context", func(t *testing.T) {
+		ps := &extensions{}
+		reqCtx, cancelReq := context.WithCancel(context.WithValue(context.Background(), ctxKey{}, "keep"))
+		got := ps.runtimeContext(reqCtx)
+		cancelReq()
+		if got.Err() != nil {
+			t.Fatalf("fallback runtimeContext canceled with request: %v", got.Err())
+		}
+		if got.Value(ctxKey{}) != "keep" {
+			t.Fatalf("fallback runtimeContext lost context value: %v", got.Value(ctxKey{}))
+		}
+		if bg := ps.runtimeContext(nil); bg == nil || bg.Err() != nil {
+			t.Fatalf("runtimeContext(nil) returned %v", bg)
+		}
+	})
+
+	t.Run("isolated apply survives canceled request and stops on disable", func(t *testing.T) {
+		h, _ := extensionTestHub(t)
+		mux := h.routes()
+		master := h.cfg.Token
+		log := filepath.Join(t.TempDir(), "active.log")
+		installForTest(t, h, livePackage(t, log))
+
+		waitLong(t, "initial start", func() bool {
+			hp := h.extensions.get("example-live")
+			return hp != nil && hp.proc != nil && hp.proc.Ready()
+		})
+
+		// Simulate a unit-test boundary where Run/startExtensions has not stored ps.ctx or h.ctx.
+		h.extensions.mu.Lock()
+		savedCtx := h.extensions.ctx
+		h.extensions.ctx = nil
+		h.extensions.mu.Unlock()
+		h.ctx = nil
+		t.Cleanup(func() {
+			h.extensions.mu.Lock()
+			h.extensions.ctx = savedCtx
+			h.extensions.mu.Unlock()
+		})
+
+		reqCtx, cancelReq := context.WithCancel(context.Background())
+		h.extensions.apply(reqCtx, "example-live")
+		cancelReq()
+
+		hp := h.extensions.get("example-live")
+		waitLong(t, "restarted extension ready without manager ctx", func() bool {
+			return hp != nil && hp.proc != nil && hp.proc.Ready()
+		})
+		state, why := hp.proc.Status()
+		if state != host.StateRunning || why != "" {
+			t.Fatalf("isolated apply exited after request cancel: state=%q err=%q", state, why)
+		}
+		if code, out := call(t, mux, "POST", "/api/v1/extensions/example-live/-/ui/panel", master, `{}`); code != http.StatusOK || !strings.Contains(fmt.Sprint(out["view"]), "live page") {
+			t.Fatalf("UI call failed after isolated apply: %d %v", code, out)
+		}
+
+		// Explicit disable must still stop the process cleanly.
+		if err := h.extensions.reg.SetEnabled(context.Background(), "example-live", false, "test"); err != nil {
+			t.Fatal(err)
+		}
+		waitLong(t, "disabled extension stops", func() bool {
+			cur := h.extensions.get("example-live")
+			return cur != nil && cur.proc == nil && cur.status == extensionDisabled
+		})
+	})
 }

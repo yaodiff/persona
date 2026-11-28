@@ -65,6 +65,7 @@ func forDevice(s FleetState, p NotifyPrefs, stats FleetStats) FleetState {
 		for i := range d.Items {
 			if k := d.Items[i].Kind; k == "permission" || k == "plan" { // the kinds with buttons; others keep naming their card
 				d.Items[i].Interaction = ""
+				d.Items[i].InteractionCreatedAt = ""
 			}
 		}
 	}

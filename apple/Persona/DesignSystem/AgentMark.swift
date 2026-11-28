@@ -29,8 +29,7 @@ nonisolated struct AgentKind: Equatable, Sendable {
         switch (s.agent ?? "").lowercased() {
         case _ where s.isCodex: brand = Theme.Brand.openAI; name = "Codex"
         case "trae": brand = Theme.Brand.trae; name = "TRAE"
-        case "trae-cli", "traecli": brand = Theme.Brand.trae; name = Session.traeCLIName
-        case "traex": brand = nil; name = Session.traeCLIName
+        case "trae-cli", "traecli", "traex": brand = Theme.Brand.trae; name = Session.traeCLIName
         case _ where s.isClaude: brand = Theme.Brand.claude; name = "Claude Code"
         default:
             // A runtime's agent by the name the row gives it (Paseo's provider label, else its launcher, its provider's
@@ -49,8 +48,7 @@ nonisolated struct AgentKind: Equatable, Sendable {
         switch lower {
         case _ where isCodex: brand = Theme.Brand.openAI; name = "Codex"
         case "trae": brand = Theme.Brand.trae; name = "TRAE"
-        case "trae-cli", "traecli": brand = Theme.Brand.trae; name = Session.traeCLIName
-        case "traex": brand = nil; name = Session.traeCLIName
+        case "trae-cli", "traecli", "traex": brand = Theme.Brand.trae; name = Session.traeCLIName
         case _ where isClaude: brand = Theme.Brand.claude; name = "Claude Code"
         default:
             name = harness.displayName
@@ -60,13 +58,9 @@ nonisolated struct AgentKind: Equatable, Sendable {
         }
     }
 
-    /// Shares and exports normally look up the displayed name. Preserve a legacy CLI's letter when that lookup
-    /// would give its renamed title the TRAE logo, including when Paseo reports it as a provider.
+    /// Shares and exports look up the displayed agent mark uniformly (no legacy letter override needed).
     static func prefersLetterMark(for session: Session?) -> Bool {
-        guard let session else { return false }
-        if session.isTraex { return true }
-        return Session.providerEngines.contains(session.agent?.lowercased() ?? "")
-            && session.launcher?.lowercased() == "traex" && Self(session).brand == nil
+        false
     }
 
     /// The agent a token usage share names (`UsageAgentShare.agent`, `Session.agent`'s names, #9984): its mark and its
@@ -79,8 +73,7 @@ nonisolated struct AgentKind: Equatable, Sendable {
         case "claude": brand = Theme.Brand.claude; name = "Claude Code"
         case "codex": brand = Theme.Brand.openAI; name = "Codex"
         case "trae": brand = Theme.Brand.trae; name = "TRAE"
-        case "trae-cli", "traecli": brand = Theme.Brand.trae; name = Session.traeCLIName
-        case "traex": brand = nil; name = Session.traeCLIName
+        case "trae-cli", "traecli", "traex": brand = Theme.Brand.trae; name = Session.traeCLIName
         case "omp": brand = nil; name = "Oh My Pi"
         case "gemini": brand = Theme.Brand.gemini; name = "Gemini CLI"
         case "cursor": brand = Theme.Brand.cursor; name = "Cursor"
@@ -97,7 +90,7 @@ nonisolated struct AgentKind: Equatable, Sendable {
         switch key {
         case "claude", "claudecode": return Theme.Brand.claude
         case "codex", "codexcli": return Theme.Brand.openAI
-        case "trae", "traecli", "traeagent": return Theme.Brand.trae
+        case "trae", "traecli", "traeagent", "traex": return Theme.Brand.trae
         case "opencode": return Theme.Brand.opencode
         case "pi", "piweb": return Theme.Brand.pi
         case "gemini", "geminicli": return Theme.Brand.gemini

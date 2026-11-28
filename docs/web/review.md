@@ -8,13 +8,14 @@ This page covers the node call, the hub route and the web panel. The iOS / Mac v
 
 ## Scopes
 
-A review compares the **working tree** with one of three bases, so it always shows the files as they are on disk now:
+A review compares the **working tree** with one of three bases, or compares two checkpoints of a turn:
 
 | Scope | Base | What it shows |
 | --- | --- | --- |
 | `uncommitted` | `HEAD` | staged and unstaged changes, and new files Git does not track yet |
 | `branch` | the merge base of `HEAD` and the default branch (or the branch named in `base`) | the branch's commits, plus everything above |
 | `commit` | the commit in `base` | everything since that commit, plus everything above |
+| `turn` | the checkpoint at the end of the previous turn (`base`), and the latest completed turn's checkpoint (`target`) | what the latest turn changed, including shell commands and formatters; with `live`, the latest checkpoint against the working tree |
 
 The default branch is the one `origin/HEAD` points at. If there is none, it is the first of `origin/main`,
 `origin/master`, `main`, `master` that exists. `branch` includes uncommitted work because an agent's changes are
@@ -23,9 +24,33 @@ often not committed yet, and those are what you want to review.
 Before the first commit, `uncommitted` compares with the empty tree (`base.empty`), so every file is new. A detached
 `HEAD` works like a branch with no name (`head.branch` is empty).
 
+## Turn checkpoints
+
+The node captures a working-tree snapshot when a turn ends in the background. A later message waits for that capture to
+finish before it starts, so a new turn cannot overtake the snapshot (the wait is bounded by the capture limits below).
+The snapshot is a commit under `refs/persona/checkpoints/<session>/<turn>`; it includes tracked files and new files Git
+would add, respects `.gitignore`, and never touches the user's index, `HEAD`, branches, stash or working tree. A
+private index seeded from the real one keeps Git's stat cache, and snapshot objects are written to a temporary object
+directory and published only when the commit is complete. The end of turn N is the base of turn N+1.
+Captures are serialized per session; a new message waits for the previous turn's capture before it starts, and a turn
+that ends while a capture is running is queued. A node that starts after a turn ended captures the first `done`/`idle`
+state it sees, so a restart does not lose that turn.
+This gate covers Persona's message and resume paths. Raw `terminal.input` (typing directly in a terminal) is not gated:
+the terminal stream cannot wait for Git without blocking every keystroke, so a turn started by typing there is outside
+this guarantee.
+The snapshot pack is published before its ref, with Git's `gc.pid` lock held across the move and ref write; a failed
+ref write removes the newly published pack.
+
+A capture is skipped, with the reason in the node log, outside Git or over any of these pilot limits: 2 seconds,
+15,000 tracked files, 250 MiB of snapshot content, or 20 MiB of added or modified content. Repositories with more than
+50,000 tracked files are off by default. The newest 20 checkpoints per session are kept; old refs are pruned, and `git
+gc` keeps the rest reachable. A failed or timed-out capture leaves no ref and removes its temporary index. Restoring or
+undoing files is not part of this slice.
+
 ## Node: `git.review`
 
-`{cwd, scope, base?, paths?}` → `GitReview` (`server/internal/proto/review.go`, `server/internal/node/gitreview.go`).
+`{cwd, scope, base?, session?, target?, live?, paths?}` → `GitReview` (`server/internal/proto/review.go`,
+`server/internal/node/gitreview.go`).
 
 The call is read only. It runs `git diff` / `ls-files` / `check-attr` through `gitCmd`, which never prompts and takes
 no optional locks, and it writes nothing (no index, no temporary files).
@@ -47,6 +72,12 @@ What it runs, from the repository root:
 6. A new file becomes one hunk of added lines, which is what `git diff --no-index /dev/null <file>` would show. A NUL
    in the first 8000 bytes means binary, as Git decides; a link's content is where it points.
 
+`turn` reads the node's checkpoint refs (`refs/persona/checkpoints/<session>/<turn>`). With no `target`, it compares
+the newest checkpoint with the one before it (or `HEAD` as it was when the first turn was captured). `live: true` compares the newest
+checkpoint with the working tree, for a turn still running. A big file asked for on its own sends the chosen `base`
+and `target` back, so it remains the same review even if another turn finishes meanwhile.
+A session with no checkpoint answers `no_checkpoint`; `live` never silently substitutes `HEAD`.
+
 Hunks use the shape the web's diff review already draws (`lib/code-view.ts` `Hunk`): `old_start`, `new_start`, and
 `lines` with their prefix (`" "`, `"+"`, `"-"`, `"\"`), plus `header`, the text after the second `@@`. A side with no
 lines starts after the line the header names: `-4,0` becomes `old_start: 5`. This keeps the hidden-line counts
@@ -66,8 +97,8 @@ between hunks right.
 - **A file over its share** comes with `big` and its line counts but no hunks.
 - **Once the page is full**, the files after it also come as `big`. The node stops reading the patch there.
 - **A `big` file** is asked for again with `scope: "commit"`, `base: <base.hash>` and `paths: [path]`, or
-  `[old_path, path]` for a rename so the pair is still found. Pinning the base keeps it the same review even if the
-  branch moved meanwhile.
+  `[old_path, path]` for a rename so the pair is still found. A turn sends `scope: "turn"`, `session`, its `base` and
+  its `target` instead. Pinning both sides keeps it the same review even if the branch or a later turn moves meanwhile.
 - **A new file** over 32 MB isn't read to count its lines.
 
 ### Refusals
@@ -78,14 +109,15 @@ between hunks right.
 | --- | --- |
 | `not_git` | `cwd` is not in a Git repository |
 | `no_folder` | `cwd` is not there: moved or deleted, such as a removed worktree (#8733). A node from before it says `not_git` |
-| `bad_scope` | a scope other than the three, or `commit` without a `base` |
+| `bad_scope` | a scope other than the four, or `commit` without a `base`, or `turn` without a `session` |
 | `bad_base` | `base` is not a commit (or branch) of the repository; also a `base` starting with `-` or holding `:` or a space |
 | `no_default_branch` | `branch` without a `base`, and none of the default branch names exists |
 | `no_merge_base` | `HEAD` and that branch have no commit in common |
+| `no_checkpoint` | `turn` and the session has no completed checkpoint yet |
 
 ## Hub: `GET /api/v1/machines/{mid}/git/review`
 
-`?cwd=&scope=&base=&path=…` (`path` repeatable) relays to `git.review` and returns its answer as is
+`?cwd=&scope=&base=&session=&target=&live=&path=…` (`path` repeatable) relays to `git.review` and returns its answer as is
 (`server/internal/hub/gitreview.go`). It needs a full device token, like `git/diff`: an answer-only device (a watch)
 has no `machines/{mid}/` routes. A node from before the call answers "unknown method", which the hub turns into 409
 `node_outdated` with a message saying to update it. Hub feature `git_review`.
@@ -111,13 +143,15 @@ holds real answers, written by the node's `TestGitReviewWireFixture` (rewrite wi
   `diff` items built from `git/review` instead of an extension's view: word diffs, Hide whitespace, viewed marks (kept
   in this browser by path, revision and hunks), generated and big files folded, keys (`n` / `p`, `j` / `k`, `v`, `c`,
   `?`, only while the focus is in the panel), ranges picked on the line numbers, suggestions.
-- **Scopes:** a segmented control picks Uncommitted / Branch / Since a commit. Since a commit opens a menu of the 30
-  latest commits (`git/log`). The choice is remembered per session, and the line beside it says what the files are
-  compared with.
+- **Scopes:** a segmented control picks Uncommitted / Branch / This turn / Since a commit. This turn compares the
+  latest completed turn, and while the Agent is working it compares the last checkpoint with the files on disk. Since
+  a commit opens a menu of the 30 latest commits (`git/log`). The choice is remembered per session, and the line beside
+  it says what the files are compared with.
 - **Lines between hunks:** the new side is the file on disk, so they are read with `file` once per file and review and
   cached. A removed file has none.
 - **A big file** waits for **Load diff**. It is then asked for on its own with the base pinned (`scope=commit`,
-  `base=<hash>`), and if it is too big even then, it says so.
+  `base=<hash>`; a turn sends `scope=turn`, its `base`, and its `target` instead), and if it is too big even then, it
+  says so.
 - **What isn't shown:** a file the node refuses (a key) says it holds secrets; an empty file and a mode-only change say
   so instead of "no changes".
 - **A comment on lines** offers **Start a review** / **Add to review** (a draft) or **Comment now** (straight to the
@@ -137,7 +171,7 @@ holds real answers, written by the node's `TestGitReviewWireFixture` (rewrite wi
 - **When the agent changes files** (`fs_changed` for Git), a bar says so and offers **Refresh**: the diff doesn't move
   under the reader.
 - **States:** reading; nothing changed (Uncommitted offers the branch, Branch offers Uncommitted); not a repository;
-  a folder that is gone (both name the folder); an old node; no default branch and no merge base (both offer Uncommitted); a commit or branch that isn't there; any
+  a folder that is gone (both name the folder); an old node; no default branch and no merge base (both offer Uncommitted); no turn checkpoint yet; a commit or branch that isn't there; any
   other failure with Retry. A chat that takes no messages shows the review read-only.
 
 ## Independent reviewer (#1808)
@@ -183,12 +217,14 @@ The comment block names its diff in the `Diff:` line (`lib/comments.ts` `DiffSco
 | uncommitted | `uncommitted` |
 | branch | `branch since <base short hash>` |
 | commit | `since <base short hash>` |
+| turn | `turn <base>..<target>` (the review's pinned hashes; `turn ..<target>` for an unborn repository's first turn; `turn <base>..live` for a live comment; a lone base is accepted for older comments) |
 
 A sent or edited message reads it back (`parseDiffLabel`), and the comment card opens the Review panel at its line.
 
-Tests: `web/src/lib/session-review.test.ts` (the items, a comment's rows, drafts and their storage, the message and
-reading it back); `scripts/test/web_review_e2e.py` against the mock hub's `MOCK_FILES=1 MOCK_REVIEW=1`
-(`scripts/mock/mock_review.py`).
+Tests: `server/internal/node/checkpoint_test.go` (the private index and object directory, the read-only guarantee,
+limits, pruning and `git gc`); `web/src/lib/session-review.test.ts` (the items, a comment's rows, drafts and their
+storage, the message and reading it back); `scripts/test/web_review_e2e.py` against the mock hub's
+`MOCK_FILES=1 MOCK_REVIEW=1` (`scripts/mock/mock_review.py`).
 
 ## iOS / Mac (follow-up)
 

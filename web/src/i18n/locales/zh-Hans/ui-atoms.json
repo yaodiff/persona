@@ -1,8 +1,8 @@
 {
-  "menu_loading": "读取中…",
-  "menu_empty": "没有可选的",
+  "menu_loading": "加载中…",
+  "menu_empty": "暂无可选项",
   "close": "关闭",
   "copied": "已复制",
-  "copy_failed": "没复制上",
+  "copy_failed": "复制失败",
   "about": "关于「{name}」"
 }

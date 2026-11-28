@@ -189,7 +189,7 @@ describe("Settings › General › Start page", { timeout: 30_000 }, () => {
     expect(list.map((o) => o.value)).toContain("home");
     expect(list.map((o) => o.value)).not.toContain("settings");
     expect(list.find((o) => o.value === TODAY)?.text).toBe("Today · Example Today");
-    expect(host.textContent).toContain("你的所有设备都会跟着变。");
+    expect(host.textContent).toContain("将在你的所有设备间同步。");
   });
 
   it("saves a choice to the hub", async () => {
@@ -225,14 +225,14 @@ describe("Settings › General › Start page", { timeout: 30_000 }, () => {
     const { hello } = await open("p:gone/page", "settings");
     await hello();
     expect(select().value).toBe("p:gone/page");
-    expect(options().at(-1)).toEqual({ value: "p:gone/page", text: "现在用不了的页面", disabled: true });
-    expect(host.textContent).toContain("选的页面现在用不了，在它回来之前，Persona 打开时显示主对话。");
+    expect(options().at(-1)).toEqual({ value: "p:gone/page", text: "当前不可用的页面", disabled: true });
+    expect(host.textContent).toContain("你选择的页面当前不可用，在其恢复前，Persona 将默认打开主对话。");
   });
 
   it("says the choice stays in this browser on a hub without the route", async () => {
     navigation = "missing";
     const { hello } = await open(undefined, "settings");
     await hello();
-    expect(host.textContent).toContain("只存在这个浏览器里");
+    expect(host.textContent).toContain("仅保存在当前浏览器中");
   });
 });

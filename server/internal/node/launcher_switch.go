@@ -116,9 +116,19 @@ func (n *Node) putPendingSwitch(id string, ps *proto.PendingSwitch) {
 // with the model and effort, the permission mode applied after (handled). The session's own launcher drops a switch
 // that waits; handled false then when the request asks for more (a model, mode or effort), which goes on as it would
 // without a launcher.
+// validSwitchID reports whether id is a valid session identifier for launcher/engine switching: a UUID (Claude Code,
+// Codex) or a live terminal Antigravity pane row ID (otherSession).
+func (n *Node) validSwitchID(id string) bool {
+	if validID(id) {
+		return true
+	}
+	a, live := n.agent(id)
+	return live && a.Agent == agyAgent
+}
+
 func (n *Node) launcherModes(ctx context.Context, id, launcher, from, model, mode, effort string) (handled, changed bool, err error) {
 	launcher, from = strings.TrimSpace(launcher), strings.TrimSpace(from)
-	if !validID(id) {
+	if !n.validSwitchID(id) {
 		return true, false, fmt.Errorf("invalid session id %q", id)
 	}
 	// What the request changes must not be overwritten by the hub's copy of the record still on its way (#5510).
@@ -221,7 +231,7 @@ func (n *Node) switchEngine(ctx context.Context, id, launcher string) (string, e
 	if err != nil {
 		return "", err
 	}
-	if (to == "claude" || to == "codex") && to != from {
+	if isSwitchEngine(to) && to != from {
 		return to, nil
 	}
 	return "", nil
@@ -292,7 +302,7 @@ func (n *Node) planSwitch(ctx context.Context, id string, ps proto.PendingSwitch
 func (n *Node) switchSession(ctx context.Context, id string, engine bool) (host.Agent, host.Host, host.PaneRef, error) {
 	var a host.Agent
 	var ref host.PaneRef
-	if !validID(id) {
+	if !validID(id) && (!engine || !n.validSwitchID(id)) {
 		return a, nil, ref, fmt.Errorf("invalid session id %q", id)
 	}
 	unsupported := switchUnsupported
@@ -320,7 +330,7 @@ func (n *Node) switchSession(ctx context.Context, id string, engine bool) (host.
 	if !live {
 		return a, nil, ref, n.noPaneForModes(id) // a claude in a terminal Persona does not drive
 	}
-	if a.Agent != "" && a.Agent != "claude" && (!engine || a.Agent != "codex") {
+	if a.Agent != "" && a.Agent != "claude" && (!engine || !isSwitchEngine(a.Agent)) {
 		return a, nil, ref, unsupported(a.Agent + " runs in this terminal")
 	}
 	kind := host.ParsePane(a.PaneID).Kind
@@ -707,6 +717,10 @@ func (n *Node) dropSwitchNow(id string, why error) {
 // for the user or still starts, or has background work that quitting it would end (backgroundWork).
 func (n *Node) switchBusy(ctx context.Context, id string) string {
 	_ = n.refreshHosts(ctx)
+	return n.switchActivity(id)
+}
+
+func (n *Node) switchActivity(id string) string {
 	a, ok := n.agent(id)
 	if !ok {
 		return ""
@@ -1029,13 +1043,9 @@ func (n *Node) carryOut(ctx context.Context, id, own string, ps proto.PendingSwi
 	back modelExecution, backErr error, prev sessionState, had bool) (string, error) {
 	a, h, ref := plan.a, plan.h, plan.ref
 	n.logf("session %s: switching from launcher %s to %s (model %q) in %s", id, own, ps.Launcher, plan.forward.Model, a.PaneID)
-	if quit, err := n.quitAgent(ctx, id, a.PaneID); err != nil || !quit {
-		return "", refusal(proto.CodeSwitchNotStopped, fmt.Sprintf("the agent did not quit (%v); it runs on %s as before", err, own), nil)
-	}
-	shells, dir, err := n.shellAfterQuit(ctx, id, "claude", a, h, ref)
+	shells, dir, err := n.quitForLauncherRestart(ctx, id, own, a, h, ref)
 	if err != nil {
-		n.logf("session %s: switch: %v", id, err)
-		return "", refusal(proto.CodeSwitchFailedStopped, fmt.Sprintf("the agent quit, but its terminal did not come back to a shell prompt: %v", err), nil)
+		return "", err
 	}
 	start := func(launcher, effort string, execution modelExecution, shells []string, dir string) (*proto.Session, error) {
 		sctx, cancel := switchStartCtx(ctx, a, h, ref, shells, dir, plan.cwd)
@@ -1065,6 +1075,18 @@ func (n *Node) carryOut(ctx context.Context, id, own string, ps proto.PendingSwi
 	}
 	n.logf("session %s: back on launcher %s", id, own)
 	return "", refusal(proto.CodeSwitchFailed, fmt.Sprintf("the agent did not come up on launcher %s (%v); it is back on %s", ps.Launcher, startErr, own), nil)
+}
+
+func (n *Node) quitForLauncherRestart(ctx context.Context, id, launcher string, a host.Agent, h host.Host, ref host.PaneRef) ([]string, string, error) {
+	if quit, err := n.quitAgent(ctx, id, a.PaneID); err != nil || !quit {
+		return nil, "", refusal(proto.CodeSwitchNotStopped, fmt.Sprintf("the agent did not quit (%v); it runs on %s as before", err, launcher), nil)
+	}
+	shells, dir, err := n.shellAfterQuit(ctx, id, "claude", a, h, ref)
+	if err != nil {
+		n.logf("session %s: restart: %v", id, err)
+		return nil, "", refusal(proto.CodeSwitchFailedStopped, fmt.Sprintf("the agent quit, but its terminal did not come back to a shell prompt: %v", err), nil)
+	}
+	return shells, dir, nil
 }
 
 // switchStartCtx is the context of a start in a switch's pane (ref on h, agent a's): the pane adopted with the shells
@@ -1155,6 +1177,12 @@ func (n *Node) quitStillOpen(id, engine string) error {
 	if engine == "codex" {
 		if n.codexHolds(n.codexPath(id)) {
 			return errors.New("a Codex still has the thread open")
+		}
+		return nil
+	}
+	if engine == agyAgent {
+		if conv := n.agyHandoffConversation(id); conv != "" && agyPresenceHeld(n.agyDataRoot(), conv) {
+			return errors.New("an Antigravity process still has the conversation open")
 		}
 		return nil
 	}

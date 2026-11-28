@@ -1,6 +1,8 @@
 {
   "new_worktree": " · 新しい worktree：{branch}",
   "archive_close_card": "{agent} · {machine} をアーカイブして、コンピュータ上で閉じる（記録は残り、次のメッセージで再開します）",
+  "agent_modes_card": "{agent} · {machine} のセッション設定を変更：{changes}",
+  "agent_modes_bypass_card": "{agent} · {machine} のセッション設定を変更：{changes}（すべての権限確認をスキップし、必要時は現在のターン終了後に再起動します）",
   "autoname_card": "{agent} · {machine} の名前をモデルで変更します。手動で付けた名前を含む現在のタイトルは置き換えられます。ターミナルのタブ名は変わりません。",
   "with_model": " · モデル：{model}",
   "with_tier": " · プリセット {tier}：{runs}"

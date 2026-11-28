@@ -111,13 +111,13 @@ describe("uninstall warnings", () => {
       removed_members: ["member-a"], failed_members: [{ id: "member-b", error: "仍在运行" }], remaining_members: ["member-c"] } }, { body: { ok: true } }];
     await open([{ id: "member-a" }, { id: "member-b" }, { id: "member-c" }]);
     // By name; one not installed keeps its id.
-    expect(dialog()?.textContent).toContain("连合集成员一起卸载成员甲、成员乙、member-c。不勾选时它们会保留。");
+    expect(dialog()?.textContent).toContain("同时卸载合集成员成员甲、成员乙、member-c。如不勾选，这些成员将保留。");
     const inputs = dialog()!.querySelectorAll<HTMLInputElement>('input[type="checkbox"]');
     await act(async () => inputs[1].click());
     await click("卸载");
     const part = dialog()!.querySelector("[data-partial-uninstall]")!;
-    expect(part.textContent).toContain("「示例扩展」还在。已经卸载的成员不会恢复，可以再试一次。");
-    expect([...part.querySelectorAll("li")].map((li) => li.textContent)).toEqual(["已卸载：成员甲", "未能卸载：成员乙（仍在运行）", "未处理，仍已安装：member-c"]);
+    expect(part.textContent).toContain("「示例扩展」仍处于已安装状态。此前已完成卸载的成员不会自动还原，你可以重试卸载。");
+    expect([...part.querySelectorAll("li")].map((li) => li.textContent)).toEqual(["已卸载：成员甲", "未能卸载：成员乙（仍在运行）", "未处理（仍处于已安装状态）：member-c"]);
     // The lists say it; the hub's sentence isn't repeated as an error.
     expect(dialog()?.textContent).not.toContain("没卸载完");
     expect(done).not.toHaveBeenCalled();

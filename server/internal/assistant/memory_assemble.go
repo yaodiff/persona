@@ -40,19 +40,25 @@ const (
 // Budgets, in bytes of entry text (#15312): the ledger's and the memory extension's are kept apart, so neither spends
 // the other's. Of the ledger, a standing channel takes at most memoryStandingSpaceMax of its own track's entries and
 // memoryStandingPersonalMax of personal ones from elsewhere, a hand-off at most memoryHandOffMax. Of the memory
-// extension, a standing channel takes at most the budget it states (memoryExtensionBatch.standingBudget: by default
-// memoryExtensionStandingDefault, never more than memoryExtensionStandingMost) whichever scene its entries are in, a
-// hand-off at most memoryExtensionHandOffMax.
+// extension, a standing channel takes at most the budget it states (memoryExtensionBatch.standingBudget: by default the
+// owner's choice, assistant.memory_extension_standing_bytes, 4096 unless changed; never more than the larger of that
+// choice and memoryExtensionStandingMost) whichever scene its entries are in, a hand-off at most
+// memoryExtensionHandOffMax.
 const (
 	memoryStandingSpaceMax    = 1536
 	memoryStandingPersonalMax = 1536
 	memoryHandOffMax          = 1536
-	// memoryExtensionStandingDefault is the memory extension's standing budget when it states none; about 30 short
-	// rules. Every main-conversation message's snapshot may carry it (sent again only when it changes).
+	// memoryExtensionStandingDefault is the memory extension's standing budget when it states none and the owner kept
+	// the default choice (memoryExtensionStandingOptions); about 30 short rules. Every main-conversation message's
+	// snapshot may carry it (sent again only when it changes).
 	memoryExtensionStandingDefault = 4096
-	// memoryExtensionStandingMost caps the standing budget an extension may state.
+	// memoryExtensionStandingMost caps the standing budget an extension may state while the owner's choice is below it,
+	// as before the choice existed (#15312); a larger choice raises the cap to itself.
 	memoryExtensionStandingMost = 8192
-	memoryExtensionHandOffMax   = 1536
+	// memoryExtensionStandingCeiling is the largest standing budget there is: the largest of
+	// memoryExtensionStandingOptions.
+	memoryExtensionStandingCeiling = 16384
+	memoryExtensionHandOffMax      = 1536
 	// memoryAssemblePages bounds how many pages of the ledger an assembly reads, newest first: past them only older
 	// entries are left, which no budget would take before the newer ones.
 	memoryAssemblePages = 10
@@ -73,8 +79,8 @@ type assembleFor struct {
 	TopicKnown bool
 	// Query is the text general entries must bear on for a hand-off or the Inbox (memoryRelevantTerms).
 	Query string
-	// ExtensionStanding is the memory extension's standing budget (memoryExtensionBatch.standingBudget); 0:
-	// memoryExtensionStandingDefault.
+	// ExtensionStanding is the memory extension's standing budget (memoryExtensionBatch.standingBudget), at most
+	// memoryExtensionStandingCeiling; 0: memoryExtensionStandingDefault.
 	ExtensionStanding int
 }
 
@@ -99,7 +105,7 @@ func (a assembled) IDs() []string {
 func assembleEntries(entries []proto.AssistantEntry, f assembleFor, info func(proto.AssistantEntry) infoUse) assembled {
 	var out assembled
 	spaceLeft, personalLeft, handOffLeft := memoryStandingSpaceMax, memoryStandingPersonalMax, memoryHandOffMax
-	extStandingLeft, extHandOffLeft := cmp.Or(min(f.ExtensionStanding, memoryExtensionStandingMost), memoryExtensionStandingDefault), memoryExtensionHandOffMax
+	extStandingLeft, extHandOffLeft := cmp.Or(min(f.ExtensionStanding, memoryExtensionStandingCeiling), memoryExtensionStandingDefault), memoryExtensionHandOffMax
 	for i := len(entries) - 1; i >= 0; i-- {
 		e := entries[i]
 		u := info(e)
@@ -287,7 +293,7 @@ func (s *Service) assembleMemory(ctx context.Context, f assembleFor, p proto.Ass
 	if f.Role == assembleStanding {
 		ext = ext.standingOnly()
 	}
-	f.ExtensionStanding = ext.standingBudget()
+	f.ExtensionStanding = ext.standingBudget(s.memoryExtensionStandingBytes(ctx))
 	all, info := s.memorySources(ctx, entries, ext)
 	if len(all) == 0 {
 		return assembled{}, err

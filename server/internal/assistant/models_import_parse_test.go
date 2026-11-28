@@ -466,8 +466,11 @@ func TestParsePasteLeavesSecretsOut(t *testing.T) {
 		{"cindy header name with a line break", cindy(`{"protocol": "anthropic-messages", "baseUrl": "https://gw.example.com",
 			"headers": {"X-Org: a\nAuthorization": "Bearer ` + s + `", "X Org": "` + s + `"}}`),
 			[]string{`"notes":[{"code":"header_unreadable"}]`}},
-		{"curl header names that are no token", curl + `-H 'X Api Key: ` + s + `' -H $'X-Org: a\nAuthorization: Bearer ` + s + `' -H 'x.api.key: ` + s + `'`,
+		{"curl header names that are no token", curl + `-H 'X Api Key: ` + s + `' -H '$X-Org: a\nAuthorization: Bearer ` + s + `' -H 'x.api.key: ` + s + `'`,
 			[]string{`{"code":"header_unreadable"}`}},
+		// ANSI-C quoting ($'…') is not read at all (shellcmd fails closed on it since #17598): the command makes no draft.
+		{"curl with ANSI-C quoting", curl + `-H $'X-Org: a\nAuthorization: Bearer ` + s + `'`,
+			[]string{`"drafts":[]`, `"notes":[{"code":"unrecognized"}]`}},
 		{"curl header over two lines", curl + "-H 'X-Org: a\nAuthorization: Bearer " + s + "' -H 'X-Note: a\nX-Other: " + s + "'",
 			[]string{`{"name":"X-Org","reason":"credential"}`, `{"name":"X-Note","reason":"unsafe"}`}},
 		{"a literal backslash-n or a $ in ANTHROPIC_CUSTOM_HEADERS", gw + `export ANTHROPIC_CUSTOM_HEADERS="X-Org: a\nX-Other: ` + s + `"` + "\n" +

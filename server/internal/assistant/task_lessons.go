@@ -104,7 +104,7 @@ func (s *Service) learnTaskLessons(ctx context.Context, t Todo, doneAt time.Time
 		return
 	}
 	rctx, cancel := context.WithTimeout(ctx, lessonsReadTimeout)
-	agents := s.outcomeAgents(rctx, t)
+	agents, _ := s.outcomeAgents(rctx, t)
 	cancel()
 	language := answerLanguage(s.hello(ctx).Locale)
 	in := lessonsInput(language, t, briefRef, reviews, since, answers, agents, known)

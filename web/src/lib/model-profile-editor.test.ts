@@ -60,6 +60,22 @@ describe("model-profile-editor", () => {
     expect(JSON.stringify(input)).not.toContain("api_key");
   });
 
+  it("keeps a tier's runtime and channel, and takes a candidate given by them alone", () => {
+    const profile: ModelProfile = { ...baseProfile, tiers: { strong: { launcher: "gw", runtime: "codex", channel: "team-gw", model: "opus-4", effort: "high" } } };
+    const draft = profileToDraft(profile);
+    expect(draft.tiers[0].candidates[0]).toMatchObject({ launcher: "gw", runtime: "codex", channel: "team-gw" });
+    expect(draftToProfileInput(draft, 3).tiers?.strong).toMatchObject({ launcher: "gw", runtime: "codex", channel: "team-gw", model: "opus-4" });
+    // the hub resolves the launcher alias of a route on save
+    draft.tiers[0].candidates[0].launcher = "";
+    expect(profileDraftProblems(draft, { gw: "launcher" })).toEqual([]);
+    // without a route either, the launcher is required
+    draft.tiers[0].candidates[0].runtime = undefined;
+    draft.tiers[0].candidates[0].channel = undefined;
+    expect(profileDraftProblems(draft, { gw: "launcher" })).not.toEqual([]);
+    // a profile without them sends none
+    expect(draftToProfileInput(profileToDraft(baseProfile), 3).tiers?.strong).not.toHaveProperty("runtime");
+  });
+
   it("omits unchecked purposes and empty launcher entries", () => {
     const draft = profileToDraft(baseProfile);
     draft.purposes.kb.included = false;

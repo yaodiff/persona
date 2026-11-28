@@ -49,7 +49,7 @@ class PartitionTests(unittest.TestCase):
             gp.patterns(["Test%06d%s" % (i, "x" * 40) for i in range(6000)], 2)
 
     def test_only_the_packages_themselves_are_partitioned(self):
-        for name in ("node", "assistant"):
+        for name in ("node", "assistant", "devices", "db"):
             self.assertEqual(gp.partitioned("./internal/" + name), "./internal/" + name)
             self.assertEqual(gp.partitioned("./internal/%s/" % name), "./internal/" + name)
             self.assertEqual(gp.partitioned("github.com/example/persona/server/internal/" + name), "./internal/" + name)
@@ -57,6 +57,7 @@ class PartitionTests(unittest.TestCase):
         self.assertFalse(gp.is_partitioned("github.com/example/persona/server/internal/nodeupdate"))
         self.assertFalse(gp.is_partitioned("github.com/example/persona/server/internal/assistantwire"))
         self.assertFalse(gp.is_partitioned("github.com/example/persona/server/internal/assistant/fleet"))
+        self.assertFalse(gp.is_partitioned("github.com/example/persona/server/internal/db/dbtest"))
 
     def test_split_keeps_the_rest_in_order_and_names_each_partitioned_package_once(self):
         module = "github.com/example/persona/server"

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/apierr"
+	"github.com/nwverse/persona/server/internal/connectorwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
 )
@@ -108,7 +109,24 @@ func (s *Service) handOff(ctx context.Context, id string, in handoffReq) (InboxI
 		b.mu.Unlock()
 		return InboxItem{}, SessionRef{}, errNoInboxItem
 	}
+	var promise *connectorwire.OwnerPromise
+	message := it.Last
+	if it.Connector != nil {
+		promise = it.Connector.OwnerPromise
+	}
+	if promise != nil && !it.open() {
+		b.mu.Unlock()
+		return InboxItem{}, SessionRef{}, errSuggestionStale
+	}
 	b.mu.Unlock()
+	if promise != nil {
+		if err := s.ensureTodosLoaded(ctx); err != nil {
+			return InboxItem{}, SessionRef{}, errTodosUnavailable
+		}
+		if s.ownerPromiseCovered(promise, message, id) {
+			return InboxItem{}, SessionRef{}, i18n.Err("assistant-owner_promise.covered")
+		}
+	}
 	allowed, err := s.inboxVisibilityModelAllowed(ctx, it)
 	if err != nil {
 		return InboxItem{}, SessionRef{}, err
@@ -512,7 +530,7 @@ func (s *Service) confirmHandedReply(ctx context.Context, it *InboxItem, g *Inbo
 	} else if it.Mail != nil {
 		err = errMailReplyTargetChanged // a pre-upgrade mail suggestion has no trustworthy target
 	} else {
-		out, err = s.replyInboxDo(ctx, it.ID, text, clientID, false, true, g.Changes...)
+		out, err = s.replyInboxDoMentions(ctx, it.ID, text, clientID, false, true, activeReplyMentions(text, g.Mentions), g.Changes...)
 	}
 	b := &s.inbox
 	if err != nil {

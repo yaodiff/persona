@@ -231,7 +231,7 @@ func TestPRMergedWakePreservesParkedTasksAndUnrelatedParks(t *testing.T) {
 		}
 	})
 
-	t.Run("unrelated active park stays parked and receives no wake", func(t *testing.T) {
+	t.Run("unrelated active park stays parked and still hears the merge (#14049)", func(t *testing.T) {
 		s, _, task := newPRConflictTask(t, &memStore{})
 		ctx, now := context.Background(), time.Now()
 		if _, err := reviewErr(s, task.ID, waitingPark()); err != nil {
@@ -243,8 +243,11 @@ func TestPRMergedWakePreservesParkedTasksAndUnrelatedParks(t *testing.T) {
 		forge.status.State = "merged"
 		s.sweepPRStatuses(ctx, now.Add(deployRecheck))
 		got := todoNow(s, task.ID)
-		if got.Supervision.State != reviewParked || len(pendingKinds(s, task.ID)) != 0 {
-			t.Fatalf("unrelated park was disturbed: state=%q signals=%v", got.Supervision.State, pendingKinds(s, task.ID))
+		if got.Supervision.State != reviewParked {
+			t.Fatalf("unrelated park was ended: state=%q", got.Supervision.State)
+		}
+		if _, ok := pendingPRMerged(s, task.ID, task.PRURL); !ok || pendingReviewSignal(s, task.ID) {
+			t.Fatalf("signals = %v; want one pr_merged and no review", pendingKinds(s, task.ID))
 		}
 	})
 

@@ -178,19 +178,21 @@ func (f filters) matches(r *record) bool {
 	}
 	v := r.item
 	todo := v.todo()
+	paneSource := f.paneSource(v)
 	return (f.ID != "" || f.IncludeHidden || !v.HiddenByDirectory) && (f.ID == "" || f.ID == v.ID) && (!f.NoPrivate || !v.Private) &&
 		(!f.AgentsOnly || (!v.Assistant && !v.Private)) &&
 		(!f.Roots || !v.hiddenByRoots(f.CrossMachineHierarchy)) &&
 		(f.Under == "" || v.matchesUnder(f.UnderMachine, f.Under)) &&
 		(f.State == "" || f.State == stateOf(v, f.Roots, f.CrossMachineHierarchy)) &&
 		(f.Machine == "" || f.Machine == v.Machine) &&
+		(f.AllowedMachines == "" || inAllowedMachines(f.AllowedMachines, v.Machine)) &&
 		(f.Project == "" || f.Project == v.Project) &&
 		(f.Places == "" || inPlaces(f.Places, v.Machine, v.Project)) &&
 		(f.Spaces == "" || inPlaces(f.Spaces, v.Machine, v.Group)) &&
 		(f.Group == "" || f.Group == v.Group) &&
 		(f.Source == "" || f.Source == v.Source) &&
-		(f.PaneSource == "" || f.PaneSource == v.PaneSource) &&
-		(f.ExcludePaneSource == "" || f.ExcludePaneSource != v.PaneSource) &&
+		(f.PaneSource == "" || f.PaneSource == paneSource) &&
+		(f.ExcludePaneSource == "" || f.ExcludePaneSource != paneSource) &&
 		(f.Waiting == "" || (f.Waiting == "1") == waitingOf(v, f.Roots, f.CrossMachineHierarchy)) &&
 		(f.JustFinished == "" || (f.JustFinished == "1") == justFinishedOf(v, f.Roots, f.CrossMachineHierarchy)) &&
 		(f.Manager == "" || f.Manager == r.owner) &&
@@ -276,25 +278,34 @@ func justFinishedOf(v Item, roots, crossMachine bool) bool {
 	return v.JustFinished && stateOf(v, roots, crossMachine) == "idle"
 }
 
-func addCount(c *Counts, v Item, roots, crossMachine bool, delta int) {
+// The Agents tab filter uses current membership. A saved reference on an offline
+// session still describes its origin in general session queries.
+func (f filters) paneSource(v Item) string {
+	if f.AgentsOnly && v.PaneSource == "terminal" && stateOf(v, f.Roots, f.CrossMachineHierarchy) == "offline" {
+		return ""
+	}
+	return v.PaneSource
+}
+
+func addCount(c *Counts, v Item, f filters, delta int) {
 	c.Total += delta
-	state := stateOf(v, roots, crossMachine)
-	if roots && !v.Assistant && state != "offline" {
+	state := stateOf(v, f.Roots, f.CrossMachineHierarchy)
+	if f.Roots && !v.Assistant && state != "offline" {
 		c.ActiveAgentsByMachine[v.Machine] += delta
 		if c.ActiveAgentsByMachine[v.Machine] == 0 {
 			delete(c.ActiveAgentsByMachine, v.Machine)
 		}
 	}
-	if v.PaneSource != "" {
-		c.PaneSource[v.PaneSource] += delta
-		if c.PaneSource[v.PaneSource] == 0 {
-			delete(c.PaneSource, v.PaneSource)
+	if source := f.paneSource(v); source != "" {
+		c.PaneSource[source] += delta
+		if c.PaneSource[source] == 0 {
+			delete(c.PaneSource, source)
 		}
 	}
-	if waitingOf(v, roots, crossMachine) {
+	if waitingOf(v, f.Roots, f.CrossMachineHierarchy) {
 		c.BackgroundWaiting += delta
 	}
-	if justFinishedOf(v, roots, crossMachine) {
+	if justFinishedOf(v, f.Roots, f.CrossMachineHierarchy) {
 		c.JustFinished += delta
 	}
 	for _, pair := range []struct {
@@ -315,7 +326,7 @@ func addCount(c *Counts, v Item, roots, crossMachine bool, delta int) {
 func (i *Index) exactResult(f filters) *result {
 	r := &result{counts: emptyCounts(i.revisionToken(), f.Roots), ordered: true}
 	if item := i.items[f.ID]; f.matches(item) {
-		addCount(&r.counts, item.item, f.Roots, f.CrossMachineHierarchy, 1)
+		addCount(&r.counts, item.item, f, 1)
 		r.events = []event{{id: f.ID, updated: item.item.UpdatedAt, value: item}}
 	}
 	return r
@@ -339,7 +350,7 @@ func (i *Index) countsResult(f filters) *result {
 		counts = emptyCounts(i.revisionToken(), f.Roots)
 		for _, item := range i.items {
 			if f.matches(item) {
-				addCount(&counts, item.item, f.Roots, f.CrossMachineHierarchy, 1)
+				addCount(&counts, item.item, f, 1)
 			}
 		}
 	}
@@ -396,7 +407,7 @@ func (i *Index) queryResult(o Options) *result {
 			if before && reflect.DeepEqual(c.before.item, c.after.item) {
 				continue
 			}
-			r.events = append(r.events, event{id: id, updated: c.after.item.UpdatedAt, value: c.after, added: c.before == nil})
+			r.events = append(r.events, event{id: id, updated: c.after.item.UpdatedAt, value: c.after, added: !before})
 		} else if before {
 			updated := c.before.item.UpdatedAt
 			if c.after != nil {

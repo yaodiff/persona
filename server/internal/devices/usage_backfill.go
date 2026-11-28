@@ -89,6 +89,8 @@ func (d *Devices) putUsageBackfill(ctx context.Context, machine string, params j
 		// Agents: what the request read through Through (an older node's: none, the legacy record); a bucket of
 		// another agent is not stored.
 		Agents []string `json:"agents"`
+		// Dirs: what the node resolved the buckets' directories to (usage_projects.go), kept first.
+		Dirs []proto.UsageDir `json:"dirs"`
 	}
 	if err := json.Unmarshal(params, &p); err != nil {
 		return nil, err
@@ -96,6 +98,11 @@ func (d *Devices) putUsageBackfill(ctx context.Context, machine string, params j
 	st, ok := d.opts.Store.(usageBackfillStore)
 	if !ok {
 		return map[string]any{"stored": 0}, nil
+	}
+	if ds, ok := d.opts.Store.(usageDirStore); ok && len(p.Dirs) > 0 {
+		if err := ds.PutUsageDirs(ctx, machine, usableDirs(p.Dirs)); err != nil {
+			return nil, err
+		}
 	}
 	since, before := usageBackfillRange(db.UsageBackfill{}, now)
 	keep := p.Buckets[:0]

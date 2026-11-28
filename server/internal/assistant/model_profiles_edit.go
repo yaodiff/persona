@@ -144,6 +144,9 @@ func checkModelTiers(tiers map[string]ModelTier) error {
 			return i18n.Err("assistant-model_profiles.err_tier_candidates", i18n.Args{"tier": name, "max": maxTierCandidates})
 		}
 		t.normalize()
+		if checkStartHostName(t.startHost()) != nil {
+			return i18n.Err("assistant-model_profiles.err_value", i18n.Args{"where": name, "field": "host"})
+		}
 		for i, c := range t.list() {
 			if err := checkTierCandidate(candidateWhere(name, i), c); err != nil {
 				return err
@@ -285,6 +288,9 @@ func (s *Service) checkModelProfileForSave(ctx context.Context, p *ModelProfile,
 		return err
 	}
 	ctx = withManagedSnapshot(ctx, stored)
+	if err := s.projectTiers(ctx, p.Tiers); err != nil {
+		return err
+	}
 	if p.Purposes, err = s.normalizeProfilePurposes(ctx, p.Purposes, map[string]modelRecord{}, stored); err != nil {
 		return err
 	}
@@ -322,7 +328,7 @@ func (s *Service) saveModelProfile(ctx context.Context, revision *int64, id stri
 }
 
 func (s *Service) saveModelProfileLocked(ctx context.Context, revision *int64, id string, by ProfileActor, edit func(p *ModelProfile, exists bool) error) (ModelProfile, string, error) {
-	ps, seeded, err := s.modelProfilesLocked(ctx)
+	ps, err := s.modelProfilesLocked(ctx)
 	if err != nil {
 		return ModelProfile{}, "", err
 	}
@@ -358,9 +364,6 @@ func (s *Service) saveModelProfileLocked(ctx context.Context, revision *int64, i
 	if err != nil {
 		return p, "", err
 	}
-	if seeded {
-		state.seed()
-	}
 	state.record(ModelProfileEvent{At: now, Action: "save", To: id, By: by, Changed: changed})
 	if err := s.putModelProfileSettings(ctx, map[string]any{modelProfilesKey: ps, modelProfileStateKey: state}); err != nil {
 		return p, "", err
@@ -369,7 +372,7 @@ func (s *Service) saveModelProfileLocked(ctx context.Context, revision *int64, i
 	return p, state.Active, nil
 }
 
-// deleteModelProfile removes profile id; not the one in use.
+// deleteModelProfile removes a saved profile and clears its active designation if in use.
 func (s *Service) deleteModelProfile(ctx context.Context, revision *int64, id string, by ProfileActor) error {
 	s.models.mu.Lock()
 	active, err := s.deleteModelProfileLocked(ctx, revision, id, by)
@@ -381,7 +384,7 @@ func (s *Service) deleteModelProfile(ctx context.Context, revision *int64, id st
 }
 
 func (s *Service) deleteModelProfileLocked(ctx context.Context, revision *int64, id string, by ProfileActor) (string, error) {
-	ps, seeded, err := s.modelProfilesLocked(ctx)
+	ps, err := s.modelProfilesLocked(ctx)
 	if err != nil {
 		return "", err
 	}
@@ -396,11 +399,8 @@ func (s *Service) deleteModelProfileLocked(ctx context.Context, revision *int64,
 	if err != nil {
 		return "", err
 	}
-	if seeded {
-		state.seed()
-	}
 	if state.Active == id {
-		return "", i18n.Err("assistant-model_profiles.err_active", i18n.Args{"name": ps.Profiles[i].Name})
+		state.clearActive()
 	}
 	ps.Profiles = slices.Delete(ps.Profiles, i, i+1)
 	ps.Revision++
@@ -410,4 +410,58 @@ func (s *Service) deleteModelProfileLocked(ctx context.Context, revision *int64,
 	}
 	s.ProfileChanged(ctx)
 	return state.Active, nil
+}
+
+func (s *Service) deactivateModelProfile(ctx context.Context, by ProfileActor) error {
+	s.models.mu.Lock()
+	changed, err := s.deactivateModelProfileLocked(ctx, by)
+	s.models.mu.Unlock()
+	if err == nil && changed {
+		s.ProfileChanged(ctx)
+		s.profileEvent(ctx, "")
+	}
+	return err
+}
+
+func (s *Service) deactivateModelProfileLocked(ctx context.Context, by ProfileActor) (bool, error) {
+	state, err := s.readModelProfileState(ctx)
+	if err != nil || state.Active == "" {
+		return false, err
+	}
+	state.record(ModelProfileEvent{At: time.Now().UTC(), Action: "deactivate", From: state.Active, By: by})
+	state.clearActive()
+	if err := s.putModelProfileSettings(ctx, map[string]any{modelProfileStateKey: state}); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (s *Service) clearModelProfiles(ctx context.Context, revision *int64, by ProfileActor) error {
+	s.models.mu.Lock()
+	err := s.clearModelProfilesLocked(ctx, revision, by)
+	s.models.mu.Unlock()
+	if err == nil {
+		s.ProfileChanged(ctx)
+		s.profileEvent(ctx, "")
+	}
+	return err
+}
+
+func (s *Service) clearModelProfilesLocked(ctx context.Context, revision *int64, by ProfileActor) error {
+	ps, err := s.modelProfilesLocked(ctx)
+	if err != nil {
+		return err
+	}
+	if revision != nil && *revision != ps.Revision {
+		return errModelProfileConflict
+	}
+	state, err := s.readModelProfileState(ctx)
+	if err != nil {
+		return err
+	}
+	state.record(ModelProfileEvent{At: time.Now().UTC(), Action: "clear", From: state.Active, By: by})
+	state.clearActive()
+	state.setRollbacks(nil)
+	catalog := modelProfiles{Revision: ps.Revision + 1, Profiles: []ModelProfile{}}
+	return s.putModelProfileSettings(ctx, map[string]any{modelProfilesKey: catalog, modelProfileStateKey: state})
 }

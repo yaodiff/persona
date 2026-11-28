@@ -57,13 +57,13 @@ describe("the health memory card", () => {
     act(() => root.render(<Health fresh onToggleSidebar={() => {}} />));
     await flush();
     expect(hub.memoryReads).toBe(1);
-    expect(host.textContent).toContain("没读到");
+    expect(host.textContent).toContain("加载失败");
 
     hub.memoryDown = false;
     await act(async () => hub.hello.forEach((l) => l()));
     await flush();
     expect(hub.memoryReads).toBe(2);
-    expect(host.textContent).not.toContain("没读到");
+    expect(host.textContent).not.toContain("加载失败");
     expect(host.textContent).toContain(t("health.memory_empty"));
   });
 });

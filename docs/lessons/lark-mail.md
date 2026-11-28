@@ -100,6 +100,11 @@ When mainline hides the send button for an empty composer, attachment drafts sti
 - Check the capabilities the server advertises before using IMAP extensions: QQ Mail doesn't advertise LIST-EXTENDED and simply never answers a `LIST` with `RETURN`, so you can only wait for the timeout (`docs/extensions/mail.md` ("Known limitations")).
 - A server answering "search succeeded, 0 results" doesn't mean there really are none: 163 returns 0 for any keyword `SEARCH` (`TEXT`, `BODY`, `SUBJECT`, `FROM`, Chinese or English, with or without `CHARSET UTF-8`); only conditions like `ALL` and dates work (tested 2026-11-03). So when a keyword search returns 0, match headers locally (`docs/extensions/mail.md` ("Known limitations")); tests simulate this kind of server with `blindSearch`.
 - 163 is also slow to fetch, slower and more erratic the older the mail: 200 summaries per page, 4 seconds for the newest page, 6 to 20 seconds after that, over 20 seconds for the page around message 1000 (tested 2026-11-03). One IMAP operation gets only 20 seconds (`withConn`), so finding headers and fetching summaries must be done in small batches, with time counted from the start of the operation, connecting included (#858); batches of 500 with time counted from the start of the scan time out.
+- Wait for each UIDPLUS move command in order. The go-imap `Move` fallback pipelines COPY, STORE and EXPUNGE, so use
+  it only with native MOVE. Once the first write may have reached the server, even a dropped tagged reply must not
+  trigger a replay. A native MOVE can also end in tagged `NO` after applying the move (RFC 6851 §3.3); only `BAD`
+  rejects the command itself. Test by letting the fake server apply the command before replacing or dropping the
+  reply (#16742).
 - A cursor kept by UID must also record UIDVALIDITY: after the server rebuilds / migrates a mailbox, UIDs are renumbered from the start (RFC 3501 2.3.1.1), new mail's UIDs are all smaller than the old cursor, and comparing UIDs alone archives nothing until the new UIDs pass the old maximum.
   The cursor also can't jump straight to "the max UID of the newest page": if more than a page arrives between two runs, the ones in the middle are never read. The knowledge base's mail archiving (`extmgr/mail_connector.go`) now records `<account>#v`;
   when a page doesn't reach the old cursor it records the gap (`#f` < UID < `#h`) and fills it page by page; when UIDVALIDITY changes it starts again from the newest page and only takes mail later than the newest archived one (`#t`) (#2633).
@@ -253,3 +258,9 @@ A platform's mention scope may coexist with broader message scopes. Enforce per-
 ## Native topic progress must not hold the card mutex (#12574)
 
 Deferring native create/append until after the first card still holds the progress mutex for the entire call. Test a second progress tick and the final answer while the fake native API remains blocked. Serialize native events separately, coalesce bounded item snapshots, cancel progress at the end, and fence persisted results by current durable membership and the owning turn so a late response cannot modify a held next turn. Test real run folding: an attached worker owns native completion, while restored runs without one use direct cleanup. Distinguish `rpc.NotSent` / `ErrNotWritten` from uncertain cancellation before deciding whether to replay a batch; a terminal refusal repairs the existing card's process panel instead of posting another answer. Keep the worker mutex out of the existing ordered checkpoint I/O.
+
+## A bot switch is two structs, and an agent message keeps its route (#16847)
+
+`BotFeatures` and `assistantwire.FeishuFeatures` are converted by struct conversion: add a switch to both, at the same position, or the flags silently land on the wrong fields. Settings saved before the switch have no key and read as the zero value, so a new switch that must default on needs the same defaulting the older ones use; one that defaults off does not.
+
+An agent message's route (the worker, or the older synchronous cursor) must not change mid-turn. The two cursors do not share a position, so handing a message the worker already opened to the other path appends the same events twice. Switching the feature off, or a hub restart that rebuilds the run, keeps the run on the path that opened the message.

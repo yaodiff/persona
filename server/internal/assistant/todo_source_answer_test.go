@@ -167,7 +167,7 @@ func TestSourceMainReplyMatchesWakeForAHeldRun(t *testing.T) {
 		{Seq: 3, Role: "assistant", Kind: proto.KindText, Text: "Still running."},
 		{ID: "interim", Seq: 4, Kind: turnDurationKind},
 	}
-	if reply, wait := sourceMainReplyItems(items, 4); len(reply) != 0 || wait != channel.HeldMost {
+	if reply, wait := sourceMainReplyItems(items, 4, false); len(reply) != 0 || wait != channel.HeldMost {
 		t.Fatalf("the held turn must wait for background work, got %v with wait %s", reply, wait)
 	}
 	items = append(items,
@@ -176,7 +176,7 @@ func TestSourceMainReplyMatchesWakeForAHeldRun(t *testing.T) {
 		proto.Item{ID: "final", Seq: 7, Kind: turnDurationKind},
 	)
 	for _, heldThrough := range []int{4, -1} {
-		if reply, wait := sourceMainReplyItems(items, heldThrough); len(reply) != 1 || reply[0].Text != "Work finished." || wait != 0 {
+		if reply, wait := sourceMainReplyItems(items, heldThrough, false); len(reply) != 1 || reply[0].Text != "Work finished." || wait != 0 {
 			t.Fatalf("the matching wake supplies the final reply with heldThrough %d, got %v with wait %s", heldThrough, reply, wait)
 		}
 	}
@@ -359,7 +359,7 @@ func TestSourceMainReplyEndsAtAnotherRequest(t *testing.T) {
 		{"a picture sent before any words", slices.Concat(launch, []proto.Item{{Seq: 6, Role: "user", Kind: proto.KindImage}}, interim), -1, ""},
 	}
 	for _, c := range cases {
-		reply, wait := sourceMainReplyItems(c.items, c.held)
+		reply, wait := sourceMainReplyItems(c.items, c.held, false)
 		var got string
 		if len(reply) == 1 {
 			got = reply[0].Text
@@ -379,7 +379,7 @@ func TestSourceMainReplyReadsToolLines(t *testing.T) {
 		{Seq: 5, Role: "assistant", Kind: proto.KindText, Text: "The page renders."},
 		{ID: "end", Seq: 6, Kind: turnDurationKind},
 	}
-	if reply, wait := sourceMainReplyItems(items, -1); len(reply) != 1 || reply[0].Text != "The page renders." || wait != 0 {
+	if reply, wait := sourceMainReplyItems(items, -1, false); len(reply) != 1 || reply[0].Text != "The page renders." || wait != 0 {
 		t.Fatalf("tool lines: got %v with wait %s", reply, wait)
 	}
 	// A Monitor reports events, not an end: the answer does not wait for it.
@@ -389,7 +389,7 @@ func TestSourceMainReplyReadsToolLines(t *testing.T) {
 		{Seq: 4, Role: "assistant", Kind: proto.KindText, Text: "Watching the deploy."},
 		{ID: "end", Seq: 5, Kind: turnDurationKind},
 	}
-	if reply, wait := sourceMainReplyItems(items, -1); len(reply) != 1 || reply[0].Text != "Watching the deploy." || wait != 0 {
+	if reply, wait := sourceMainReplyItems(items, -1, false); len(reply) != 1 || reply[0].Text != "Watching the deploy." || wait != 0 {
 		t.Fatalf("a Monitor: got %v with wait %s", reply, wait)
 	}
 }
@@ -406,7 +406,7 @@ func TestSourceMainReplyWaitsForAllItsBackgroundWork(t *testing.T) {
 		{Seq: 9, Role: "assistant", Kind: proto.KindText, Text: "A passed; B is still running."},
 		{ID: "a_end", Seq: 10, Kind: turnDurationKind},
 	}
-	if reply, wait := sourceMainReplyItems(items, -1); len(reply) != 0 || wait != channel.HeldMost {
+	if reply, wait := sourceMainReplyItems(items, -1, false); len(reply) != 0 || wait != channel.HeldMost {
 		t.Fatalf("one of two tasks reported: got %v with wait %s", reply, wait)
 	}
 	items = append(items,
@@ -414,7 +414,7 @@ func TestSourceMainReplyWaitsForAllItsBackgroundWork(t *testing.T) {
 		proto.Item{Seq: 12, Role: "assistant", Kind: proto.KindText, Text: "Both passed."},
 		proto.Item{ID: "b_end", Seq: 13, Kind: turnDurationKind},
 	)
-	if reply, wait := sourceMainReplyItems(items, -1); len(reply) != 1 || reply[0].Text != "Both passed." || wait != 0 {
+	if reply, wait := sourceMainReplyItems(items, -1, false); len(reply) != 1 || reply[0].Text != "Both passed." || wait != 0 {
 		t.Fatalf("both tasks reported: got %v with wait %s", reply, wait)
 	}
 }
@@ -443,7 +443,7 @@ func TestSourceMainReplyWaitsForItsContinuation(t *testing.T) {
 			{Seq: 9, Kind: proto.KindNotice, Text: userStoppedNotice}}), -1, "", 0},
 	}
 	for _, c := range cases {
-		reply, wait := sourceMainReplyItems(c.items, c.held)
+		reply, wait := sourceMainReplyItems(c.items, c.held, false)
 		var got string
 		if len(reply) == 1 {
 			got = reply[0].Text
@@ -501,6 +501,103 @@ func TestSourceReportWaitsForTheContinuationTurn(t *testing.T) {
 	e.clock.advance(30 * time.Second)
 	if got := reportsTo(e.f, askSrc, "om_continuation"); len(got) != 1 || got[0]["text"] != answer || got[0]["full_answer"] != true {
 		t.Fatalf("expected the continuation's answer, got %v", got)
+	}
+}
+
+// A headless main conversation (claude -p) writes no turn_duration line: its items end with the
+// answer, and the node's session state or what follows says the turn is over.
+func TestSourceMainReplyHeadlessTurnEnds(t *testing.T) {
+	answer := []proto.Item{
+		{Seq: 2, Role: "assistant", Kind: proto.KindToolUse, ToolUseID: "tool_weather"},
+		{Seq: 3, Role: "user", Kind: proto.KindToolResult, ToolUseID: "tool_weather", Text: "5°C, sunny"},
+		{Seq: 4, Role: "assistant", Kind: proto.KindText, Text: "Beijing is sunny."},
+	}
+	launch := []proto.Item{
+		{Seq: 2, Role: "assistant", Kind: proto.KindToolUse, ToolUseID: "tool_check"},
+		{Seq: 3, Role: "user", Kind: proto.KindToolResult, ToolUseID: "tool_check", Text: "Command running in background with ID: check1."},
+		{Seq: 4, Role: "assistant", Kind: proto.KindText, Text: "Still running."},
+	}
+	cases := []struct {
+		name  string
+		items []proto.Item
+		idle  bool
+		reply string
+		wait  time.Duration
+	}{
+		{"idle after its words", answer, true, "Beijing is sunny.", 0},
+		{"still working", answer, false, "", sourceReportWait},
+		{"idle before its words are in", answer[:2], true, "", sourceReportWait},
+		{"an unrelated wake follows the answer", slices.Concat(answer, []proto.Item{
+			{Seq: 5, Kind: proto.KindNotice, Wake: true, Task: &proto.TaskNote{TaskID: "other", Status: "completed"}},
+			{Seq: 6, Role: "assistant", Kind: proto.KindText, Text: "Another task finished."},
+		}), false, "Beijing is sunny.", 0},
+		{"another request follows the answer", slices.Concat(answer, []proto.Item{
+			{Seq: 5, Role: "user", Kind: proto.KindText, Text: "Other request"},
+			{Seq: 6, Role: "assistant", Kind: proto.KindText, Text: "Other answer"},
+		}), true, "Beijing is sunny.", 0},
+		{"a message queued mid-turn does not end it", []proto.Item{
+			{Seq: 2, Role: "assistant", Kind: proto.KindText, Text: "Interim."},
+			{Seq: 3, Role: "user", Kind: proto.KindText, Text: "Also this", Queued: true},
+			{Seq: 4, Role: "assistant", Kind: proto.KindText, Text: "Both done."},
+		}, true, "", 0},
+		{"its background work still runs", launch, true, "", channel.HeldMost},
+		{"the continuation is working", slices.Concat(launch, []proto.Item{
+			{Seq: 5, Kind: proto.KindNotice, Wake: true, Task: &proto.TaskNote{TaskID: "check1", Status: "completed"}},
+			{Seq: 6, Role: "assistant", Kind: proto.KindText, Text: "The check passed."},
+		}), false, "", channel.HeldMost},
+		{"the continuation is idle", slices.Concat(launch, []proto.Item{
+			{Seq: 5, Kind: proto.KindNotice, Wake: true, Task: &proto.TaskNote{TaskID: "check1", Status: "completed"}},
+			{Seq: 6, Role: "assistant", Kind: proto.KindText, Text: "The check passed."},
+		}), true, "The check passed.", 0},
+	}
+	for _, c := range cases {
+		reply, wait := sourceMainReplyItems(c.items, -1, c.idle)
+		var got string
+		if len(reply) == 1 {
+			got = reply[0].Text
+		}
+		if len(reply) > 1 || got != c.reply || wait != c.wait {
+			t.Errorf("%s: got %v with wait %s, want %q with wait %s", c.name, reply, wait, c.reply, c.wait)
+		}
+	}
+}
+
+// The main conversation runs headless: its transcript has no turn end. The answer goes out once
+// the node lists the conversation as done, not at the fallback three minutes after the close.
+func TestSourceReportHeadlessMainAnswer(t *testing.T) {
+	needsLarkLayer(t)
+	e := newAskEnv(t, nil)
+	minutes := 0
+	e.fullReply, e.reportDelay = true, &minutes
+	e.ask(ownerAsk("om_headless", "/ai What is the weather?"))
+	todo := onlyTodo(e.s)
+	mainIs := func(status, state string) {
+		e.sessions("server",
+			proto.Session{SessionID: "mask", Assistant: true, Status: status, State: state},
+			proto.Session{SessionID: "c1x1x1", Assistant: true})
+	}
+	mainIs(proto.StatusWorking, proto.StateWorking)
+	items := []proto.Item{
+		{Seq: 1, Role: "user", Kind: proto.KindText, ClientMsgID: channel.ClientMsgID(channel.Feishu, todo.Source.Handoff)},
+		{Seq: 2, Role: "assistant", Kind: proto.KindToolUse, ToolUseID: "tool_done"},
+		{Seq: 3, Role: "user", Kind: proto.KindToolResult, ToolUseID: "tool_done", Text: "Completed"},
+	}
+	e.f.setItems(items...)
+	e.closeDone(todo.ID)
+	e.clock.advance(0)
+
+	const answer = "Beijing is sunny today."
+	items = append(items, proto.Item{Seq: 4, Role: "assistant", Kind: proto.KindText, Text: answer})
+	e.f.setItems(items...)
+	e.clock.advance(5 * time.Second)
+	if src := onlyTodo(e.s).Source; src.ReportDueAt != "" {
+		t.Fatalf("planned a reply while the conversation was still working: %q", src.ReportText)
+	}
+
+	mainIs(proto.StatusDone, proto.StateIdle)
+	e.clock.advance(5 * time.Second)
+	if got := reportsTo(e.f, askSrc, "om_headless"); len(got) != 1 || got[0]["text"] != answer || got[0]["full_answer"] != true {
+		t.Fatalf("expected the headless turn's answer, got %v", got)
 	}
 }
 

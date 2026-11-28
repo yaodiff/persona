@@ -23,7 +23,7 @@ const { foldRows, homeKey } = await import("./folded-rows");
 const { stateCounts, useAgentSessions, useCounts, useFullAgentSessions } = await import("./sessions");
 const { buildAgentGroups, splitAgentSessions } = await import("./agent-groups");
 const { filterCounts } = await import("./agent-filter");
-const { tabTitle, detectNewCards, detectTransitions } = await import("./attention");
+const { tabTitle, cardArrivalKey, detectNewCards, detectTransitions } = await import("./attention");
 const { homeOverview } = await import("./herdr-tree");
 const { assistantEntries } = await import("./assistant-entries");
 const { dockAgents } = await import("./todos");
@@ -68,7 +68,7 @@ describe("child sessions counted once, under their parent (#5120, #14323)", () =
     const groups = Object.fromEntries(buildAgentGroups(shown, machines, "state", mutes).map((g) => [g.key, keys(g.sessions)]));
     expect(groups["state:needs"]).toEqual(["lead"]);
     expect(groups["state:working"]).toBeUndefined();
-    expect(groups["state:unread"]).toEqual(["plain"]);
+    expect(groups["state:done"]).toEqual(["plain"]);
     const filters = filterCounts(splitAgentSessions(shown, machines).live, mutes);
     expect([filters.needs, filters.working, filters.unread]).toEqual([NEEDS, WORKING, UNREAD]);
   });
@@ -146,7 +146,7 @@ describe("child sessions counted once, under their parent (#5120, #14323)", () =
     expect(next.has("m/child-b")).toBe(false);
     // a second child's card while the parent already waits: announced for the parent
     const second = { ...card, id: "ix-2", session_id: "child-a" };
-    const fresh = detectNewCards(new Map([["ix-1", 0]]), [card, second], next, next, shown, new Set(), 1);
+    const fresh = detectNewCards(new Map([[cardArrivalKey(card), 0]]), [card, second], next, next, shown, new Set(), 1);
     expect(fresh.events.map((e) => [e.key, e.card.id])).toEqual([["m/lead", "ix-2"]]);
   });
 

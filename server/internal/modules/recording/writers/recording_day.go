@@ -293,7 +293,7 @@ func (e *engine) AppendRecording(rawID string, a RecordingAppend) (RecordingAppe
 		return out, err
 	}
 	now := e.now()
-	if r.Trimmed() || r.StartedAt.Before(now.UTC().AddDate(0, 0, -recordingDays(e.RecordingDays()))) {
+	if r.Trimmed() || pastRetention(r.StartedAt, now, e.RecordingDays()) {
 		out.Status = RecordingExpired
 		return out, nil
 	}

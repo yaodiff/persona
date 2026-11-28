@@ -90,8 +90,8 @@ describe("the Main chat default's agent-kind mismatch", () => {
   it("names the actual and configured launchers and opens the existing New main chat dialog", async () => {
     await show(session());
     expect(notice()).not.toBeNull();
-    expect(notice()!.textContent).toContain("claude");
-    expect(notice()!.textContent).toContain("codex");
+    expect(notice()!.textContent).toContain("Claude Code");
+    expect(notice()!.textContent).toContain("Codex");
     const action = [...notice()!.querySelectorAll("button")].find((b) => b.textContent === t("assistant-assistantchat.new_main_ellipsis"))!;
     expect(action.className).toContain("touch-hit");
     await act(async () => action.click());

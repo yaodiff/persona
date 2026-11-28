@@ -46,7 +46,7 @@ const mac = (computer: Machine["computer"], extra: Partial<Machine> = {}) => ({ 
 
 async function open(m: Machine) {
   fake.machines = [m];
-  act(() => root.render(<MachineDetail mid="mac" onToggleSidebar={() => {}} />));
+  act(() => root.render(<MachineDetail subview="management" mid="mac" onToggleSidebar={() => {}} />));
   await flush();
 }
 
@@ -86,7 +86,9 @@ describe("MachineDetail live screen", () => {
     await open(mac({ enabled: true, installed: true, daemon: true, ready: true, accessibility: "granted", screen_recording: "granted", screen_sharing: true }));
     expect(screenLinks()).toHaveLength(1);
     expect(section().querySelector('a[href*="/screen/"]')).toBeNull();
-    expect(section().textContent).not.toMatch(/VNC|查看屏幕/);
+    expect([...section().querySelectorAll("a, button")].map((e) => e.textContent ?? "").join(" ")).not.toMatch(/VNC|查看屏幕/);
+    expect(section().textContent).not.toContain("VNC");
+    expect(section().textContent).not.toContain(ALLOW_HERE);
   });
 
   it("points to the top bar to click Allow while macOS's permission dialogs are up", async () => {

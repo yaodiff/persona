@@ -13,6 +13,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -277,7 +278,8 @@ func (m *Machine) canDeployLocked() (bool, string) {
 
 // reconnect has the manager connect the machine's node again.
 func (m *Machine) reconnect() {
-	if err := m.hub.callBus(context.Background(), m.ownerOrCarrier(), devicewire.MethodReconnect, map[string]any{"machine_id": m.cfg.ID}, nil); err != nil {
+	caller := m.hub.managerCaller(m.ownerOrCarrier())
+	if _, err := buswire.Call(context.Background(), caller, devicewire.ReconnectMethod, devicewire.ReconnectRequest{MachineID: m.cfg.ID}); err != nil {
 		m.hub.logf("[%s] reconnect: %v", m.cfg.ID, err)
 	}
 }

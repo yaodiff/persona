@@ -19,8 +19,8 @@ describe("launcherBlock", () => {
   it("says a launcher the terminal can't run is not available there", () => {
     const b = launcherBlock(l("work_gw", { state: "blocked", kind: NOT_IN_TERMINAL, error: "  bash: work_gw: command not found\n" }))!;
     expect(b.notInTerminal).toBe(true);
-    expect(b.reason).toBe("这台电脑的终端里用不了");
-    expect(b.title).toBe("终端里用不了");
+    expect(b.reason).toBe("无法在该电脑的终端中使用");
+    expect(b.title).toBe("终端中不可用");
     expect(b.detail).toBe("bash: work_gw: command not found");
   });
 
@@ -50,7 +50,7 @@ describe("launcherBlock", () => {
     expect(none.kind).toBe("");
     expect(none.notInTerminal).toBe(false);
     expect(none.detail).toBeUndefined();
-    expect(none.title).toBe("这台电脑上用不了");
+    expect(none.title).toBe("该电脑上不可用");
   });
 });
 

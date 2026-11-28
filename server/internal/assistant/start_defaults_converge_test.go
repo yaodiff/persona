@@ -1141,8 +1141,8 @@ func TestStartDefaultsCandidateSourceScopesAndCachesHidden(t *testing.T) {
 		wantRPCs      int
 	}{
 		{name: "visible choice ignores unrelated hidden tiers", secretPresent: true, choices: []PresetChoice{{Name: "quick"}}, wantTier: "quick", wantRPCs: 1},
-		{name: "requested tiers share a present hidden probe", secretPresent: true, choices: []PresetChoice{{Name: "hidden-a"}, {Name: "hidden-b"}}, wantTier: "hidden-a", wantRPCs: 2},
-		{name: "requested tiers share an absent hidden probe", secretPresent: false, choices: []PresetChoice{{Name: "hidden-a"}, {Name: "hidden-b"}}, wantRPCs: 2},
+		{name: "requested tiers share a present hidden probe", secretPresent: true, choices: []PresetChoice{{Name: "hidden-a"}, {Name: "hidden-b"}}, wantTier: "hidden-a", wantRPCs: 1},
+		{name: "requested tiers share an absent hidden probe", secretPresent: false, choices: []PresetChoice{{Name: "hidden-a"}, {Name: "hidden-b"}}, wantRPCs: 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, f := defaultsHub(t)
@@ -1214,8 +1214,8 @@ func TestStartDefaultsHiddenCandidateCacheIsPerLauncherAndAttempt(t *testing.T) 
 		}
 	}
 	f.mu.Unlock()
-	if calls != 3 {
-		t.Fatalf("two distinct hidden launchers caused %d RPCs, want 3", calls)
+	if calls != 1 {
+		t.Fatalf("two distinct hidden launchers caused %d RPCs, want 1", calls)
 	}
 	if !rows["present"].Available || rows["absent"].Available || !strings.Contains(rows["absent"].Reason, "absent") {
 		t.Fatalf("hidden availability leaked between launchers: %+v", rows)
@@ -1231,6 +1231,7 @@ func TestStartDefaultsHiddenCandidateCacheIsPerLauncherAndAttempt(t *testing.T) 
 	f.mu.Lock()
 	f.zshrc["box"] = append(f.zshrc["box"], proto.Launcher{Name: "absent", Source: "zshrc"})
 	f.mu.Unlock()
+	s.invalidateLauncherListCache("box")
 	rows, err = s.candidateSource().candidates(ctx, "box", []string{"absent"})
 	if err != nil {
 		t.Fatal(err)
@@ -1821,9 +1822,9 @@ func TestStartDefaultsPreviewMetadataDoesNotAddInventoryReads(t *testing.T) {
 		if len(rows) != 2 || rows[0].(map[string]any)["agent"] != "claude" || rows[1].(map[string]any)["agent"] != "codex" {
 			t.Fatalf("mixed-agent rows: %v", rows)
 		}
-		// One ordinary candidate read, one explicit-hidden candidate read, one fit read for quick.
-		if got := count(f, before); got != 3 {
-			t.Fatalf("mixed-agent preview made %d inventory reads, want 3", got)
+		// Shared per-machine launcher-list cache covers ordinary, explicit-hidden, and fit reads in one RPC.
+		if got := count(f, before); got != 1 {
+			t.Fatalf("mixed-agent preview made %d inventory reads, want 1", got)
 		}
 	})
 }

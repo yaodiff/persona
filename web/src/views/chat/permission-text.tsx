@@ -6,7 +6,7 @@ import { Button } from "../../ui/atoms";
 
 /** Progressive-disclosure text editing and deny notes for server-declared editable permission cards. The original
  * Allow/Deny stay plain everywhere else; only an actual text change sends edited_text, and Always never carries it. */
-export function usePermissionText(ix: Interaction) {
+export function usePermissionText(ix: Interaction, reviewing = false) {
   const original = ix.editable_text ?? "";
   const [editing, setEditing] = useState(false);
   const [denyOpen, setDenyOpen] = useState(false);
@@ -24,7 +24,7 @@ export function usePermissionText(ix: Interaction) {
   const allow = () => changed ? { allow: true, edited_text: text } : allowBody();
   const deny = () => note.trim() ? { allow: false, message: note.trim() } : denyBody();
   const editor = ix.editable_text === undefined ? null : (
-    <div className="flex flex-col gap-2" data-permission-text>
+    <fieldset disabled={reviewing} className="flex min-w-0 flex-col gap-2" data-permission-text>
       <div className="flex flex-wrap gap-2">
         <Button tone="quiet" onClick={() => setEditing((v) => !v)}>
           {t(editing ? "chat-interactions.hide_edit" : "chat-interactions.edit_text")}
@@ -58,7 +58,7 @@ export function usePermissionText(ix: Interaction) {
         </label>
       )}
       {changed && <p className="text-xs text-ink-3">{t("chat-interactions.edited_pending")}</p>}
-    </div>
+    </fieldset>
   );
   return { editor, allow, deny, changed, canAllow, composing: editing || denyOpen };
 }

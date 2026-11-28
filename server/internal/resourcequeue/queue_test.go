@@ -209,3 +209,180 @@ func TestActiveRunTakesPrecedenceOverPreviousCachedSuccess(t *testing.T) {
 		t.Fatalf("did not join the current run: %+v %v", reply, err)
 	}
 }
+
+func TestAcquireRejectsReusedIDAfterTerminalLease(t *testing.T) {
+	now := time.Now().UTC()
+	holder := Holder{Machine: "computer-a", Session: "one"}
+	commit := strings.Repeat("c", 40)
+
+	for _, tc := range []struct {
+		name      string
+		wantState string
+	}{
+		{name: "cancelled", wantState: "cancelled"},
+		{name: "expired", wantState: "expired"},
+		{name: "timeout", wantState: "timeout"},
+		{name: "failed-release", wantState: "released"},
+		{name: "expired-cache", wantState: "released"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rows := []Lease{}
+			in := Request{Resource: "ci.example", Project: "example", Commit: commit, ID: "attempt-1", Holder: holder}
+			rep, err := Acquire(&rows, in, now, "fallback-1", 1)
+			if err != nil || rep.Status != "queued" || rep.Lease.ID != "attempt-1" {
+				t.Fatalf("initial acquire: %+v %v", rep, err)
+			}
+			// Idempotent retry while active must still return the active lease.
+			again, err := Acquire(&rows, in, now, "fallback-active", 2)
+			if err != nil || again.Status != "queued" || again.Lease.ID != "attempt-1" || len(rows) != 1 {
+				t.Fatalf("active replay: %+v %v len=%d", again, err, len(rows))
+			}
+
+			retryAt := now
+			switch tc.name {
+			case "cancelled":
+				if _, err := Mutate(rows, Request{Action: "cancel", ID: "attempt-1", Holder: holder}, now); err != nil {
+					t.Fatal(err)
+				}
+			case "expired":
+				Expire(rows, now.Add(2*time.Minute))
+			case "timeout":
+				// Keep heartbeat alive past WaitUntil so Expire enters timeout rather than expired.
+				for d := time.Minute; d < 90*time.Minute; d += time.Minute {
+					if r, err := Mutate(rows, Request{Action: "renew", ID: "attempt-1", Holder: holder}, now.Add(d)); err != nil || r.Status != "queued" {
+						t.Fatalf("renew before timeout at %v: %+v %v", d, r, err)
+					}
+				}
+				if r, err := Mutate(rows, Request{Action: "renew", ID: "attempt-1", Holder: holder}, now.Add(89*time.Minute+30*time.Second)); err != nil || r.Status != "queued" {
+					t.Fatalf("final renew before timeout: %+v %v", r, err)
+				}
+				retryAt = now.Add(90 * time.Minute)
+				Expire(rows, retryAt)
+			case "failed-release":
+				Advance(rows, 1, 0, now)
+				if _, err := Mutate(rows, Request{Action: "release", ID: "attempt-1", Token: rows[0].Token, Holder: holder, Outcome: &Outcome{Exit: 1, Run: "failed-run"}}, now); err != nil {
+					t.Fatal(err)
+				}
+			case "expired-cache":
+				Advance(rows, 1, 0, now)
+				if _, err := Mutate(rows, Request{Action: "release", ID: "attempt-1", Token: rows[0].Token, Holder: holder, Outcome: &Outcome{Exit: 0, Run: "old-ok-run"}}, now); err != nil {
+					t.Fatal(err)
+				}
+				retryAt = now.Add(13 * time.Hour)
+			}
+
+			if rows[0].State != tc.wantState {
+				t.Fatalf("state before retry = %q, want %q", rows[0].State, tc.wantState)
+			}
+
+			dup, err := Acquire(&rows, in, retryAt, "fallback-2", 3)
+			if err == nil {
+				t.Fatalf("reused ID after %s succeeded: %+v (rows=%d)", tc.name, dup, len(rows))
+			}
+			if len(rows) != 1 {
+				t.Fatalf("duplicate row appended after %s: %+v", tc.name, rows)
+			}
+
+			// A fresh request ID for the same key after a terminal lease must still be admitted.
+			freshReq := in
+			freshReq.ID = "attempt-fresh"
+			fresh, err := Acquire(&rows, freshReq, retryAt, "fallback-3", 4)
+			if err != nil || fresh.Status != "queued" || fresh.Lease.ID != "attempt-fresh" || len(rows) != 2 {
+				t.Fatalf("fresh acquire after %s: %+v %v len=%d", tc.name, fresh, err, len(rows))
+			}
+		})
+	}
+
+	// Idempotent retry after a successful cached release still returns the cached outcome.
+	rows := []Lease{}
+	in := Request{Resource: "ci.example", Project: "example", Commit: commit, ID: "attempt-ok", Holder: holder}
+	if _, err := Acquire(&rows, in, now, "fallback", 1); err != nil {
+		t.Fatal(err)
+	}
+	Advance(rows, 1, 0, now)
+	if _, err := Mutate(rows, Request{Action: "release", ID: "attempt-ok", Token: rows[0].Token, Holder: holder, Outcome: &Outcome{Exit: 0, Run: "ok-run"}}, now); err != nil {
+		t.Fatal(err)
+	}
+	cached, err := Acquire(&rows, in, now.Add(time.Minute), "fallback-2", 2)
+	if err != nil || cached.Status != "cached" || cached.Lease.ID != "attempt-ok" || len(rows) != 1 {
+		t.Fatalf("cached replay: %+v %v len=%d", cached, err, len(rows))
+	}
+}
+
+func TestMutateEnforcesHoldUntilAndWaitUntilCaps(t *testing.T) {
+	t0 := time.Date(2026, 11, 27, 10, 0, 0, 0, time.UTC)
+	holder := Holder{Machine: "computer-a", Session: "one"}
+
+	// Granted lease: heartbeat renewed just before HoldUntil must not allow renew or release at/after HoldUntil.
+	rows := []Lease{}
+	in := Request{Resource: "ci.example", Project: "example", Commit: strings.Repeat("d", 40), Holder: holder}
+	if _, err := Acquire(&rows, in, t0, "held", 1); err != nil {
+		t.Fatal(err)
+	}
+	Advance(rows, 1, 0, t0)
+	if rows[0].State != "granted" {
+		t.Fatalf("expected granted: %+v", rows[0])
+	}
+	// Renew heartbeats every minute up to 59m; at 59m30s HeartbeatUntil extends to 61m (past HoldUntil=60m).
+	for d := time.Minute; d < time.Hour; d += time.Minute {
+		if rep, err := Mutate(rows, Request{Action: "renew", ID: "held", Token: rows[0].Token, Holder: holder}, t0.Add(d)); err != nil || rep.Status != "granted" {
+			t.Fatalf("renew at %v: %+v %v", d, rep, err)
+		}
+	}
+	if rep, err := Mutate(rows, Request{Action: "renew", ID: "held", Token: rows[0].Token, Holder: holder}, t0.Add(59*time.Minute+30*time.Second)); err != nil || rep.Status != "granted" {
+		t.Fatalf("renew before HoldUntil: %+v %v", rep, err)
+	}
+	// HeartbeatUntil is now t0+61m, past HoldUntil (t0+60m). At t0+60m both renew and release must be fenced.
+	atHoldCap := t0.Add(time.Hour)
+	heldHBBefore := rows[0].HeartbeatUntil
+	rep, err := Mutate(rows, Request{Action: "renew", ID: "held", Token: rows[0].Token, Holder: holder}, atHoldCap)
+	if err != nil || rep.Status != "fenced" {
+		t.Fatalf("renew at HoldUntil = %+v, %v; want fenced", rep, err)
+	}
+	if !rows[0].HeartbeatUntil.Equal(heldHBBefore) {
+		t.Fatalf("granted renew extended HeartbeatUntil past HoldUntil: %v -> %v", heldHBBefore, rows[0].HeartbeatUntil)
+	}
+	rep, err = Mutate(rows, Request{Action: "release", ID: "held", Token: rows[0].Token, Holder: holder, Outcome: &Outcome{Exit: 0, Run: "late-run"}}, atHoldCap)
+	if err != nil || rep.Status != "fenced" {
+		t.Fatalf("release at HoldUntil = %+v, %v; want fenced", rep, err)
+	}
+	if rows[0].Outcome != nil || rows[0].State == "released" {
+		t.Fatalf("late release mutated lease after HoldUntil: %+v", rows[0])
+	}
+
+	// Queued lease: heartbeat renewed every minute up to WaitUntil must not allow renew or cancel at/after WaitUntil.
+	qrows := []Lease{}
+	if _, err := Acquire(&qrows, in, t0, "queued", 1); err != nil {
+		t.Fatal(err)
+	}
+	for d := time.Minute; d < 90*time.Minute; d += time.Minute {
+		if rep, err := Mutate(qrows, Request{Action: "renew", ID: "queued", Holder: holder}, t0.Add(d)); err != nil || rep.Status != "queued" {
+			t.Fatalf("queued renew at %v: %+v %v", d, rep, err)
+		}
+	}
+	if rep, err := Mutate(qrows, Request{Action: "renew", ID: "queued", Holder: holder}, t0.Add(89*time.Minute+30*time.Second)); err != nil || rep.Status != "queued" {
+		t.Fatalf("queued renew before WaitUntil: %+v %v", rep, err)
+	}
+	hbBefore := qrows[0].HeartbeatUntil
+	rep, err = Mutate(qrows, Request{Action: "renew", ID: "queued", Holder: holder}, t0.Add(90*time.Minute))
+	if err != nil || rep.Status != "fenced" {
+		t.Fatalf("queued renew at WaitUntil = %+v, %v; want fenced", rep, err)
+	}
+	if !qrows[0].HeartbeatUntil.Equal(hbBefore) {
+		t.Fatalf("queued renew extended HeartbeatUntil past WaitUntil: %v -> %v", hbBefore, qrows[0].HeartbeatUntil)
+	}
+	rep, err = Mutate(qrows, Request{Action: "cancel", ID: "queued", Holder: holder}, t0.Add(90*time.Minute))
+	if err != nil || rep.Status != "fenced" || qrows[0].State != "queued" {
+		t.Fatalf("queued cancel at WaitUntil = %+v, %v, state=%q; want fenced and unchanged", rep, err, qrows[0].State)
+	}
+
+	// Queued lease whose heartbeat expired must also reject cancel with fenced without overwriting state.
+	erows := []Lease{}
+	if _, err := Acquire(&erows, in, t0, "queued-expired", 2); err != nil {
+		t.Fatal(err)
+	}
+	rep, err = Mutate(erows, Request{Action: "cancel", ID: "queued-expired", Holder: holder}, t0.Add(90*time.Second))
+	if err != nil || rep.Status != "fenced" || erows[0].State != "queued" {
+		t.Fatalf("queued cancel after HeartbeatUntil = %+v, %v, state=%q; want fenced and unchanged", rep, err, erows[0].State)
+	}
+}

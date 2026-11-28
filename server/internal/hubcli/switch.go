@@ -1,6 +1,7 @@
 package hubcli
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -20,10 +21,15 @@ const exitNoEdge = 3
 // runHubSwitch is `personad hub switch`: the running edge starts a binary next to the hub serving and switches to it
 // once it is up (docs/operations/hub-restart.md "Blue-green switching: the hub's edge"). One line per phase, then one with the outcome.
 func runHubSwitch(args []string) error {
+	return runHubSwitchWith(args, hub.SyncLocalNode)
+}
+
+func runHubSwitchWith(args []string, syncNode func(context.Context, string, int64) error) error {
 	fs := flag.NewFlagSet("hub switch", flag.ContinueOnError)
 	binary := fs.String("binary", "", "the binary to switch to (default: the program the hub runs now; with nothing serving, personad)")
 	prev := fs.String("prev", "", "the binary to go back to if the new one fails while taking over")
 	status := fs.Bool("status", false, "only say what serves now")
+	hubOnly := fs.Bool("hub-only", false, "skip the local resident node's idle reload")
 	within := fs.Duration("timeout", 8*time.Minute, "give up waiting after this long (the edge finishes the switch by itself)")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -76,6 +82,13 @@ func runHubSwitch(args []string) error {
 		return fmt.Errorf("hub switch: %w (serving: %s, build %d)", err, done.Version, done.Build)
 	}
 	fmt.Printf("hub switch: done, serving %s (build %d)\n", done.Version, done.Build)
+	if !*hubOnly {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		if err := syncNode(ctx, done.Version, done.Build); err != nil {
+			fmt.Fprintf(os.Stderr, "hub switch: local node reload: %v\n", err)
+		}
+	}
 	return nil
 }
 

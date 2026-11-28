@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/botcard"
@@ -45,6 +46,9 @@ func interactionCard(l i18n.Lang, ix proto.Interaction, v assistantwire.AskView)
 	where := botcard.EscapeMarkdown(place)
 	val := func(extra map[string]any) map[string]any {
 		v := map[string]any{"a": "ix", "id": ix.ID}
+		if !ix.CreatedAt.IsZero() {
+			v["created_at"] = ix.CreatedAt.Format(time.RFC3339Nano)
+		}
 		for k, x := range extra {
 			v[k] = x
 		}

@@ -20,7 +20,7 @@ func (*kbSentFailure) SentAsUsersForArchive(context.Context, string, time.Time, 
 
 func TestKBDaySentDatabaseAndTimezone(t *testing.T) {
 	needsKnowledgeUIModule(t)
-	database, err := db.Open(context.Background(), newDatabase(t), db.ManagerSet)
+	database, err := db.Open(context.Background(), newMigratedDatabase(t, db.ManagerSet), db.ManagerSet)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +122,7 @@ func (kbSentSource) Download(context.Context, string, string) error { return nil
 
 func TestKBDaySentIngestedReference(t *testing.T) {
 	needsKnowledgeUIModule(t)
-	database, err := db.Open(context.Background(), newDatabase(t), db.ManagerSet)
+	database, err := db.Open(context.Background(), newMigratedDatabase(t, db.ManagerSet), db.ManagerSet)
 	if err != nil {
 		t.Fatal(err)
 	}

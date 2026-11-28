@@ -27,6 +27,10 @@ var (
 	// relayDecisionMax is the longest a message that waits on a decision is held for a present owner, counted from
 	// when it queued: the time a card stays on one rung (askHoldFor).
 	relayDecisionMax = 5 * time.Minute
+	// relaySupervisionMax is the longest a non-decision supervision digest (such as completed task reports or reviews)
+	// is held for a continuously active owner, counted from when it queued: once reached, it delivers as one merged
+	// summary in the next gap between owner turns instead of starving indefinitely while the owner keeps chatting.
+	relaySupervisionMax = 10 * time.Minute
 	// ownerTurnStartWait is the safety limit for an owner-turn gate whose round no session list ever shows working
 	// (a send the node refused, a conversation the list dropped): it releases anyway so the queue cannot stick.
 	ownerTurnStartWait = time.Minute
@@ -55,7 +59,7 @@ func (msg relayMsg) decisionWaiting() bool {
 	case noticeTool:
 		return msg.State == "needs" || msg.State == "interrupted" || msg.State == "failed"
 	}
-	return false
+	return msg.standalonePermission()
 }
 
 // rank is msg's rank in the queue of a conversation that is no direction's lead.
@@ -125,6 +129,13 @@ func (msg relayMsg) decisionSince() time.Time {
 	return msg.At
 }
 
+func (msg relayMsg) queuedSince() time.Time {
+	if !msg.QueuedAt.IsZero() {
+		return msg.QueuedAt
+	}
+	return msg.At
+}
+
 // holdLocked is how long msg still has to wait before it may go into conversation to (0: it may go now); b.mu is
 // held. A message that waits on a decision and does not say when it queued is not held, and neither is the owner's
 // own answer on a card asked without waiting (relayMsg.Owner, #4928): the hold keeps the system out of the owner's
@@ -163,25 +174,82 @@ func (b *relayBook) holdLocked(to string, msg relayMsg, now time.Time) time.Dura
 		if latest := msg.decisionSince().Add(relayDecisionMax); latest.Before(until) {
 			until = latest
 		}
+	} else if msg.Tool == superviseTool {
+		if since := msg.queuedSince(); !since.IsZero() {
+			if latest := since.Add(relaySupervisionMax); latest.Before(until) {
+				until = latest
+			}
+		}
 	}
 	return max(until.Sub(now), 0)
+}
+
+// recordMsgFailedLocked records when msg in conversation to failed with a retryable error (b.mu held).
+func (b *relayBook) recordMsgFailedLocked(to string, msg relayMsg, at time.Time) {
+	if b.msgFailedAt == nil {
+		b.msgFailedAt = map[string]map[string]time.Time{}
+	}
+	per := b.msgFailedAt[to]
+	if per == nil {
+		per = map[string]time.Time{}
+		b.msgFailedAt[to] = per
+	}
+	per[relayMsgID(to, msg)] = at
+}
+
+// clearMsgFailedLocked removes msgID's per-message failure backoff from conversation to (b.mu held).
+func (b *relayBook) clearMsgFailedLocked(to, msgID string) {
+	if per := b.msgFailedAt[to]; per != nil {
+		delete(per, msgID)
+		if len(per) == 0 {
+			delete(b.msgFailedAt, to)
+		}
+	}
+}
+
+// msgBackoffLocked returns how long msg in conversation to still waits under relayRetryGap before it may be retried
+// (0: eligible now). For the last-failed message (b.stuck), b.failedAt takes precedence when set so clearing or
+// adjusting failedAt stays authoritative; other previously failed messages honor their own msgFailedAt timestamp so
+// multi-message queues cannot ping-pong past relayRetryGap (#17592). b.mu is held.
+func (b *relayBook) msgBackoffLocked(to string, msg relayMsg, now time.Time) time.Duration {
+	if relayRetryGap <= 0 {
+		return 0
+	}
+	if last, stuck := b.stuck[to]; stuck && msg == last {
+		if at, ok := b.failedAt[to]; ok && !at.IsZero() {
+			if gap := relayRetryGap - now.Sub(at); gap > 0 {
+				return gap
+			}
+			return 0
+		}
+	}
+	if at, ok := b.msgFailedAt[to][relayMsgID(to, msg)]; ok && !at.IsZero() {
+		if gap := relayRetryGap - now.Sub(at); gap > 0 {
+			return gap
+		}
+	}
+	return 0
 }
 
 // pickLocked is the index of the message of conversation to's queue that goes in next: the best rank among those not
 // held for the owner, the one that queued first within it (lead: to is a direction's lead, rankIn). The message that
 // could not go in last time (b.stuck: its agent's computer unreachable, a delivery that failed) is passed over while
-// another may go, so it holds up nothing but itself. None may go (-1): wait is how long until the first may. b.mu is
-// held.
+// another may go, so it holds up nothing but itself. Messages still inside their relayRetryGap backoff are held so
+// multi-message queues do not alternate past the gap (#17592); a withdrawn one is not, since it is never sent again.
+// None may go (-1): wait is how long until the first may.
+// b.mu is held.
 func (b *relayBook) pickLocked(to string, lead bool, now time.Time) (i int, wait time.Duration) {
 	i = -1
 	stuck := -1
 	q := b.st.Queue[to]
 	for j, m := range q {
-		lookAfter := m.LookAfter.Sub(now)
+		lookAfter, backoff := m.LookAfter.Sub(now), b.msgBackoffLocked(to, m, now)
 		if m.Withdrawn {
-			lookAfter = 0 // no retry is sent: only check whether the original in-flight text landed
+			// No retry is sent: only check whether the original in-flight text landed. Neither its retry time nor its
+			// failure backoff holds it.
+			lookAfter, backoff = 0, 0
 		}
-		if h := max(b.holdLocked(to, m, now), lookAfter); h > 0 {
+		if h := max(b.holdLocked(to, m, now), lookAfter, backoff); h > 0 {
 			if wait == 0 || h < wait {
 				wait = h
 			}
@@ -412,11 +480,33 @@ func (s *Service) drainHeldRelays(ctx context.Context, now time.Time) {
 		return
 	}
 	var due []string
+	pruned := false
 	for id, q := range b.st.Queue {
-		if _, spoke := b.st.Spoke[id]; spoke || b.holds[id] != nil || b.draining[id] {
+		if b.draining[id] {
+			continue // the in-flight attempt owns the head and its outcome
+		}
+		kept := slices.DeleteFunc(q, func(m relayMsg) bool {
+			if !m.standalonePermission() {
+				return false
+			}
+			_, pending := s.pendingStandalonePermission(id, m, now)
+			return !pending
+		})
+		if len(kept) != len(q) {
+			pruned = true
+			if len(kept) == 0 {
+				delete(b.st.Queue, id)
+				continue
+			}
+			b.st.Queue[id] = kept
+		}
+		if _, spoke := b.st.Spoke[id]; spoke || b.holds[id] != nil {
 			continue
 		}
-		if slices.ContainsFunc(q, func(m relayMsg) bool { return !m.Due.IsZero() || !m.TriedAt.IsZero() || m.unresolvedSupervision() }) {
+		if slices.ContainsFunc(kept, func(m relayMsg) bool {
+			return !m.Due.IsZero() || !m.TriedAt.IsZero() || m.unresolvedSupervision() || m.standalonePermission() ||
+				(m.Tool == extensionEventTool && !b.failedAt[id].IsZero())
+		}) {
 			if i, _ := b.pickLocked(id, leads[id], now); i >= 0 {
 				due = append(due, id)
 			}
@@ -436,7 +526,13 @@ func (s *Service) drainHeldRelays(ctx context.Context, now time.Time) {
 			due = append(due, id)
 		}
 	}
+	if pruned {
+		s.saveRelayLocked()
+	}
 	b.mu.Unlock()
+	if pruned {
+		s.publish(ctx)
+	}
 	if len(due) == 0 {
 		return
 	}

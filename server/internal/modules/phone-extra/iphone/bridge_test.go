@@ -22,6 +22,10 @@ version) echo "0.0.0-test" ;;
 usb-list) echo '[{"udid":"00000000-TESTPHONE0001","name":"Test Phone","product_version":"26.1"}]' ;;
 pair)
   udid=$2; out=$4
+  # FAKE_PAIR_GATE=<file>: pairing waits until the file is there, so a test decides when a pair job may end.
+  if [ -n "$FAKE_PAIR_GATE" ]; then
+    while [ ! -e "$FAKE_PAIR_GATE" ]; do sleep 0.01; done
+  fi
   if [ -n "$FAKE_PAIR_FAIL" ]; then
     echo "diagnostics" >&2
     echo '{"v":1,"ok":false,"error":{"code":"trust_pending","message":"tap Trust on the phone"}}' >&2
@@ -297,43 +301,54 @@ func TestPairKeepsAddressAndCleansUpOnFailure(t *testing.T) {
 
 func TestPairJob(t *testing.T) {
 	m, _ := bridgeManager(t)
+	// The pairing ends only once the gate is there: a second job is refused while the first surely runs, rather than
+	// after reading its state, which the pairing could end behind before the second job starts (#16230).
+	gate := filepath.Join(t.TempDir(), "pair-gate")
+	t.Setenv("FAKE_PAIR_GATE", gate)
 	if err := m.StartPair(testUDID); err != nil {
 		t.Fatal(err)
 	}
-	deadline := time.Now().Add(5 * time.Second)
-	for m.Job().State == JobRunning {
-		if err := m.StartForget(testUDID); Code(err) != CodeBusy {
-			t.Fatalf("a second job: %v", err)
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("pair job still running")
-		}
-		<-time.After(10 * time.Millisecond)
+	if err := m.StartForget(testUDID); Code(err) != CodeBusy {
+		t.Fatalf("a second job: %v", err)
 	}
-	if j := m.Job(); j.State != JobDone || j.Kind != "pair" || j.UDID != testUDID {
+	if err := os.WriteFile(gate, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if j := waitJob(t, m); j.State != JobDone || j.Kind != "pair" || j.UDID != testUDID {
 		t.Fatalf("job = %+v", j)
 	}
-	// A phone that never trusts this computer: the job waits, saying so, until its time runs out.
+	if _, err := m.store.Load(testUDID); err != nil {
+		t.Fatalf("after pairing: %v", err)
+	}
+	// A phone that doesn't trust this computer yet: the job says so while it waits. It has no deadline to say it
+	// before, however long the bridge takes to answer; it is cancelled once it has (#16230).
+	t.Setenv("FAKE_PAIR_FAIL", "1")
+	if err := m.StartPair(testUDID); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool { j := m.Job(); return j.Waiting == CodeTrustPending || j.State != JobRunning })
+	if j := m.Job(); j.State != JobRunning || j.Waiting != CodeTrustPending {
+		t.Fatalf("job = %+v, want it running and waiting for trust", j)
+	}
+	m.Cancel()
+	if j := waitJob(t, m); j.State != JobCancelled || j.Waiting != "" {
+		t.Fatalf("job = %+v", j)
+	}
+	// One that never trusts this computer: the job waits until its time runs out.
 	saved := pairTimeout
 	pairTimeout = 300 * time.Millisecond
 	t.Cleanup(func() { pairTimeout = saved })
-	t.Setenv("FAKE_PAIR_FAIL", "1")
-	_ = m.StartPair(testUDID)
-	sawWaiting := false
-	for m.Job().State == JobRunning {
-		if m.Job().Waiting == CodeTrustPending {
-			sawWaiting = true
-		}
-		<-time.After(5 * time.Millisecond)
+	if err := m.StartPair(testUDID); err != nil {
+		t.Fatal(err)
 	}
-	if j := m.Job(); j.State != JobFailed || j.Code != "timeout" || j.Waiting != "" || !sawWaiting {
-		t.Fatalf("job = %+v (saw waiting %v)", j, sawWaiting)
+	if j := waitJob(t, m); j.State != JobFailed || j.Code != "timeout" || j.Waiting != "" {
+		t.Fatalf("job = %+v", j)
 	}
 	if err := m.StartForget(testUDID); err != nil {
 		t.Fatal(err)
 	}
-	for m.Job().State == JobRunning {
-		<-time.After(10 * time.Millisecond)
+	if j := waitJob(t, m); j.State != JobDone || j.Kind != "forget" {
+		t.Fatalf("job = %+v", j)
 	}
 	if _, err := m.store.Load(testUDID); err != ErrNotPaired {
 		t.Fatalf("after forget: %v", err)

@@ -12,7 +12,7 @@ unchanged (Go `server/internal/assistantwire/todo_view_gen_test.go`, Kotlin
 
 | File | What it pins | Cases |
 | --- | --- | --- |
-| `todo_view.json` | One to-do, its runs' sessions and pending cards → its view | 63: every phase and section at least once, every reason the hub produces, each kind of ask's risk, and compatibility edge cases |
+| `todo_view.json` | One to-do, its runs' sessions and pending cards → its view | 65: every phase and section at least once, every reason the hub produces, each kind of ask's risk, and compatibility edge cases, unfinished closeout and pending acceptance |
 
 ## Format
 
@@ -196,7 +196,7 @@ offers nothing on the lock screen (`lockscreen` `open_only`).
 
 | Ask | `kind` | `risk` |
 | --- | --- | --- |
-| The to-do's decision, or a conclusion that says it cannot be done | `decision` | the listed ask's `risk`: the manager's rule (`askRisk` in `server/internal/assistant/todo_ask.go`) makes it `open` when `why_owner` is `irreversible` or `visible_to_others`, or Persona would take it at a deadline that cannot be undone, also once that deadline was handled and the list no longer shows it; else `safe` |
+| The to-do's decision, or a conclusion that says it cannot be done | `decision` | the listed ask's `risk`: the manager's rule (`askRisk` in `server/internal/assistant/todo_ask.go`) makes it `open` when `why_owner` is `irreversible` or `visible_to_others`, its recommendation requires the owner’s terminal, or Persona would take it at a deadline that cannot be undone, also once that deadline was handled and the list no longer shows it; else `safe` |
 | A failed start's retry | `retry` | `safe` |
 | A run's card a notification may answer: one question with options (single or multiple choice), no fields, not `private` | `question` | `safe` |
 | The same card when its asker says going ahead cannot be undone (`reversible` false) | `question` | `open` |
@@ -217,6 +217,7 @@ strings, and a time is absolute RFC 3339. The keys are stable identifiers: never
 | `failed_start` | `failed_start` | `error`: the to-do's `start_error`, the hub's text (see "Judgement calls") |
 | `agent_asks` | `agent_asks` | `run`: the asking run's title; `text`: what it asks (as its ask's `text`), absent when nothing says |
 | `interrupted` | `interrupted` | `run` |
+| `stopped_unfinished` | `stopped_unfinished` | `run`, optional `text` |
 | `decision` | `owner_decides` or `can_wait`, for a decision | `text`: the question (a `needs_user` review's when no ask is listed); `recommend`, absent when none is recommended |
 | `decision_default` | `can_wait`, for a decision Persona takes at its deadline | `text`, `recommend`, `default_at` |
 | `cannot` | `owner_decides`, for a conclusion that says it cannot be done | none |
@@ -328,8 +329,11 @@ Where the proposal and today's code leave a choice open, these cases make it; ch
   hub sends accepted and deployed work to Done 24 hours after it finished. Accepted or deployed work never reads as
   `pr_open`, as today; an open concern is never accepted or deployed.
 - **A plain "Please verify" is a finish, not `verify`**: it stays in Just finished as the SOP's "Decision table" keeps
-  it. A supervisor's explicit `accepted` + `user_check` puts the open task in Needs you with reason `verify` (row 3).
-  Its listed `ask` still supplies the existing round-bound Pass action.
+  it. A supervisor's explicit `accepted` + `user_check` is optional owner verification: #15680 (#15638) keeps it out of
+  the Needs you row and its urgent count and surfaces it as the calm "to verify" layer (the direction tree's `review`
+  state plus `counts.user_check`, and a calm web tray). Its listed `ask` still supplies the existing round-bound Pass
+  action. An older hub can still send the Needs you view with reason `verify`; clients honor that authoritative view
+  while the rolling upgrade lasts.
 - **A park on someone else is `someone_else`**, with the park's line: row 8 places it, and its `waiting_on` names the
   reason row 10 has for it.
 - **Steps roll up only into Needs you, Working, Waiting and Can wait**, and only when ahead of the parent's own
@@ -357,7 +361,6 @@ Where the proposal and today's code leave a choice open, these cases make it; ch
 The projection never answers these reasons, since today's list row carries no input for them; each comes with the
 fact it needs, adding a case here:
 
-- `stopped_unfinished`: a run's end reason, which the session list does not carry yet.
 - `steps_proposed`, `signin` and `duplicate`: no such ask exists on the hub yet.
 - `queued`: a start the admission gate holds is kept in the plan (`PlanTask.Queue`), not on the listed to-do.
 - `computer_offline`: Start When It's Back has no state yet. An open to-do whose runs' computer is away (`orphaned`
@@ -371,3 +374,20 @@ fact it needs, adding a case here:
 python3 scripts/test/test_wire_schema.py                                      # every view holds to TodoSummary
 (cd server && go test ./internal/assistantwire -run TodoView)                 # Go reads and writes each one back
 ```
+
+### Closeout follow-up (#9823, aligned with #10174)
+
+The projection reads the session's structured closeout and `work.turn_at`; an older snapshot without either keeps its
+compatibility reading, including the upstream unread/wait judgement call below. A known unfinished stop, or a seen
+missing-closeout stop with a recorded turn time, is To do during its
+follow-up window, then Needs you (`stopped_unfinished`) only after a full hour. Explicit owner asks, actual foreground,
+child/background work, a named Agent/external wait (#10411), an intentional park and settled work keep their own homes. The latest evidenced stopped run
+wins over an older closeout. The clock uses the turn and `supervision.followed_up_at` or an explicit review (empty
+`by`), never a read receipt, an automatic review or the ledger's `updated_at`. `next_change_at` names the strict
+one-hour boundary plus one nanosecond.
+
+A reported `done` is ready, never closed, even after its reply was read. Its finish time stays the recorded turn time;
+Just finished's seen window uses that result rather than a later read-receipt timestamp. The shared cases
+`stopped_unfinished_closeout_needs_followup` and `reported_done_seen_awaits_acceptance` pin those two classifications;
+`projection/closeout_test.go` also checks the exact boundary, follow-up provenance, resumed work, parks, acceptance,
+the seen window and counts (Needs you 1, Waiting 1, uncounted Just finished 1; Open 3).

@@ -76,5 +76,6 @@
   "lark_triage": "Inbox triage rules",
   "lark_triage_footer": "Say in a sentence or two what in Lark is Needs you, FYI or Collapsed. Empty uses the Inbox's default judgment; when set, Lark items are triaged by these rules only.",
   "lark_triage_placeholder": "For example: build, release and alert bots are FYI unless they ask me to act; questions to me and review requests are Needs you.",
-  "lark_triage_save": "Save rules"
+  "lark_triage_save": "Save rules",
+  "bind_in_integrations": "You can also link it in Settings › Integrations & Extensions › {name}."
 }

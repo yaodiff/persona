@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 func storedApprovalJournal(t *testing.T, ft *fleetTest) []approvalJournalEntry {
@@ -23,6 +25,16 @@ func putApprovalJournal(t *testing.T, ft *fleetTest, entry approvalJournalEntry)
 	if err := ft.st.PutSetting(context.Background(), approvalJournalKey, []approvalJournalEntry{entry}); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// reloadApprovalJournalForRestart discards process-local live markers in a test
+// that keeps its pending card but simulates startup recovery. The next recovery
+// reads the persisted journal exactly as a new Service would.
+func reloadApprovalJournalForRestart(s *Service) {
+	s.approvals.mu.Lock()
+	s.approvals.loaded = false
+	s.approvals.list = nil
+	s.approvals.mu.Unlock()
 }
 
 func TestApprovalResultJournalRemovesHandedOffEntries(t *testing.T) {
@@ -97,6 +109,31 @@ func TestApprovalResultJournalStopsRetryingDeletedConversation(t *testing.T) {
 	}
 }
 
+func TestApprovalResultJournalStopsRetryingNotFoundConversation(t *testing.T) {
+	ft := newFleetTest(t)
+	conv := proto.Session{MachineID: "mac", SessionID: "unreadable", Assistant: true, Agent: "antigravity", Status: proto.StatusIdle}
+	ft.f.setSessions("mac", conv)
+	ft.d.setSessions("mac", []proto.Session{conv})
+	ft.f.mu.Lock()
+	ft.f.failAssistant = &rpc.Error{Code: "not_found", Message: "session unreadable"}
+	ft.f.mu.Unlock()
+
+	entry := approvalJournalEntry{ID: "ix_journal_not_found", MachineID: "mac", SessionID: "unreadable",
+		Result: "Approval ix_journal_not_found is approved.", UpdatedAt: time.Now().UTC()}
+	putApprovalJournal(t, ft, entry)
+
+	if err := ft.s.deliverApprovalResult(entry); !errors.Is(err, errApprovalConversationGone) {
+		t.Fatalf("not_found originating conversation error = %v, want errApprovalConversationGone", err)
+	}
+	ft.s.deliverApprovalResults()
+	if got := storedApprovalJournal(t, ft); len(got) != 0 {
+		t.Fatalf("permanently undeliverable not_found result was retained: %+v", got)
+	}
+	if got := ft.s.queuedFor("unreadable"); got != 0 {
+		t.Fatalf("not_found approval result was queued (%d), want 0", got)
+	}
+}
+
 func TestApprovalResultJournalRetainsUncertainOutcomeForDeletedConversation(t *testing.T) {
 	ft := newFleetTest(t)
 	entry := approvalJournalEntry{ID: "ix_journal_deleted_uncertain", MachineID: "mac", SessionID: "deleted", Status: "failed",
@@ -116,6 +153,48 @@ func TestApprovalResultJournalRetainsUncertainOutcomeForDeletedConversation(t *t
 	if retry {
 		t.Fatal("an explicitly deleted destination scheduled an endless uncertain-result retry")
 	}
+}
+
+func TestDeletedUncertainResultRetriesFailedGrantRevocation(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ft := newFleetTest(t)
+		st := &grantWriteFailStore{fleetMem: ft.st}
+		ft.s.setStore(func() Store { return st })
+		entry := approvalJournalEntry{ID: "ix_deleted_revocation_retry", MachineID: "mac", SessionID: "deleted", Status: "failed",
+			Result: "Approval ix_deleted_revocation_retry left with an uncertain execution outcome and is no longer pending.", UpdatedAt: time.Now().UTC()}
+		row := deletedConversation{Machine: "mac", ID: "deleted", At: time.Now().UTC()}
+		if err := ft.st.PutSetting(context.Background(), deletedConversationsKey, map[string]deletedConversation{runtimeListID("mac", "deleted"): row}); err != nil {
+			t.Fatal(err)
+		}
+		if err := ft.s.putDetachedGrant(context.Background(), detachedTestCard(entry.ID), proto.Resolution{}); err != nil {
+			t.Fatal(err)
+		}
+		st.fail.Store(true)
+		putApprovalJournal(t, ft, entry)
+		ft.s.deliverApprovalResults()
+		ft.s.approvals.mu.Lock()
+		retry := ft.s.approvals.retry
+		ft.s.approvals.mu.Unlock()
+		if !retry {
+			t.Fatal("failed durable revocation did not schedule a retry for a deleted destination")
+		}
+
+		st.fail.Store(false)
+		elapse(time.Minute)
+		var grants map[string]detachedGrant
+		if _, err := st.Setting(context.Background(), detachedGrantSetting, &grants); err != nil || len(grants) != 0 {
+			t.Fatalf("durable grant survived the revocation retry: %+v, %v", grants, err)
+		}
+		if got := storedApprovalJournal(t, ft); len(got) != 1 || got[0].Status != "failed" {
+			t.Fatalf("uncertain deleted-conversation evidence was discarded: %+v", got)
+		}
+		ft.s.approvals.mu.Lock()
+		retry = ft.s.approvals.retry
+		ft.s.approvals.mu.Unlock()
+		if retry {
+			t.Fatal("successful revocation kept scheduling retries for a deleted destination")
+		}
+	})
 }
 
 func TestApprovalResultJournalKeepsTransientFailureForRetry(t *testing.T) {

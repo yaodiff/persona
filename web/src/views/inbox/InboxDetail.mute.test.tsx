@@ -56,8 +56,8 @@ describe("收件箱详情的静音", () => {
     act(() => muteButton()!.click());
     const rows = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')];
     expect(rows.map((r) => r.textContent)).toEqual([
-      expect.stringContaining("静音这个发件人示例甲"), expect.stringContaining("静音这个会话示例群"),
-      expect.stringContaining("为这个发件人设规则…示例甲"), expect.stringContaining("为这个会话设规则…示例群"),
+      expect.stringContaining("静音此发件人示例甲"), expect.stringContaining("静音此会话示例群"),
+      expect.stringContaining("为此发件人设置规则…示例甲"), expect.stringContaining("为此会话设置规则…示例群"),
     ]);
     act(() => rows[1].click());
     await flush();

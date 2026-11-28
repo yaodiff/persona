@@ -9,5 +9,8 @@
   "starting": "エージェントを起動しています。起動するとここにチャットが表示されます。",
   "no_agent": "このタスクを実行中のエージェントはいません。",
   "open_in_new_window": "新しいウィンドウで開く",
-  "switch_agent": "Agent を切り替え"
+  "switch_agent": "Agent を切り替え",
+  "report": "タスクの報告",
+  "raw_session": "エージェントの実行履歴を見る",
+  "follow_up": "元の会話で返信"
 }

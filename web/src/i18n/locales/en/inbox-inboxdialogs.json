@@ -1,4 +1,7 @@
 {
+  "lark_sender_bot": "Reply in “{chat}” as the bot. Everyone in the chat can see it.",
+  "lark_sender_user": "Reply in “{chat}” as you. Everyone in the chat can see it.",
+  "lark_sender_default": "Reply in “{chat}” using the configured sender. Everyone in the chat can see it.",
   "title_moment": "Comment on Moments post",
   "title_comment": "Comment on {title}",
   "title_reply_to": "Reply to {title}",

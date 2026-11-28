@@ -1,4 +1,5 @@
-import { appToolName, snippet } from '../../runtime-sdk/index.js'
+import { appToolName } from '../../runtime-sdk/index.js'
+import { assistantPreview } from '../../runtime-sdk/lib/assistant-preview.js'
 import { SNAPSHOT_RE } from '../../runtime-sdk/lib/compat.js'
 
 const NAMES = { run_terminal_command: 'Bash', read_file: 'Read', write_file: 'Write', edit_file: 'Edit', list_directory: 'LS', search_files: 'Grep', web_search: 'WebSearch', web_fetch: 'WebFetch' }
@@ -37,8 +38,12 @@ export function updateItems(state, update, { replay = false } = {}) {
       return
     }
     if (state.segment?.role === role && state.segment.kind === kind) { state.segment.text += text; state.rev++ }
-    else state.segment = addItem(state, { role, kind, text })
-    if (kind === 'text') state.lastText = snippet(state.segment.text)
+    else {
+      // A control line can arrive in several chunks. Restore the preview before this segment once it is complete.
+      state.previewBeforeSegment = state.lastText
+      state.segment = addItem(state, { role, kind, text })
+    }
+    if (kind === 'text') state.lastText = assistantPreview(state.segment.text) ?? state.previewBeforeSegment
     return
   }
   if (type === 'tool_call') {

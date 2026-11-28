@@ -12,6 +12,8 @@ extension PersonalAgentSession {
 struct PersonalAgentAvatar: View {
     let session: PersonalAgentSession
     var size: CGFloat = 32
+    /// Draw what is left of its allowance as a ring around it (`PersonalAgentChargeRing`), when the source says.
+    var showsCharge = false
     @State private var image: UIImage?
 
     var body: some View {
@@ -25,6 +27,7 @@ struct PersonalAgentAvatar: View {
         }
         .frame(width: size, height: size)
         .clipShape(Circle())
+        .modifier(PersonalAgentChargeRing(charge: showsCharge ? session.charge : nil, size: size))
         .accessibilityHidden(true)
         .task(id: session.avatarPath) {
             guard let path = session.avatarPath else { image = nil; return }

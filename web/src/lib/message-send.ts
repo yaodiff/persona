@@ -3,10 +3,11 @@ import { onConversationDeleted } from "./conversation-deleted";
 import { useSyncExternalStore } from "react";
 import { credentialOwner, getToken, onCredentialChange, sessionPath } from "./api";
 import { BASE } from "./base";
-import { stateOf } from "./format";
+import { activityOf } from "./format";
 import { MANAGER_HEADER, managerHeaderFor, onManagerChoice, shownManager } from "./manager-choice";
 import type { Item, Session } from "./types";
 import { sameMessage } from "./echo";
+import { timeNs } from "./times";
 
 interface FeedbackDeps {
   getSession(mid: string, sid: string): Session | undefined;
@@ -78,7 +79,7 @@ function create(mid: string, sid: string, id: string, old = flights.get(key(mid,
     flights.delete(key(first.mid, first.sid, first.id));
   }
   const row = deps.getSession(mid, sid);
-  const e: Flight = { mid, sid, id, scope: scope(), phase: "sending", feedback: "sending", since: row?.state_since, state: row && stateOf(row), queued: row?.queued ?? [], failure: row?.failure_reason, at: old?.at, retry: Boolean(old) };
+  const e: Flight = { mid, sid, id, scope: scope(), phase: "sending", feedback: "sending", since: row?.state_since, state: row && activityOf(row), queued: row?.queued ?? [], failure: row?.failure_reason, at: old?.at, retry: Boolean(old) };
   const page = pages.get(key(mid, sid, ""));
   e.baseSeq = page?.scope === e.scope ? page.seq : undefined;
   e.work = row?.work?.phase;
@@ -124,9 +125,8 @@ export function receiveMessageSend(msg: Record<string, unknown>) {
   if (!deps.receiptsAllowed?.()) return; // only the current authenticated hub may advertise this reserved type
   const { machine_id: mid, session_id: sid, client_msg_id: id, state, at } = msg;
   if (typeof mid !== "string" || typeof sid !== "string" || typeof id !== "string" || !id || typeof at !== "string") return;
-  const stamp = /^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(?:\.(\d{1,9}))?Z$/.exec(at);
-  if (!stamp || !Number.isFinite(Date.parse(at)) || !["processing", "delivered", "failed", "unknown"].includes(String(state))) return;
-  const time = `${stamp[1]}.${(stamp[2] ?? "").padEnd(9, "0")}Z`;
+  if (!at.endsWith("Z") || timeNs(at) === null || !["processing", "delivered", "failed", "unknown"].includes(String(state))) return;
+  const time = `${at.slice(0, 19)}.${at.slice(20, -1).padEnd(9, "0")}Z`;
   listenOwners();
   if (scopedObservation(key(mid, sid, id))?.done) return;
   let e = flights.get(key(mid, sid, id));
@@ -216,7 +216,7 @@ function handoffAuthority() {
     if (!e.feedback || !current(e)) continue;
     const row = deps.getSession(e.mid, e.sid);
     if (!row) continue;
-    const state = stateOf(row);
+    const state = activityOf(row);
     const queued = e.text && (row.queued ?? []).filter(q => sameMessage(q, e.text!)).length > e.queued.filter(q => sameMessage(q, e.text!)).length;
     const fresh = e.state !== "working" && (row.state_since !== e.since || state !== e.state);
     const executing = (fresh || e.phase === "delivered" || e.echoed) && (state === "working" || state === "needs_you");

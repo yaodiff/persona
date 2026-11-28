@@ -3,5 +3,6 @@
   "no_store": "No storage is available to save settings.",
   "need_on": "on is required.",
   "need_autostart": "autostart is required.",
-  "not_herdr": "This computer does not use the herdr engine."
+  "not_herdr": "This computer does not use the herdr engine.",
+  "orca_chat_starts_read_only": "This device can't change how this computer starts new Agents."
 }

@@ -89,6 +89,9 @@ func New(cfg Config, sender Sender, secret []byte, logf func(string, ...any)) (*
 	if len(cfg.Topics) == 0 {
 		return nil, errors.New("relay.json: topics is empty")
 	}
+	if logf == nil {
+		logf = func(string, ...any) {}
+	}
 	block, _ := aes.NewCipher(secret)
 	aead, _ := cipher.NewGCM(block)
 	s := &Server{apns: sender, aead: aead, topics: map[string]bool{}, proxySecret: cfg.ProxySecret, logf: logf, now: time.Now,
@@ -211,6 +214,10 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request) {
 	}
 	if !s.served(g.Topic) {
 		writeErr(w, http.StatusForbidden, "topic not served by this relay")
+		return
+	}
+	if s.apns == nil {
+		writeErr(w, http.StatusServiceUnavailable, "apns not configured")
 		return
 	}
 	if !s.pushLimit.allow("dev:"+g.Token, s.now()) {
@@ -370,7 +377,11 @@ func writeErr(w http.ResponseWriter, status int, msg string) {
 }
 
 // sweepAbove: past this many keys, a new key first forgets the buckets that have refilled.
-const sweepAbove = 50000
+// maxBuckets: hard ceiling on tracked keys so a flood of distinct IPs or tokens cannot exhaust memory between sweeps.
+const (
+	sweepAbove = 50000
+	maxBuckets = 2 * sweepAbove
+)
 
 // limiter is a token bucket per key.
 type limiter struct {
@@ -378,6 +389,7 @@ type limiter struct {
 	perMin  float64
 	burst   float64
 	refill  time.Duration // an empty bucket is full again after this
+	maxKeys int           // hard ceiling on len(buckets); defaults to maxBuckets when <= 0
 	buckets map[string]*bucket
 	swept   time.Time // last time allow forgot the refilled buckets
 }
@@ -389,7 +401,7 @@ type bucket struct {
 
 func newLimiter(perMin, burst float64) *limiter {
 	return &limiter{perMin: perMin, burst: burst,
-		refill: time.Duration(burst / perMin * float64(time.Minute)), buckets: map[string]*bucket{}}
+		refill: time.Duration(burst / perMin * float64(time.Minute)), maxKeys: maxBuckets, buckets: map[string]*bucket{}}
 }
 
 func (l *limiter) allow(key string, now time.Time) bool {
@@ -397,21 +409,39 @@ func (l *limiter) allow(key string, now time.Time) bool {
 	defer l.mu.Unlock()
 	b := l.buckets[key]
 	if b == nil {
+		capKeys := l.maxKeys
+		if capKeys <= 0 {
+			capKeys = maxBuckets
+		}
 		// Forget the buckets that have refilled: a new one starts full, so no answer changes. At most once per refill
 		// time: otherwise every new key of a flood scans the whole table under the lock, usually forgetting nothing.
-		if len(l.buckets) > sweepAbove && now.Sub(l.swept) >= l.refill {
-			l.swept = now
-			for k, v := range l.buckets {
-				if now.Sub(v.at) > l.refill {
-					delete(l.buckets, k)
+		if len(l.buckets) > sweepAbove || len(l.buckets) >= capKeys {
+			if !l.swept.IsZero() && now.Before(l.swept) {
+				l.swept = now
+			}
+			if l.swept.IsZero() || now.Sub(l.swept) >= l.refill {
+				l.swept = now
+				for k, v := range l.buckets {
+					if now.Sub(v.at) > l.refill {
+						delete(l.buckets, k)
+					} else if now.Before(v.at) {
+						v.at = now
+					}
 				}
 			}
+		}
+		if len(l.buckets) >= capKeys {
+			return false
 		}
 		b = &bucket{tokens: l.burst, at: now}
 		l.buckets[key] = b
 	}
-	b.tokens = min(l.burst, b.tokens+now.Sub(b.at).Minutes()*l.perMin)
-	b.at = now
+	if elapsed := now.Sub(b.at); elapsed > 0 {
+		b.tokens = min(l.burst, b.tokens+elapsed.Minutes()*l.perMin)
+		b.at = now
+	} else if elapsed < 0 {
+		b.at = now
+	}
 	if b.tokens < 1 {
 		return false
 	}

@@ -1162,5 +1162,235 @@ class MachOSignatureTests(unittest.TestCase):
                 self.assertEqual(cbp.signature_ranges(data[:length]), [])
 
 
+class LzfsePrivacyTests(unittest.TestCase):
+    address = str(ipaddress.ip_address(0x0A63584D))
+
+    @staticmethod
+    def _encode_lzfse(payload: bytes) -> bytes:
+        result = subprocess.run(["compression_tool", "-encode", "-a", "lzfse"], input=payload, capture_output=True)
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.decode(errors="replace"))
+        return result.stdout
+
+    def scan(self, data: bytes, words=(), filename="Metadata.actionsdata", *, whole_short=False):
+        with tempfile.TemporaryDirectory(prefix="bundle-privacy-lzfse-") as directory:
+            path = Path(directory) / filename
+            path.write_bytes(data)
+            output = io.StringIO()
+            argv = ["check_bundle_privacy.py"] + (["--whole-short"] if whole_short else []) + [directory]
+            with patch.object(sys, "argv", argv), \
+                    patch.object(cbp.pc, "module_paths", return_value=None), \
+                    patch.object(cbp.pc, "terms", return_value=(words, set())), \
+                    patch.object(cbp.persona_config, "load", return_value={}), redirect_stdout(output):
+                try:
+                    cbp.main()
+                except SystemExit as error:
+                    return error.code, output.getvalue()
+            return 0, output.getvalue()
+
+    def test_non_lzfse_bvx_prefixed_file_is_still_scanned(self):
+        code, output = self.scan(b"bvx_plain " + self.address.encode() + b" " + EMAIL.encode())
+        self.assertNotEqual(code, 0)
+        self.assertIn("private IP", output)
+        self.assertIn("email", output)
+
+        code_clean, output_clean = self.scan(b"bvx_plain totally safe text")
+        self.assertEqual(code_clean, 0, output_clean)
+
+    def test_corrupt_lzfse_magic_file_fails_closed_and_scans_raw_bytes(self):
+        code, output = self.scan(b"bvx2not-valid-lzfse " + self.address.encode())
+        self.assertNotEqual(code, 0)
+        self.assertIn("private IP", output)
+        self.assertIn("unreadable lzfse stream", output)
+
+        code2, output2 = self.scan(b"bvx2" + bytes(range(64)))
+        self.assertNotEqual(code2, 0)
+        self.assertIn("unreadable lzfse stream", output2)
+
+        # Crafted magic flood must not trigger quadratic subprocess spawning.
+        with patch.object(cbp.subprocess, "Popen") as popen:
+            code3, output3 = self.scan(b"bvx-\x00\x00\x00\x00bvx$" + b"bvx2" * 200)
+        self.assertNotEqual(code3, 0)
+        self.assertIn("unreadable lzfse stream", output3)
+        self.assertEqual(popen.call_count, 0)
+
+    @unittest.skipUnless(shutil.which("compression_tool"), "macOS compression_tool required")
+    def test_valid_lzfse_decodes_compressed_and_trailing_and_concatenated_streams(self):
+        # Valid empty LZFSE stream (bvx- with n_raw=0 + bvx$) must pass cleanly without false failure.
+        empty_stream = self._encode_lzfse(b"")
+        code, output = self.scan(empty_stream)
+        self.assertEqual(code, 0, output)
+
+        # Valid stream containing literal b"bvx$bvx2corrupt" inside payload must not false-fail.
+        tricky_stream = self._encode_lzfse(b"harmless prefix bvx$bvx2corrupt suffix")
+        code, output = self.scan(tricky_stream)
+        self.assertEqual(code, 0, output)
+
+        clean_stream = self._encode_lzfse(b"safe public metadata " * 400)
+        self.assertEqual(clean_stream[:4], b"bvx2")
+        code, output = self.scan(clean_stream)
+        self.assertEqual(code, 0, output)
+
+        # Genuinely bvx2-compressed secret where raw bytes do NOT contain the plaintext IP.
+        secret_payload = b"".join(f"entry-{i:04d}: endpoint={self.address} pad={i % 97:02d}\n".encode() for i in range(450))
+        secret_stream = self._encode_lzfse(secret_payload)
+        self.assertEqual(secret_stream[:4], b"bvx2")
+        self.assertNotIn(self.address.encode(), secret_stream)
+        code, output = self.scan(secret_stream)
+        self.assertNotEqual(code, 0)
+        self.assertIn("private IP", output)
+
+        # Decode once per file in main() (not duplicated across modes=(False, True)).
+        real_popen = cbp.subprocess.Popen
+        with patch.object(cbp.subprocess, "Popen", wraps=real_popen) as popen:
+            code, output = self.scan(clean_stream)
+        self.assertEqual(code, 0, output)
+        self.assertEqual(popen.call_count, 1)
+
+        # Trailing plaintext appended after valid LZFSE bvx$ end-of-stream marker.
+        code, output = self.scan(clean_stream + b"trailing " + self.address.encode())
+        self.assertNotEqual(code, 0)
+        self.assertIn("private IP", output)
+
+        # Second LZFSE stream concatenated after a clean first stream.
+        code, output = self.scan(clean_stream + secret_stream)
+        self.assertNotEqual(code, 0)
+        self.assertIn("private IP", output)
+
+        # Padded second LZFSE stream after bvx$ end-of-stream marker.
+        code, output = self.scan(clean_stream + b"X" + secret_stream)
+        self.assertNotEqual(code, 0)
+        self.assertIn("private IP", output)
+
+        # Corrupt trailing stream (both immediate and padded) fails closed consistently.
+        for suffix in (b"bvx2corrupt", b"X" + b"bvx2corrupt"):
+            with self.subTest(suffix=suffix):
+                code, output = self.scan(clean_stream + suffix)
+                self.assertNotEqual(code, 0)
+                self.assertIn("unreadable lzfse stream", output)
+
+        # Stream starting with empty bvx$ marker followed by a compressed secret stream.
+        code, output = self.scan(b"bvx$" + secret_stream)
+        self.assertNotEqual(code, 0)
+        self.assertIn("private IP", output)
+
+        # Nested LZFSE-in-LZFSE must be decoded recursively (and excessive depth fails closed).
+        nested_stream = self._encode_lzfse(secret_stream)
+        self.assertNotIn(self.address.encode(), nested_stream)
+        code, output = self.scan(nested_stream)
+        self.assertNotEqual(code, 0)
+        self.assertIn("private IP", output)
+
+        deep = clean_stream
+        for _ in range(cbp.LZFSE_MAX_DEPTH + 1):
+            deep = self._encode_lzfse(deep)
+        code, output = self.scan(deep)
+        self.assertNotEqual(code, 0)
+        self.assertIn("unreadable lzfse stream", output)
+
+        # Compressed binary plist inside LZFSE (genuinely bvx2-compressed, no plaintext IP in stream).
+        bplist_raw = plistlib.dumps(
+            {f"endpoint_{i:04d}": f"{self.address}:{i}" for i in range(450)},
+            fmt=plistlib.FMT_BINARY,
+        )
+        bplist_stream = self._encode_lzfse(bplist_raw)
+        self.assertEqual(bplist_stream[:4], b"bvx2")
+        self.assertNotIn(self.address.encode(), bplist_stream)
+        code, output = self.scan(bplist_stream)
+        self.assertNotEqual(code, 0)
+        self.assertIn("private IP", output)
+
+        # LZFSE embedded inside a binary plist <data> value.
+        outer_bplist = plistlib.dumps({"blob": secret_stream}, fmt=plistlib.FMT_BINARY)
+        self.assertNotIn(self.address.encode(), outer_bplist)
+        code, output = self.scan(outer_bplist, filename="Info.plist")
+        self.assertNotEqual(code, 0)
+        self.assertIn("private IP", output)
+
+        # Shared refs to identical LZFSE <data> objects in a bplist must deduplicate and never exhaust stream budget.
+        shared_refs_bplist = plistlib.dumps([clean_stream] * 20, fmt=plistlib.FMT_BINARY)
+        with patch.object(cbp.subprocess, "Popen", wraps=real_popen) as popen:
+            code, output = self.scan(shared_refs_bplist, filename="Shared.plist")
+        self.assertEqual(code, 0, output)
+        self.assertEqual(popen.call_count, 1)
+
+        # Nested bplist-in-bplist containing LZFSE must be decoded (and excessive bplist nesting fails closed).
+        nested_bplist = plistlib.dumps({"inner": outer_bplist}, fmt=plistlib.FMT_BINARY)
+        self.assertNotIn(self.address.encode(), nested_bplist)
+        code, output = self.scan(nested_bplist, filename="Nested.plist")
+        self.assertNotEqual(code, 0)
+        self.assertIn("private IP", output)
+
+        deep_bplist = plistlib.dumps({"blob": clean_stream}, fmt=plistlib.FMT_BINARY)
+        for _ in range(cbp.LZFSE_MAX_DEPTH + 1):
+            deep_bplist = plistlib.dumps({"wrap": deep_bplist}, fmt=plistlib.FMT_BINARY)
+        code, output = self.scan(deep_bplist, filename="Deep.plist")
+        self.assertNotEqual(code, 0)
+        self.assertIn("unreadable lzfse stream", output)
+
+        # Unreferenced <data> object in a bplist00 object table (not reachable from root) must still be decoded.
+        # Object 0 (root): empty string ""; Object 1 (unreferenced): <data> containing secret_stream.
+        length_bytes = len(secret_stream).to_bytes(2, "big")
+        obj0 = b"\x50"
+        obj1 = b"\x4f\x11" + length_bytes + secret_stream
+        body = b"bplist00" + obj0 + obj1
+        off0, off1 = 8, 8 + len(obj0)
+        table_offset = len(body)
+        offset_table = struct.pack(">HH", off0, off1)
+        trailer = struct.pack(">6xBBQQQ", 2, 1, 2, 0, table_offset)
+        unreferenced_bplist = body + offset_table + trailer
+        self.assertNotIn(self.address.encode(), unreferenced_bplist)
+        code, output = self.scan(unreferenced_bplist, filename="Unref.plist")
+        self.assertNotEqual(code, 0)
+        self.assertIn("private IP", output)
+
+        # LZFSE embedded inside a --whole-short gzip member.
+        gz_embedded = b"ELF-stub" + gzip.compress(secret_stream)
+        self.assertNotIn(self.address.encode(), gz_embedded)
+        code, output = self.scan(gz_embedded, filename="personad", whole_short=True)
+        self.assertNotEqual(code, 0)
+        self.assertIn("private IP", output)
+
+        # --whole-short LZFSE(gzip(secret)) must also be decoded and scanned.
+        lzfse_of_gzip = self._encode_lzfse(gzip.compress(secret_payload))
+        self.assertNotIn(self.address.encode(), lzfse_of_gzip)
+        code, output = self.scan(lzfse_of_gzip, filename="payload.lzfse", whole_short=True)
+        self.assertNotEqual(code, 0)
+        self.assertIn("private IP", output)
+
+        # Cumulative byte budget across concatenated streams in one file fails closed.
+        part = self._encode_lzfse(b"B" * 40_000)
+        with patch.object(cbp, "LZFSE_OUTPUT_LIMIT", 64 * 1024):
+            code, output = self.scan(part + part)
+            self.assertNotEqual(code, 0)
+            self.assertIn("unreadable lzfse stream", output)
+
+        # Decompression bomb exceeding LZFSE_OUTPUT_LIMIT fails closed without OOM.
+        bomb = self._encode_lzfse(b"A" * 200_000)
+        with patch.object(cbp, "LZFSE_OUTPUT_LIMIT", 64 * 1024):
+            with self.assertRaises(cbp.LzfseDecodeError):
+                list(cbp.decode_lzfse_streams(bomb, limit=64 * 1024))
+            code, output = self.scan(bomb)
+            self.assertNotEqual(code, 0)
+            self.assertIn("unreadable lzfse stream", output)
+
+        # Runtime stdout cap also catches a deceptive/oversized decoder output stream.
+        with patch.object(cbp, "LZFSE_OUTPUT_LIMIT", 64 * 1024):
+            with self.assertRaises(cbp.LzfseDecodeError):
+                cbp._run_lzfse_decode(bomb, limit=64 * 1024)
+
+        # In-memory snapshot must decode `data` without reading `path` from disk.
+        texts = list(cbp.texts("/nonexistent/archive-member/Metadata.actionsdata", secret_stream))
+        self.assertTrue(any(self.address in t for t in texts))
+
+    def test_missing_compression_tool_fails_closed_on_lzfse_magic(self):
+        # Header-valid non-empty literal stream reaches Popen and fails closed when compression_tool is absent.
+        valid_literal = b"bvx-" + struct.pack("<I", 5) + b"hello" + b"bvx$"
+        with patch.object(cbp.subprocess, "Popen", side_effect=FileNotFoundError("compression_tool")):
+            code, output = self.scan(valid_literal)
+        self.assertNotEqual(code, 0)
+        self.assertIn("unreadable lzfse stream", output)
+
+
 if __name__ == "__main__":
     unittest.main()

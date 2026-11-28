@@ -57,11 +57,15 @@ nonisolated struct KBEntry: Codable, Identifiable, Hashable, Sendable {
     var meetingID: String?
     /// In the meetings list, a recording that stands for an imported meeting too: that meeting (`KBList.meetings`).
     var imported: KBImportedMeeting? = nil
+    /// A project's parent as it shows (#12927); nil at the top level and from a hub before it. Read only here.
+    var parent: String? = nil
+    /// A project's milestone flags (#12927); nil without any and from a hub before them. Read only here.
+    var milestones: [KBMilestone]? = nil
     /// A recording whose in-flight state the hub holds back, and why (#15214); nil when nothing is paused.
     var paused: RecordingPause? = nil
 
     enum CodingKeys: String, CodingKey {
-        case kind, id, name, importance, relevance, tags, updated, extra, source, paused
+        case kind, id, name, importance, relevance, tags, updated, extra, source, parent, milestones, paused
         case oneLine = "one_line"
         case recordingKind = "recording_kind"
         case meetingID = "meeting_id"
@@ -250,6 +254,67 @@ nonisolated struct KBDetailResponse: Decodable, Sendable {
     var detail: KBDetail
     var agents: [Session]?
     var matches: [KBMatch]?
+    /// A project's place in the project tree (#12927): parent, the way down, children, milestones. Nil from a hub
+    /// before it. The app reads it only; moving projects and editing milestones is on the web for now.
+    var tree: KBProjectTree?
+    /// A chat's Inbox items (#15356, docs/assistant/knowledge.md "A chat's Inbox items"); nil for none, and from a hub
+    /// before them.
+    var inbox: [KBInboxItem]?
+}
+
+/// A milestone flag on a project (#12927): a title, an optional target day (YYYY-MM-DD) and whether it was accepted
+/// (open, accepted, not_accepted). Every field is optional so a hub's later additions or a damaged flag never fail
+/// the list it is in.
+nonisolated struct KBMilestone: Codable, Hashable, Sendable {
+    var id: String?
+    var title: String?
+    var target: String?
+    var state: String?
+}
+
+/// A project as a tree names it: its parent, the ones above it, the ones under it.
+nonisolated struct KBProjectRef: Decodable, Hashable, Sendable {
+    var id: String
+    var name: String?
+    var status: String?
+    var children: Int?
+}
+
+/// `tree` of a project's detail (`GET /api/v1/kb/projects/{id}`, #12927).
+nonisolated struct KBProjectTree: Decodable, Sendable {
+    var parent: KBProjectRef?
+    var ancestors: [KBProjectRef]?
+    var children: [KBProjectRef]?
+    var milestones: [KBMilestone]?
+    var depth: Int?
+}
+
+/// An Inbox item a chat's page lists: what its row draws, and `messages`, the rows of the page's `recent` it holds, each
+/// by its day and its lines as written there (the hub matched them on time, sender and text).
+nonisolated struct KBInboxItem: Decodable, Identifiable, Hashable, Sendable {
+    var id: String
+    var title: String
+    var tier: String?
+    /// An open item's section (action, working, fyi, noise) as the Inbox has it.
+    var status: String?
+    var summary: String?
+    var preview: String?
+    var updatedAt: Date?
+    var doneAt: Date?
+    var messages: [Row]?
+
+    /// A row of the chat's recent messages: its day ("2026-10-30") and its lines, "- 10:15 name: text" and any indented
+    /// ones after it.
+    nonisolated struct Row: Decodable, Hashable, Sendable {
+        var day: String
+        var line: String
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, title, tier, status, summary, preview, messages
+        case updatedAt = "updated_at"
+        case doneAt = "done_at"
+    }
 }
 
 /// A change made in the app; tagging set here is kept over the automatic one.

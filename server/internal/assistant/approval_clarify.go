@@ -30,6 +30,7 @@ type preparedApproval struct {
 
 	clarified  bool
 	waiting    bool // its decision window ended unanswered and it was kept for the owner (keepWaiting)
+	ownerSpoke bool // an owner message arrived before startPreparedTimer armed the initial wait
 	release    chan struct{}
 	attempt    *clarifyAttempt
 	terminal   bool
@@ -61,6 +62,9 @@ type clarifyAttempt struct {
 	clientMsgID string
 	text        string
 	originKey   string
+	sending     bool
+	turnStarted bool
+	turnEnded   bool
 }
 
 type clarifyDelivery struct {
@@ -95,6 +99,9 @@ var (
 func (s *Service) waitPreparedCard(ctx context.Context, ix proto.Interaction, op approvalops.Operation) (approvalops.Outcome, error) {
 	if reservedCard(ix) || ix.Kind != proto.IxPermission || op.Apply == nil {
 		return approvalops.Outcome{}, errClarifyUnavailable
+	}
+	if proto.InternalMaintenanceApproval(ix) {
+		return s.waitOneShotPreparedCard(ctx, ix, op)
 	}
 	live := ix.MachineID != "" && ix.SessionID != ""
 	if live {
@@ -156,7 +163,7 @@ func (s *Service) awaitPrepared(ctx context.Context, p *pending, auxiliary bool)
 		s.fleet.mu.Lock()
 		r := p.prepared.result
 		s.fleet.mu.Unlock()
-		s.finishInteraction(p.ix.ID)
+		s.finishPending(p)
 		return r, nil
 	}
 	// Prefer an already published terminal result over a clarification release
@@ -209,9 +216,9 @@ func (s *Service) awaitPrepared(ctx context.Context, p *pending, auxiliary bool)
 // startPreparedTimer is called after the card is registered and announced.
 func (s *Service) startPreparedTimer(p *pending) {
 	s.fleet.mu.Lock()
-	defer s.fleet.mu.Unlock()
 	a := p.prepared
 	if a == nil || a.terminal || p.claimed || s.fleet.interactions[p.ix.ID] != p || a.paused || a.clarified {
+		s.fleet.mu.Unlock()
 		return
 	}
 	if persistentOwnerProposal(p.ix) {
@@ -220,12 +227,14 @@ func (s *Service) startPreparedTimer(p *pending) {
 			a.decisionTimer = nil
 		}
 		a.decisionGen++
+		s.fleet.mu.Unlock()
 		return
 	}
 	if !p.ix.ExpiresAt.IsZero() {
 		a.decisionDeadline = p.ix.ExpiresAt
 	}
 	if a.decisionDeadline.IsZero() {
+		s.fleet.mu.Unlock()
 		return
 	}
 	if a.decisionTimer != nil {
@@ -237,6 +246,12 @@ func (s *Service) startPreparedTimer(p *pending) {
 	a.decisionTimer = time.AfterFunc(wait, func() {
 		s.expirePreparedGen(p, gen)
 	})
+	detachNow := a.ownerSpoke && p.ix.Detachable && p.orphaned == nil && a.caller.Err() == nil
+	a.ownerSpoke = false
+	s.fleet.mu.Unlock()
+	if detachNow {
+		go s.detachPreparedGen(p, gen, false)
+	}
 }
 
 func (s *Service) expirePrepared(p *pending) {
@@ -289,6 +304,10 @@ func (s *Service) expirePreparedGen(p *pending, gen uint64) {
 // final outcome reaches the conversation through the approval journal, as after a question. It keeps nothing waiting
 // when the caller already went away, once the card has clarified (its own timing applies), superseded, or ended. False: expire.
 func (s *Service) keepWaitingGen(p *pending, gen uint64) bool {
+	return s.detachPreparedGen(p, gen, true)
+}
+
+func (s *Service) detachPreparedGen(p *pending, gen uint64, expireOnError bool) bool {
 	// A scheduled task's own conversation has nobody present to continue the turn
 	// between rounds. Let its detachable card expire at the initial window instead
 	// of retaining a needs-you session that makes every later round skip as busy.
@@ -315,31 +334,48 @@ func (s *Service) keepWaitingGen(p *pending, gen uint64) bool {
 		ix := p.ix
 		s.fleet.mu.Unlock()
 
-		err := s.approvalJournalStarted(context.Background(), ix)
-		deadline := time.Time{}
+		deadline := time.Now().Add(approvalWaitingWindow).UTC()
+		var waitingUntil time.Time
+		if ix.Detachable && ix.Resumable {
+			waitingUntil = deadline
+		}
+		err := s.startApprovalJournal(context.Background(), ix, waitingUntil)
 		if err == nil {
-			deadline = time.Now().Add(approvalWaitingWindow).UTC()
 			err = s.updateInteractionDeadline(context.Background(), ix.ID, ix.CreatedAt, deadline)
 			if err != nil {
 				// approvalJournalStarted succeeded, so balance its new entry before
 				// this card expires. A failed start already removed that entry.
-				s.approvalJournalAborted(context.Background(), ix.ID)
+				s.approvalJournalAborted(context.Background(), ix)
 			}
 		}
 		s.fleet.mu.Lock()
-		a.attempt = nil
-		close(attempt.done)
 		ended := a.terminal || p.claimed || s.fleet.interactions[p.ix.ID] != p
 		stale := a.decisionGen != gen
 		if err != nil || ended || stale || a.caller.Err() != nil {
-			s.fleet.mu.Unlock()
 			if err != nil {
-				s.logf("approval %s: could not keep the unanswered card waiting, it expires: %v", ix.ID, err)
+				a.attempt = nil
+				close(attempt.done)
+				s.fleet.mu.Unlock()
+				if expireOnError {
+					s.logf("approval %s: could not keep the unanswered card waiting, it expires: %v", ix.ID, err)
+				} else {
+					s.logf("approval %s: could not detach waiting card on owner message, keeping initial wait: %v", ix.ID, err)
+				}
 				return false
 			}
-			s.approvalJournalAborted(context.Background(), ix.ID)
+			// Keep a.attempt held while rolling back the unused journal entry so a
+			// waiting resolvePreparedAnswer cannot race approvalJournalApplying with
+			// approvalJournalAborted.
+			s.fleet.mu.Unlock()
+			s.approvalJournalAborted(context.Background(), ix)
+			s.fleet.mu.Lock()
+			a.attempt = nil
+			close(attempt.done)
+			s.fleet.mu.Unlock()
 			return ended || stale // ended/superseded meanwhile: nothing more to do; its caller gone: it expires as before
 		}
+		a.attempt = nil
+		close(attempt.done)
 		a.clarified, a.waiting = true, true
 		p.ix.ExpiresAt = deadline
 		a.decisionDeadline = p.ix.ExpiresAt
@@ -352,8 +388,91 @@ func (s *Service) keepWaitingGen(p *pending, gen uint64) bool {
 		a.decisionTimer = time.AfterFunc(approvalWaitingWindow, func() { s.expirePreparedGen(p, nextGen) })
 		s.fleet.mu.Unlock()
 		s.show(ix) // the apps keep the card, with its new deadline
+		s.armPendingReminder(ix)
 		close(a.release)
 		return true
+	}
+}
+
+// Both new questions and decisions claim this window under fleet.mu. A late
+// timer cannot extend a released command's deadline by accepting either one.
+func detachedWaitElapsedLocked(p *pending) bool {
+	a := p.prepared
+	return p.ix.Detachable && a.waiting && !a.paused && !a.decisionDeadline.After(time.Now())
+}
+
+type clarifyingCardKey struct{}
+
+func withClarifyingCard(ctx context.Context, id string) context.Context {
+	return context.WithValue(ctx, clarifyingCardKey{}, id)
+}
+
+func clarifyingCardOf(ctx context.Context) string {
+	id, _ := ctx.Value(clarifyingCardKey{}).(string)
+	return id
+}
+
+// detachPendingApprovalsOnOwnerMessage moves any unanswered Detachable approval
+// card for (machine, session) out of its initial synchronous wait into the
+// retained approvalWaitingWindow state so the blocked tool call releases the
+// turn promptly for the owner's new message. The card stays pending in the UI
+// and is never cancelled; non-detachable cards and scheduled conversations are
+// untouched. Runs asynchronously so owner sends never block or fail on storage.
+func (s *Service) detachPendingApprovalsOnOwnerMessage(machine, session string) {
+	if machine == "" || session == "" {
+		return
+	}
+	type candidate struct {
+		p         *pending
+		machineID string
+		gen       uint64
+	}
+	s.fleet.mu.Lock()
+	var candidates []candidate
+	for _, p := range s.fleet.interactions {
+		a := p.prepared
+		if a == nil || !p.ix.Detachable || p.ix.SessionID != session {
+			continue
+		}
+		if a.terminal || p.claimed || a.clarified || a.paused || p.orphaned != nil || a.caller.Err() != nil {
+			continue
+		}
+		candidates = append(candidates, candidate{p: p, machineID: p.ix.MachineID, gen: a.decisionGen})
+	}
+	s.fleet.mu.Unlock()
+	if len(candidates) == 0 {
+		return
+	}
+	var ready []candidate
+	for _, c := range candidates {
+		if c.machineID != machine && !s.sameMachine(c.machineID, machine) {
+			continue
+		}
+		if c.gen == 0 {
+			// Registration (record/announce) has not reached startPreparedTimer yet.
+			// Re-check under fleet.mu so startPreparedTimer detaches once recorded.
+			s.fleet.mu.Lock()
+			a := c.p.prepared
+			if a != nil && s.fleet.interactions[c.p.ix.ID] == c.p &&
+				!a.terminal && !c.p.claimed && !a.clarified && !a.paused &&
+				c.p.orphaned == nil && a.caller.Err() == nil {
+				if a.decisionGen == 0 {
+					a.ownerSpoke = true
+				} else {
+					c.gen = a.decisionGen
+					ready = append(ready, c)
+				}
+			}
+			s.fleet.mu.Unlock()
+			continue
+		}
+		ready = append(ready, c)
+	}
+	if len(ready) == 0 {
+		return
+	}
+	for _, c := range ready {
+		go s.detachPreparedGen(c.p, c.gen, false)
 	}
 }
 
@@ -457,7 +576,14 @@ func (s *Service) clarificationTurnStarted(machine, session string) {
 	defer s.fleet.mu.Unlock()
 	for _, p := range s.fleet.interactions {
 		a := p.prepared
-		if a == nil || !a.clarified || a.terminal || p.ix.MachineID != machine || p.ix.SessionID != session {
+		if a == nil || a.terminal || p.ix.MachineID != machine || p.ix.SessionID != session {
+			continue
+		}
+		if a.attempt != nil && a.attempt.sending && a.answeredSeq == a.acceptedSeq {
+			a.attempt.turnStarted = true
+			a.attempt.turnEnded = false
+		}
+		if !a.clarified || a.acceptedSeq == a.answeredSeq {
 			continue
 		}
 		a.turnActive = true
@@ -465,12 +591,18 @@ func (s *Service) clarificationTurnStarted(machine, session string) {
 	}
 }
 
-func (s *Service) clarificationTurnEnded(machine, session string) {
+func (s *Service) clarificationTurnEndedSync(machine, session string) []proto.Interaction {
 	s.fleet.mu.Lock()
 	var tells []proto.Interaction
 	for _, p := range s.fleet.interactions {
 		a := p.prepared
-		if a == nil || !a.clarified || a.terminal || p.ix.MachineID != machine || p.ix.SessionID != session || !a.turnActive {
+		if a == nil || a.terminal || p.ix.MachineID != machine || p.ix.SessionID != session {
+			continue
+		}
+		if a.attempt != nil && a.attempt.sending && a.attempt.turnStarted {
+			a.attempt.turnEnded = true
+		}
+		if !a.clarified || !a.turnActive {
 			continue
 		}
 		a.turnActive = false
@@ -480,7 +612,11 @@ func (s *Service) clarificationTurnEnded(machine, session string) {
 		}
 	}
 	s.fleet.mu.Unlock()
-	for _, ix := range tells {
+	return tells
+}
+
+func (s *Service) clarificationTurnEnded(machine, session string) {
+	for _, ix := range s.clarificationTurnEndedSync(machine, session) {
 		s.show(ix)
 	}
 }
@@ -509,6 +645,10 @@ func validateClarifyQuestion(text string) error {
 // state. Different questions submitted concurrently are processed in order;
 // only a replay of the same delivery is deduplicated.
 func (s *Service) clarify(ctx context.Context, id, text, clientMsgID string, origin *clarificationOrigin) error {
+	return s.clarifyAt(ctx, id, text, clientMsgID, origin, nil)
+}
+
+func (s *Service) clarifyAt(ctx context.Context, id, text, clientMsgID string, origin *clarificationOrigin, expected *time.Time) error {
 	if err := validateClarifyQuestion(text); err != nil {
 		return err
 	}
@@ -519,6 +659,10 @@ func (s *Service) clarify(ctx context.Context, id, text, clientMsgID string, ori
 
 	s.fleet.mu.Lock()
 	p := s.fleet.interactions[id]
+	if p != nil && expected != nil && !p.ix.CreatedAt.Equal(*expected) {
+		s.fleet.mu.Unlock()
+		return errClarifyUnavailable
+	}
 	if p == nil || p.prepared == nil || !p.ix.CanClarify {
 		s.fleet.mu.Unlock()
 		return errClarifyUnavailable
@@ -544,10 +688,20 @@ func (s *Service) clarify(ctx context.Context, id, text, clientMsgID string, ori
 			}
 			return running.err
 		}
-		return s.clarify(ctx, id, text, clientMsgID, origin)
+		return s.clarifyAt(ctx, id, text, clientMsgID, origin, expected)
+	}
+	if detachedWaitElapsedLocked(p) {
+		gen := a.decisionGen
+		s.fleet.mu.Unlock()
+		s.expirePreparedGen(p, gen)
+		return errClarifyUnavailable
 	}
 	attempt := &clarifyAttempt{done: make(chan struct{}), first: !a.clarified,
 		clientMsgID: clientMsgID, text: text, originKey: originKey}
+	var waitingUntil time.Time
+	if p.ix.Detachable && a.waiting && a.questionSeq == 0 {
+		waitingUntil = a.decisionDeadline
+	}
 	a.attempt = attempt
 	s.fleet.mu.Unlock()
 
@@ -564,7 +718,7 @@ func (s *Service) clarify(ctx context.Context, id, text, clientMsgID string, ori
 		questionParams[assistantwire.ClarificationProofParam] = token
 		questionParams[assistantwire.ClarificationInteractionParam] = id
 	}
-	params, err := s.SendParams(ctx, SendParams{MachineID: p.ix.MachineID, SessionID: p.ix.SessionID, Params: questionParams, VerbatimText: true})
+	params, err := s.SendParams(withClarifyingCard(ctx, id), SendParams{MachineID: p.ix.MachineID, SessionID: p.ix.SessionID, Params: questionParams, VerbatimText: true})
 	if err != nil {
 		return s.finishClarifyAttempt(p, attempt, nil, err)
 	}
@@ -577,14 +731,27 @@ func (s *Service) clarify(ctx context.Context, id, text, clientMsgID string, ori
 			ReplyTo: origin.MessageID, Started: time.Now().UTC(), Base: s.lastSeq(ctx, p.ix.MachineID, p.ix.SessionID),
 			MsgIDs: []string{clientMsgID}, Ext: map[string]string{"clarify": id, "chat": origin.ChatID}}
 	}
+	// A clarification needs process-local turn and pause state. Clear the wait
+	// marker before sending it, and restore it after a definite rejection.
+	if !waitingUntil.IsZero() {
+		if err := s.approvalJournalStarted(ctx, p.ix); err != nil {
+			return s.finishClarifyAttempt(p, attempt, nil, err)
+		}
+	}
 	s.UserSpoke(ctx, SessionRef{MachineID: p.ix.MachineID, SessionID: p.ix.SessionID})
 	if p.ix.Private {
 		// The owner's question starts a new turn after the original Just me turn
 		// may have ended. Mark that answer turn before dispatch, not at its end.
 		s.justMeSent(p.ix.MachineID, p.ix.SessionID)
 	}
+	s.fleet.mu.Lock()
+	attempt.sending = true
+	s.fleet.mu.Unlock()
 	err = s.sendOnce(ctx, p.ix.MachineID, params)
 	if err != nil && !relayInDoubt(err) {
+		if !waitingUntil.IsZero() {
+			err = errors.Join(err, s.startApprovalJournal(context.Background(), p.ix, waitingUntil))
+		}
 		return s.finishClarifyAttempt(p, attempt, nil, err)
 	}
 	if err != nil {
@@ -606,10 +773,27 @@ func (s *Service) finishClarifyAttempt(p *pending, attempt *clarifyAttempt, run 
 	var tell proto.Interaction
 	tellDeadline := false
 	if err == nil && !a.terminal && !p.claimed && s.fleet.interactions[p.ix.ID] == p {
+		prevAccepted := a.acceptedSeq
 		release = attempt.first && !a.clarified
 		a.clarified = true
 		a.questionSeq++
 		a.acceptedSeq = a.questionSeq
+		prev := s.fleet.prev[p.ix.MachineID][p.ix.SessionID]
+		working := prev.Status == proto.StatusWorking || prev.WorkingBeforeUnknown
+		if attempt.turnEnded {
+			a.turnActive = false
+			a.answeredSeq = max(a.answeredSeq, a.acceptedSeq)
+		} else if attempt.turnStarted {
+			a.turnActive = true
+			a.turnSeq = a.acceptedSeq
+		} else if working && !a.turnActive && a.answeredSeq == prevAccepted {
+			// Headless assistant sessions remain StatusWorking through waitPreparedCard/waitDetachedCard
+			// and either steer the owner's question into the running turn (Codex) or coalesce the
+			// tool-turn end and answer-turn start inside notifySessionsSoon (Claude), emitting only
+			// StatusWorking -> StatusDone with no intermediate stopped edge.
+			a.turnActive = true
+			a.turnSeq = a.acceptedSeq
+		}
 		a.deliveries[attempt.clientMsgID] = clarifyDelivery{text: attempt.text, originKey: attempt.originKey}
 		if run != nil {
 			if a.channelRuns == nil {
@@ -637,13 +821,16 @@ func (s *Service) finishClarifyAttempt(p *pending, attempt *clarifyAttempt, run 
 		s.show(tell)
 	}
 	if finalErr != nil && attempt.first {
-		s.approvalJournalAborted(context.Background(), p.ix.ID)
+		s.approvalJournalAborted(context.Background(), p.ix)
 	}
 	if run != nil && finalErr == nil {
 		s.startChannelRun(run)
 	}
 	if release {
 		close(a.release)
+	}
+	if finalErr == nil {
+		s.detachPendingApprovalsOnOwnerMessage(p.ix.MachineID, p.ix.SessionID)
 	}
 	return finalErr
 }
@@ -666,10 +853,15 @@ func (s *Service) clarificationChannelEnded(id, runID string) {
 	}
 }
 
+type approvalEndHandledKey struct{}
+
 // approvalAnswerTurnStarted/Ended are small indirections used by Service's turn
 // events and tests.
 func (s *Service) approvalAnswerTurnStarted(r SessionRef) {
 	s.clarificationTurnStarted(r.MachineID, r.SessionID)
+}
+func (s *Service) approvalAnswerTurnEndedSync(r SessionRef) []proto.Interaction {
+	return s.clarificationTurnEndedSync(r.MachineID, r.SessionID)
 }
 func (s *Service) approvalAnswerTurnEnded(r SessionRef) {
 	s.clarificationTurnEnded(r.MachineID, r.SessionID)
@@ -678,12 +870,16 @@ func (s *Service) approvalAnswerTurnEnded(r SessionRef) {
 // approvalBook is defined here; its durable journal implementation is in
 // approval_journal.go.
 type approvalBook struct {
-	mu         sync.Mutex
-	loaded     bool
-	list       []approvalJournalEntry
-	handled    map[string]bool
-	delivering bool
-	again      bool
-	retry      bool
-	retryDelay time.Duration // 0: approvalResultRetryDelay; tests shorten it
+	mu            sync.Mutex
+	loaded        bool
+	list          []approvalJournalEntry
+	handled       map[string]bool
+	delivering    bool
+	again         bool
+	retry         bool
+	retryDelay    time.Duration // 0: approvalResultRetryDelay; tests shorten it
+	recovering    bool
+	recoveryDone  bool
+	recoveryRetry bool
+	recoverySeq   uint64
 }

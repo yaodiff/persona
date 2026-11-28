@@ -1,6 +1,7 @@
 {
   "waiting_idle": "更新待ち",
   "transferring": "更新を準備中",
+  "draining": "再起動待ち",
   "restarting": "更新後の再起動中",
   "confirming": "接続を確認中",
   "updating": "更新中",

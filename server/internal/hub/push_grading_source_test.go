@@ -185,7 +185,7 @@ func TestPushGradingHeldPushSourcesPersist(t *testing.T) {
 				}
 			}
 
-			restarted := newPusher(t.TempDir(), store, t.Logf)
+			restarted := restartPusher(t, h, store)
 			assert("after restart", restarted.heldPushesView("", 0))
 		})
 	}

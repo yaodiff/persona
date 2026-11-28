@@ -89,6 +89,8 @@ extension AppModel {
     /// initiated; InboxStore still rolls it back if that write fails. Returns whether this message carried a filing intent.
     func completeInboxHandOff(_ key: SessionKey, _ msg: PendingMessage) -> Bool {
         guard var handOff = msg.inboxHandOff else { return false }
+        // A delivery callback can run while another hub is on screen, or after the app restarts.
+        guard let group = handOff.filingGroup(in: registry, destination: key.group), let client = api(group) else { return true }
         if let i = chat(key).pending.firstIndex(where: { $0.id == msg.id }) {
             if chat(key).pending[i].inboxHandOff?.filed == true { return true }
             handOff.filed = true
@@ -100,7 +102,16 @@ extension AppModel {
             return true
         }
         #endif
-        InboxStore.shared.setDone(id: handOff.itemID, manager: handOff.manager, done: true)
+        if group == hub?.group {
+            InboxStore.shared.setDone(id: handOff.itemID, manager: handOff.manager, done: true, api: client.manager(handOff.manager))
+        } else {
+            let owner = client.manager(handOff.manager)
+            let id = handOff.itemID
+            Task {
+                do { try await owner.setInboxDone(id, true) }
+                catch { if hub?.group == group { show(error) } }
+            }
+        }
         return true
     }
 
@@ -310,5 +321,14 @@ nonisolated enum OutboxWait {
         let start = since ?? now
         if now.timeIntervalSince(start) >= connectedLimit { return Next(outcome: .failed, since: nil, gaveUp: true) }
         return Next(outcome: .waiting, since: start)
+    }
+}
+
+extension PendingMessage.InboxHandOff {
+    func filingGroup(in registry: HubRegistry, destination: String) -> String? {
+        if let sourcePairing { return registry.hubs.first { $0.id == sourcePairing }?.group }
+        if let sourceGroup { return sourceGroup }
+        // Receipts from before the source was stored can identify it only in a single-hub installation.
+        return registry.groups == [destination] ? destination : nil
     }
 }

@@ -5,13 +5,10 @@
 
 import { useEffect, useSyncExternalStore } from "react";
 import { api } from "./api";
+import { UNFILED, type Filed } from "./inbox-folder-filter";
 import { itemHeaders } from "./manager-choice";
 
-/** The folder filter's value for items in no folder (a real path never starts with "/"). */
-export const UNFILED = "/";
-
-/** The parts of an item the folder code reads. */
-type Filed = { folder?: string; done_at?: string | null };
+export { inFolderFilter, UNFILED } from "./inbox-folder-filter";
 
 const MAX_DEPTH = 6;
 const MAX_SEGMENT = 40;
@@ -29,14 +26,6 @@ export function normalizeFolder(s: string): string {
     out.push(seg);
   }
   return out.join("/");
-}
-
-/** Whether an item is in the folder filter: under the folder (or in it), or in none for UNFILED; "" is every item. */
-export function inFolderFilter(it: Filed, folder: string): boolean {
-  if (!folder) return true;
-  const path = it.folder ?? "";
-  if (folder === UNFILED) return !path;
-  return path === folder || path.startsWith(`${folder}/`);
 }
 
 /** A folder's name: its last segment. */

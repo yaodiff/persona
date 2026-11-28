@@ -8,7 +8,9 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/sdk/go/wire"
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/extension"
+	"github.com/nwverse/persona/server/internal/extwire"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
@@ -41,8 +43,8 @@ func (ps *extensions) completeAuth(ctx context.Context, link string) (wire.AuthR
 			continue
 		}
 		cctx, cancel := context.WithTimeout(ctx, authRelayTimeout)
-		var res wire.AuthRelayResult
-		err := hp.proc.Call(cctx, "auth_relay.complete", wire.AuthRelayCompleteParams{Contribution: r.Contribution, URL: link}, &res)
+		res, err := buswire.Call(cctx, hp.proc, extwire.AuthRelayCompleteMethod,
+			wire.AuthRelayCompleteParams{Contribution: r.Contribution, URL: link})
 		cancel()
 		if err != nil {
 			var re *rpc.Error

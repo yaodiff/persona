@@ -113,6 +113,8 @@ export interface Program {
   ui?: Record<string, Page | ComponentPage>;
   /** Shortcuts by contribution id: shortcut.run goes to them (docs/extensions/extensions.md "System-level placements"). */
   shortcuts?: Record<string, (req: ShortcutRequest) => wire.ShortcutResult | void | Promise<wire.ShortcutResult | void>>;
+  /** Collect plain text for the owner's local date, keyed by manifest contribution ID. */
+  routineFacts?: Record<string, (req: wire.RoutineFactsParams) => wire.RoutineFactsResult | Promise<wire.RoutineFactsResult>>;
   /** If set, served on the hub's socket (runtime.http in the manifest) by main(). */
   fetch?(req: Request): Response | Promise<Response>;
 }
@@ -415,6 +417,12 @@ export function connect(prog: Program, write: Write) {
       const run = prog.shortcuts[params?.contribution];
       if (!run) throw noContribution(params?.contribution);
       return (await run({ ...params, values: params.values ?? {}, hub })) ?? {};
+    }
+    if (ns === "routine_facts" && prog.routineFacts) {
+      if (rest !== "collect") throw unknownMethod(method);
+      const id = params?.contribution;
+      if (typeof id !== "string" || !Object.hasOwn(prog.routineFacts, id)) throw noContribution(id);
+      return prog.routineFacts[id](params);
     }
     throw unknownMethod(method);
   }

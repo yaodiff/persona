@@ -102,10 +102,10 @@
     <string name="machines_engine">エンジン</string>
     <string name="machines_reconnecting">再接続中…</string>
     <string name="machines_reconnect">再接続</string>
-    <string name="machines_engine_note">選択したエンジンのセッションのみ表示します。</string>
+    <string name="machines_engine_note">このコンピューターで使うエンジンのセッションのみ表示します。</string>
     <string name="machines_engine_note_none">デスクトップアプリのセッションを表示します。スマートフォンからのセッションの開始や再開はできません。</string>
     <string name="machines_botmux">botmux のセッションも表示</string>
-    <string name="machines_botmux_note">このコンピューターに botmux がある場合、botmux のセッションを選択したエンジンのセッションと一緒に表示します。オフにすると表示せず、botmux も実行しません。</string>
+    <string name="machines_botmux_note">このコンピューターに botmux がある場合、botmux のセッションをこのコンピューターで使うエンジンのセッションと一緒に表示します。オフにすると表示せず、botmux も実行しません。</string>
     <string name="machines_notice_botmux_failed">botmux の設定を保存できませんでした：%1$s</string>
     <string name="machines_local_note">ハブのマシンです。ノードを直接実行します。</string>
     <string name="machines_ssh_note">ハブはssh %1$sで接続します。</string>

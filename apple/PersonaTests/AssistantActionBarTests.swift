@@ -66,15 +66,24 @@ struct AssistantActionBarTests {
 
     private func ids(_ rows: [AssistantEntries.Row]) -> [String] { rows.map(\.id) }
 
-    /// Needs You and In Progress always; Finished only while it lists something, or while its tray is open (#10922).
-    @Test func finishedIsTheThirdEntryOnlyWhileItListsSomething() {
+    /// Needs You is always visible on the bar; Finished is not persistent on the collapsed bar (#16165) and appears on
+    /// the bar only while its tray is open, reachable from any open tray's header when 24-hour finished rows exist.
+    @Test func finishedIsNotPersistentOnCollapsedBar() {
         #expect(ActionTray.allCases == [.needsYou, .running, .finished])
         let empty = ActionTrayContent(split([]))
         #expect(empty.entries(open: nil) == [.needsYou, .running])
         #expect(empty.entries(open: .running) == [.needsYou, .running])
         #expect(empty.entries(open: .finished) == [.needsYou, .running, .finished])
+        #expect(!empty.offersFinishedLink(for: .needsYou))
+        #expect(!empty.offersFinishedLink(for: .running))
         let finished = ActionTrayContent(split([todo("done", done: true)]))
-        #expect(finished.entries(open: nil) == [.needsYou, .running, .finished])
+        #expect(finished.entries(open: nil) == [.needsYou, .running])
+        #expect(finished.entries(open: .needsYou) == [.needsYou, .running])
+        #expect(finished.entries(open: .running) == [.needsYou, .running])
+        #expect(finished.entries(open: .finished) == [.needsYou, .running, .finished])
+        #expect(finished.offersFinishedLink(for: .needsYou))
+        #expect(finished.offersFinishedLink(for: .running))
+        #expect(!finished.offersFinishedLink(for: .finished))
     }
 
     /// A task waiting for a decision or review is only in Needs You; once answered it is back in In Progress.

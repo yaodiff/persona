@@ -74,6 +74,32 @@ test('lists the recent sessions in the store as offline DSH rows, titled from DS
   assert.equal(rows.find((r) => r.session_id === 'session-b').title, 'app', 'a cache record of another log is not used')
 })
 
+test('offline turn outlines skip marker-only replies on the first inventory', async (t) => {
+  const marker = 'BOTMUX_NOTHING_TO_SEND'
+  const words = `  The guide mentions ${marker}.\n  ${'detail '.repeat(45)}`
+  const cases = [
+    ['prior', [words, marker, `  ${marker}  `], words],
+    ['mixed', [`${words}\n${marker}`], words],
+    ['empty', [words, '', marker], undefined],
+    ['missing', [words, undefined, marker], undefined],
+  ]
+  const cache = {}
+  for (const [id, responses] of cases) {
+    cache[`${HOME}/storages/session_projcache/sessions/${id}.json`] = { record: {
+      identity: { createdAt: 1000, cwd: '/w/app' },
+      rows: { turnOutline: { val: { turns: responses.map(response => ({ response })) } } },
+    } }
+  }
+  const { n, st, rt } = await setup(t, { json: cache })
+  for (const [id] of cases) st.add(id, {})
+  rt.start()
+  await n.ready
+  const { sessions } = await until('disk inventory', () => n.last('runtime.sessions'))
+  for (const [id, , expected] of cases) {
+    assert.equal(sessions.find(row => row.session_id === id).last_text, expected, id)
+  }
+})
+
 test('pages a session from its log, read once while the file does not change', async (t) => {
   const { n, st, rt } = await setup(t)
   st.add('session-p', {}, [text(0, 'user', 'one'), text(1, 'assistant', 'a1'), text(2, 'user', 'two'), text(3, 'assistant', 'a2')])
@@ -88,6 +114,29 @@ test('pages a session from its log, read once while the file does not change', a
   assert.deepEqual(after.items.map((i) => i.text), ['two', 'a2'])
   assert.equal(st.reads, 1)
   await assert.rejects(n.peer.call('session.items', { session_id: 'session-none', limit: 1 }), /没有会话/)
+})
+
+test('session.items preserves full_size and avoids double-truncation on long tool outputs and messages', async (t) => {
+  const { n, st, rt } = await setup(t)
+  const longOutput = 'x'.repeat(10_000)
+  const longReply = 'y'.repeat(30_000)
+  st.add('session-long', {}, [
+    text(0, 'user', 'run it'),
+    { type: 'tool/result', seq: 1, time: 0, surfaceOp: 'append', data: { message: { toolCallId: 'c1', content: [{ type: 'text', text: longOutput }], isError: false } } },
+    text(2, 'assistant', longReply),
+  ])
+  rt.start()
+  await n.ready
+  await until('listed', () => n.last('runtime.sessions'))
+  const res = await n.peer.call('session.items', { session_id: 'session-long' })
+  const toolItem = res.items.find((i) => i.kind === 'tool_result')
+  const replyItem = res.items.find((i) => i.role === 'assistant' && i.kind === 'text')
+  assert.equal(toolItem.full_size, longOutput.length)
+  assert.equal((toolItem.text.match(/已截断/g) ?? []).length, 1)
+  assert.ok(toolItem.text.endsWith(`共 ${longOutput.length} 字节）`))
+  assert.equal(replyItem.full_size, longReply.length)
+  assert.equal((replyItem.text.match(/已截断/g) ?? []).length, 1)
+  assert.ok(replyItem.text.endsWith(`共 ${longReply.length} 字节）`))
 })
 
 test('a send wakes DSH once and is handed over, nothing delivered here', async (t) => {

@@ -11,6 +11,7 @@ import type { SearchAddon as XSearch } from "@xterm/addon-search";
 import { api, errorText, isAbort, sessionPath } from "../../../lib/api";
 import { openLink } from "../../../lib/links";
 import { getSession, getState, isOpen, onHubEvent, send } from "../../../lib/store";
+import { sessionEngineName } from "../../../lib/engine-names";
 import { passesToApp } from "../../../lib/shortcuts";
 import {
   ANSWER_LIMIT_MS,
@@ -23,6 +24,7 @@ import {
   decodeBase64,
   encodeKey,
   historyAnchor,
+  historyEnd,
   isStale,
   keyDecision,
   keyNameForBytes,
@@ -34,6 +36,8 @@ import {
   modifiersPressed,
   parseTerminalPush,
   pasteBytes,
+  pollDelay,
+  POLL_MS,
   typedWithModifiers,
   usableGrid,
   withModifiers,
@@ -118,6 +122,10 @@ export interface FeedView {
   hasOlder: boolean;
   /** The page reached the start of what herdr keeps (about 1000 lines). */
   atLimit: boolean;
+  /** The page reached the start of what the computer keeps, and older output was let go (#17048). */
+  dropped: boolean;
+  /** Polling, the computer lets the screen be read several times a second while it changes (`refresh_ms`, #17048). */
+  pollFast: boolean;
   /** "Wrap": long rows fold at the panel's width while watching (remembered). */
   wrap: boolean;
   fontSize: number;
@@ -151,7 +159,6 @@ export interface ScreenRows {
 
 const TICK_MS = 250;
 const RESIZE_MS = 250;
-const POLL_MS = 1000;
 const WHEEL_MS = 50;
 const LINK_DOWN = t("session-terminal-feed.hub_unreachable");
 const WATCH_KEY = "persona.terminal.watch";
@@ -223,6 +230,8 @@ export class TerminalFeed {
   private focusedOnce = false;
   /** The last screen read while polling (its rows, when the page draws them). */
   private pollText = "";
+  /** When a poll last found the screen changed: the node's quicker pace holds for a while after (pollDelay). */
+  private pollChangedAt = 0;
   /** The plain lines of `older` (what the next page is located by). */
   private olderPlain: string[] = [];
   /** Frames that arrived while history is read, applied on "Back to latest". */
@@ -303,6 +312,8 @@ export class TerminalFeed {
       loadingOlder: false,
       hasOlder: true,
       atLimit: false,
+      dropped: false,
+      pollFast: false,
       wrap: localStorage.getItem(WRAP_KEY) === "1",
       fontSize: savedFontSize(),
       fontFamily: "",
@@ -456,7 +467,7 @@ export class TerminalFeed {
   dispose() {
     if (this.disposed) return;
     this.disposed = true;
-    if (this.everSubscribed && this.view.mode === "stream") send({ type: "terminal_unsubscribe", ...this.ids() });
+    if (this.everSubscribed) send({ type: "terminal_unsubscribe", ...this.ids() });
     this.polling?.abort();
     clearTimeout(this.gridTimer);
     clearTimeout(this.wheelTimer);
@@ -583,6 +594,12 @@ export class TerminalFeed {
     return getState().machines.find((m) => m.id === this.mid);
   }
 
+  /** The engine the session's terminal is in, by name ("herdr", "Orca"): the words for a session that isn't running say
+   *  where (#17053). A pane address names its own host. */
+  private engineName(): string {
+    return sessionEngineName(getSession(this.mid, this.sid), this.machine(), this.sid.startsWith("pane:") ? this.sid.slice(5) : undefined);
+  }
+
   /** Why the terminal hasn't come: its computer is offline, or isn't answering. */
   private notAnswering() {
     const m = this.machine();
@@ -591,7 +608,11 @@ export class TerminalFeed {
   }
 
   private onHello = () => {
-    if (this.view.mode !== "stream" || this.disposed) return;
+    if (this.disposed) return;
+    if (this.view.mode !== "stream") {
+      if (this.everSubscribed && this.live()) send({ type: "terminal_subscribe", ...this.ids() });
+      return;
+    }
     this.subscribed = false;
     this.linkLost();
     if (this.live()) this.subscribeNow(true);
@@ -671,7 +692,7 @@ export class TerminalFeed {
       // next try is answered ("View only" between tries read as a mirror that had given up, #6327).
       this.patch({ offline, loaded: true, control: taking ? (offline ? "off" : "starting") : c });
       // An offline computer in the page's words, whatever the hub's error says (it may name the machine by id).
-      this.failed(offline ? t("session-terminal-feed.not_in_herdr") : this.machine()?.online === false ? this.notAnswering() : error);
+      this.failed(offline ? t("session-terminal-feed.not_running_in", { engine: this.engineName() }) : this.machine()?.online === false ? this.notAnswering() : error);
     }
     this.inputMode();
   }
@@ -1443,14 +1464,15 @@ export class TerminalFeed {
     this.patch({ loadingOlder: true, paused: true });
     const { anchor, loaded } = historyAnchor([...this.olderPlain, ...this.screenPlain()]);
     try {
-      const r = await api<{ text?: string; has_more?: boolean; at_limit?: boolean }>(`${sessionPath(this.mid, this.sid)}/screen/before`, {
+      const r = await api<{ text?: string; has_more?: boolean; at_limit?: boolean; dropped?: boolean }>(`${sessionPath(this.mid, this.sid)}/screen/before`, {
         method: "POST",
         json: { anchor, lines: HISTORY_PAGE, loaded, format: "ansi" },
       });
       if (this.disposed || !this.view.paused) return;
       const rows = r.text ? parseAnsiRows(r.text) : [];
       if (rows.length) this.olderPlain = [...rows.map(plainRow), ...this.olderPlain];
-      this.patch({ older: rows.length ? [...rows, ...this.view.older] : this.view.older, hasOlder: Boolean(r.has_more), atLimit: Boolean(r.at_limit) });
+      const end = historyEnd(r);
+      this.patch({ older: rows.length ? [...rows, ...this.view.older] : this.view.older, hasOlder: end === "more", atLimit: end === "limit", dropped: end === "dropped" });
     } catch (e) {
       if (!this.disposed && !isAbort(e)) toast(t("session-terminal-feed.older_failed", { error: errorText(e) }), "error");
     } finally {
@@ -1467,7 +1489,7 @@ export class TerminalFeed {
     this.olderPlain = [];
     this.recount();
     const wasPaused = this.view.paused;
-    this.patch({ older: [], hasOlder: true, atLimit: false, paused: false, loadingOlder: false });
+    this.patch({ older: [], hasOlder: true, atLimit: false, dropped: false, paused: false, loadingOlder: false });
     if (!wasPaused) return;
     if (this.view.mode === "stream") {
       const held = this.held, overflow = this.heldOverflow;
@@ -1566,11 +1588,13 @@ export class TerminalFeed {
     this.polling = ctrl;
     const rows = this.grid?.rows ?? this.term?.rows ?? 40;
     try {
-      const r = await api<{ text?: string; status?: string }>(`${sessionPath(this.mid, this.sid)}/screen?format=ansi&lines=${rows}`, { signal: ctrl.signal });
+      const r = await api<{ text?: string; status?: string; refresh_ms?: number }>(`${sessionPath(this.mid, this.sid)}/screen?format=ansi&lines=${rows}`, { signal: ctrl.signal });
       if (this.disposed || ctrl.signal.aborted || this.view.mode !== "poll" || !this.term) return;
       if (this.grid) this.resize(this.grid.cols, this.grid.rows);
       const text = r.text ?? "";
+      const now = Date.now();
       if (text !== this.lastPoll) {
+        if (this.lastPoll !== null) this.pollChangedAt = now;
         this.lastPoll = text;
         this.pollText = text;
         this.term.reset();
@@ -1578,10 +1602,10 @@ export class TerminalFeed {
         this.term.write("\x1b[?25l" + text.replace(/\r?\n/g, "\r\n").replace(/(\r\n)+$/, ""));
         this.screenChanged();
       }
-      const now = Date.now();
       this.healthy(now);
-      this.nextTry = now + POLL_MS;
-      this.patch({ offline: r.status === "offline", loaded: true });
+      // The node's quicker pace only while someone can see the panel: a hidden page reads once a second.
+      this.nextTry = now + pollDelay(document.hidden ? undefined : r.refresh_ms, this.pollChangedAt, now);
+      this.patch({ offline: r.status === "offline", loaded: true, pollFast: pollDelay(r.refresh_ms, now, now) < POLL_MS });
     } catch (e) {
       if (isAbort(e) || this.disposed) return;
       this.failed(errorText(e));

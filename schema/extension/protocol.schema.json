@@ -533,6 +533,81 @@
       },
       "required": ["status"]
     },
+    "TextLookupStateParams": {
+      "description": "text_lookup.state's parameters: which contribution to ask for the words the user saved and whether saved words are underlined.",
+      "type": "object",
+      "properties": {"contribution": {"type": "string"}},
+      "required": ["contribution"]
+    },
+    "TextLookupStateResult": {
+      "description": "What text_lookup.state answers. words is capped by the manager at 5000.",
+      "type": "object",
+      "properties": {
+        "underline_saved": {"type": "boolean"},
+        "words": {"type": "array", "maxItems": 5000, "items": {"type": "string", "maxLength": 64}}
+      },
+      "required": ["underline_saved"]
+    },
+    "TextLookupLookupParams": {
+      "description": "text_lookup.lookup's parameters: the word the user tapped, an optional sentence around it, the word's language and the language of the app.",
+      "type": "object",
+      "properties": {
+        "contribution": {"type": "string"},
+        "word": {"type": "string", "minLength": 1, "maxLength": 64},
+        "context": {"type": "string", "maxLength": 500},
+        "lang": {"type": "string"},
+        "ui_lang": {"type": "string"}
+      },
+      "required": ["contribution", "word", "lang", "ui_lang"]
+    },
+    "TextLookupSense": {
+      "description": "One meaning of a looked-up word.",
+      "type": "object",
+      "properties": {
+        "pos": {"type": "string", "maxLength": 40},
+        "text": {"type": "string", "maxLength": 500}
+      },
+      "required": ["text"]
+    },
+    "TextLookupLookupResult": {
+      "description": "What text_lookup.lookup answers: found is false when the dictionary has no entry.",
+      "type": "object",
+      "properties": {
+        "found": {"type": "boolean"},
+        "word": {"type": "string", "maxLength": 64},
+        "lemma": {"type": "string", "maxLength": 64},
+        "phonetic": {"type": "string", "maxLength": 80},
+        "senses": {"type": "array", "maxItems": 20, "items": {"$ref": "#/$defs/TextLookupSense"}},
+        "saved": {"type": "boolean"}
+      },
+      "required": ["found", "word", "saved"]
+    },
+    "TextLookupSaveParams": {
+      "description": "text_lookup.save's parameters: the word to remember, an optional sentence around it and where the user saved it from.",
+      "type": "object",
+      "properties": {
+        "contribution": {"type": "string"},
+        "word": {"type": "string", "minLength": 1, "maxLength": 64},
+        "context": {"type": "string", "maxLength": 500},
+        "source": {"type": "string", "maxLength": 200}
+      },
+      "required": ["contribution", "word"]
+    },
+    "TextLookupRemoveParams": {
+      "description": "text_lookup.remove's parameters: the saved word to forget.",
+      "type": "object",
+      "properties": {
+        "contribution": {"type": "string"},
+        "word": {"type": "string", "minLength": 1, "maxLength": 64}
+      },
+      "required": ["contribution", "word"]
+    },
+    "TextLookupSavedResult": {
+      "description": "What text_lookup.save and text_lookup.remove answer: whether the word is saved afterwards.",
+      "type": "object",
+      "properties": {"saved": {"type": "boolean"}},
+      "required": ["saved"]
+    },
     "SecretPurpose": {
       "description": "What a secret value is resolved for: kind extension (an extension's secret, id its id), launcher (a launcher's or model provider's key, id its name, machine the computer it goes to) or agent_run (handed to one Agent run after the user approved it on the phone, id the variable's name, machine and session the Agent's).",
       "type": "object",
@@ -568,7 +643,8 @@
       "properties": {
         "contribution": {"type": "string"},
         "reference": {"type": "string", "maxLength": 1024},
-        "purpose": {"$ref": "#/$defs/SecretPurpose"}
+        "purpose": {"$ref": "#/$defs/SecretPurpose"},
+        "quiet": {"type": "boolean", "description": "The manager still holds an earlier value of the reference and uses it if this fails: the provider must not ask the user (no authorization prompt), and answers not_signed_in at once when it cannot answer without them."}
       },
       "required": ["contribution", "reference", "purpose"]
     },
@@ -592,15 +668,21 @@
           "type": "string",
           "enum": [
             "STRING",
-            "CONCEALED"
+            "CONCEALED",
+            "OTP"
           ]
+        },
+        "delete": {
+          "type": "boolean"
+        },
+        "keep_value": {
+          "type": "boolean"
         }
       },
       "required": [
-        "name",
-        "type"
+        "name"
       ],
-      "description": "A public field name/type; never a value or source path."
+      "description": "A public field name/type or edit action (delete, keep_value); never a value or source path."
     },
     "SecretStoreTarget": {
       "type": "object",

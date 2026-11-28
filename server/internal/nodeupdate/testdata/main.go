@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strconv"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/nodeupdate"
@@ -80,10 +81,20 @@ func main() {
 	// As the resident node does before runResident: after an in-place exec the update watchdog the previous image
 	// started is this one's child.
 	osproc.ReapInherited()
-	restart := make(chan struct{})
+	restart := make(chan string, 1)
 	// `--supervised` among the arguments stands for a supervisor other than systemd or launchd, as the real node's
 	// `node --attach --supervised` does.
-	m := nodeupdate.New(version, func(string) { close(restart) }, nodeupdate.Options{Supervised: slices.Contains(os.Args[1:], "--supervised")})
+	m := nodeupdate.New(version, func(id string) {
+		select {
+		case restart <- id:
+		default:
+		}
+	}, nodeupdate.Options{Supervised: slices.Contains(os.Args[1:], "--supervised")})
+	if raw := os.Getenv("FIXTURE_TIMEOUT_MS"); raw != "" {
+		if ms, err := strconv.Atoi(raw); err == nil && ms > 0 {
+			m.SetTimeoutForTest(time.Duration(ms) * time.Millisecond)
+		}
+	}
 	defer m.Close()
 	if m.RestartRequired() {
 		mustExec(m.Executable())
@@ -97,7 +108,24 @@ func main() {
 		panic(err)
 	}
 	_ = os.WriteFile(os.Getenv("FIXTURE_PROOF"), proof, 0600)
-	go func() { <-restart; _ = ln.Close() }()
+	restartingID := make(chan string, 1)
+	go func() {
+		id := <-restart
+		if gate := os.Getenv("FIXTURE_DRAIN_GATE"); gate != "" {
+			_ = m.BeginDrain(id)
+			_ = os.WriteFile(gate+".draining", []byte(id), 0600)
+			deadline := time.Now().Add(15 * time.Second)
+			for time.Now().Before(deadline) {
+				if _, err := os.Stat(gate); err == nil {
+					break
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			_ = m.ArmHandover(id)
+		}
+		restartingID <- id
+		_ = ln.Close()
+	}()
 	for {
 		c, err := ln.Accept()
 		if err != nil {
@@ -135,6 +163,7 @@ func main() {
 		}
 		go func() { _ = peer.Serve(ctx, c); _ = c.Close() }()
 	}
+	<-restartingID
 	mustExec(m.Executable())
 }
 

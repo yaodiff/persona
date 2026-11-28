@@ -333,6 +333,19 @@ describe("where a task opens", () => {
     expect(taskRoute("unknown")).toEqual({ name: "todos", id: "unknown" });
   });
 
+  it("opens an owner verification on the task page and returns there from the raw worker", async () => {
+    const verifying = { ...todo([{ machine_id: "m1", session_id: "s1", linked_at: at }]), supervision: { supervisor: "owner", state: "user_check" as const } };
+    const report = taskRoute("t1", with_(verifying));
+    expect(report).toEqual({ name: "todos", id: "t1" });
+    leaveChat(report);
+    openFromPage({ name: "session", mid: "m1", sid: "s1" });
+    expect(handoffFrom()?.path).toBe("/todos?id=t1");
+    const returned = new Promise<void>((resolve) => window.addEventListener("popstate", () => resolve(), { once: true }));
+    history.back();
+    await returned;
+    expect(location.pathname + location.search).toBe("/todos?id=t1");
+  });
+
   it("opens there, set to Full page", () => {
     setAgentOpenMode("page");
     openTask("unknown");

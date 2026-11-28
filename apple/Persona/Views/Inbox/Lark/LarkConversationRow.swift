@@ -47,3 +47,38 @@ struct LarkAccountChips: View {
         .accessibilityLabel("Lark account")
     }
 }
+
+/// A personal Agent in the Messages list, drawn like a chat: its own face, its name with its service's (Grok Bot, Muse…)
+/// beside it, the time and its latest message, and its unread count.
+struct LarkAgentRow: View {
+    let session: PersonalAgentSession
+
+    var body: some View {
+        HStack(spacing: Theme.Space.m) {
+            PersonalAgentAvatar(session: session, size: Theme.Size.avatarXL, showsCharge: true)
+            VStack(alignment: .leading, spacing: Theme.Space.xs) {
+                HStack(spacing: Theme.Space.s) {
+                    Text(session.title).font(Theme.Font.bodyStrong).foregroundStyle(.primary).lineLimit(1)
+                    Text(PersonalAgentArrange.providerLabel(session.provider))
+                        .font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1)
+                        .padding(.horizontal, Theme.Space.s).padding(.vertical, Theme.Space.xxs)
+                        .background(Theme.Fill.well, in: Capsule())
+                        .layoutPriority(-1)
+                    if let charge = session.charge { PersonalAgentBattery(charge: charge) }
+                    Spacer(minLength: 0)
+                    if session.rankTimeMs > 0 {
+                        Text(Fmt.relative(session.rankTime)).font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                }
+                HStack(spacing: Theme.Space.s) {
+                    Text(LarkAgentFeed.preview(session) ?? String(localized: "AI Assistant", comment: "A personal Agent's row in the Messages list without a latest message"))
+                        .font(Theme.Font.secondary).foregroundStyle(.secondary).lineLimit(1)
+                    Spacer(minLength: 0)
+                    if session.unreadCount > 0 { CountBadge(count: session.unreadCount) }
+                }
+            }
+        }
+        .padding(.vertical, Theme.Space.s)
+        .accessibilityElement(children: .combine)
+    }
+}

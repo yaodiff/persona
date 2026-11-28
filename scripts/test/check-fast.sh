@@ -676,7 +676,9 @@ job_i18n() {
     python3 -B test_android_slot_order.py || return $?
   in_dir scripts/app step "$TIMEOUT_OTHER" "scripts/app: android_slot_order.py" python3 -B android_slot_order.py || return $?
   in_dir scripts/app step "$TIMEOUT_OTHER" "scripts/app: android_token_baseline.py" python3 -B android_token_baseline.py || return $?
-  in_dir scripts/app step "$TIMEOUT_OTHER" "scripts/app: android_motion_baseline.py" python3 -B android_motion_baseline.py
+  in_dir scripts/app step "$TIMEOUT_OTHER" "scripts/app: android_motion_baseline.py" python3 -B android_motion_baseline.py || return $?
+  in_dir scripts/app step "$TIMEOUT_OTHER" "scripts/app: android_compose_budget.py" python3 -B android_compose_budget.py || return $?
+  in_dir scripts/app step "$TIMEOUT_OTHER" "scripts/app: android_nested_throwables.py" python3 -B android_nested_throwables.py
 }
 
 job_external_refs() {

@@ -65,12 +65,16 @@ func light(it proto.Item, keepImage bool) (_ proto.Item, cut bool) {
 		limit, note = pageOutputLen, "\n…（已截断，点开看全文，共 %d 字节）"
 	}
 	if len(it.Text) > limit && it.Role == "user" && it.Kind == proto.KindText {
+		recordRawTextHash(&it, it.Text)
 		if t, ok := lightContexts(it.Text, limit); ok { // what the user wrote stays whole, the blocks' bodies are cut
 			it.FullSize, it.Text = len(it.Text), t
 			cut = true
 		}
 	}
 	if len(it.Text) > limit {
+		if it.Role == "user" && it.Kind == proto.KindText {
+			recordRawTextHash(&it, it.Text)
+		}
 		end := pageCut(it.Text, limit)
 		it.FullSize = len(it.Text)
 		it.Text = it.Text[:end] + fmt.Sprintf(note, len(it.Text))
@@ -95,6 +99,26 @@ func light(it proto.Item, keepImage bool) (_ proto.Item, cut bool) {
 		cut = true
 	}
 	return it, cut
+}
+
+// recordRawTextHash captures the SHA-256 of raw (and its \r\n-trimmed form) on it before truncation,
+// preserving the first (most complete) hash if it was already recorded at parse time.
+func recordRawTextHash(it *proto.Item, raw string) {
+	if it.RawTextSHA256 != "" || raw == "" {
+		return
+	}
+	it.RawTextSHA256 = sha256Hex(raw)
+	if trimmed := strings.TrimRight(raw, "\r\n"); trimmed != raw {
+		it.RawTextTrimmedSHA256 = sha256Hex(trimmed)
+	}
+}
+
+// clipUserText clips user prompt text at maxTextLen while preserving the untruncated SHA-256 for anchor matching.
+func clipUserText(it *proto.Item, raw string) {
+	if len(raw) > maxTextLen {
+		recordRawTextHash(it, raw)
+	}
+	it.Text = clip(raw)
 }
 
 // LightItem applies the page and push limits to an item from a native transcript reader.

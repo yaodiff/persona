@@ -278,4 +278,107 @@ describe("DecisionQueuePanel (#15757)", () => {
       failed: 0,
     });
   });
+
+  it("clusters decisions by server same-cause groups with group-select checkbox while preserving Mode A and Mode B (#16433)", async () => {
+    const items = [
+      makeDecisionTodo("t1", "Fix auth", { options: ["Proceed", "Hold"] }),
+      makeDecisionTodo("t2", "Fix login", { options: ["Proceed", "Hold"] }),
+      makeDecisionTodo("t3", "Update docs", { options: ["Merge", "Skip"] }),
+    ];
+    const onFetchGroups = vi.fn(async () => ({
+      groups: [
+        {
+          key: "blocker:pr-99",
+          cause_kind: "shared_blocker",
+          label: "org/repo#99",
+          url: "https://github.com/org/repo/pull/99",
+          todo_ids: ["t1", "t2"],
+          count: 2,
+        },
+        {
+          key: "standalone:t3",
+          cause_kind: "standalone",
+          label: "Update docs",
+          url: "https://user:pw@evil.example/pr/3",
+          todo_ids: ["t3"],
+          count: 1,
+        },
+      ],
+      total_pending: 3,
+    }));
+    const onSubmitBatch = vi.fn(async (batch: readonly TodoDecisionBatchItem[]): Promise<TodoDecisionBatchResponse> => ({
+      results: batch.map((b) => ({ todo_id: b.todo_id, ok: true })),
+      succeeded: batch.length,
+      failed: 0,
+    }));
+
+    await act(async () => {
+      root.render(
+        <DecisionQueuePanel
+          open
+          items={items}
+          onClose={() => {}}
+          onFetchGroups={onFetchGroups}
+          onSubmitBatch={onSubmitBatch}
+        />,
+      );
+    });
+    await flush();
+
+    expect(onFetchGroups).toHaveBeenCalledTimes(1);
+    const groups = [...document.querySelectorAll('[data-testid="decision-queue-group"]')];
+    expect(groups.length).toBe(2);
+    expect(groups[0].getAttribute("data-cause-kind")).toBe("shared_blocker");
+    expect(groups[0].querySelector('[data-testid="decision-queue-group-link"]')?.getAttribute("href")).toBe(
+      "https://github.com/org/repo/pull/99",
+    );
+    expect(groups[1].querySelector('[data-testid="decision-queue-group-link"]')).toBeNull();
+    expect(groups[0].querySelector('[data-testid="decision-queue-group-count"]')?.textContent).toBe("2");
+
+    // Select the shared_blocker group via its group checkbox (Mode B) and pick an explicit option on t3 (Mode A).
+    const groupCheck = document.querySelector<HTMLInputElement>(
+      '[data-testid="decision-queue-group-select"][data-group-key="blocker:pr-99"]',
+    )!;
+    await act(async () => groupCheck.click());
+    expect(document.querySelector<HTMLInputElement>('[data-testid="decision-queue-check"][data-todo-id="t1"]')?.checked).toBe(true);
+    expect(document.querySelector<HTMLInputElement>('[data-testid="decision-queue-check"][data-todo-id="t2"]')?.checked).toBe(true);
+    expect(document.querySelector<HTMLInputElement>('[data-testid="decision-queue-check"][data-todo-id="t3"]')?.checked).toBe(false);
+
+    const optMerge = document.querySelector<HTMLButtonElement>('[data-testid="decision-queue-option"][data-todo-id="t3"][data-option="Merge"]')!;
+    await act(async () => optMerge.click());
+
+    const input = document.querySelector<HTMLInputElement>('[data-testid="decision-queue-shared-reply"]')!;
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+      setter.call(input, "Wait for #99");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await flush();
+
+    await act(async () => document.querySelector<HTMLButtonElement>('[data-testid="decision-queue-submit"]')!.click());
+    await flush();
+
+    expect(onSubmitBatch).toHaveBeenCalledWith([
+      { todo_id: "t1", reply: "Wait for #99" },
+      { todo_id: "t2", reply: "Wait for #99" },
+      { todo_id: "t3", option: "Merge" },
+    ]);
+  });
+
+  it("gracefully falls back to flat list when GET /todos/decisions/groups fails (#16433)", async () => {
+    const items = [makeDecisionTodo("t1", "PR A"), makeDecisionTodo("t2", "PR B")];
+    const onFetchGroups = vi.fn(async () => {
+      throw new Error("409 todos_v2_disabled");
+    });
+
+    await act(async () => {
+      root.render(
+        <DecisionQueuePanel open items={items} onClose={() => {}} onFetchGroups={onFetchGroups} />,
+      );
+    });
+    await flush();
+
+    expect(document.querySelectorAll('[data-testid="decision-queue-group"]').length).toBe(0);
+    expect(document.querySelectorAll('[data-testid="decision-queue-item"]').length).toBe(2);
+  });
 });

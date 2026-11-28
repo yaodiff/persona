@@ -54,6 +54,7 @@ class EngineSelectionModelTest {
         model.choose("herdr")
         assertNull(model.state.value.error)
         val offline = EngineSelectionModel(machine, put = { _, _ -> throw java.io.IOException("reset") }, applied = {})
+        offline.choose("orca")
         assertFalse(offline.save("m1"))
         assertTrue(offline.state.value.error!!.resolve(res).startsWith("保存失败：连不上 hub"))
     }
@@ -115,10 +116,52 @@ class EngineSelectionModelTest {
         assertEquals(Engines.NONE, saved.state.value.selected)
     }
 
+    // #17052: opening the page and tapping Save sends nothing; pairing still confirms the engine shown.
+    @Test fun anUnchangedChoiceIsNotSentOutsidePairing() = runBlocking {
+        val sent = mutableListOf<String>()
+        val model = EngineSelectionModel(machine, put = { _, engine -> sent += engine; machine.copy(engine = engine) }, applied = {})
+        assertFalse(model.save("m1"))
+        model.choose("orca")
+        model.choose("herdr")
+        assertFalse(model.save("m1"))
+        assertTrue(sent.isEmpty())
+        val pairing = EngineSelectionModel(machine, put = { _, engine -> sent += engine; machine.copy(engine = engine) }, applied = {}, pairing = true)
+        assertTrue(pairing.save("m1"))
+        assertEquals(listOf("herdr"), sent)
+    }
+
+    // #17052: a computer with herdr, Orca and Paseo set up on the web keeps all three when the phone picks a new default.
+    @Test fun aPickInsideASetKeepsTheSet() = runBlocking {
+        val web = machine.copy(engine = "herdr", engineHosts = listOf("herdr", "orca", "paseo"), engineDefault = "herdr",
+            engines = machine.engines + DetectedEngine("paseo", "Paseo", true) + DetectedEngine("herdr-core", "Herdr App", true))
+        val singles = mutableListOf<String>()
+        val defaults = mutableListOf<Pair<List<String>, String>>()
+        val model = EngineSelectionModel(web,
+            put = { _, engine -> singles += engine; web.copy(engine = engine, engineHosts = listOf(engine), engineDefault = engine) },
+            applied = {},
+            putDefault = { _, hosts, default -> defaults += hosts to default; web.copy(engine = default, engineDefault = default) })
+        assertEquals("herdr", model.state.value.selected)
+        assertFalse(model.save("m1"))
+        model.choose("orca")
+        assertTrue(model.save("m1"))
+        assertEquals(listOf(listOf("herdr", "orca", "paseo") to "orca"), defaults)
+        assertTrue(singles.isEmpty())
+        assertEquals(Engines.Save.Default(listOf("herdr", "orca", "paseo"), "orca"), model.lastSaved)
+        assertEquals("orca", model.state.value.selected)
+        // Saved: the same pick again is no change.
+        assertFalse(model.save("m1"))
+        // An engine outside the set is that engine alone, as before.
+        model.choose("herdr-core")
+        assertTrue(model.save("m1"))
+        assertEquals(listOf("herdr-core"), singles)
+        assertEquals(Engines.Save.Engine("herdr-core"), model.lastSaved)
+    }
+
     @Test fun noSecondSaveWhileOneIsRunning() = runBlocking {
         val gate = CompletableDeferred<Unit>()
         var calls = 0
         val model = EngineSelectionModel(machine, put = { _, engine -> calls++; gate.await(); machine.copy(engine = engine) }, applied = {})
+        model.choose("orca")
         val first = async(start = CoroutineStart.UNDISPATCHED) { model.save("m1") }
         assertTrue(model.state.value.saving)
         assertFalse(model.save("m1"))

@@ -19,7 +19,9 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/sdk/go/wire"
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/extension"
+	"github.com/nwverse/persona/server/internal/extwire"
 )
 
 // Pictures an extension serves itself (UI version 6, docs/extensions.md "UI version 6", "Pictures through the hub"):
@@ -317,9 +319,9 @@ func (h *Manager) extensionImage(ctx context.Context, t imageToken, width int) (
 		return nil, time.Time{}, err
 	}
 	defer release()
-	var out wire.UIImage
 	params := wire.UIImageParams{Contribution: t.UI, Ref: t.Ref, Width: width, Placement: item.Placement}
-	if err := hp.proc.Call(cctx, "ui.image", params, &out); err != nil {
+	out, err := buswire.Call(cctx, hp.proc, extwire.UIImageMethod, params)
+	if err != nil {
 		f.err = fmt.Errorf("ui.image: %w", err)
 		return nil, time.Time{}, f.err
 	}

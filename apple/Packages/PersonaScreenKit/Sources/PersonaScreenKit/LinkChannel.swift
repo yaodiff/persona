@@ -22,8 +22,11 @@ public struct LinkReceiver: Equatable, Sendable {
         let skip = offset - at
         guard skip < UInt64(bytes.count) else { return Data() }
         let fresh = bytes.dropFirst(Int(skip))
-        offset += UInt64(fresh.count)
-        return Data(fresh)
+        let room = UInt64.max - offset
+        guard room > 0 else { return Data() }
+        let delivered = UInt64(fresh.count) <= room ? fresh : fresh.prefix(Int(room))
+        offset += UInt64(delivered.count)
+        return Data(delivered)
     }
 
     /// The video channel goes on at `offset` (`reset`): what lay between was dropped by the node. True when it moved the
@@ -56,7 +59,10 @@ public struct LinkSender: Sendable {
 
     public init(window: Int) { self.window = window }
 
-    public var end: UInt64 { base + UInt64(buffer.count) }
+    public var end: UInt64 {
+        let (sum, overflow) = base.addingReportingOverflow(UInt64(buffer.count))
+        return overflow ? .max : sum
+    }
     public var unacknowledged: Int { buffer.count }
     public var hasRoom: Bool { buffer.count < window }
     public var hasUnsent: Bool { sent < end }
@@ -85,18 +91,25 @@ public struct LinkSender: Sendable {
 
     /// The next bytes to send, at most `max`, moving `sent` past them.
     public mutating func next(max: Int) -> (offset: UInt64, bytes: Data)? {
-        guard sent < end else { return nil }
+        guard max > 0, sent >= base, sent < end else { return nil }
         let from = Int(sent - base)
-        let to = Swift.min(from + max, buffer.count)
+        guard from < buffer.count else { return nil }
+        let remaining = end - sent
+        let tail = buffer.count - from
+        let available = remaining < UInt64(tail) ? Int(remaining) : tail
+        let take = Swift.min(max, available)
+        guard take > 0 else { return nil }
+        let to = from + take
         let out = (sent, Data(buffer[buffer.startIndex + from ..< buffer.startIndex + to]))
-        sent = base + UInt64(to)
+        let (nextSent, overflow) = base.addingReportingOverflow(UInt64(to))
+        sent = overflow ? .max : nextSent
         return out
     }
 
     /// How long the oldest byte the node hasn't acknowledged has waited, in seconds; nil with none.
     public func oldestAge(at now: Double) -> Double? {
         guard !buffer.isEmpty, let first = stamps.first else { return nil }
-        return now - first.at
+        return Swift.max(0, now - first.at)
     }
 }
 
@@ -139,6 +152,7 @@ public struct LinkMeter: Sendable {
 
     /// A pong for a ping sent `rttMs` ago. `counts`: the node counts packets on this route (a direct one).
     public mutating func pong(rttMs: Double, retransmitted: UInt32, sent: UInt32, counts: Bool, at now: Double) {
+        guard rttMs.isFinite, rttMs >= 0, now.isFinite else { return }
         rtts.append((now, rttMs))
         if counts { packets.append((now, retransmitted, sent)) }
         srttMs = srttMs.map { $0 + (rttMs - $0) / 8 } ?? rttMs
@@ -156,8 +170,14 @@ public struct LinkMeter: Sendable {
     public func stats(kind: LinkStats.Kind, via: LinkStats.Via, at now: Double) -> LinkStats {
         let recent = rtts.filter { now - $0.at <= Self.window }
         let counted = packets.filter { now - $0.at <= Self.window }
-        let sent = counted.reduce(UInt64(0)) { $0 + UInt64($1.sent) }
-        let retrans = counted.reduce(UInt64(0)) { $0 + UInt64($1.retransmitted) }
+        let sent = counted.reduce(UInt64(0)) { acc, p in
+            let (sum, ov) = acc.addingReportingOverflow(UInt64(p.sent))
+            return ov ? .max : sum
+        }
+        let retrans = counted.reduce(UInt64(0)) { acc, p in
+            let (sum, ov) = acc.addingReportingOverflow(UInt64(p.retransmitted))
+            return ov ? .max : sum
+        }
         let loss: Double? = sent >= UInt64(Self.lossPackets) ? min(1, Double(retrans) / Double(sent)) : nil
         let fresh = lastPongAt.map { now - $0 <= 3 } ?? false
         let healthy = recent.count >= 3 && fresh && (loss ?? 0) < 0.05 && (jitterMs ?? 0) < 30

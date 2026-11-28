@@ -37,6 +37,8 @@ interface AgentCreationService {
      * unified model configuration.
      */
     suspend fun newAgentModel(): ModelPurposeDetail? = null
+    /** The same purpose on the hub that owns a preselected computer. */
+    suspend fun newAgentModel(machineId: String): ModelPurposeDetail? = newAgentModel()
 
     /**
      * The models [launcher]'s agent offers in its own /model menu, for "New Agent"'s model picker: the node keeps the
@@ -76,10 +78,22 @@ interface AgentCreationService {
 
     /** A catalog refresh, including usable hub-cache rows when a source cannot refresh; transport failures propagate. */
     suspend fun workspaceCatalog(machineId: String): AgentWorkspaceCatalog = AgentWorkspaceCatalog(workspaces(machineId))
+
+    /**
+     * Creating, renaming and deleting an engine's worktrees (#17054, [WorktreeManagement]); null where the wiring has none,
+     * which then offers none of those actions.
+     */
+    val worktrees: WorktreeManagement? get() = null
 }
 
 /** A complete response replaces the inventory. A partial response updates returned rows but does not remove missing ones. */
-data class AgentWorkspaceCatalog(val workspaces: List<AgentWorkspace>, val complete: Boolean = true)
+data class AgentWorkspaceCatalog(
+    val workspaces: List<AgentWorkspace>,
+    /** Completeness as used by the New Agent picker. The list tracks failures for each source separately. */
+    val complete: Boolean = true,
+    val failedSources: Set<String> = emptySet(),
+    val unscopedFailure: Boolean = false,
+)
 
 /**
  * One workspace of the hub's catalog (`GET /api/v1/workspaces`, docs/protocol/protocol.md): a start with
@@ -180,13 +194,13 @@ data class AgentModel(
 
 private val gptModelId = Regex("^gpt-([a-z0-9]+(?:\\.[a-z0-9]+)*(?:-[a-z0-9]+(?:\\.[a-z0-9]+)*)*)$", RegexOption.IGNORE_CASE)
 
-/** Display only: explicit names win, and GPT versions and variants retain every component of their id. */
+/** Display only: explicit names win, and GPT versions and variants preserve the GPT- prefix and every component. */
 fun modelName(id: String?, name: String? = null): String {
     val raw = id.orEmpty()
     if (!name.isNullOrBlank() && !name.equals(raw, ignoreCase = true)) return name
     val label = name?.takeIf { it.isNotBlank() } ?: raw
     val model = gptModelId.matchEntire(label)?.groupValues?.get(1) ?: return label
-    return model.split('-').mapIndexed { index, part ->
+    return "GPT-" + model.split('-').mapIndexed { index, part ->
         if (index == 0) part else part.replaceFirstChar { it.titlecase(java.util.Locale.ROOT) }
     }.joinToString(" ")
 }
@@ -258,7 +272,30 @@ data class AssistantLaunchers(
     val tiers: List<PickerTier> = emptyList(),
     /** The profile [tiers] belongs to; null when there is no active profile or on an older hub. */
     @SerialName("tiers_profile") val tiersProfile: PickerTierProfile? = null,
+    /**
+     * Where a start that keeps the default opens while the computer starts new Agents as Orca chats (#17650); null while
+     * it opens where it always did, and from an older hub.
+     */
+    @SerialName("default_opens") val defaultOpens: DefaultOpens? = null,
 )
+
+/**
+ * `default_opens` of New Agent's launchers (#17650, docs/integrations/engines.md "Orca chats as New Agent's default"): the
+ * Orca chat launcher a start that keeps the default opens as, its name, the permission modes with which it does (another
+ * mode keeps it in a terminal), the model and effort that go with it, and [dropped] when the default's model or effort
+ * does not (Orca's own runs). The hub decides; the form only checks that a start still keeps the default.
+ */
+@Serializable
+data class DefaultOpens(
+    val launcher: String,
+    @SerialName("display_name") val displayName: String = "",
+    @SerialName("permission_modes") val permissionModes: List<String> = emptyList(),
+    val model: String? = null,
+    val effort: String? = null,
+    val dropped: Boolean = false,
+) {
+    val title: String get() = displayName.ifEmpty { launcher }
+}
 
 /** A named Agent launch preset from the active model profile (#2225). */
 @Serializable
@@ -305,6 +342,20 @@ data class UnavailableLauncher(
     val title: String get() = launcherTitle(name, agent, displayName?.trim()?.takeIf(String::isNotEmpty))
 }
 
+private val BUILTIN_LAUNCHER_TITLES = mapOf(
+    "claude" to "Claude Code",
+    "codex" to "Codex",
+    "claude-desktop" to "Claude Desktop",
+    "codex-app" to "Codex App",
+    "traex" to TraeCliDisplayName,
+    "traecli" to TraeCliDisplayName,
+    "trae-cli" to TraeCliDisplayName,
+    "agy" to "Antigravity CLI",
+    "omp" to "Oh My Pi",
+    "cursor" to "Cursor",
+    "gemini" to "Gemini CLI",
+)
+
 internal fun launcherTitle(
     name: String, agent: String?, displayName: String?, baseUrl: String? = null, source: String? = null,
 ): String {
@@ -315,7 +366,8 @@ internal fun launcherTitle(
         agent == PaseoAgent && isTraeCliId(name) -> unknownAgentName(agent, displayName, name)
         (legacyMachineCli || isTraeCliId(agent)) && isTraeCliId(name) &&
             (displayName == null || isTraeCliLabel(displayName)) -> TraeCliDisplayName
-        else -> displayName ?: name
+        displayName != null && !displayName.equals(name, ignoreCase = true) -> displayName
+        else -> BUILTIN_LAUNCHER_TITLES[name.lowercase(java.util.Locale.ROOT)] ?: displayName ?: name
     }
 }
 

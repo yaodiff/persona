@@ -110,5 +110,6 @@
         <item quantity="other">%d 字节</item>
     </plurals>
     <string name="inbox_mail_module_off">hub 所在的机器上关闭了邮件，所以无法加载完整邮件和附件。这是 Persona 保存下来的文字。</string>
+    <string name="inbox_mail_module_off_clipped">hub 所在的机器上关闭了邮件，所以无法加载完整邮件和附件。这是 Persona 保存下来的文字，内容不完整。</string>
     <string name="inbox_mail_stored_empty">这封邮件没有保存下来的文字。</string>
 </resources>

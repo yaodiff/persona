@@ -1,11 +1,11 @@
 {
-  "history_hint": "↑↓ 翻看发过的消息 · Ctrl+R 搜索",
-  "history_hint_edit": "↑ 编辑上一条消息 · ↑↓ 翻看发过的消息 · Ctrl+R 搜索",
+  "history_hint": "↑↓ 浏览已发送的消息 · Ctrl+R 搜索",
+  "history_hint_edit": "↑ 编辑上一条消息 · ↑↓ 浏览已发送的消息 · Ctrl+R 搜索",
   "history_placeholder": "搜索已发送的消息",
   "history_list": "已发送的消息",
-  "history_empty": "没有匹配的消息",
+  "history_empty": "未找到匹配的消息",
   "history_footer": "↑↓ 选择 · Enter 填入 · Esc 关闭",
-  "locked": "这个启动器固定了自己的模型，在这里选了也不会生效。",
-  "busy": "Agent 正在工作，这一轮结束后再切换模型",
-  "forget_failed": "没能忘记「{id}」：{error}"
+  "locked": "此启动器已固定使用其自带模型，在此切换模型不会生效。",
+  "busy": "Agent 正在处理中，请在本轮结束后再切换模型。",
+  "forget_failed": "无法移除「{id}」：{error}"
 }

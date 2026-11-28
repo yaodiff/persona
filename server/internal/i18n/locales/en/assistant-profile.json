@@ -10,8 +10,11 @@
   "bad_agent_naming_max": "Choose a whole number of name changes from 1 to 1000.",
   "bad_agent_naming_interval": "Choose a whole number of hours from 1 to 8760, or turn periodic updates off.",
   "bad_minutes_days": "minutes_days must be 0 (forever) or a whole number of days from 1 to 3650.",
+  "bad_recording_days": "recording_audio_days and recording_text_days must be 0 (forever) or a whole number of days from 1 to 3650.",
   "bad_idle_auto_compact_minutes": "idle_auto_compact_minutes must be a whole number from 1 to 1440.",
   "bad_idle_auto_compact_tokens": "idle_auto_compact_tokens must be a whole number from 10000 to 10000000.",
+  "bad_agy_idle_auto_compact_minutes": "agy_idle_auto_compact_minutes must be a whole number from 1 to 1440.",
+  "bad_agy_idle_auto_compact_tokens": "agy_idle_auto_compact_tokens must be a whole number from 10000 to 10000000.",
   "bad_idle_release_minutes": "idle_release_minutes must be a whole number from 5 to 55.",
   "bad_supervision_batch_minutes": "supervision_batch_minutes must be a whole number from 0 to 1440.",
   "bad_cache_keepalive": "The cache interval must be a whole number from 1 to 55 minutes, and the refresh limit from 1 to 144."

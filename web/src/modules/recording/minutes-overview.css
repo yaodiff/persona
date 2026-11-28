@@ -22,10 +22,10 @@
   --minutes-card-gap: 0.75rem;
 }
 .dark {
-  --topic-1-tint: #26303d;
-  --topic-2-tint: #263337;
-  --topic-3-tint: #372d34;
-  --topic-4-tint: #2f3034;
+  --topic-1-tint: #1a232f;
+  --topic-2-tint: #1a262a;
+  --topic-3-tint: #2c2026;
+  --topic-4-tint: #232426;
 }
 
 /* A group's tint (data-minutes-tint, its position): the cards' wash, the glyph's hue and the heading's dot. */
@@ -67,3 +67,12 @@
   --minutes-ai-accent-ink: color-mix(in srgb, var(--accent-ink) 85%, var(--ink));
 }
 .dark [data-minutes-conclusions] > ul { --accent-ink: var(--minutes-ai-accent-ink); }
+
+/* Disagreements cards (#16728, MinutesDebatesSection): neutral inset cards that reuse .minutes-words, .minutes-mark
+   and .minutes-glyph; the settled outcome row keeps extra breathing room above its hairline. */
+.minutes-debate-outcome { margin-top: 0.5rem; }
+
+/* Neutral speaker avatars (#17675, RecordingTranscript & RecordingSpeakersDialog): sized in em so they scale cleanly
+   with the app's Large text setting without adding utilities to the first-screen stylesheet. */
+.speaker-avatar { width: 1.75em; height: 1.75em; min-width: 1.75em; }
+.speaker-avatar-lg { width: 2.1em; height: 2.1em; min-width: 2.1em; }

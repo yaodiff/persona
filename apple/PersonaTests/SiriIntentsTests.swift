@@ -109,4 +109,39 @@ struct SiriIntentsTests {
             #expect(error.localizedDescription == TodoIntentText.oldHub)
         }
     }
+
+    // MARK: Ask Claude / Ask Persona
+
+    @Test func askClaudeFlowSendsClientMsgIDAndIntentViaToRuntimeSession() async throws {
+        let hub = FakeHub()
+        let sessionsJSON = """
+        {"sessions":[{"machine_id":"mac","session_id":"agy-live","title":"Runtime Chat","cwd":"/tmp","status":"idle","state":"idle","source_kind":"runtime","capabilities":{"read":true,"send":true}}]}
+        """
+        let msgPath = "/api/v1/sessions/mac/agy-live/messages"
+        hub.on("GET", "/api/v1/sessions", json: sessionsJSON)
+        hub.on("POST", msgPath) { req in
+            let body = try #require(req.body)
+            let fields = try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any])
+            let id = fields["client_msg_id"] as? String ?? ""
+            guard !id.isEmpty else {
+                throw APIError(status: 400, message: "missing client_msg_id", fields: ["code": "codex_send_guard", "delivered": "none"])
+            }
+            return Data("{}".utf8)
+        }
+
+        let expectedID = UUID()
+        let session = try await AskClaudeFlow.sendToLatest(hub.client, machineID: "mac", group: "",
+                                                           machineName: "Mac", text: "Check build status",
+                                                           clientMsgID: expectedID)
+        #expect(session.sessionID == "agy-live")
+
+        let sent = hub.sent("POST", msgPath)
+        try #require(sent.count == 1)
+        let body = try #require(sent[0].body)
+        let fields = try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any])
+        #expect(fields["text"] as? String == "Check build status")
+        #expect(fields["via"] as? String == "intent")
+        #expect(fields["client_msg_id"] as? String == expectedID.uuidString)
+        #expect(sent[0].headers[OpRetry.header] == expectedID.uuidString.lowercased())
+    }
 }

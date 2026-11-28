@@ -34,6 +34,8 @@ const (
 	notRetirable = "not_retirable"
 	noTerminal   = "no_terminal"
 	notStopped   = "not_stopped"
+	// The manager's owner-activity grace period, also enforced at the node's stop boundary.
+	stopInputIdle = 10 * time.Minute
 )
 
 // stopRounds and stopWait bound session.stop: each round presses Ctrl+C twice and waits up to stopWait for the agent
@@ -76,6 +78,17 @@ func (n *Node) retire(ctx context.Context, id string, closeTerminal, afterExit b
 	}
 	release := n.recovery.lock(id)
 	defer release()
+	if err := n.resolveStopRuntime(ctx, id); err != nil {
+		return false, err
+	}
+	if !guard.Active {
+		if h, ok := n.runtimeCloseTarget(id); ok {
+			if _, err := n.runtimeClose(ctx, h, id); err != nil {
+				return false, err
+			}
+			return true, nil
+		}
+	}
 	unlock, _, ok, err := n.stoppable(id, true)
 	if err != nil {
 		return false, err
@@ -100,6 +113,55 @@ func (n *Node) retire(ctx context.Context, id string, closeTerminal, afterExit b
 		cause = proto.StopUser
 	}
 	if err := n.closeWithCause(ctx, id, cause); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// runtimeCanClose is a runtime row the owner's close-on-end setting may release: it runs outside a terminal, is not
+// an assistant conversation, and explicitly advertises close.
+func runtimeCanClose(row proto.Session) bool {
+	return row.SourceKind == proto.SourceRuntime && !row.Assistant && row.PaneID == "" &&
+		row.Capabilities != nil && !row.Capabilities.Terminal &&
+		row.Capabilities.Close != nil && *row.Capabilities.Close
+}
+
+// runtimeCloseTarget returns the runtime that owns id when its listed row is closeable and still, without treating a
+// runtime's row as a terminal session. A row that is working, blocked, unknown, or starting keeps the refusal a terminal
+// retire would give it.
+func (n *Node) runtimeCloseTarget(id string) (*runtimeConn, bool) {
+	h, _, _ := n.runtimes.belongs(id)
+	if h == nil {
+		return nil, false
+	}
+	row, ok := h.row(id)
+	if !ok || !runtimeCanClose(row) || n.isAssistantSession(id) || n.runtimeAssistant(id) {
+		return h, false
+	}
+	switch row.Status {
+	case proto.StatusIdle, proto.StatusDone:
+	default:
+		return h, false
+	}
+	if row.Starting {
+		return h, false
+	}
+	return h, true
+}
+
+// runtimeClose uses the runtime's own close for a live, terminal-less runtime session. The runtime's close is the
+// existing session.close path, including its capability check and gate release; retire reports it as closed only when
+// that call succeeds.
+func (n *Node) runtimeClose(ctx context.Context, h *runtimeConn, id string) (bool, error) {
+	params, err := json.Marshal(map[string]any{"session_id": id})
+	if err != nil {
+		return false, err
+	}
+	_, err, handled := n.runtimeHandle(ctx, h, "session.close", params)
+	if !handled {
+		return false, refusal(notRetirable, "this runtime session has no close", nil)
+	}
+	if err != nil {
 		return false, err
 	}
 	return true, nil
@@ -191,6 +253,49 @@ func (n *Node) currentSessionActivity(id string, a host.Agent) (rev int64, updat
 // closeExited closes the shell session id's agent left when it quit (closeAfterExit), under the recovery lock its
 // caller holds; done false when there is no such shell. Its stop cause stays as it was.
 func (n *Node) closeExited(ctx context.Context, id string) (bool, error) {
+	return n.closeExitedChecked(ctx, id, nil)
+}
+
+// closeIdleTerminal applies the owner's close-on-end setting without bypassing automatic retirement's guard.
+// The running Agent's Close and an already exited Agent's shell both recheck input at their irreversible boundaries.
+func (n *Node) closeIdleTerminal(ctx context.Context, id string, cause proto.StopCause) (stopped, closed bool, err error) {
+	release := n.recovery.lock(id)
+	defer release()
+	if err := ctx.Err(); err != nil {
+		return false, false, err
+	}
+	if err := n.refreshHosts(ctx); err != nil {
+		return false, false, err
+	}
+	before := func() error { return n.checkAutomaticStop(ctx, id) }
+	unlock, _, running, err := n.stoppable(id, true)
+	if err != nil {
+		return false, false, err
+	}
+	if running {
+		defer unlock()
+		err = n.closeWithCauseChecked(ctx, id, cause, before)
+		stopped, closed = err == nil, err == nil
+	} else {
+		closed, err = n.closeExitedChecked(ctx, id, before)
+	}
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return false, false, ctxErr
+	}
+	return stopped, closed, err
+}
+
+func (n *Node) checkAutomaticStop(ctx context.Context, id string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if !n.typing.inputIdle(id, stopInputIdle) {
+		return refusal(notRetirable, "input is pending or was received within the last 10 minutes", nil)
+	}
+	return nil
+}
+
+func (n *Node) closeExitedChecked(ctx context.Context, id string, before func() error) (bool, error) {
 	if !validID(id) {
 		return false, fmt.Errorf("invalid session id %q", id)
 	}
@@ -199,6 +304,11 @@ func (n *Node) closeExited(ctx context.Context, id string) (bool, error) {
 	}
 	unlock := n.typing.lock(id)
 	defer unlock()
+	if before != nil {
+		if err := before(); err != nil {
+			return false, err
+		}
+	}
 	if _, running := n.agent(id); running {
 		return false, refusal(notRetirable, "the agent is running again", nil)
 	}
@@ -211,11 +321,22 @@ func (n *Node) closeExited(ctx context.Context, id string) (bool, error) {
 		p, _ := n.keptPane(id)
 		pane = p.PaneID
 	}
+	if host.ParsePane(pane).Kind == host.Orca {
+		h, ref, err := n.paneHost(pane)
+		if err != nil {
+			return false, err
+		}
+		o, ok := h.(*orcaHost)
+		if !ok {
+			return false, unsupported(h)
+		}
+		return n.closeStoppedOrca(ctx, o, id, ref.String(), st, before)
+	}
 	if pane == "" || host.ParsePane(pane).Kind != host.Herdr {
 		return false, nil // no shell it left that Persona can tell apart safely: kept, as before
 	}
 	_, kept := n.keptPane(id) // in the hosts' last snapshots; closeAfterExit reads the engine again before closing
-	if err := n.closeAfterExit(ctx, id, st); err != nil {
+	if err := n.closeAfterExit(ctx, id, st, before); err != nil {
 		return false, err
 	}
 	return kept, nil
@@ -227,9 +348,67 @@ func (n *Node) stop(ctx context.Context, id string, retire bool) (stopped bool, 
 	return n.stopWithCause(ctx, id, retire, proto.StopUser)
 }
 
+// resolveStopRuntime probes connected Antigravity runtimes for an unlisted companion session ID (agy-<uuid>, which can
+// drop off runtime.sessions past maxSessions=80) when this machine has no local terminal pane, presence lock, or active
+// start holding it. If the runtime owns it, runtimeFor claims it so resolveAgyCompanionStop/stoppable classify it as
+// no_terminal / not_retirable instead of not_found; if the owning-prefix runtime confirms it does not exist, that typed
+// not_found error (with confirmed_missing=true) is returned (#16410, #16231).
+func (n *Node) resolveStopRuntime(ctx context.Context, id string) error {
+	conversation, ok := agyConversationID(id)
+	if !ok {
+		return nil
+	}
+	if h, _, known := n.runtimes.belongs(id); h != nil || known {
+		return nil
+	}
+	if n.hasOwnSession(id) || n.agyPaneRow(id) ||
+		n.isAssistantSession(id) || n.runtimeAssistant(id) || n.externalCodex(id) || n.restarting(id) {
+		return nil
+	}
+	if r := n.starts.get(id); r != nil && r.ended.IsZero() {
+		return nil
+	}
+	if _, _, held := n.agyOpenIn(id); held || n.agyHasRawPaneAttribution(conversation) {
+		return nil
+	}
+	switch agyPresenceLockProbe(filepath.Join(n.agyDataRoot(), "presence", conversation+".lock")) {
+	case agyLockHeld, agyLockUnknown:
+		return nil
+	}
+	_, err := n.runtimeFor(ctx, "session.interrupt", id)
+	return err
+}
+
 func (n *Node) stopWithCause(ctx context.Context, id string, retire bool, cause proto.StopCause) (stopped bool, err error) {
+	return n.stopWithGuard(ctx, id, retire, cause, false)
+}
+
+func (n *Node) stopWithGuard(ctx context.Context, id string, retire bool, cause proto.StopCause, guarded bool) (stopped bool, err error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	if err := n.resolveStopRuntime(ctx, id); err != nil {
+		return false, err
+	}
+	// An Antigravity companion row id agy-<conversation-uuid> resolves here first: to its one live pane
+	// row, to an authoritative not_found for an orphaned conversation, or to a hard refusal. Every other
+	// id comes back unchanged. Resolving before the recovery lock also serializes companion-id stops with
+	// pane-row stops on the same row key.
+	origID := id
+	id, err = n.resolveAgyCompanionStop(id, retire)
+	if err != nil {
+		return false, err
+	}
 	release := n.recovery.lock(id)
 	defer release()
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	if guarded {
+		if err := n.refreshHosts(ctx); err != nil {
+			return false, err
+		}
+	}
 	if cause == proto.StopUser {
 		if err := n.saveStopCause(ctx, id, proto.StopUser); err != nil {
 			return false, err
@@ -237,15 +416,45 @@ func (n *Node) stopWithCause(ctx context.Context, id string, retire bool, cause 
 		defer n.state.stopped(id, cause)
 	}
 	unlock, a, ok, err := n.stoppable(id, retire)
-	if err != nil || !ok {
+	if err != nil {
 		return false, err
 	}
+	if !ok {
+		// The routed row went away between resolution and stoppable. For a companion uuid re-check raw
+		// attribution: a refresh can have moved the conversation to another pane, and returning the
+		// idempotent (false,nil) here would otherwise make the hub release that live conversation.
+		if lerr := n.agyStopAbsentVerdict(origID, id); lerr != nil {
+			return false, lerr
+		}
+		return false, nil
+	}
 	defer unlock()
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	if conversation, isCompanion := agyConversationID(origID); isCompanion && id != origID {
+		// The routed unique pane could gain a twin or move while saveStopCause/stoppable ran; never
+		// Ctrl+C one pane while raw attribution now shows more than one.
+		if err := n.agyCompanionStopRecheck(conversation, id); err != nil {
+			return false, err
+		}
+	}
 	if cause != proto.StopUser {
 		n.state.stopped(id, proto.StopUnknown) // An unconfirmed/failed automatic stop never grants recovery.
 	}
-	stopped, err = n.quitAgent(ctx, id, a.PaneID)
+	var before func() error
+	if guarded {
+		before = func() error { return n.checkAutomaticStop(ctx, id) }
+	}
+	stopped, err = n.quitAgentChecked(ctx, id, a.PaneID, before)
 	if stopped && err == nil {
+		if conversation, isCompanion := agyConversationID(origID); isCompanion && id != origID {
+			// A twin pane can have appeared during the quit verification; quitAgent only proves the
+			// routed row left, so confirm no other pane still attributes the conversation before success.
+			if perr := n.agyCompanionStopPostQuit(conversation); perr != nil {
+				return false, perr
+			}
+		}
 		n.state.stopped(id, cause)
 	}
 	return stopped, err
@@ -254,22 +463,53 @@ func (n *Node) stopWithCause(ctx context.Context, id string, retire bool, cause 
 // stoppable checks that session id's agent may be stopped now (retire: only a still one) and holds its typing lock
 // (unlock releases it) when ok; ok false with no error when it is not running.
 func (n *Node) stoppable(id string, retire bool) (unlock func(), a host.Agent, ok bool, err error) {
-	if !validID(id) && !n.agyPaneRow(id) {
-		return nil, a, false, fmt.Errorf("invalid session id %q", id)
-	}
 	no := func(code, why string) (func(), host.Agent, bool, error) {
 		if retire {
 			code = notRetirable // what hubs before #4754 know
 		}
 		return nil, a, false, refusal(code, why, nil)
 	}
+	h, _, known := n.runtimes.belongs(id)
+	if !validID(id) && !n.agyPaneRow(id) {
+		// session.stop and session.retire are dispatched before runtimeFor (node.go), so a live or known external
+		// runtime session with a non-hex id (opencode-*, hermes-*, pi-*, paseo-*, etc.) must be refused here rather
+		// than falling through to "not running" or "invalid session id".
+		if h != nil || known {
+			if n.isAssistantSession(id) || n.runtimeAssistant(id) {
+				return no(notRetirable, "assistant conversations are not stopped")
+			}
+			return no(noTerminal, "this session belongs to another tool")
+		}
+		// A runtime's session (agy-b-<conversation>, opencode-*, hermes-*, etc.) that no runtime lists any more
+		// reaches here. Fail closed while a matching runtime is still starting or has connected without pushing
+		// its initial runtime.sessions list yet; otherwise nothing runs it on this computer, so it is not running
+		// (#16376). A pane's row of another work agent (cursor) is not this: it runs, and is refused as before;
+		// so is an id of any other shape.
+		if _, running := n.agent(id); !running && runtimeIDRe.MatchString(id) {
+			if n.isAssistantSession(id) || n.runtimeAssistant(id) {
+				return no(notRetirable, "assistant conversations are not stopped")
+			}
+			if n.restarting(id) {
+				return no(notRetirable, "still starting")
+			}
+			if r := n.starts.get(id); r != nil && r.ended.IsZero() {
+				return no(notRetirable, "still starting")
+			}
+			if label, pending := n.pendingRuntimeForStop(id); pending {
+				return nil, a, false, errRuntimeAway(label)
+			}
+			return nil, a, false, nil
+		}
+		return nil, a, false, fmt.Errorf("invalid session id %q", id)
+	}
 	_, terminalOnly := n.terminalOnly(id)
-	switch h, _, known := n.runtimes.belongs(id); {
+	switch {
 	case n.isAssistantSession(id) || n.runtimeAssistant(id):
 		return no(notRetirable, "assistant conversations are not stopped")
 	case n.externalCodex(id) || h != nil || known || terminalOnly:
 		return no(noTerminal, "this session belongs to another tool")
-	case n.restarting(id):
+	}
+	if n.restarting(id) {
 		// Refused at once rather than after the lock below, which a message carrying out a launcher switch holds for
 		// minutes: stopping the agent it starts then would leave the switch for nothing (launcher_switch.go).
 		return no(notRetirable, "still starting")
@@ -309,8 +549,12 @@ func (n *Node) stoppable(id string, retire bool) (unlock func(), a host.Agent, o
 // quitAgent presses Ctrl+C twice in pane until session id's agent is no longer in it (or in any pane), and never
 // closes the pane: the shell the agent ran in stays. An agent that does not quit is refused as not_stopped.
 func (n *Node) quitAgent(ctx context.Context, id, pane string) (bool, error) {
+	return n.quitAgentChecked(ctx, id, pane, nil)
+}
+
+func (n *Node) quitAgentChecked(ctx context.Context, id, pane string, before func() error) (bool, error) {
 	for range stopRounds {
-		stopped, err := n.quitAgentRound(ctx, id, pane, nil, false)
+		stopped, err := n.quitAgentRound(ctx, id, pane, nil, false, before)
 		if err != nil {
 			return false, err
 		}
@@ -324,7 +568,7 @@ func (n *Node) quitAgent(ctx context.Context, id, pane string) (bool, error) {
 // quitAgentRound is one quitAgent attempt: two Ctrl+C presses, then a bounded wait for the session to leave pane.
 // With only and requireFresh, an abandoned start uses the same primitive but every verification refresh must succeed
 // for that pane's host; the ordinary quitAgent keeps its tolerant multi-round refresh behavior.
-func (n *Node) quitAgentRound(ctx context.Context, id, pane string, only host.Host, requireFresh bool) (bool, error) {
+func (n *Node) quitAgentRound(ctx context.Context, id, pane string, only host.Host, requireFresh bool, before func() error) (bool, error) {
 	if requireFresh {
 		// Do not let a successful discovery followed by an outage turn the first Ctrl+C pair into an unverified interrupt,
 		// and do not send it to a shell after the agent has already left.
@@ -335,6 +579,19 @@ func (n *Node) quitAgentRound(ctx context.Context, id, pane string, only host.Ho
 			return true, nil
 		}
 	}
+	// A guarded retirement must recheck activity before each irreversible action.
+	check := func() error {
+		if before == nil {
+			return nil
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		return before()
+	}
+	if err := check(); err != nil {
+		return false, err
+	}
 	codexAgent := false
 	codexExtra := 0
 	if a, ok := n.agent(id); ok && a.PaneID == pane && a.Agent == "codex" {
@@ -344,6 +601,9 @@ func (n *Node) quitAgentRound(ctx context.Context, id, pane string, only host.Ho
 			// idle composer; otherwise keep Ctrl+C-only keys (codex_waiting_test.go) and follow up within Codex's
 			// ~1s "Press Ctrl-C again to exit" window before stopWait expires it (#12389).
 			wireInterrupted := n.interruptCodexActiveTurn(ctx, id)
+			if err := check(); err != nil {
+				return false, err
+			}
 			codexExtra = 1
 			if !wireInterrupted && (a.AgentStatus == proto.StatusWorking || a.AgentStatus == proto.StatusBlocked) {
 				codexExtra = 2
@@ -352,6 +612,9 @@ func (n *Node) quitAgentRound(ctx context.Context, id, pane string, only host.Ho
 	}
 	_ = n.sendKeys(ctx, pane, "ctrl+c")
 	time.Sleep(200 * time.Millisecond)
+	if err := check(); err != nil {
+		return false, err
+	}
 	if err := n.sendKeys(ctx, pane, "ctrl+c"); err != nil {
 		return false, err
 	}
@@ -384,6 +647,9 @@ func (n *Node) quitAgentRound(ctx context.Context, id, pane string, only host.Ho
 					extraAt = time.Time{}
 				}
 				if a.Agent == "codex" {
+					if err := check(); err != nil {
+						return false, err
+					}
 					_ = n.sendKeys(ctx, pane, "ctrl+c")
 				}
 			}
@@ -430,16 +696,20 @@ func (n *Node) resumeWith(id string, opts sendOpts) resumed {
 // fillResume: a start that resumes a Claude session that is not running (the app's Resume Session, #4328) keeps what
 // the session ran with for whatever the start leaves out (asked), as a message that resumes it does; before, it ran
 // on the launcher's default model and wrote that over the one the session remembered. The model comes along only
-// with the launcher it was picked for. A Codex or compatible thread resumes its own way (codex_resume.go), and a
-// running session is not started again: both keep what was asked.
+// with the launcher it was picked for. A Codex thread resumes its own way (codex_resume.go), and a running session is
+// not started again: both keep what was asked. A TRAE CLI session gets only its launcher, directory and task
+// (traexResumeWith): without them a bare Resume (the web's sends only the id) would start Claude Code on its id.
 func (n *Node) fillResume(id string, asked resumed) resumed {
 	if !validID(id) {
 		return asked
 	}
-	if _, live := n.agent(id); live || n.codexPath(id) != "" || n.traexPath(id) != "" {
+	if _, live := n.agent(id); live || n.codexPath(id) != "" {
 		return asked
 	}
 	r := n.resumeWith(id, sendOpts{})
+	if n.traexPath(id) != "" {
+		r = n.traexResumeWith(id)
+	}
 	out := asked
 	if out.execution.Source.Role == "" {
 		out.execution.Source = r.execution.Source
@@ -464,6 +734,25 @@ func (n *Node) fillResume(id string, asked resumed) resumed {
 	return out
 }
 
+// traexResumeWith is what a TRAE CLI session that is not running comes back with when a start leaves it out:
+// `<launcher> resume <id>` (startOtherAgent) on the launcher it ran on (the CLI by name for one Persona has no record
+// of), in its directory, on its task. Its model, effort and permission mode stay the CLI's own: a TRAE CLI takes them
+// only on a new session (control.go).
+func (n *Node) traexResumeWith(id string) resumed {
+	st, _ := n.state.get(id)
+	r := resumed{launcher: cmp.Or(st.Launcher, traexAgent), cwd: st.Cwd, taskID: st.TaskID, workspaceID: st.WorkspaceID,
+		workspaceLabel: st.WorkspaceLabel, tab: n.traexTitle(id)}
+	r.execution.Source = st.ModelSource
+	if r.cwd == "" {
+		if t, ok := n.traexThread(id); ok && t.Cwd != "" {
+			r.cwd = t.Cwd
+		} else if p := rolloutPath(n.traexHome(), id); p != "" {
+			r.cwd = metaOf(n.traexHome(), p).cwd
+		}
+	}
+	return r
+}
+
 // resumeTabName names the tab a session is resumed in: its title (Claude's AI title, or the one it was given), so
 // the tab reads as it did before it was closed rather than agent-<n>.
 func (n *Node) resumeTabName(id string) string {
@@ -480,13 +769,14 @@ func (n *Node) resumeTabName(id string) string {
 
 // resumeOtherWith resumes a Codex or a compatible CLI that is not running, with text as its first message, the user's
 // Resume (#4754): with the launcher, directory and model to resume with (st): the session's own, or
-// what a Codex thread started outside Persona is resumed with (codex_resume.go).
+// what a Codex thread started outside Persona is resumed with (codex_resume.go). Herdr and Orca alike (#17044): a new
+// terminal in the engine's workspace for its directory, or the shell its agent left.
 func (n *Node) resumeOtherWith(ctx context.Context, id string, st sessionState, text string, images []proto.Image) error {
 	ctx = n.withResumeHost(ctx, id)
 	if st.TaskID != "" {
 		ctx, _ = withTaskSpace(ctx, st.TaskID, st.WorkspaceID, st.WorkspaceLabel)
 	}
-	if r := n.notRunningRefusal(ctx, id); r != nil {
+	if r := n.resumeEngineRefusal(ctx, id); r != nil {
 		return r
 	}
 	launch, err := n.launcherFor(n.startKind(ctx))
@@ -504,10 +794,20 @@ func (n *Node) resumeOtherWith(ctx context.Context, id string, st sessionState, 
 		if !ok {
 			return fmt.Errorf("启动器「%s」不再运行 Codex，没法接着这个会话", st.Launcher)
 		}
+		if st.AppMode == "" && stockOrcaCodexArgv(st.Launcher, argv) {
+			// Orca's own Codex launch profile, as a new start of the stock launcher there runs it: the resumed Codex
+			// gets the arguments it started with (codex_orca_launch_defaults.go). Herdr leaves the words as they are.
+			if argv, err = codexOrcaLaunchDefaults(ctx, launch, argv); err != nil {
+				return err
+			}
+		}
 		if argv, err = n.codexReadonlyArgs(st.Launcher, argv, st.AppMode); err != nil {
 			return err // Refuse conflicting permissions before creating a workspace, tab or attachment.
 		}
 		argv = codexTaskArgs(codexExecutionArgs(argv, n.codexOwnEffort(ctx, argv, codexPaneEnv(launch), st.Cwd, modelExecution{Model: st.Model, Effort: st.ModelEffort})), codexKeptTaskInstructions(st))
+		if src, ok := n.codexSource(id); ok {
+			argv = codexHomeArgv(argv, src.home, canonicalCodexHome(n.codexHome(), n.home))
+		}
 		if home, thread, ok := n.codexThread(id); ok && codexArchived(home, n.codexPath(id)) {
 			// Restore through Codex itself before its TUI can block the first prompt on an archive confirmation.
 			restored, err := n.codexArchive(ctx, id, home, thread, false)
@@ -559,7 +859,10 @@ func (n *Node) resumeCodex(ctx context.Context, launch host.Launcher, id string,
 	}
 	defer os.RemoveAll(dir)
 	file := filepath.Join(dir, "start.json")
-	b, _ := json.Marshal(codexStartFile{Source: sourceSession(st.ModelSource, id), SourceHosts: sourceHostsFor(st.ModelSource), Argv: argv, Prompt: prompt, Agent: herdrAgentFor(launch, "codex"), Dir: st.Cwd})
+	// In an Orca terminal the resumed Codex keeps that terminal's hooks, as a new start there does (codex_start.go).
+	owner, _ := launch.(interface{ Kind() string })
+	isolateHooks := owner != nil && owner.Kind() == host.Orca
+	b, _ := json.Marshal(codexStartFile{Source: sourceSession(st.ModelSource, id), SourceHosts: sourceHostsFor(st.ModelSource), Argv: argv, Prompt: prompt, Agent: herdrAgentFor(launch, "codex"), IsolateHooks: isolateHooks, Dir: st.Cwd})
 	if err := os.WriteFile(file, b, 0o600); err != nil {
 		return err
 	}
@@ -586,6 +889,14 @@ func (n *Node) resumeCodex(ctx context.Context, launch host.Launcher, id string,
 	}
 	defer done()
 	n.bindPane(pane, id) // the pane runs this thread (kept in its state): no guessing another rollout for it
+	if src, ok := n.codexSource(id); ok && src.home != "" && n.codices != nil {
+		n.codices.mu.Lock()
+		if n.codices.byPane == nil {
+			n.codices.byPane = map[string]string{}
+		}
+		n.codices.byPane[pane] = src.home
+		n.codices.mu.Unlock()
+	}
 	wait, cancel := context.WithTimeout(ctx, codexResumeWait)
 	defer cancel()
 	for {
@@ -620,6 +931,11 @@ func (n *Node) newTab(ctx context.Context, launch host.Launcher, cwd, ws, tabNam
 		if ts != nil {
 			ts.adopted = true
 		}
+		if a, ok := launch.(paneAdopter); ok {
+			if err := a.AdoptPane(ctx, c.Pane, cwd); err != nil {
+				return nil, err
+			}
+		}
 		return c, nil
 	}
 	if c, err := keptClaimOf(ctx).tab(ctx); err != nil || c != nil { // a failed start's kept tab (startremedy.go)
@@ -642,6 +958,11 @@ func (n *Node) newTab(ctx context.Context, launch host.Launcher, cwd, ws, tabNam
 			}
 			_ = renameSlot(ctx, launch, created.SlotID, tabLabel(tabName, taken))
 		}
+		// Orca opens the tab in the worktree that holds cwd: one Orca just made for this Agent (worktree.add) has a first
+		// shell that is Persona's, gone now as after a start into the workspace by id (#17050).
+		if _, orca := launch.(*orcaHost); orca && err == nil && created.SpaceID != "" {
+			n.closeWorktreeShells(ctx, launch, created.SpaceID, created.Pane.String())
+		}
 	} else {
 		created, err = createStartSlot(ctx, launch, ws, cwd, tabLabel(tabName, n.tabLabels(ctx, launch, ws)))
 		var missing *herdr.Error
@@ -657,13 +978,23 @@ func (n *Node) newTab(ctx context.Context, launch host.Launcher, cwd, ws, tabNam
 		}
 	}
 	if err != nil {
-		return nil, fmt.Errorf("创建终端标签页失败：%w", err)
+		return nil, hostFailure(ctx, "terminal_open_failed", err)
 	}
+	n.forgetPane(created.Pane.String()) // a new tab: whatever ran in a pane of its id before, nothing runs in it yet
 	ts.opened(created.SpaceID)
-	markPersonaTab(ctx, launch, created.Pane, id)
+	n.markPersonaTab(ctx, launch, created.Pane, id)
 	markTaskTerminal(ctx, launch, created.Pane)
-	n.agentTerminalOpened(launch, created.Pane) // finished_close.go
+	if h, ok := launch.(*orcaHost); ok {
+		h.markOrcaTerminal(ctx, created.Pane, id)
+	}
 	return created, nil
+}
+
+// paneAdopter is a launcher that types a start only into a terminal it opened itself unless told it may (Orca's
+// single-use launch grant, orcaHost.Run): newTab grants it the pane a start was told to use, which the host checks
+// again right before it types.
+type paneAdopter interface {
+	AdoptPane(ctx context.Context, pane host.PaneRef, cwd string) error
 }
 
 // agyPaneRow: id is the pane-derived row (otherSession) of an agy herdr is running now. agy rows never carry a
@@ -671,4 +1002,22 @@ func (n *Node) newTab(ctx context.Context, launch host.Launcher, cwd, ws, tabNam
 func (n *Node) agyPaneRow(id string) bool {
 	a, ok := n.agent(id)
 	return ok && a.Agent == agyAgent && a.PaneID != "" && id == otherSession(a)
+}
+
+// pendingRuntimeForStop reports whether a runtime matching id's "<runtime>-" prefix is still starting up or has
+// connected without pushing its initial runtime.sessions list yet, so stop fails closed with runtime_away instead
+// of assuming the session is already gone.
+func (n *Node) pendingRuntimeForStop(id string) (string, bool) {
+	if n.runtimes != nil {
+		if label, pending := n.runtimes.unlistedRuntimeByPrefix(id); pending {
+			return label, true
+		}
+		if n.runtimes.hasListedRuntimePrefix(id) {
+			return "", false
+		}
+	}
+	if rtID, pending := n.pendingAutoCompanionRuntime(id); pending {
+		return rtID, true
+	}
+	return "", false
 }

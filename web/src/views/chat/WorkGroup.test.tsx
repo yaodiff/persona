@@ -41,15 +41,30 @@ describe("WorkGroup", () => {
     expect(html).not.toContain("data-work-detail"); // a lazy Collapse: nothing until it opens
   });
 
-  it("done: no leading layers icon, 已工作 Xs followed directly by chevron, folded", () => {
+  it("done: no leading layers icon; the completed summary's disclosure follows its label", () => {
     const html = renderToStaticMarkup(<WorkGroup g={group([tool("t1", "Bash", { command: "ls" })], false, 65_000)} p={props} />);
     expect(html).toContain(">已工作 1m 5s<");
+    expect(html).toMatch(/>已工作 1m 5s<\/span><svg/);
+    expect(html.match(/<svg/g)).toHaveLength(1);
     expect(html).toContain('aria-expanded="false"');
     expect(html).not.toContain("data-live-preview");
     // Only one svg in the completed top-level header: the disclosure chevron right after the heading (no leading layers icon, no flex-1 spacer)
     expect(html.match(/<svg /g)).toHaveLength(1);
     expect(html).not.toContain("flex-1");
     expect(html.indexOf("已工作 1m 5s")).toBeLessThan(html.indexOf("<svg "));
+  });
+
+  it("done: a top-level header keeps the elapsed heading without a tool-count suffix (#16777)", () => {
+    const inner = group([tool("r1", "Read", { file_path: "/a.ts" }), tool("e1", "Edit", { file_path: "/a.ts", old_string: "x", new_string: "y" })], false, 2000);
+    const outer: WorkGroupNode = { kind: "group", id: "work-outer", children: [inner, { kind: "step", step: tool("c1", "Bash", { command: "echo ok" }) }], live: false, durationMs: 5000 };
+    const html = renderToStaticMarkup(<WorkGroup g={outer} p={props} />);
+    expect(html).toContain(">已工作 5s<");
+    expect(html).toMatch(/>已工作 5s<\/span><svg/);
+    expect(html).not.toContain("data-work-summary");
+    expect(html).not.toContain("读取 1 个文件、编辑 1 处、运行 1 条命令");
+
+    const liveHtml = renderToStaticMarkup(<WorkGroup g={group([tool("t1", "Bash", { command: "ls" }, false), tool("t2", "Read", { file_path: "/a" })], true)} p={props} />);
+    expect(liveHtml).toContain("已执行 2 步");
   });
 
   it("every nonempty live group can be manually opened and never previews tools", () => {
@@ -111,8 +126,8 @@ describe("ActionRow", () => {
   });
 
   it("Claude Code's newer tools say what they did, then what about (#2986)", () => {
-    expect(presentAction(use("n", "TaskCreate", { subject: "Write tests", description: "…" }))).toEqual({ verb: "加待办", param: { text: "Write tests", title: "Write tests" } });
-    expect(presentAction(use("n", "ListAgents", {}))).toEqual({ verb: "看 Agent 列表" });
+    expect(presentAction(use("n", "TaskCreate", { subject: "Write tests", description: "…" }))).toEqual({ verb: "添加待办", param: { text: "Write tests", title: "Write tests" } });
+    expect(presentAction(use("n", "ListAgents", {}))).toEqual({ verb: "查看 Agent 列表" });
     expect(presentAction(use("n", "Monitor", { command: "tail -f x", description: "errors in x" })).verb).toBe("监视");
     expect(presentAction(use("n", "PowerShell", { command: "Get-ChildItem" }))).toEqual({ param: { text: "Get-ChildItem", title: "Get-ChildItem" } });
     expect(inlineInput(use("n", "Monitor", { command: "tail -f x", description: "d" }))).toBe("tail -f x");
@@ -132,8 +147,8 @@ describe("ActionRow", () => {
   });
 
   it("Persona's own tools read as their verb, then what they were given", () => {
-    expect(presentAction(use("p", "mcp__persona__agent_read", {}))).toEqual({ verb: "读 Agent 对话" });
-    expect(presentAction(use("p", "mcp__persona__kb_search", { query: "周报" }))).toEqual({ verb: "查知识库", param: { text: "周报", title: "mcp__persona__kb_search" } });
+    expect(presentAction(use("p", "mcp__persona__agent_read", {}))).toEqual({ verb: "读取 Agent 对话" });
+    expect(presentAction(use("p", "mcp__persona__kb_search", { query: "周报" }))).toEqual({ verb: "搜索知识库", param: { text: "周报", title: "mcp__persona__kb_search" } });
     expect(presentAction(use("p", "mcp__persona__phone_contacts_search", { query: "Alice" }))).toEqual({ verb: "iPhone", param: { text: "contacts search · Alice", title: "mcp__persona__phone_contacts_search" } });
     expect(presentAction(use("p", "mcp__github__create_issue", {})).verb).toBe("调用");
   });
@@ -326,17 +341,14 @@ describe("summarizeWorkSteps", () => {
       tool("a1", "Agent", { description: "sub" }),
       tool("o1", "CustomTool", {}),
     ];
-    expect(summarizeWorkSteps(steps)).toBe("读 2 个文件、编辑 3 处、运行 2 条命令、搜索 2 次、1 个子代理、1 项操作");
+    expect(summarizeWorkSteps(steps)).toBe("读取 2 个文件、编辑 3 处、运行 2 条命令、搜索 2 次、1 个子 Agent、1 项操作");
     expect(summarizeWorkSteps([])).toBe("");
   });
 
-  it("recursively collects tools from nested WorkGroupNodes and renders in WorkGroup header", () => {
+  it("recursively collects nested tools and keeps the live step count", () => {
     const inner = group([tool("r1", "Read", { file_path: "/a.ts" }), tool("e1", "Edit", { file_path: "/a.ts", old_string: "x", new_string: "y" })], false, 2000);
     const outer: WorkGroupNode = { kind: "group", id: "work-outer", children: [inner, { kind: "step", step: tool("c1", "Bash", { command: "echo ok" }) }], live: false, durationMs: 5000 };
-    expect(summarizeWorkSteps(outer.children)).toBe("读 1 个文件、编辑 1 处、运行 1 条命令");
-    const html = renderToStaticMarkup(<WorkGroup g={outer} p={props} />);
-    expect(html).toContain(">已工作 5s<");
-    expect(html).toContain("读 1 个文件、编辑 1 处、运行 1 条命令");
+    expect(summarizeWorkSteps(outer.children)).toBe("读取 1 个文件、编辑 1 处、运行 1 条命令");
 
     const liveHtml = renderToStaticMarkup(<WorkGroup g={group([tool("t1", "Bash", { command: "ls" }, false), tool("t2", "Read", { file_path: "/a" })], true)} p={props} />);
     expect(liveHtml).toContain(">正在工作…<");

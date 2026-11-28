@@ -162,7 +162,7 @@ func TestTaskWorkspaceOwnBranchRefusals(t *testing.T) {
 						t.Fatal(err)
 					}
 				}
-				f.nodes[DeviceWorktreePrepare] = ownBranchPrepare(func(b string) (map[string]any, error) {
+				f.answerNode(DeviceWorktreePrepare, ownBranchPrepare(func(b string) (map[string]any, error) {
 					if tc.err != nil {
 						return nil, tc.err
 					}
@@ -171,12 +171,12 @@ func TestTaskWorkspaceOwnBranchRefusals(t *testing.T) {
 						at[k] = v
 					}
 					return at, nil
-				})
+				}))
 				creates := 0
-				f.nodes[DeviceWorktreeCreate] = func(string, json.RawMessage) (any, error) {
+				f.answerNode(DeviceWorktreeCreate, func(string, json.RawMessage) (any, error) {
 					creates++
 					return proto.WorktreeCreateResult{Path: "/wt/app/new", Branch: "x"}, nil
-				}
+				})
 				p := workspacePlan(t, s, `"new"`)
 				if _, err := s.startPlan(ctx, p.ID, nil, false); err != nil {
 					t.Fatal(err)

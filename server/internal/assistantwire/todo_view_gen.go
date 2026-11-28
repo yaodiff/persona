@@ -89,34 +89,35 @@ var TodoReasons = []string{"failed_start", "agent_asks", "interrupted", "stopped
 // unknown, and draws no line for that. TodoLine.key itself stays a string: a timeline entry's line takes the keys of
 // spec/fixtures/todo-rounds/README.md.
 const (
-	TodoLineKeyFailedStart     = "failed_start"
-	TodoLineKeyAgentAsks       = "agent_asks"
-	TodoLineKeyInterrupted     = "interrupted"
-	TodoLineKeyDecision        = "decision"
-	TodoLineKeyDecisionDefault = "decision_default"
-	TodoLineKeyCannot          = "cannot"
-	TodoLineKeyAwaitsReply     = "awaits_reply"
-	TodoLineKeyWorking         = "working"
-	TodoLineKeyPersonaWorking  = "persona_working"
-	TodoLineKeyStarting        = "starting"
-	TodoLineKeyBackground      = "background"
-	TodoLineKeyParked          = "parked"
-	TodoLineKeyFinished        = "finished"
-	TodoLineKeyAccepted        = "accepted"
-	TodoLineKeyDeployed        = "deployed"
-	TodoLineKeyPrOpen          = "pr_open"
-	TodoLineKeyUsageLimit      = "usage_limit"
-	TodoLineKeyRunWaits        = "run_waits"
-	TodoLineKeyFinishedSeen    = "finished_seen"
-	TodoLineKeyCompleted       = "completed"
-	TodoLineKeyCanceled        = "canceled"
-	TodoLineKeyReported        = "reported"
-	TodoLineKeySuperseded      = "superseded"
-	TodoLineKeySomeday         = "someday"
+	TodoLineKeyFailedStart       = "failed_start"
+	TodoLineKeyAgentAsks         = "agent_asks"
+	TodoLineKeyInterrupted       = "interrupted"
+	TodoLineKeyStoppedUnfinished = "stopped_unfinished"
+	TodoLineKeyDecision          = "decision"
+	TodoLineKeyDecisionDefault   = "decision_default"
+	TodoLineKeyCannot            = "cannot"
+	TodoLineKeyAwaitsReply       = "awaits_reply"
+	TodoLineKeyWorking           = "working"
+	TodoLineKeyPersonaWorking    = "persona_working"
+	TodoLineKeyStarting          = "starting"
+	TodoLineKeyBackground        = "background"
+	TodoLineKeyParked            = "parked"
+	TodoLineKeyFinished          = "finished"
+	TodoLineKeyAccepted          = "accepted"
+	TodoLineKeyDeployed          = "deployed"
+	TodoLineKeyPrOpen            = "pr_open"
+	TodoLineKeyUsageLimit        = "usage_limit"
+	TodoLineKeyRunWaits          = "run_waits"
+	TodoLineKeyFinishedSeen      = "finished_seen"
+	TodoLineKeyCompleted         = "completed"
+	TodoLineKeyCanceled          = "canceled"
+	TodoLineKeyReported          = "reported"
+	TodoLineKeySuperseded        = "superseded"
+	TodoLineKeySomeday           = "someday"
 )
 
 // TodoLineKeys are the values of TodoLineKey, in order.
-var TodoLineKeys = []string{"failed_start", "agent_asks", "interrupted", "decision", "decision_default", "cannot", "awaits_reply", "working", "persona_working", "starting", "background", "parked", "finished", "accepted", "deployed", "pr_open", "usage_limit", "run_waits", "finished_seen", "completed", "canceled", "reported", "superseded", "someday"}
+var TodoLineKeys = []string{"failed_start", "agent_asks", "interrupted", "stopped_unfinished", "decision", "decision_default", "cannot", "awaits_reply", "working", "persona_working", "starting", "background", "parked", "finished", "accepted", "deployed", "pr_open", "usage_limit", "run_waits", "finished_seen", "completed", "canceled", "reported", "superseded", "someday"}
 
 // TodoLineArg: the argument names produced by this version of the projection. TodoLine.args remains an open string
 // dictionary on the wire.

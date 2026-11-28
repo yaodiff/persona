@@ -59,7 +59,9 @@ class AgentRowContentTest {
         assertEquals("#1", botmux.rowContent().words())
         assertEquals("botmux · #1", botmux.rowContent(AgentRowContext(host = true)).words())
         assertEquals("#1", row { copy(paneId = "w1:p2", slotIndex = 1) }.rowContent(AgentRowContext(host = true)).words())
-        assertEquals("herdr-core · #1", row { copy(paneId = "herdr-core:t1", slotIndex = 1) }.rowContent(AgentRowContext(host = true)).words())
+        // the host by its name, never its id (#17054)
+        assertEquals("Herdr App · #1", row { copy(paneId = "herdr-core:t1", slotIndex = 1) }.rowContent(AgentRowContext(host = true)).words())
+        assertEquals("Orca · #1", row { copy(paneId = "orca:tab1:leaf1", slotIndex = 1) }.rowContent(AgentRowContext(host = true)).words())
     }
 
     @Test fun theSourceTagIsWhereItWasOpened() {

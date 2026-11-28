@@ -101,8 +101,10 @@ func TestLarkSupervisedTerminalDialog(t *testing.T) {
 			t.Errorf("title lacks %q: %s", want, card.Header.Title.Content)
 		}
 	}
-	preview, _ := card.Config["summary"].(map[string]any)
-	summary, _ := preview["content"].(string)
+	if card.Config == nil || card.Config.Summary == nil {
+		t.Fatal("missing chat preview")
+	}
+	summary := card.Config.Summary.Content
 	if !strings.Contains(summary, dialog.Question) {
 		t.Errorf("chat preview lacks question: %q", summary)
 	}
@@ -129,14 +131,7 @@ func TestLarkTerminalRoutingWithoutLeaders(t *testing.T) {
 	}
 	plain := screenAsk("ordinary", "unrelated-session")
 	e.raise(plain)
-	waitFor(t, "ordinary terminal routed to main", func() bool {
-		for _, m := range laterFor(e.s, "conv1") {
-			if m.From == cardAgentQuestion && strings.Contains(m.Text, "interaction_id="+plain.ID) {
-				return true
-			}
-		}
-		return false
-	})
+	e.noticeWith("conv1", "interaction_id="+plain.ID)
 	if !e.lastShown(plain.ID).Delegating || e.pushesOf(plain.ID) != 0 {
 		t.Fatal("ordinary non-owner terminal pushed to the owner instead of routing to main")
 	}

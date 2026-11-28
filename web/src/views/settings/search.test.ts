@@ -73,6 +73,7 @@ const views = new URL("../", import.meta.url);
 const sources = (readdirSync(views, { recursive: true }) as string[])
   .filter((f) => f.endsWith(".tsx") && !f.includes(".test."))
   .map((f) => readFileSync(new URL(f, views), "utf8"))
+  .concat(read("../../modules/mail/MailSettings.tsx"))
   // Advanced › Appearance's extension theme row is drawn by ui/ExtensionThemePicker.tsx when a theme is installed
   .concat(readFileSync(new URL("../../ui/ExtensionThemePicker.tsx", import.meta.url), "utf8"))
   .join("\n");
@@ -95,6 +96,18 @@ const { LOCAL_SHORTCUTS, SHORTCUTS } = await import("../../lib/shortcuts");
 const { TERMINAL_LABS_ID } = await import("../../lib/labs-terminal");
 
 describe("the settings search's index", () => {
+  it.each(languages)("finds both Advanced pages by name and task in $lang", ({ lang, t, searchSettings }) => {
+    const tasks = { en: ["pairing", "manage assistants"], "zh-Hans": ["设备配对", "助手管理"], ja: ["ペアリング", "アシスタントの管理"] };
+    const [pairing, assistants] = tasks[lang as keyof typeof tasks];
+    expect(searchSettings(t("settings-nav.search_advanced_appearance")).tabs).toContain("advanced");
+    if (lang === "en") expect(searchSettings("online").tabs).toContain("managers");
+    for (const [tab, task] of [["devices", pairing], ["managers", assistants]]) {
+      for (const query of [t(`settings-nav.tab_${tab}`), task]) {
+        expect(searchSettings(query).tabs).toContain(tab);
+      }
+    }
+  });
+
   it("reads the pages' row labels (the scan finds what it should)", () => {
     expect(labels).toEqual(expect.arrayContaining([
       "settings-assistantsettings.timezone", "settings-triagesettings.auto_continue", "settings-notifications.quiet",
@@ -118,6 +131,7 @@ describe("the settings search's index", () => {
     finds(t("settings-assistantsettings.timezone"), "persona", "runs-on");
     finds(t("settings-assistantsettings.recent_task_chats"), "persona", "recent-task-chats");
     finds(t("settings-assistantsettings.default_permissions"), "persona", "default-permissions");
+    finds(t("settings-assistantsettings.approval_mirror_main"), "persona", "approval-mirror-main");
     finds(t("settings-triagesettings.auto_continue"), "persona", "triage-auto-continue");
     finds(t("settings-notifications.quiet"), "notifications", "notify-quiet");
     finds(t("settings-notifications.system_always"), "notifications", "notify-system-always");
@@ -179,17 +193,49 @@ describe("the settings search's index", () => {
     expect(off.tabs).not.toContain("integrations");
     expect(off.groups).toContainEqual(expect.objectContaining({ tab: "sources", anchor: "inbox-sources" }));
 
-    const on = searchSettings(label, true);
+    const on = searchSettings(label, true, true);
     expect(on.tabs).toContain("integrations");
     expect(on.tabs).not.toContain("sources");
     expect(on.groups).toContainEqual(expect.objectContaining({ tab: "integrations", anchor: "inbox-sources", sub: "-sources" }));
 
-    const flow = searchSettings(t("settings-integrations.view_sources"), true);
+    const flow = searchSettings(t("settings-integrations.view_sources"), true, true);
     expect(flow.groups).toContainEqual(expect.objectContaining({ tab: "integrations", anchor: "inbox-sources", sub: "-sources" }));
 
     const fwdLabel = t("settings-assistantsettings.inbox_todo_forward");
     expect(searchSettings(fwdLabel, false).groups).toContainEqual(expect.objectContaining({ tab: "sources", anchor: "inbox-todo-forward" }));
-    expect(searchSettings(fwdLabel, true).groups).toContainEqual(expect.objectContaining({ tab: "integrations", anchor: "inbox-todo-forward", sub: "-sources" }));
+    expect(searchSettings(fwdLabel, true, true).groups).toContainEqual(expect.objectContaining({ tab: "integrations", anchor: "inbox-todo-forward", sub: "-sources" }));
+  });
+
+  it.each(languages)("uses the available Data flow destination once in $lang", ({ t, searchSettings }) => {
+    const forward = t("settings-assistantsettings.inbox_todo_forward");
+    const flow = t("settings-integrations.view_sources");
+    expect(searchSettings(forward, true, true).groups).toEqual([
+      expect.objectContaining({ tab: "integrations", group: `${flow} › ${forward}`, sub: "-sources" }),
+    ]);
+    expect(searchSettings(forward, true, false).groups).toEqual([expect.objectContaining({ tab: "persona" })]);
+    for (const key of ["settings-nav.tab_sources", "settings-integrations.view_sources", "external-sources.flows"]) {
+      expect(searchSettings(t(key), true, false).groups.filter((g) => g.sub === "-sources")).toEqual([]);
+    }
+  });
+
+  it.each(languages)("finds each integration setting at its own destination in $lang", ({ t, searchSettings }) => {
+    for (const [key, sub] of [
+      ["settings-connectors.lark", "builtin:lark"], ["settings-larksync.title", "builtin:feishu-bot"],
+      ["settings-extensions.market_title", "-market"], ["settings-extensionmarket.manage_markets", "-markets"],
+      ["settings-feishubot.title", "builtin:feishu-bot"], ["settings-larkdisplay.anti_recall", "builtin:lark"],
+      ["settings-larkdisplay.edit_history", "builtin:lark"], ["external-sources.flows", "-sources"],
+      ["settings-integrations.thread_mode_title", "builtin:feishu-bot"], ["settings-integrations.thread_idle_hours_title", "builtin:feishu-bot"],
+    ]) {
+      expect(searchSettings(t(key), true, true).groups, key).toContainEqual(expect.objectContaining({ tab: "integrations", sub }));
+    }
+    for (const field of ["thread_mode", "thread_idle_hours"]) {
+      expect(searchSettings(field, true, true).groups).toEqual([
+        expect.objectContaining({ sub: "builtin:feishu-bot", anchor: `configuration-channel-routing-feishu-${field}` }),
+      ]);
+    }
+    expect(searchSettings(t("settings-extensions.title"), true, true).groups).toContainEqual(expect.objectContaining({
+      tab: "integrations", anchor: "extensions", group: t("settings-integrations.group_extensions"),
+    }));
   });
 
   it("lands every entry on something a page draws, and lists each once", () => {
@@ -207,7 +253,7 @@ describe("the settings search's index", () => {
         const m = re.exec(anchor);
         return !!m && sources.includes(code) && takes(m[1]);
       });
-    expect(SEARCH_INDEX.filter((g) => !drawn(g.anchor)).map((g) => g.anchor)).toEqual([]);
+    expect(SEARCH_INDEX.filter((g) => g.anchor ? !drawn(g.anchor) : !g.sub).map((g) => g.anchor)).toEqual([]);
     const keys = SEARCH_INDEX.map((g) => `${g.tab}/${g.anchor}/${g.group}`);
     expect(keys.length).toBe(new Set(keys).size);
   });

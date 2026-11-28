@@ -331,7 +331,7 @@ describe("an associated tab name in the complete Agents list (#7595)", () => {
   });
 
   it("keeps the plain fallback in an idle multi-session space without duplicating an associated identity", async () => {
-    const plain = { ...sessions[1], session_id: "plain", title: "Plain fallback", space_id: "w1", space_name: "demo", slot_name: "Workspace only", status: "idle" as const, state: "idle" as const, updated_at: undefined };
+    const plain = { ...sessions[1], session_id: "plain", title: "Plain fallback", space_id: "w1", space_name: "demo", slot_name: "Workspace only", status: "idle" as const, state: "idle" as const, turn_error: undefined, updated_at: undefined };
     const associated = { ...plain, session_id: "associated", title: "Associated", slot_id: "w1:t1", tab_id: "w1:t1", slot_name: "Release Review", pane_id: "w1:p1" };
     seed();
     getState().sessions = { mac: [plain, associated] };

@@ -3,7 +3,7 @@
 // idle/unread with starting=false, making sidebar groups (e.g. "Not on a to-do") flash "Done unread" before flipping
 // to "Working". This keeps the launched session projected as working until the hub confirms working/terminal state or
 // the handoff window expires, without mutating the underlying hub rows in the store.
-import { stateOf } from "./format";
+import { activityOf, stateOf } from "./format";
 import type { AgentLaunch } from "./new-agent";
 import type { Session } from "./types";
 
@@ -34,7 +34,7 @@ export function launchHandoffSettled(s: Session, launch: AgentLaunch, now: numbe
   if (launch.phase === "failed" || launch.handoffAt === undefined) return true;
   if (now - launch.handoffAt >= LAUNCH_HANDOFF_MS) return true;
   if (launch.phase !== "ready") return false;
-  const st = stateOf(s);
+  const st = activityOf(s);
   if (st === "working" || st === "needs_you" || st === "offline") return true;
   if (s.start_error || s.failure_reason || s.turn_error) return true;
   if (s.awaits_reply || s.work) return true;

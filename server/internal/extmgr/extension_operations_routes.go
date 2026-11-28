@@ -132,8 +132,30 @@ func (h *Manager) operationRoutes(api *http.ServeMux) {
 		state, previewID, cancel := op.v.State, op.v.PreviewID, op.cancel
 		consent := stepOf(&op.v, extension.StepConsent) // an uninstall has none
 		previewing := consent != nil && consent.State == extension.StepPending
-		if state == opRunning && previewing && cancel != nil {
+		canceledConsent := false
+		var cleanups []func()
+		switch {
+		case state == opRunning && previewing && cancel != nil:
 			op.canceling = true
+		case state == opRunning:
+		case state == opNeedsConsent:
+			// Transition to canceled and detach the primary and bundle member previews
+			// from the registry atomically under ops.mu so a concurrent POST /install
+			// cannot either claim the op or fall back to installing the canceled preview.
+			if bundleIDs, ok := cancelOpLocked(op); ok {
+				op.v.UpdatedAt = time.Now()
+				canceledConsent = true
+				if c := ps.reg.DetachPreview(previewID); c != nil {
+					cleanups = append(cleanups, c)
+				}
+				for _, bid := range bundleIDs {
+					if c := ps.reg.DetachPreview(bid); c != nil {
+						cleanups = append(cleanups, c)
+					}
+				}
+			}
+		default:
+			delete(ps.ops.byID, op.v.ID)
 		}
 		ps.ops.mu.Unlock()
 		switch {
@@ -142,13 +164,11 @@ func (h *Manager) operationRoutes(api *http.ServeMux) {
 		case state == opRunning:
 			writeExtensionResponseError(w, r, http.StatusConflict, "cannot_cancel", i18n.Err("hub-extension_operations.cannot_cancel"))
 			return
-		case state == opNeedsConsent:
-			ps.reg.Discard(previewID)
-			h.cancelOp(op)
-		default:
-			ps.ops.mu.Lock()
-			delete(ps.ops.byID, op.v.ID)
-			ps.ops.mu.Unlock()
+		case canceledConsent:
+			for _, c := range cleanups {
+				c()
+			}
+			h.pushOp(op, true)
 		}
 		w.WriteHeader(http.StatusNoContent)
 	}))

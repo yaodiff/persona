@@ -8,7 +8,7 @@ import (
 )
 
 func TestBundleCommitRechecksMarketTrustForEveryMember(t *testing.T) {
-	for _, failure := range []string{"removed", "invalid-signature", "changed-key", "changed-spec"} {
+	for _, failure := range []string{"removed", "invalid-signature", "changed-key", "changed-keys", "changed-spec"} {
 		t.Run(failure, func(t *testing.T) {
 			h, phone, _ := marketHub(t)
 			memberMarket := bundleMarketFixture(t, h, phone, map[string]string{"child": bundleGraphPackage(t, "child", "1.0.0")})
@@ -32,6 +32,8 @@ func TestBundleCommitRechecksMarketTrustForEveryMember(t *testing.T) {
 				state.rec.Error = "synthetic signature failure"
 			case "changed-key":
 				state.rec.SigningKey = "synthetic changed public key"
+			case "changed-keys":
+				state.rec.TrustedKeys = []string{"synthetic added public key"}
 			case "changed-spec":
 				state.rec.Spec = "github:example/changed-market"
 			}

@@ -15,7 +15,7 @@ import org.junit.runners.Parameterized
 class AgentListFixtureTest internal constructor(private val fixture: ListFixture) {
     companion object {
         @JvmStatic @Parameterized.Parameters(name = "{0}")
-        fun cases(): List<Array<Any>> = listFixtures("spec/fixtures/sort")
+        fun cases(): List<Array<Any>> = listFixtures("spec/fixtures/sort", "spec/fixtures/sort/next/held_set.json")
     }
 
     @Test fun matchesExpected() {
@@ -44,6 +44,9 @@ class AgentListFixtureTest internal constructor(private val fixture: ListFixture
                     quick = AgentQuickFilter.entries.single { it.name.equals(settings.string("quick"), ignoreCase = true) },
                     machineFilter = settings.string("machine_filter"), query = settings.string("query"),
                     kept = settings.strings("kept").toSet(), folded = settings.strings("folded").toSet(),
+                    heldSeen = (settings["held_seen"] as? JsonObject).orEmpty().mapValues { (_, place) ->
+                        AgentSeenPlace.entries.single { it.wire == place.jsonPrimitive.content }
+                    },
                     expandedIdle = settings.strings("expanded_idle").toSet(), expandedQuiet = settings.strings("expanded_quiet").toSet(),
                 ), held = settings.optional("held"))
                 val output = linkedMapOf<String, Any?>(
@@ -56,6 +59,7 @@ class AgentListFixtureTest internal constructor(private val fixture: ListFixture
                             group.parent?.let { put("parent", it) }
                             group.stateCounts?.let { put("state_counts", it.mapKeys { entry -> entry.key.wire }) }
                             group.spoken?.let { put("spoken", it) }
+                            if ("held_seen" in settings) put("held_seen", group.heldSeen)
                         }
                     },
                     "unread_shown" to result.unreadShown,

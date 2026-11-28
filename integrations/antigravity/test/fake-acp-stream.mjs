@@ -14,6 +14,7 @@ const timer = setInterval(() => {
   const commands = readFileSync(`${directory}/updates.jsonl`, 'utf8').split('\n').filter(Boolean)
   for (const line of commands.slice(consumed)) {
     const { sessionId: target = sessionId, ...update } = JSON.parse(line)
+    if (update.exit) process.exit(0)
     if (update.permission) {
       send({ id: update.permission, method: 'session/request_permission', params: {
         sessionId: target,

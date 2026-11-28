@@ -94,6 +94,20 @@ func TestHookResumesOnNextNode(t *testing.T) {
 	if first.Resume || !second.Resume || !third.Resume {
 		t.Fatal("only reconnects are resumes")
 	}
+	occurrence := func(req sockRequest) string {
+		raw, _ := json.Marshal(req)
+		var fields map[string]any
+		_ = json.Unmarshal(raw, &fields)
+		at, _ := fields["created_at"].(string)
+		return at
+	}
+	firstAt := occurrence(first)
+	if firstAt == "" || occurrence(second) != firstAt || occurrence(third) != firstAt {
+		t.Fatalf("occurrence timestamps %q %q %q, want one nonzero timestamp preserved across reconnects", firstAt, occurrence(second), occurrence(third))
+	}
+	if _, err := time.Parse(time.RFC3339Nano, firstAt); err != nil {
+		t.Fatalf("occurrence timestamp %q: %v", firstAt, err)
+	}
 }
 
 func TestHookWithoutNodeLeavesItToTheTUI(t *testing.T) {

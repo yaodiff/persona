@@ -1,4 +1,4 @@
 {
   "handoff_title": "交接内容——切换时发送给新引擎的上下文摘要（不计入对话记录，仅在此展示）",
-  "earlier_failed": "这段对话较早的部分没能加载：{error}"
+  "earlier_failed": "无法加载此对话较早的内容：{error}"
 }

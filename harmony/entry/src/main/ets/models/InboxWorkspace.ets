@@ -306,6 +306,7 @@ export class InboxWorkspace {
   @Trace items: ResourceRow[] = [];
   @Trace selected: ResourceRow = new ResourceRow();
   @Trace detail: Record<string, Object> = {};
+  @Trace kbChat: Record<string, Object> = {};
   @Trace sourceFilter: string = 'all';
   @Trace accountFilter: string = 'all';
   @Trace kindFilter:string = '';
@@ -571,7 +572,14 @@ export class InboxWorkspace {
     }));
   }
   filterAccountName(key:string):string { return this.filterAddresses[key] || this.accountName(key); }
+  private mailAllowed(client: ClientModel | undefined = this.client): boolean {
+    return !client || typeof client.mailModuleAllowed !== 'function' || client.mailModuleAllowed();
+  }
   private async readFilterAccounts(owner:OwnerSnapshot,current:() => boolean):Promise<void> {
+    if (!this.mailAllowed(owner.client)) {
+      if (current()) this.filterAddresses = {};
+      return;
+    }
     try {
       const result=await owner.repo.call('/api/v1/mail/accounts'+managerQuery(owner.managerId));
       if (!current()) return;
@@ -583,7 +591,7 @@ export class InboxWorkspace {
       this.filterAddresses=names;
     } catch (_) { if (current()) this.filterAddresses={}; }
   }
-  canComposeMail():boolean { return this.active && !!this.client?.connected && Object.keys(this.filterAddresses).length>0 && this.canWrite(); }
+  canComposeMail():boolean { return this.mailAllowed() && this.active && !!this.client?.connected && Object.keys(this.filterAddresses).length>0 && this.canWrite(); }
   sourceName(value: string): string {
     if (value === 'all') return 'all';
     if (value === 'mail') return 'mail';
@@ -655,6 +663,7 @@ export class InboxWorkspace {
     if (this.referenceMode) return false;
     const source = itemSource(this.selected, this.detail), connector = Wire.object(this.detail, 'connector');
     if (source === 'mail') {
+      if (!this.mailAllowed()) return false;
       const target = Wire.object(this.detail, 'reply_target');
       return !!this.selected.id && !done(this.selected) && Wire.number(target, 'uid') > 0 && !!Wire.text(target, 'version');
     }
@@ -799,6 +808,7 @@ export class InboxWorkspace {
     this.threadReplyTo = ''; this.threadReply = false; this.handoffDraft = ''; this.handoffBusy = false;
     this.referenceMode = false; this.referenceThreadId = ''; this.referenceThreadTitle = '';
     this.currentThreadRootMessage = ''; this.currentThreadCanReply = false; this.referenceThreadLoaded = false;
+    this.kbChat = {};
   }
 
   private capture(row: ResourceRow | undefined = this.selected): OwnerSnapshot {
@@ -1074,13 +1084,18 @@ export class InboxWorkspace {
       const updated = this.detailRow(data, row);
       if (updated.id && updated.id !== row.id) { this.error = 'identity_changed'; return; }
       updated.id = row.id; this.selected = updated; this.selectedKey = updated.key(); this.detail = data;
+      const topKbChat = Wire.object(result, 'kb_chat');
+      this.kbChat = Object.keys(topKbChat).length ? topKbChat : Wire.object(data, 'kb_chat');
       const nextTargetRevision = targetRevision(updated, data);
       if (this.detailTargetRevision) this.replyTargetChanged = this.detailTargetRevision !== nextTargetRevision;
       this.detailTargetRevision = nextTargetRevision;
       this.items = updateResourceList(this.items, updated);
       this.error = '';
       const source = itemSource(updated, data);
-      if (source === 'mail') await this.loadMail(owner, updated, data);
+      if (source === 'mail') {
+        if (this.mailAllowed(owner.client)) await this.loadMail(owner, updated, data);
+        else this.mailMessages = [];
+      }
       else if (Object.keys(genericConversation(data, updated)).length || Object.keys(Wire.object(data, 'lark')).length) await this.loadConversation(owner, updated, data);
     } catch (error) { if (this.owns(owner)) this.error = this.errorCode(error as Error); }
     finally { if (this.owns(owner)) this.detailLoading = false; }
@@ -1113,7 +1128,7 @@ export class InboxWorkspace {
   }
 
   async markMailVisible(uid: number): Promise<void> {
-    if (!this.isMail() || this.mailReadUids.includes(uid) || !Number.isSafeInteger(uid) || uid <= 0) return;
+    if (!this.isMail() || !this.mailAllowed() || this.mailReadUids.includes(uid) || !Number.isSafeInteger(uid) || uid <= 0) return;
     let owner: OwnerSnapshot;
     try { owner = this.capture(); } catch (_) { return; }
     const mail = Wire.object(this.detail, 'mail'), mailbox = Wire.text(mail, 'mailbox', 'INBOX'), account = Wire.text(mail, 'account_id');
@@ -1594,6 +1609,7 @@ export class InboxWorkspace {
   }
 
   async openMailCompose(): Promise<void> {
+    if (!this.mailAllowed()) return;
     let owner: OwnerSnapshot; try { owner = this.capture(undefined); } catch (error) { this.error = this.errorCode(error as Error); return; }
     this.mailComposeError = ''; this.mailComposeOpen = true; this.mailComposeBusy = true; this.mailComposeReady = false;
     this.mailComposeBlocked = false; this.mailComposeState = 'draft'; this.mailComposeAccount = '';

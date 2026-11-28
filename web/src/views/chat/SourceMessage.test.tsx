@@ -37,7 +37,7 @@ describe("source messages in the actual transcript renderer", () => {
     const cards = host.querySelectorAll('[data-message-source="scheduled_task"]');
     expect(cards).toHaveLength(2);
     const card = cards[0];
-    expect(card.textContent).toContain("由已安排任务发送");
+    expect(card.textContent).toContain("由定时任务发送");
     const preview = card.querySelector("[data-scheduled-body]");
     expect(preview?.textContent).toBe(prompt);
     expect(preview?.classList.contains("line-clamp-2")).toBe(true);

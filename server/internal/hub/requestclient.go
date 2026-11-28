@@ -8,6 +8,7 @@ import (
 type requestClient struct {
 	Platform string
 	Version  string
+	Instance string
 }
 
 type requestClientKey struct{}
@@ -30,4 +31,14 @@ func parseRequestClient(value string) requestClient {
 		}
 	}
 	return requestClient{Platform: platform, Version: version}
+}
+
+// parseRequestClientInstance binds web REST requests to the same tab's hello.
+// It is an opaque, bounded token, never a credential or a durable device ID.
+func parseRequestClientInstance(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" || len(value) > 128 || strings.Trim(value, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._+-") != "" {
+		return ""
+	}
+	return value
 }

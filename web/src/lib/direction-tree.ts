@@ -24,6 +24,8 @@ export interface DirectionCounts {
   needs_you: number;
   stuck: number;
   review: number;
+  /** Open tasks accepted by their supervisor awaiting optional owner verification (`user_check`), subset of `review`. */
+  user_check?: number;
   /** Not started (#5846): absent from an older hub; normalizeCounts makes it 0. */
   planned?: number;
 }
@@ -121,7 +123,8 @@ export function normalizeTree(raw: unknown): DirectionTree {
 function normalizeCounts(raw: unknown): DirectionCounts {
   const c = (raw ?? {}) as Partial<Record<keyof DirectionCounts, unknown>>;
   const n = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : 0);
-  return { working: n(c.working), needs_you: n(c.needs_you), stuck: n(c.stuck), review: n(c.review), planned: n(c.planned) };
+  const user_check = n(c.user_check);
+  return { working: n(c.working), needs_you: n(c.needs_you), stuck: n(c.stuck), review: n(c.review), ...(user_check > 0 ? { user_check } : {}), planned: n(c.planned) };
 }
 
 function validAgent(a: unknown): a is DirectionAgent {

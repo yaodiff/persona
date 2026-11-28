@@ -167,10 +167,7 @@ func (ps *extensions) storageStart(ctx context.Context, p *extension.Extension) 
 // storageRuntimeContext keeps a restored process alive until the manager stops,
 // not merely until the authenticated restore HTTP request has returned.
 func (ps *extensions) storageRuntimeContext() context.Context {
-	if ps.ctx != nil {
-		return ps.ctx
-	}
-	return context.Background()
+	return ps.runtimeContext(nil)
 }
 
 func (h *Manager) storageRoutes(api *http.ServeMux) {

@@ -6,9 +6,15 @@ import Testing
 struct NotificationWithdrawalTests {
     private let t0 = Date(timeIntervalSince1970: 1_000_000)
 
-    private func delivered(_ identifier: String, _ id: String, group: String = "", at seconds: TimeInterval = 0)
-        -> NotificationWithdrawal.Delivered {
-        .init(identifier: identifier, group: group, interactionID: id, date: t0.addingTimeInterval(seconds))
+    private func delivered(_ identifier: String, _ id: String, group: String = "", at seconds: TimeInterval = 0,
+                           occurrence: String? = nil) -> NotificationWithdrawal.Delivered {
+        .init(identifier: identifier, group: group, interactionID: id, date: t0.addingTimeInterval(seconds),
+              interactionCreatedAt: occurrence)
+    }
+
+    private func interaction(_ id: String, occurrence: String) throws -> Interaction {
+        try JSONDecoder().decode(Interaction.self, from: Data(
+            #"{"id":"\#(id)","machine_id":"m","session_id":"s","kind":"permission","created_at":"\#(occurrence)"}"#.utf8))
     }
 
     private func deliveredTodo(_ identifier: String, _ todoID: String, group: String = "", at seconds: TimeInterval = 0)
@@ -34,6 +40,18 @@ struct NotificationWithdrawalTests {
         #expect(NotificationWithdrawal.settled(gone: ["ix1"], pending: ["g2|ix1"], delivered: pushes) == ["home"])
         // A group forgotten: all of its interactions left at once.
         #expect(NotificationWithdrawal.settled(gone: ["g2|ix1", "g2|ix9"], pending: ["ix1"], delivered: pushes) == ["work"])
+    }
+
+    @Test func modelRemovalLeavesAReplacementAlertBeforeItsModelEvent() throws {
+        let firstAt = "2026-01-02T03:04:05.000000001Z"
+        let secondAt = "2026-01-02T03:04:05.000000002Z"
+        let first = try interaction("ix1", occurrence: firstAt)
+        let second = try interaction("ix1", occurrence: secondAt)
+        let pushes = [delivered("old", "ix1", occurrence: firstAt), delivered("new", "ix1", occurrence: secondAt)]
+        let gone = [first.uid: first]
+        #expect(NotificationWithdrawal.settledOccurrences(gone: gone, pending: [:], delivered: pushes) == ["old"])
+        #expect(NotificationWithdrawal.settledOccurrences(gone: gone, pending: [second.uid: second], delivered: pushes) == ["old"])
+        #expect(NotificationWithdrawal.settledOccurrences(gone: gone, pending: [first.uid: first], delivered: [pushes[0]]).isEmpty)
     }
 
     @Test func aGroupsWholeListTakesBackWhatItNoLongerHas() {
@@ -72,6 +90,17 @@ struct NotificationWithdrawalTests {
         // A push that did not say whose: the ids in any group.
         #expect(NotificationWithdrawal.resolved(["ix1", "ix3"], group: nil, delivered: pushes) == ["n1", "n3"])
         #expect(NotificationWithdrawal.resolved([], group: nil, delivered: pushes).isEmpty)
+    }
+
+    @Test func aDelayedWithdrawalDoesNotRemoveItsSameIDReplacement() {
+        let first = "2026-01-02T03:04:05.000000001Z"
+        let second = "2026-01-02T03:04:05.000000002Z"
+        let pushes = [delivered("old", "ix1", occurrence: first), delivered("new", "ix1", occurrence: second)]
+        let over = [NotificationWithdrawal.Resolved(interactionID: "ix1", interactionCreatedAt: first)]
+        #expect(NotificationWithdrawal.resolvedOccurrences(over, group: "", delivered: pushes) == ["old"])
+        // A pre-occurrence alert can still be collected after an upgrade; a known replacement cannot.
+        let legacy = delivered("legacy", "ix1")
+        #expect(NotificationWithdrawal.resolvedOccurrences(over, group: "", delivered: [legacy]) == ["legacy"])
     }
 
     @Test func anAssistantCardsPushWaitsForItsWithdrawal() {

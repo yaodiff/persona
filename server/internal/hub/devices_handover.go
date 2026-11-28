@@ -39,7 +39,7 @@ func (h *Hub) devicesConfigFor(id string) devicewire.Config {
 			}
 		}
 	}
-	out.AutoUpdateNodes = h.upd.nodesEnabled()
+	out.AutoUpdateNodes = h.upd.nodesEnabled() && h.upd.isConfirmed()
 	for _, mc := range h.cfgEntries() {
 		if h.entryOwner(mc.ID) != id {
 			continue
@@ -57,6 +57,9 @@ func (h *Hub) devicesConfigFor(id string) devicewire.Config {
 	out.NodePackagesURL, out.NodePackagesProxy = h.nodePackages()
 	if h.upd != nil {
 		target, hold := h.upd.confirmedDevelopment()
+		if h.managerCan(id, devicewire.PublishedPackagesCapability) {
+			out.PublishedTarget = h.upd.publishedBuild()
+		}
 		if target != nil && id != devicesOwner {
 			if h.managerCan(id, devicewire.DevelopmentPackagesCapability) {
 				out.DevelopmentTarget = target
@@ -216,13 +219,9 @@ func (h *Hub) queueDevicesConfig(checkNodes bool) {
 				d.sent[p.ID] = b
 				d.mu.Unlock()
 			}
-			if checkNodes && cfg.AutoUpdateNodes {
-				ctx, cancel := context.WithTimeout(context.Background(), updateRequestLimit)
-				if err := h.callBus(ctx, p.ID, devicewire.MethodUpdateNodes, map[string]any{}, nil); err != nil {
-					h.logf("update: [%s] checks its node packages: %v", p.ID, err)
-				}
-				cancel()
-			}
+		}
+		if checkNodes && h.upd.nodesEnabled() && h.upd.isConfirmed() {
+			h.updateNodes(context.Background())
 		}
 	})
 }

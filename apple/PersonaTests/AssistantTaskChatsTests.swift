@@ -85,3 +85,75 @@ struct AssistantTaskChatsTests {
         #expect(AssistantTaskChats.label(.init(key: key, at: nil), index: 1, now: now) == "对话 2")
     }
 }
+
+@MainActor
+extension AssistantTaskChatsTests {
+    @MainActor private final class PendingTasks {
+        var reply: CheckedContinuation<Data, Never>?
+        func wait() async throws {
+            let clock = ContinuousClock()
+            let end = clock.now.advanced(by: .seconds(3))
+            while reply == nil && clock.now < end { try await Task.sleep(for: .milliseconds(5)) }
+            try #require(reply != nil)
+        }
+
+        func client(group: String) -> APIClient {
+            let hub = FakeHub()
+            hub.on("GET", "/api/v1/assistant/runs", json: #"{"runs":[]}"#)
+            hub.onAsync("GET", "/api/v1/assistant/tasks") { _ in
+                await withCheckedContinuation { self.reply = $0 }
+            }
+            var api = hub.client
+            api.group = group
+            return api
+        }
+
+        func finish(_ title: String) throws {
+            let row = APIClient.ScheduledTask(id: "task", title: title, prompt: "p", repeats: .daily)
+            let data = try JSON.encoder.encode(["tasks": [row]])
+            reply?.resume(returning: data)
+            reply = nil
+        }
+    }
+
+    @Test func cancelledSidebarReadCanBeReplacedOnTheSamePage() async throws {
+        let store = AssistantTaskChatsStore()
+        let old = PendingTasks(), fresh = PendingTasks()
+        let a = old.client(group: "home"), replacement = fresh.client(group: "home")
+        let first = Task { await store.refresh(a) }
+        try await old.wait()
+        // The duplicate during the active read coalesces, as a second sidebar would.
+        await store.refresh(replacement)
+        #expect(fresh.reply == nil)
+
+        first.cancel()
+        let second = Task { await store.refresh(replacement) }
+        try await fresh.wait()
+        try fresh.finish("fresh")
+        await second.value
+        try old.finish("stale")
+        await first.value
+        #expect(store.known(on: a).topics == ["fresh"])
+    }
+
+    @Test func onlyTheLatestSidebarVisitAppliesItsReadAfterReturningToAHub() async throws {
+        let store = AssistantTaskChatsStore()
+        let old = PendingTasks(), away = PendingTasks(), returned = PendingTasks()
+        let home = old.client(group: "home"), work = away.client(group: "work"), homeAgain = returned.client(group: "home")
+        let first = Task { await store.refresh(home) }
+        try await old.wait()
+        let second = Task { await store.refresh(work) }
+        try await away.wait()
+        let third = Task { await store.refresh(homeAgain) }
+        try await returned.wait()
+
+        try returned.finish("new-home")
+        await third.value
+        try old.finish("old-home")
+        await first.value
+        try away.finish("old-work")
+        await second.value
+        #expect(store.known(on: home).topics == ["new-home"])
+        #expect(store.known(on: work) == .none)
+    }
+}

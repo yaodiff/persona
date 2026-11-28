@@ -1,0 +1,6 @@
+/* Adjacent wrapped choices each own their full touch target. */
+@media (pointer: coarse) {
+  .machine-views [role="radio"] {
+    min-height: calc(var(--spacing) * 11);
+  }
+}

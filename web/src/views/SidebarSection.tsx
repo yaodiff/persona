@@ -129,7 +129,7 @@ export function Section({ title, children, folded, onToggle, right, onMenu, firs
 /** A group title's count with what it counts: a tooltip, and the same words for a screen reader. */
 export function GroupCount({ n, label, className, dataGoalProgress }: { n: number | string; label: string; className?: string; dataGoalProgress?: string }) {
   return (
-    <span title={label} data-goal-progress={dataGoalProgress} className={cx("text-[10.5px] text-ink-3 tabular-nums", className)}>
+    <span title={label} data-goal-progress={dataGoalProgress} className={cx("inline-block min-w-4 text-right text-[10.5px] text-ink-3 tabular-nums", className)}>
       <span aria-hidden>{n}</span>
       <span className="sr-only">{label}</span>
     </span>

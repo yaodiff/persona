@@ -18,6 +18,8 @@ export interface HubNotice {
   card?: string;
   title: string;
   body: string;
+  /** The exact occurrence the event announced; absent from an older hub. */
+  created_at?: string;
   /** Where clicking it goes, a path of lib/router.ts. */
   path: string;
   /** Under this browser's "When something needs you" switch, as the hub's push is under the device's (`input`). */
@@ -51,15 +53,17 @@ function digest(text: string): string {
 export function hubNotice(msg: Record<string, unknown>, followed: (key: string) => boolean, cards: readonly Interaction[]): HubNotice | undefined {
   const kind = str(msg.kind);
   const mid = str(msg.machine_id), sid = str(msg.session_id), ixId = str(msg.interaction_id), id = str(msg.id);
+  const occurrence = str(msg.interaction_created_at) || undefined;
   const title = str(msg.title).trim(), subtitle = str(msg.subtitle).trim(), text = str(msg.body).trim();
   const words = { title: title || subtitle || "Persona", body: [title ? subtitle : "", text].filter(Boolean).join("\n") };
   const at = mid && sid ? `/s/${encodeURIComponent(mid)}/${encodeURIComponent(sid)}` : "";
   if (kind === "interaction" || kind === "reply") {
     if (!sid) return undefined;
     const ix = ixId ? cards.find((c) => c.id === ixId) : undefined;
+    if (occurrence && ix?.created_at && ix.created_at !== occurrence) return undefined;
     const key = ix ? homeKey(ix) : `${mid}/${sid}`;
     if (followed(key)) return undefined;
-    return { ...words, tag: `${key}#needs`, key, card: ixId || undefined, path: at || "/", needs: true, hush: true, manager: ix?.manager };
+    return { ...words, tag: `${key}#needs`, key, card: ixId || undefined, ...(occurrence ? { created_at: occurrence } : {}), path: at || "/", needs: true, hush: true, manager: ix?.manager };
   }
   if (kind !== "assistant" && kind !== "alert") return undefined;
   const todo = msg.todo && typeof msg.todo === "object" ? (msg.todo as Record<string, unknown>) : undefined;

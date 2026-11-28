@@ -68,6 +68,8 @@ class AgentsPreferences @Inject constructor(
             pins = AgentPreferences(remote.pins.spaces, remote.pins.sessions, remote.pins.allowed),
             mutes = AgentPreferences(remote.mutes.spaces, remote.mutes.sessions, remote.mutes.allowed),
             seen = remote.seen,
+            seenRows = AgentSeenRows.fromPreference(p[seenRowsKey]),
+            seenRowsNoticed = p[seenRowsNoticedKey] ?: false,
         )
     }
     /** Hub pins and mutes as last read for each pairing scope. */
@@ -159,6 +161,24 @@ class AgentsPreferences @Inject constructor(
      * keeps the style chosen before it.
      */
     override val display: Flow<AgentListDisplay> get() = store.data.map { AgentListDisplay.of(AgentRowStyle.fromPreference(it[rowStyleKey]), it[compactKey] ?: false) }
+    override val seenRows: Flow<AgentSeenRows> get() = store.data.map { AgentSeenRows.fromPreference(it[seenRowsKey]) }
+    override suspend fun setSeenRows(value: AgentSeenRows) {
+        store.edit {
+            it[seenRowsKey] = value.name
+            it[seenRowsNoticedKey] = true
+        }
+    }
+    suspend fun noticeSeenRows(): Boolean {
+        var newlyNoticed = false
+        store.edit {
+            if (it[seenRowsNoticedKey] != true) {
+                newlyNoticed = true
+                it[seenRowsNoticedKey] = true
+            }
+        }
+        return newlyNoticed
+    }
+
     override suspend fun setDisplay(value: AgentListDisplay) {
         store.edit { p ->
             value.style?.let { p[rowStyleKey] = it.name }
@@ -183,6 +203,8 @@ class AgentsPreferences @Inject constructor(
 private val foldedTabsKey = stringSetPreferencesKey("folded-tabs")
 private val compactKey = booleanPreferencesKey("compact")
 private val rowStyleKey = stringPreferencesKey("row-style")
+private val seenRowsKey = stringPreferencesKey("agents-seen-rows")
+private val seenRowsNoticedKey = booleanPreferencesKey("agents-seen-rows-noticed")
 private val legacyHideBotmux = booleanPreferencesKey("hide-botmux")
 private val migrationScope = stringPreferencesKey("hide-botmux-migration-scope")
 private fun showBotmuxKey(scope: String) = booleanPreferencesKey("agents-show-botmux:$scope")
@@ -209,6 +231,8 @@ data class AgentsPreferencesSnapshot(
     val mutes: AgentPreferences = AgentPreferences(),
     val seen: Map<String, String> = emptyMap(),
     val range: AgentRange = AgentRange.Running,
+    val seenRows: AgentSeenRows = AgentSeenRows.Stay,
+    val seenRowsNoticed: Boolean = false,
 ) {
     internal fun hides(session: Session) = session.isBotmux && GroupKeys.namespaceOf(session.machineId) in hiddenBotmuxHubs
     fun prefersHerdrTabName(session: Session): Boolean = GroupKeys.namespaceOf(session.machineId) in herdrTabNameHubs
@@ -240,7 +264,7 @@ data class AgentRowMetadata(
     val hasDraft: Boolean get() = draft.isNotBlank() || hasAttachments
 }
 
-private val Session.readVersion: String get() = "${updatedAt.orEmpty()}|${rev ?: ""}"
+internal val Session.readVersion: String get() = "${updatedAt.orEmpty()}|${rev ?: ""}"
 
 /**
  * The session as the list shows it: one seen on this phone and not yet recorded by the hub is seen at once, no longer

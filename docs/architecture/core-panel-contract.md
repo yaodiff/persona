@@ -12,6 +12,10 @@ field. HTTP routes and WebSocket names in the tables are guarded against source 
 
 - A panel talks only to the hub. The hub answers from its own snapshots or relays to the manager that owns the data;
   a panel does not import a manager or a feature module.
+- Server-first logic, thin clients: any logic that defines shared product truth, domain rules, or must agree across
+  clients (state transitions, validation/idempotency, querying/windowing, projections/counts, permissions/affordances,
+  orchestration, and cross-device state) belongs in the Go server; panels own presentation, local transient UI state,
+  device-native capabilities, and offline/low-latency UX (`docs/architecture/server-first-logic.md`).
 - Credential requirements are route-specific. Rows call out `full`-only operations where that restriction is explicit.
   Scoped `agents.read`, `agents.control`, and `agents.permission_mode` credentials open only their registered subsets;
   an answer-only watch has its own smaller allowlist. Authentication and scope rules are in `docs/protocol/protocol.md`.
@@ -150,7 +154,7 @@ closure is a no-op. Reopening changes the effective state without erasing the re
 
 | Operation | HTTP route | Acceptance and concurrency contract | Source evidence |
 | --- | --- | --- | --- |
-| Accept or answer an owner check | `POST /api/v1/todos/{id}/accept` | Full role only. `asked_at` is required and fences the review round; optional `option`, `response`, or expired-question `answers` supply the answer. Stale or already handled rounds return 409. A recorded but undelivered answer reports `delivered:"none"`; uncertain delivery is explicit rather than safe to repeat blindly. | `server/internal/assistant/briefing_feed.go`, `server/internal/assistant/acceptance_reply.go` |
+| Accept or answer an owner check | `POST /api/v1/todos/{id}/accept` | Full role only. `asked_at` is required and fences the review round; optional `option`, `response`, or expired-question `answers` supply the answer. Stale or already handled rounds return 409. A recorded but undelivered answer reports `delivered:"none"`; uncertain delivery is explicit rather than safe to repeat blindly. | `server/internal/assistant/todo_accept_route.go`, `server/internal/assistant/acceptance_reply.go` |
 | Answer a structured task ask | `POST /api/v1/todos/{id}/asks/{ask}/answer` | Full role only. At most one of `option`, `response`, `text`, or `outcome`; `outcome:"undo"` also requires `receipt`. Returns the ask, outcome, optional delivery and receipt, and current to-do. Supports the to-do operation receipt and `todo_send_state`. | `server/internal/assistant/todo_asks_routes.go`, `server/internal/assistantwire/todo_view_gen.go` |
 | Dismiss an owner decision | `POST /api/v1/todos/{id}/decision-dismiss` | `{review_at}` hides only the current open `needs_user` review and returns `{review_at,dismissal_id}`. Repeating the same dismissal returns its receipt; it does not close the task. | `server/internal/assistantwire/bus.go`, `server/internal/assistant/task_review_dismissals.go` |
 | Undo a decision dismissal | `POST /api/v1/todos/{id}/decision-undo-dismiss` | `{review_at,dismissal_id}` restores that review. An old receipt or changed review returns 409; repeated Undo is idempotent. Dismiss, Undo, and acceptance share per-task action locking. | `server/internal/assistantwire/bus.go`, `server/internal/assistant/task_review_dismissals.go` |

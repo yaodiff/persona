@@ -8,5 +8,11 @@ package persona.core.designsystem
 object SystemSurfaces {
     fun palette(style: AppStyle, dark: Boolean): PersonaPalette = Palettes.of(style, dark)
 
+    /** Palette for [style] in [dark] appearance with the user's chosen [color] preset layered on top. */
+    fun palette(style: AppStyle, dark: Boolean, color: ThemeColor): PersonaPalette {
+        val base = Palettes.of(style, dark)
+        return ThemeColors.accent(color, persona = null)?.let { ThemeColors.palette(base, it) } ?: base
+    }
+
     fun type(style: AppStyle): PersonaType = Types.of(style)
 }

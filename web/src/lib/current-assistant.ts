@@ -70,7 +70,7 @@ export function useScopedTodos() {
   return useScoped(useStore((s) => s.todos));
 }
 
-/** The current assistant's pending cards. */
+/** The current assistant's authoritative pending cards. Conversation views read the store directly so they can show copies. */
 export function useScopedInteractions() {
   return useScoped(useStore((s) => directoryVisibleCards(s.interactions)));
 }

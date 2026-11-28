@@ -1,4 +1,7 @@
 {
+  "kind_pr_merge": "PR のマージ",
+  "kind_agent": "エージェント",
+  "deadline": "期限：{time}",
   "kind_todo_handoff": "結果待ち",
   "handoff_deadline": "結果の期限 {time}",
   "kind_person_reply": "返信待ち",

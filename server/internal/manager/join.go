@@ -161,14 +161,19 @@ func joinAddress(ctx context.Context, o JoinOptions) (hub, code string, err erro
 func redeem(ctx context.Context, o JoinOptions, hub, code string) (joinReply, error) {
 	var j joinReply
 	l := o.language()
-	client := o.HTTPClient
-	if client == nil {
-		client = &http.Client{Timeout: 30 * time.Second}
-		if o.Fingerprint != "" {
-			client = link.Pinned(o.Fingerprint)
-			client.Timeout = 30 * time.Second
-		}
+	var client http.Client
+	switch {
+	case o.HTTPClient != nil:
+		client = *o.HTTPClient
+	case o.Fingerprint != "":
+		client = *link.Pinned(o.Fingerprint)
+		client.Timeout = 30 * time.Second
+	default:
+		client = http.Client{Timeout: 30 * time.Second}
 	}
+	// Never follow 3xx redirects when redeeming a one-time install code: net/http would otherwise replay the
+	// POST body containing code on 307/308 to another origin or downgrade https:// to plaintext http://.
+	client.CheckRedirect = noRedirect
 	fields := map[string]any{"code": code}
 	if o.builtin { // only then: a hub that does not know the field may refuse it
 		fields["builtin"] = true
@@ -227,6 +232,11 @@ func redeem(ctx context.Context, o JoinOptions, hub, code string) (joinReply, er
 		return j, errors.New(i18n.T(l, "manager-cli.join_bad_reply"))
 	}
 	return j, nil
+}
+
+// noRedirect stops net/http from following 3xx responses when sending install codes or bearer tokens.
+func noRedirect(*http.Request, []*http.Request) error {
+	return http.ErrUseLastResponse
 }
 
 // JoinBuiltin trades the built-in manager's one-time code (`persona-hub manager-code` on the hub's machine) for its

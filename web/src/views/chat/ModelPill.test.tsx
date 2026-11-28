@@ -9,6 +9,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { t } from "../../i18n";
+import { agentName } from "../../lib/agent-kind";
 import type { PanelProvider } from "../../lib/model-panel";
 import { requestModelPicker } from "../../lib/model-switch";
 import { readModels, sessionSwitches } from "../../lib/session-models";
@@ -68,12 +69,22 @@ describe("the pill's states", () => {
     const host = document.createElement("div");
     host.innerHTML = markup(<ModelPill current={{ engine, provider: engine, model, effort }} onOpen={() => {}} />);
     const button = host.querySelector("button")!;
+    const engineTitle = agentName(engine);
     expect(button.getAttribute("aria-label")).toBe(t("chat-modelpill.aria_effort", { model: name, effort: label }));
-    expect(button.title).toContain(` · ${name} · ${engine} · ${label}`);
+    expect(button.title).toBe(engineTitle === engine ? `${engineTitle} · ${name} · ${label}` : `${engineTitle} · ${name} · ${engine} · ${label}`);
     expect(button.querySelector("[data-pill-effort]")?.textContent).toBe(label);
     expect(button.textContent).toContain(name);
     if (pillShortName(name) !== name) expect(button.querySelector("[data-pill-short]")?.textContent).toBe(pillShortName(name));
     expect(button.textContent).not.toMatch(/\((Medium|Minimal|Max|Ultra)\)/);
+  });
+
+  it("omits the provider segment in the tooltip when it matches the engine name, while keeping distinct launchers", () => {
+    const builtin = markup(<ModelPill current={{ engine: "claude", provider: "Claude Code", model: "Opus 5.5", effort: "high" }} onOpen={() => {}} />);
+    expect(builtin).toContain('title="Claude Code · Opus 5.5 · High"');
+    const launcher = markup(<ModelPill current={{ engine: "claude", provider: "claude", launcherName: "Claude Code", model: "Opus 5.5", effort: "high" }} onOpen={() => {}} />);
+    expect(launcher).toContain('title="Claude Code · Opus 5.5 · High"');
+    const desktop = markup(<ModelPill current={{ engine: "claude", provider: "Claude Desktop", model: "Opus 5.5", effort: "high" }} onOpen={() => {}} />);
+    expect(desktop).toContain('title="Claude Code · Opus 5.5 · Claude Desktop · High"');
   });
 
   it("takes the composer card's widths: its words' width under 600, a step smaller under 520, the mark and chevron alone under 420", () => {
@@ -129,7 +140,7 @@ describe("the pill's states", () => {
   });
 
   it("Fast: a filled bolt in the neutral colour, and Fast in the tooltip", () => {
-    const html = markup(<ModelPill current={{ ...opus, engine: "codex", model: "5.5", fast: true }} onOpen={() => {}} />);
+    const html = markup(<ModelPill current={{ ...opus, engine: "codex", model: "5.5", speed: "fast" }} onOpen={() => {}} />);
     expect(html).toContain("fill-current");
     expect(html).toContain(`title="Codex · 5.5 · gateway · High · ${t("chat-sessiondialogs.speed_fast")}"`);
   });
@@ -293,7 +304,7 @@ describe("an Agent's pill", () => {
     await open();
     expect(provider("gateway").name).toBe(pill()!.querySelector("[data-pill-target]")?.textContent);
     await show(agent({ launcher: "claude" }));
-    expect(pill()!.querySelector("[data-pill-target]")?.textContent).toBe("claude");
+    expect(pill()!.querySelector("[data-pill-target]")?.textContent).toBe("Claude Code");
     expect(pill()!.textContent).toContain("Opus 5.5");
     expect(pill()!.querySelector("[data-pill-effort]")?.textContent).toBe("High");
     expect(modes()).toEqual([]);
@@ -381,7 +392,7 @@ describe("an Agent's pill", () => {
     await act(async () => panel.props!.onReload!("agy"));
     await flush();
     expect(calls.filter((c) => c.url.includes("/launchers/agy/models")).map((c) => c.url.split("?")[1]))
-      .toEqual(["host=agy", "host=agy", "host=agy"]);
+      .toEqual(["host=agy", "host=agy", "refresh=1&host=agy"]);
   });
 
   it("reads each provider's cached quota for this computer, without forcing a refresh", async () => {
@@ -421,7 +432,7 @@ describe("an Agent's pill", () => {
     expect(provider("gateway").models!.some((m) => m.id === "vendor/model-x")).toBe(false);
     await flush();
     expect(provider("gateway").models!.some((m) => m.id === "vendor/model-x")).toBe(true);
-    expect(toast).toHaveBeenCalledWith(expect.stringMatching(/没能忘记「vendor\/model-x」：.*只读设备不能改/), "error");
+    expect(toast).toHaveBeenCalledWith(expect.stringMatching(/无法移除「vendor\/model-x」：.*只读设备不能改/), "error");
   });
 
   it("is busy while the agent works, and says why a launcher that fixes its model can't take a pick", async () => {
@@ -461,27 +472,39 @@ describe("an Agent's pill", () => {
     expect(host.querySelector('[data-testid="panel"]')).not.toBeNull();
   });
 
-  it("a Codex thread: its own rows say why, its effort and Fast apply through the flyout, the speed only after the push", async () => {
-    const codex = agent({ agent: "codex", source_kind: "codex_app_server", launcher: "cx", capabilities: { send: true }, model: "gpt-5.5", efforts: ["low", "medium", "high"], service_tiers: [{ id: "default", name: "Standard" }, { id: "priority", name: "Fast" }] });
+  it("a Codex thread applies effort and speed through the flyout and shows speed after the push", async () => {
+    const codex = agent({ agent: "codex", source_kind: "codex_app_server", launcher: "cx", capabilities: { send: true }, model: "gpt-5.5", efforts: ["low", "medium", "high"], service_tiers: [{ id: "default", name: "Standard" }, { id: "priority", name: "Fast" }, { id: "ultrafast", name: "Ultrafast" }] });
     await show(codex);
     expect(requestModelPicker(`mac-${machine}/s1`)).toBe(false); // no model switch: `/model` goes as text
     await open();
     expect(provider("cx").unavailable).toBe(t("chat-modelpanel.model_fixed", { agent: "Codex" }));
     expect(panel.props!.state.recommended).toEqual([]);
-    expect(provider("cx").models![0]).toMatchObject({ id: "gpt-5.5", efforts: ["low", "medium", "high"], fast: true });
-    expect(await act(() => panel.props!.onApplyCurrent!({ fast: true }))).toBe(true);
+    expect(provider("cx").models![0]).toMatchObject({ id: "gpt-5.5", efforts: ["low", "medium", "high"], speeds: [{ id: "standard" }, { id: "fast" }, { id: "ultrafast" }] });
+    expect(await act(() => panel.props!.onApplyCurrent!({ speed: "fast" }))).toBe(true);
     expect(modes()).toEqual([{ service_tier: "priority" }]);
     expect(getSession(codex.machine_id, "s1")?.service_tier).toBeUndefined();
     expect(await act(() => panel.props!.onApplyCurrent!({ effort: "low" }))).toBe(true);
     expect(modes()).toEqual([{ service_tier: "priority" }, { effort: "low" }]);
-    // Standard back from Fast, once the session's push says it runs Fast (the speed is sent only when it changes)
     const fast = { ...getSession(codex.machine_id, "s1")!, service_tier: "priority" };
     upsertSession(fast);
     act(() => root.render(<AgentModelPill session={fast} />));
     await flush();
+    expect(pill()!.querySelectorAll('[data-pill-speed="fast"] svg.fill-current path')).toHaveLength(1);
+    expect(await act(() => panel.props!.onApplyCurrent!({ speed: "ultrafast" }))).toBe(true);
+    expect(modes().at(-1)).toEqual({ service_tier: "ultrafast" });
+    expect(pill()!.querySelector('[data-pill-speed="ultrafast"]')).toBeNull();
+    const ultra = { ...fast, service_tier: "ultrafast" };
+    upsertSession(ultra);
+    act(() => root.render(<AgentModelPill session={ultra} />));
+    await flush();
+    expect(pill()!.querySelectorAll('[data-pill-speed="ultrafast"] svg.fill-current path')).toHaveLength(2);
+    expect(pill()!.title).toContain(` · ${t("ui-modelpanel.speed_ultrafast")}`);
+    expect(pill()!.getAttribute("aria-label")).toContain(` · ${t("ui-modelpanel.speed_ultrafast")}`);
     calls.length = 0;
-    await act(() => panel.props!.onApplyCurrent!({ fast: false }));
+    await act(() => panel.props!.onApplyCurrent!({ speed: "standard" }));
     expect(modes()).toEqual([{ service_tier: "default" }]);
+    act(() => root.render(<AgentModelPill session={{ ...ultra, service_tier: "default" }} />));
+    expect(pill()!.querySelector("[data-pill-speed]")).toBeNull();
   });
 
   it("a Codex terminal Agent that switches neither model nor effort: its mark first and once, and the pill opens the panel that says why (#5497, #6962)", async () => {
@@ -513,7 +536,7 @@ describe("an Agent's pill", () => {
     act(() => root.render(<AgentModelPill session={getSession(s.machine_id, "s1")!} />));
     await flush();
     expect(pill()!.getAttribute("data-model-pill")).toBe("pending");
-    expect(pill()!.getAttribute("title")).toBe(t("chat-modelpill.current_and_next", { current: "Claude Code · Opus 5.5 · gateway · High", next: "Claude Code · Haiku 5.5 · claude · Low" }));
+    expect(pill()!.getAttribute("title")).toBe(t("chat-modelpill.current_and_next", { current: "Claude Code · Opus 5.5 · gateway · High", next: "Claude Code · Haiku 5.5 · Low" }));
     // a refusal puts it back as it was, with the hub's words
     calls.length = 0;
     modesAnswer = () => json({ error: "这个启动器用的是另一个配置目录", code: "switch_config_dir" }, 409);
@@ -615,6 +638,42 @@ describe("an Agent's pill", () => {
     expect(await act(() => panel.props!.onPick({ provider: "gateway", model: "opus", effort: "high" }))).toBe(false);
     expect(modes()).toEqual([{ model: "opus" }]);
     expect(getSession(s.machine_id, "s1")?.model).toBeUndefined();
+  });
+
+  it("opens SessionModelPanel on a live terminal agy session and applies model and effort picks", async () => {
+    const s = agent({
+      agent: "agy",
+      launcher: undefined,
+      pane_id: "herdr:w1:p1",
+      model: "gemini-4-neon-high",
+      effort: "high",
+      efforts: ["low", "medium", "high", "xhigh"],
+      capabilities: { read: true, send: true, modes: false, model: true },
+    });
+    const agyCatalog = {
+      agent: "agy",
+      models: [
+        { id: "gemini-4-neon-low", name: "Gemini 4 Neon (Low)", efforts: ["low", "medium", "high", "xhigh"], default_effort: "low" },
+        { id: "gemini-4-neon-high", name: "Gemini 4 Neon (High)", efforts: ["low", "medium", "high", "xhigh"], default_effort: "high" },
+      ],
+    };
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (url.includes("/launchers/agy/models")) {
+        calls.push({ url, method: init?.method ?? "GET", body: init?.body ? JSON.parse(String(init.body)) : undefined });
+        return new Response(JSON.stringify(agyCatalog), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      return origFetch(input, init);
+    }) as typeof fetch;
+
+    await show(s);
+    expect(pill()).not.toBeNull();
+    expect(calls.some((c) => c.url.includes("/launchers/agy/models") && !c.url.includes("host=agy"))).toBe(true);
+    await open();
+    expect(panel.props!.state.current).toMatchObject({ provider: "agy", model: "gemini-4-neon-high", effort: "high" });
+    expect(await act(() => panel.props!.onPick({ provider: "agy", model: "gemini-4-neon-low" }))).toBe(true);
+    expect(modes()).toEqual([{ model: "gemini-4-neon-low" }]);
   });
 
   it("is a label where nothing switches (offline), and nothing at all without a model", async () => {

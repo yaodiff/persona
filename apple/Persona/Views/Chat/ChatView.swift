@@ -26,6 +26,9 @@ struct ChatView: View {
     /// The session on screen; the sibling strip can switch it to another agent in the same space.
     @State private var key: SessionKey
     var style: ChatStyle = .dev
+    @StoredValue(BotmuxDisplayMode.storageKey) private var botmuxMode: BotmuxDisplayMode = .decoded
+
+    private var isBotmuxSession: Bool { session?.host == "botmux" || session?.hostKind == "botmux" }
     @State private var position = ScrollPosition(edge: .top) // .top is the newest end of the flipped list
     /// Where the chat stands with its newest end: ↓, following and holding back all come from it (#1046). Changed
     /// through `setFollow` only.
@@ -175,6 +178,8 @@ struct ChatView: View {
     @Environment(\.hostedChat) private var host
     /// In the detail column of a split (iPhone Duo open): the list is beside the chat, the tab bar stays.
     @Environment(\.splitDetail) private var split
+    /// A task's detail goes on the stack's path, not pushed by view from here (#13156).
+    @Environment(\.taskDetailByValue) private var taskDetailByValue
     @Environment(\.splitShowList) private var showList
     /// The Persona conversation in the shell (docs/apple/ios.md「New shell」).
     @Environment(\.shellChat) private var shellChat
@@ -187,6 +192,9 @@ struct ChatView: View {
     @Environment(\.sideColumn) private var sideColumn
     /// The page draws this chat's lifted message (`MessageLiftHost`).
     @Environment(\.messageLiftHost) private var liftHost
+    #if os(iOS)
+    @Environment(\.replySpeechContext) private var replySpeechContext
+    #endif
     /// The shell's composer (`ShellComposerBar`): the assistant's conversation and, in the shell, an agent's too, in every
     /// style (#1091). Other platforms retain `ComposerRow` / `PromptComposer` and their mode chips. On the Mac
     /// the card in every style but BeautifulUI's (its prompt bar is already one): the field, and under it Add, the model
@@ -402,6 +410,8 @@ struct ChatView: View {
         base
             .background { DismissReader(holder: dismissChat) }
             .environment(\.rowMemoScope, RowMemo.scope(shownKey))
+            // A tap on a word of a message looks it up while a text_lookup extension answers (#10977).
+            .textLookupSurface(style == .assistant ? "chat" : "agent")
             .environment(\.assistantCardConversation, style == .assistant ? shownKey : nil)
             // Only this chat hands its lifted message to the page (a chat shown in a sheet from it draws its own).
             .environment(\.messageLiftHost, nil)
@@ -555,7 +565,9 @@ struct ChatView: View {
         }
         // A task's own detail: assigning detailTask must not be a dead link. iPhone dispatch links push a live Agent
         // directly; this is the starting/no-Agent fallback and the normal task detail.
-        .detailPresentation(isPresented: Binding(get: { style == .assistant && (TasksStore.shared.detailTask != nil || TasksStore.shared.detailAgent != nil) },
+        // Not where the stack takes it by value (the Sidebar layout's page, `taskDetailByValue`, #13156).
+        .detailPresentation(isPresented: Binding(get: { style == .assistant && !taskDetailByValue
+                                                        && (TasksStore.shared.detailTask != nil || TasksStore.shared.detailAgent != nil) },
                                                  set: { if !$0 { TasksStore.shared.detailTask = nil; TasksStore.shared.detailAgent = nil } })) {
             Group {
                 if let id = TasksStore.shared.detailTask {
@@ -585,7 +597,11 @@ struct ChatView: View {
             if key == model.assistantMain { TasksStore.shared.loadToday(key.sessionID) }
             #if DEBUG
             // `-showTaskDetail <todo id>` / `-showTaskBoard YES`: a task's detail or the board, for screenshots.
-            if let id = UserDefaults.standard.string(forKey: "showTaskDetail") { TasksStore.shared.detailTask = id }
+            if let id = UserDefaults.standard.string(forKey: "showTaskDetail") {
+                // On the Sidebar layout's path (#13156) after the launch's first assistant switch, which empties that path.
+                if taskDetailByValue { try? await Task.sleep(for: .seconds(2)) }
+                TasksStore.shared.detailTask = id
+            }
             if UserDefaults.standard.bool(forKey: "showTaskBoard") { TasksStore.shared.showBoard = true }
             #endif
         }
@@ -718,6 +734,15 @@ struct ChatView: View {
         .stackSegment()
     }
 
+    #if os(iOS)
+    /// A page opened from a message covers the main chat even while its underlying view stays mounted.
+    private var coveredMainChat: Bool? {
+        guard replySpeechContext != nil, style == .assistant, !backgroundActivity, key == model.assistantMain else { return nil }
+        return link != nil || viewingImages != nil || file != nil || openedKnowledge != nil || linkedTodo != nil
+            || hubSheet != nil || previewing || planOpen || showAssistantModel || readinessRoute != nil || showTodoDetail
+    }
+    #endif
+
     @inline(never) private func applyChatLifecycleTop(_ base: AnyView) -> AnyView {
         base
         .environment(\.openFile, actions.openFile)
@@ -745,6 +770,11 @@ struct ChatView: View {
         .environment(\.openPort, actions.openPort)
         // Web links open in the in-app sheet (Feishu docs in the native reader); local paths open the machine's file viewer.
         .environment(\.openURL, actions.openURL)
+        #if os(iOS)
+        .onChange(of: coveredMainChat, initial: true) { _, covered in
+            if let covered { replySpeechContext?.chatSheetOpen = covered }
+        }
+        #endif
         .sheet(item: $link) { t in LinkSheet(target: t, key: key, choosePreview: { openPort($0.link, name: $0.name) }) }
         .readinessSheets($readinessRoute)
         .onChange(of: showAssistantModel) { _, on in
@@ -894,7 +924,8 @@ struct ChatView: View {
                                        supervision: openSupervision, active: shownRoundActive, background: foldsBackground,
                                        foldRoutineRelayReplies: foldRoutineRelayReplies, latestReplyNeedsAttention: latestReplyNeedsAttention,
                                        closeout: shownCloseout != nil, children: childStamp, modes: modes.map { "\($0.kind)@\($0.at.timeIntervalSince1970)" },
-                                       turnChanges: showsTurnChanges, cwd: showsTurnChanges ? (session?.cwd ?? "") : "")
+                                       turnChanges: showsTurnChanges, cwd: showsTurnChanges ? (session?.cwd ?? "") : "",
+                                       botmuxMode: botmuxMode, botmuxSession: isBotmuxSession)
         if scratch.linesKey == key { return scratch.lines }
         var blocks = store.blocks
         if frozen != nil {
@@ -913,6 +944,17 @@ struct ChatView: View {
                                             presentation: presentation)
         let feed = projection.feed(allFeed, for: presentation)
         var lines = backgroundActivity ? projection.activity : projection.timeline
+        if NativeTemplateStore.shared.plainMainChat, style == .assistant, !backgroundActivity {
+            // Questions, replies and work needing the owner. Finished patrols and briefings stay in Background activity;
+            // a live supervision round, plans, tasks, live cards and errors remain in the main timeline (#17129).
+            lines = lines.filter { line in
+                switch line.content {
+                case .supervision(_, _, let live, _): live
+                case .feed(let item): ![FeedItem.Kind.brief, .today, .inboxSuggestion].contains(item.kind)
+                default: true
+                }
+            }
+        }
         lines = ModelChanges.mark(lines)
         #if os(iOS)
         // An Agent's long finished answers as several rows: one row many screens tall stuttered whenever it was on
@@ -985,7 +1027,8 @@ struct ChatView: View {
     /// What builds the lines from the blocks, with what is open now.
     private var lineBuilder: ChatLines {
         ChatLines(openWork: openWork, openAll: Self.debugOpenAll, openRuns: openRuns,
-                  openAllRuns: Self.debugOpenRuns, chipRuns: AppStyle.current.usesBeautifulUI,
+                  openAllRuns: Self.debugOpenRuns, botmuxMode: botmuxMode, botmuxSession: isBotmuxSession,
+                  chipRuns: AppStyle.current.usesBeautifulUI,
                   foldsIntoRun: foldsIntoRun, includeTurnChanges: showsTurnChanges,
                   turnChangesCwd: showsTurnChanges ? session?.cwd : nil,
                   foldSupervision: style == .assistant, foldBackground: foldsBackground,
@@ -1162,6 +1205,9 @@ struct ChatView: View {
         switch page {
         case .todo(let id):
             guard TodosLogic.isOnTodosHub(sessionGroup: group, hubGroup: model.hub?.group) else { return false }
+            #if os(iOS)
+            if model.returnToStartIfHidden(.todos) { return true }
+            #endif
             Haptics.tap()
             linkedTodo = TodoDetailRoute(id: id)
             return true
@@ -1532,6 +1578,7 @@ struct ChatView: View {
             SentPhotos(images: items.compactMap(\.image)).padding(.bottom, -8)
         case .work(let id, let items, let live, let start, let end):
             WorkLine(items: items, live: live, start: start, end: end, open: isOpen(id, live: live), agents: live ? agentsWorking : nil,
+                     compaction: live ? model.liveCompaction(key) : nil,
                      accepting: live && items.isEmpty && sendPhase == .processing && !status.isActive,
                      openTerminal: live && style == .dev && session?.canTerminal == true ? { openTerminal() } : nil) {
                 toggleWork(id, fromHeader: true)
@@ -2831,11 +2878,13 @@ struct ChatView: View {
         }
         // Out of the way of a voice call (docs/assistant/voice.md 6.2「通话期间」), back when it ends.
         HiddenDuringCall(key: key) {
-            // Needs You / In Progress in the dock's capsules, each opening its tray (#3393), on every device.
-            AssistantActionBar(conversation: conversation, key: key, computer: computerActivity, dock: dock, dockOwn: own)
-            RouteChip(conversation: conversation)
-            // Items handed to the main conversation that are still open: "Wrap up" asks it for the final write-back (#5932).
-            if model.assistantMain == key { WrapUpChips(key: key) }
+            // Needs You (always visible), In Progress and neutral Wrap Up in one row (#3393, #16165); Finished opens
+            // from the tray header instead of staying persistent on the collapsed bar.
+            if !NativeTemplateStore.shared.plainMainChat {
+                AssistantActionBar(conversation: conversation, key: key, computer: computerActivity, dock: dock, dockOwn: own)
+                // When using `ShellComposerBar`, task routing lives in `ComposerTopSlot` fused to the composer's top edge.
+                if !usesShellComposer { RouteChip(conversation: conversation) }
+            }
         }
     }
 
@@ -2946,14 +2995,17 @@ struct ChatView: View {
                         openNext(next)
                     }
                 }
-                let queued = session?.queued ?? []
-                let sending = pendingPlacement.strip
-                if !queued.isEmpty || !sending.isEmpty, style == .dev || session?.assistant == true {
-                    QueueStrip(key: key, queued: queued, own: session?.ownQueuedCount ?? queued.count, sending: sending,
-                               photoMarks: model.chat(key).queuePhotoMarks,
-                               steers: session?.steersQueue == true || (session?.assistant == true && session?.canSend == true),
-                               persona: session?.assistant == true ? model.assistantShownName : nil,
-                               agentName: session?.agentLabel ?? "Claude")
+                let assistantTopSlot = style == .assistant && viewing == nil && usesShellComposer && session?.isStopped != true
+                if !assistantTopSlot {
+                    let queued = session?.queued ?? []
+                    let sending = pendingPlacement.strip
+                    if !queued.isEmpty || !sending.isEmpty, style == .dev || session?.assistant == true {
+                        QueueStrip(key: key, queued: queued, own: session?.ownQueuedCount ?? queued.count, sending: sending,
+                                   photoMarks: model.chat(key).queuePhotoMarks,
+                                   steers: session?.steersQueue == true || (session?.assistant == true && session?.canSend == true),
+                                   persona: session?.assistant == true ? model.assistantShownName : nil,
+                                   agentName: session?.agentLabel ?? "Claude")
+                    }
                 }
                 // The newest plan while its line is out of view (#5602): which step of how many; tap, the whole plan.
                 // Folded while a card asks something (#2970): it sat over the card's buttons.
@@ -3008,7 +3060,8 @@ struct ChatView: View {
                 }
                 if session?.isStopped != true { // a stopped Agent takes no messages: its line above says so (#4754)
                     AnyView(Composer(key: key, status: status, placeholder: style == .assistant ? String(localized: "Ask \(model.assistantShownName)…") : String(localized: "Message \(session?.agentLabel ?? "Claude") [Chat View c6f021]"),
-                             covered: link != nil, onCleared: { switchTo($0) }, onFocus: { composerTyping = $0 }, pickMode: { requestMode($0) },
+                             covered: link != nil, assistantChrome: style == .assistant && viewing == nil,
+                             onCleared: { switchTo($0) }, onFocus: { composerTyping = $0 }, pickMode: { requestMode($0) },
                              openAssistantModel: openAssistantModel)
                         // The shell's expanding field stays in the page's layout graph; so does BeautifulUI's prompt bar,
                         // whose menus hang above it: an island's hosting view takes no touches outside its bounds.
@@ -3112,7 +3165,7 @@ struct ChatView: View {
             // Streamed text, the typing line and unsent messages sit at the newest end too: while you read
             // history they wait with the rest, as they were drawn then (`Frozen`).
             if drawsLive, !ChatLines.hidesLiveSupervision(lines, open: openSupervision, openAll: Self.debugOpenSupervision) {
-                ChatLiveText(store: store, held: frozen?.text)
+                ChatLiveText(store: store, held: frozen?.text, hidesBotmuxSentinel: isBotmuxSession && botmuxMode == .decoded)
             }
             // Sent, and the agent not on it yet: the line the new-conversation page showed under the first message
             // (`FirstMessagePending`), where the turn's work line comes in. Without it the chat that took over showed
@@ -3598,6 +3651,35 @@ struct ChatView: View {
         withAnimation(.smooth(duration: 0.35)) { chrome.collapse = 0 }
     }
 
+    private var compactTitleControl: some View {
+        Button { Haptics.tap(); showChrome() } label: {
+            HStack(spacing: Theme.Space.sm) {
+                // Out of reach: the slim bar says so too (the open header's subtitle explains on a tap).
+                if model.connection.shown != .online {
+                    ProgressView().controlSize(.mini)
+                    Text(ConnectionLabel.text(model.connection.shown, hubRestarting: model.hubUpdate?.restarting == true)).lineLimit(1)
+                } else {
+                    if let s = session {
+                        if !s.assistant { AgentMark(s, side: Theme.Size.markXS) } // its agent before its state (#6390)
+                        StatusDot(state: s.state, size: 7, waiting: s.waitsInBackground)
+                    }
+                    Text(compactTitle).lineLimit(1).truncationMode(.tail)
+                }
+            }
+            .animation(Theme.Motion.standard, value: model.connection.shown)
+            .font(Theme.Font.captionStrong)
+            .padding(.horizontal, Theme.Space.m)
+            .scaledFrame(height: Theme.Size.wellXS)
+            .background(Theme.Fill.chip, in: .capsule)
+            .contentShape(.capsule)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(model.connection.shown != .online ? String(localized: "\(ConnectionLabel.text(model.connection.shown, hubRestarting: model.hubUpdate?.restarting == true)), show title and tags")
+                            : String(localized: "\(compactTitle), show title and tags"))
+        .accessibilityIdentifier("chat.compactTitle")
+        .titleSaysLink() // the slim bar says Connecting… too: the shell's floating pill does not say it again
+    }
+
     /// The chrome folded away: back, the session's name as the open header says it — tap it for everything again,
     /// where it runs included — and the open header's ⋯.
     private var compactChrome: some View {
@@ -3612,32 +3694,7 @@ struct ChatView: View {
             .modifier(SidebarButtonID(active: backShowsList))
             .noBackWhen(hidesBack)
             Spacer(minLength: 0)
-            Button { Haptics.tap(); showChrome() } label: {
-                HStack(spacing: Theme.Space.sm) {
-                    // Out of reach: the slim bar says so too (the open header's subtitle explains on a tap).
-                    if model.connection.shown != .online {
-                        ProgressView().controlSize(.mini)
-                        Text(ConnectionLabel.text(model.connection.shown, hubRestarting: model.hubUpdate?.restarting == true)).lineLimit(1)
-                    } else {
-                        if let s = session {
-                            if !s.assistant { AgentMark(s, side: Theme.Size.markXS) } // its agent before its state (#6390)
-                            StatusDot(state: s.state, size: 7, waiting: s.waitsInBackground)
-                        }
-                        Text(compactTitle).lineLimit(1).truncationMode(.tail)
-                    }
-                }
-                .animation(Theme.Motion.standard, value: model.connection.shown)
-                .font(Theme.Font.captionStrong)
-                .padding(.horizontal, Theme.Space.m)
-                .scaledFrame(height: Theme.Size.wellXS)
-                .background(Theme.Fill.chip, in: .capsule)
-                .contentShape(.capsule)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(model.connection.shown != .online ? String(localized: "\(ConnectionLabel.text(model.connection.shown, hubRestarting: model.hubUpdate?.restarting == true)), show title and tags")
-                                : String(localized: "\(compactTitle), show title and tags"))
-            .accessibilityIdentifier("chat.compactTitle")
-            .titleSaysLink() // the slim bar says Connecting… too: the shell's floating pill does not say it again
+            titleMenu(compactTitleControl)
             Spacer(minLength: 0)
             // The open header's ⋯ and its menu (#7962, the user's call; #3719 had left this spot empty). As wide as ‹,
             // so the capsule stays in the middle and no narrower; the open ⋯'s square to hit. Drawn bare like ‹: the
@@ -3747,6 +3804,7 @@ struct ChatView: View {
     }
 
     @ViewBuilder private var moreMenuItems: some View {
+        if isBotmuxSession { BotmuxModePicker(mode: $botmuxMode) }
         #if os(iOS)
         if style == .dev, let host { hostedMenuItems(host) }
         if style == .dev, let session {
@@ -3926,7 +3984,22 @@ struct ChatView: View {
     /// A custom title: tapping it toggles the developer info card (instead of the system scroll-to-top).
     /// While the hub is out of reach the subtitle turns into a spinner and Connecting… (Telegram keeps the name and
     /// swaps the "online" line the same way); a tap then explains the link instead of opening the session info.
-    @ViewBuilder private var titleButton: some View {
+    private var titleButton: some View { titleMenu(sessionTitleControl) }
+
+    @ViewBuilder private func titleMenu<Content: View>(_ control: Content) -> some View {
+        #if os(iOS)
+        if style == .dev, let session {
+            control.contextMenu {
+                AgentActionMenuReader(session: session, currentPane: pane, hosted: host != nil, showsSpace: openSpace != nil,
+                                      sides: sides, handlers: agentMenuHandlers)
+            }
+        } else { control }
+        #else
+        control
+        #endif
+    }
+
+    @ViewBuilder private var sessionTitleControl: some View {
         // Hosted for several agents (a task's): the title's ⌄ switches between them, and has the session's info too.
         // The switch stays while the hub is out of reach (its line then says so, and the menu explains the link).
         if style == .dev, let host, host.agents.count > 1 {
@@ -3953,7 +4026,7 @@ struct ChatView: View {
             }
             .labelOnlyMenu()
             .tint(Color.primary) // a title, not a button: the menu's accent tint would color it blue
-            .accessibilityLabel("\(title), \(host.agents.count) agents, tap to switch")
+            .accessibilityLabel("\(shownTitle), \(host.agents.count) agents, tap to switch")
             .accessibilityIdentifier("chat.title")
             #if DEBUG
             .modifier(UITestSessionProof(session: key.path))
@@ -3969,7 +4042,7 @@ struct ChatView: View {
         let link = model.connection.shown
         return VStack(spacing: Theme.Space.xxs) {
             HStack(spacing: Theme.Space.xs) {
-                Text(title).font(Theme.Font.heading).lineLimit(1).truncationMode(.tail)
+                Text(shownTitle).font(Theme.Font.heading).lineLimit(1).truncationMode(.tail)
                 if chevron {
                     ThemedIcon(Theme.Icon.expand).font(Theme.Font.labelStrong).foregroundStyle(.secondary)
                 }
@@ -4003,7 +4076,7 @@ struct ChatView: View {
             titleLabel(chevron: false)
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(link != .online ? String(localized: "\(title), \(ConnectionLabel.text(link, hubRestarting: model.hubUpdate?.restarting == true)), view connection details") : String(localized: "\(title), view session info"))
+        .accessibilityLabel(link != .online ? String(localized: "\(shownTitle), \(ConnectionLabel.text(link, hubRestarting: model.hubUpdate?.restarting == true)), view connection details") : String(localized: "\(shownTitle), view session info"))
         .accessibilityIdentifier("chat.title")
         #if DEBUG
         .modifier(UITestSessionProof(session: key.path))
@@ -4623,8 +4696,12 @@ struct ChatView: View {
 
     /// The slim bar's words: what the session is, as the open header, the web and Android name it (#3631). Where it runs
     /// is a tap away, on the open header's second line and in Session Info; the pane's name only off the chat.
+    private var shownTitle: String {
+        style == .dev ? model.pendingAgentTitle(key) ?? title : title
+    }
+
     private var compactTitle: String {
-        pane == .chat ? title : title + " · " + pane.title
+        pane == .chat ? shownTitle : shownTitle + " · " + pane.title
     }
 
     /// A hub link asked for one of this chat's messages (AppModel.messageJump): the entry target from now; taken once.
@@ -5400,7 +5477,9 @@ struct ChatView: View {
 
     /// A user's line: a bubble, or what stands for it (a message from a source, one Persona injected, a loop's tick, a peer's).
     @ViewBuilder private func userRow(_ i: Item, showsSource: Bool, hidesPrompt: Bool) -> some View {
-        if let source = MessageSource.of(i) {
+        if botmuxMode == .decoded, i.botmux?.isInbound == true {
+            BotmuxMessagesView(item: i).equatable()
+        } else if let source = MessageSource.of(i) {
             SourceMessage(item: i, source: source, showsSource: showsSource, hidesPrompt: hidesPrompt).equatable()
         } else if let n = Injected.of(i) {
             // Persona's message for the model: one line in its place, never its words (docs/protocol/protocol.md「Messages injected by Persona」).
@@ -5420,7 +5499,11 @@ struct ChatView: View {
         case .user(let i): userRow(i, showsSource: showsSource, hidesPrompt: hidesPrompt).chatMark("chat.user." + i.id)
         case .assistant(let i):
             VStack(alignment: .leading, spacing: 0) {
-                AssistantText(item: i).equatable().chatMark("chat.answer." + i.id)
+                if botmuxMode == .decoded, i.botmux?.kind == "reply" {
+                    BotmuxMessagesView(item: i).equatable().chatMark("chat.answer." + i.id)
+                } else {
+                    AssistantText(item: i).equatable().chatMark("chat.answer." + i.id)
+                }
                 ReplyUsageFooter(item: i)
             }
         case .thinking(let i):
@@ -5714,11 +5797,15 @@ struct Composer: View, Equatable {
     nonisolated static func == (a: Self, b: Self) -> Bool {
         a.key == b.key && a.status == b.status && a.placeholder == b.placeholder && (a.onCleared == nil) == (b.onCleared == nil)
             && a.covered == b.covered
+            && a.assistantChrome == b.assistantChrome
             && (a.pickMode == nil) == (b.pickMode == nil)
             && (a.openAssistantModel == nil) == (b.openAssistantModel == nil)
     }
 
     @Environment(AppModel.self) private var model
+    #if os(iOS)
+    @Environment(\.replySpeechContext) private var replySpeechContext
+    #endif
     @Environment(\.shellChat) private var shellChat
     @Environment(\.shell) private var shell
     /// The shell's composer (`ShellComposerBar`): the assistant's conversation and, in the shell, an agent's too, in every
@@ -5735,6 +5822,10 @@ struct Composer: View, Equatable {
     /// The link card covers the chat (ChatView's `link`): a picture handed in (a preview's screenshot, #150) lands without
     /// raising the keyboard, which would close the card.
     var covered = false
+    /// Unified Assistant conversation chrome (#16165): fuses queued messages and task routing into `ShellComposerBar`'s
+    /// top edge and arbitrates secondary advisory banners through `ComposerBannerCoordinator` while keeping all critical
+    /// prompts visible.
+    var assistantChrome = false
     /// Glow While Replying (Settings › Appearance, off by default): the assistant's composer glows while its reply is
     /// being written (`working`), not while it waits on the user (`blocked`) and not in an Agent's chat.
     @StoredValue(ComposerGlowPrefs.enabledKey) private var glowEnabled = false
@@ -5822,10 +5913,10 @@ struct Composer: View, Equatable {
         }
     }
 
-    /// /clear only for Claude in a herdr pane (the headless assistant and Codex / TRAE CLI have no such command here).
+    /// The terminal /clear command belongs to Claude Code panes.
     private var canClear: Bool {
         guard let s = model.session(key) else { return false }
-        return s.canSend && s.canTerminal && s.paneID != nil && !s.isCodex && !s.isTraex
+        return SessionModes.paneClaude(s)
     }
 
     private var allowsSend: Bool {
@@ -5871,13 +5962,12 @@ struct Composer: View, Equatable {
     /// The launcher's list behind this session's model menus once read (#3754); nil: the fixed aliases.
     private var runningModels: [AgentModel]? { RunningModelLists.shared.models(key, model.session(key)) }
 
-    /// The model menus offer models: Claude in a herdr pane (picks go as `/model`; Codex and TRAE CLI pick theirs in a
-    /// full-screen menu the phone cannot drive), and a session whose node takes the model (#6294, `capabilities.model`)
-    /// from its launcher's list once read. The "/" list's `/model` is narrower (`Session.takesModelCommand`).
+    /// An explicit model capability governs the picker (#6294). A node that takes picks offers its launcher's list once
+    /// read. Without that capability, only Claude Code panes get the terminal picker. The "/" list uses `takesModelCommand`.
     private var canPickModel: Bool {
         guard let s = model.session(key) else { return false }
         if s.capabilities?.model != nil { return SessionModes.offersModels(s, list: runningModels) }
-        return s.canSend && s.canTerminal && s.paneID != nil && !s.isCodex && !s.isTraex && !s.assistant
+        return SessionModes.paneClaude(s)
     }
 
     /// The main Persona conversation is named by the hub's assistant snapshot; leaders and other Assistant chats
@@ -6132,9 +6222,45 @@ struct Composer: View, Equatable {
     private var composerNotes: some View {
         let voice = model.voice
         let inCall = voice?.isLive(on: key) ?? false
+        let session = model.session(key)
+        let showsUltracodeLost = session.map { Ultracode.lostShown($0, features: model.features(key.group)) } == true
+        let showsModelFallback = session.flatMap { ModelFallbackText.card($0, headless: $0.assistant == true) } != nil
+        let showsVoiceEnded = voice != nil && !inCall && voice?.showsEnded(on: key) == true
+        let activeSuggestion = inCall ? nil : suggestion
+        let advisory: ComposerAdvisoryBanner? = assistantChrome ? ComposerBannerCoordinator.advisory(for: .init(
+            critical: .init(
+                stoppedAgent: session?.isStopped == true,
+                terminalOnly: session?.isTerminalOnly == true,
+                readOnlySource: session.map { !$0.canSend && $0.sourceSubtitle != nil } == true,
+                missingSession: session == nil && model.missingSessionReason(key) != nil,
+                liveRetry: model.liveRetry(key) != nil,
+                offlineAgent: offlineManager == nil && session.flatMap { model.offlineAgent($0) } != nil,
+                managerOffline: offlineManager != nil,
+                startingOrError: session.map { $0.starting == true || $0.startError != nil } == true,
+                attention: session.map { !($0.attentionReason ?? "").isEmpty && $0.state == .needsYou } == true,
+                failure: session.map { !($0.failureReason ?? "").isEmpty && !status.isActive && retried != $0.failureReason } == true,
+                readinessOrFailure: isMain
+                    ? (model.readiness.failure != nil || model.readiness.homeCardStep != nil
+                       || model.readiness.probeError != nil || model.readiness.probe != nil)
+                    : (session?.assistant == true && model.readiness.failure != nil),
+                pendingConfirmation: !model.interactions(for: key).isEmpty
+            ),
+            advisories: .init(
+                modelFallback: showsModelFallback,
+                ultracodeLost: showsUltracodeLost,
+                compaction: model.compactionNote(key) != nil,
+                pushHealth: isMain && PushHealthStore.shared.notice(group: key.group) != nil,
+                voiceEnded: showsVoiceEnded,
+                suggestion: activeSuggestion != nil
+            )
+        )) : nil
+        let allowAdvisory: (ComposerAdvisoryBanner) -> Bool = { banner in
+            !assistantChrome || advisory == banner
+        }
         return VStack(spacing: Theme.Space.s) {
+            // Critical prompts below are never gated or suppressed by advisory arbitration.
             SessionLiveRetryNote(key: key)
-            if offlineManager == nil, let session = model.session(key), let away = model.offlineAgent(session) {
+            if offlineManager == nil, let session, let away = model.offlineAgent(session) {
                 Text(verbatim: away.line)
                     .font(Theme.Font.caption).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -6143,15 +6269,15 @@ struct Composer: View, Equatable {
             if let m = offlineManager {
                 ManagerOfflineNote(manager: m)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
-            } else if let s = model.session(key), s.starting == true || s.startError != nil {
+            } else if let s = session, s.starting == true || s.startError != nil {
                 StartingNote(error: s.startError, agent: s.agentLabel, coded: s.startErrorCode?.isEmpty == false)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                 SessionShellQuestion(session: s)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
-            } else if let s = model.session(key), let reason = s.attentionReason, !reason.isEmpty, s.state == .needsYou {
+            } else if let s = session, let reason = s.attentionReason, !reason.isEmpty, s.state == .needsYou {
                 AttentionNote(reason: reason, link: s.externalLink, key: key)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
-            } else if let s = model.session(key), let reason = s.failureReason, !reason.isEmpty, !status.isActive,
+            } else if let s = session, let reason = s.failureReason, !reason.isEmpty, !status.isActive,
                       retried != reason {
                 // Continue alone (not what is in the box); the note goes at once and stays gone for this notice, while the
                 // host takes the message and the list catches up.
@@ -6161,37 +6287,42 @@ struct Composer: View, Equatable {
                 }
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
+            if isMain {
+                // The main conversation: what it still needs, or a refused send (docs/assistant/onboarding.md 4.4, 5.2).
+                ReadinessHomeCard(key: key, pickModel: openAssistantModel, route: $failureRoute)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            } else if session?.assistant == true, let f = model.readiness.failure {
+                CodedFailureCard(failure: f, route: $failureRoute)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+            // Secondary advisory banners share a single slot in Assistant conversations (`ComposerBannerCoordinator`).
             // A resume turned ultracode off (#1307): one line to turn it back on, or dismiss.
-            if let s = model.session(key), Ultracode.lostShown(s, features: model.features(key.group)) {
+            if allowAdvisory(.ultracodeLost), let s = session, showsUltracodeLost {
                 UltracodeLostNote(key: key, session: s)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
             // After an upstream refusal the session runs on a fallback model (#4489): which, and the way back.
-            if let s = model.session(key), s.modelFallback != nil {
+            if allowAdvisory(.modelFallback), let s = session, s.modelFallback != nil {
                 ModelFallbackCard(key: key, session: s, working: status.isActive)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
-            if isMain {
+            if isMain, allowAdvisory(.pushHealth) {
                 PushHealthNotice(group: key.group)
-                // The main conversation: what it still needs, or a refused send (docs/assistant/onboarding.md 4.4, 5.2).
-                ReadinessHomeCard(key: key, pickModel: openAssistantModel, route: $failureRoute)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-            } else if model.session(key)?.assistant == true, let f = model.readiness.failure {
-                CodedFailureCard(failure: f, route: $failureRoute)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
             }
-            CompactionSlot(key: key) // an assistant conversation's Compact context (#1762)
+            if allowAdvisory(.compaction) {
+                CompactionSlot(key: key) // an assistant conversation's Compact context (#1762)
+            }
             if canLoop, let hint = LoopCommand.hint(text) {
                 LoopDraftNote(hint: hint)
                     .transition(.opacity)
             }
-            if let suggestion, !inCall {
-                SuggestionPill(text: suggestion, risky: model.session(key)?.suggestionRisky == true) {
-                    text = suggestion
-                    selection = TextSelection(insertionPoint: suggestion.endIndex) // keep typing after it
+            if allowAdvisory(.suggestion), let activeSuggestion {
+                SuggestionPill(text: activeSuggestion, risky: session?.suggestionRisky == true) {
+                    text = activeSuggestion
+                    selection = TextSelection(insertionPoint: activeSuggestion.endIndex) // keep typing after it
                     focused = true
                 } send: {
-                    Task { await sendText(suggestion) }
+                    Task { await sendText(activeSuggestion) }
                 }
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
@@ -6221,7 +6352,7 @@ struct Composer: View, Equatable {
                 }
             }
             // A call that ended by itself: 「语音已结束 · 继续」 over the box, until the page goes (docs/assistant/voice.md 1.2 L).
-            if let voice, !inCall, voice.showsEnded(on: key) {
+            if allowAdvisory(.voiceEnded), let voice, showsVoiceEnded {
                 voice.endedLine(key: key)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
@@ -6234,7 +6365,7 @@ struct Composer: View, Equatable {
                                      : (suggestion ?? (shellChat ? String(localized: "Ask \(model.assistantShownName)") : placeholder ?? String(localized: "Message Claude"))),
                                  text: textBinding, selection: $selection, focused: $focused, canSend: canSend,
                                  hasAttachments: hasAttachments,
-                                 stop: status.isActive && model.session(key)?.canInterrupt == true ? { Task { await model.interrupt(key) } } : nil,
+                                 stop: status.isActive && session?.canInterrupt == true ? { Task { await model.interrupt(key) } } : nil,
                                  voice: voiceEntry,
                                  voiceLabel: model.voice?.iconLabel(key),
                                  modesTitle: modesTitle,
@@ -6268,11 +6399,13 @@ struct Composer: View, Equatable {
                     if !shellChat || offersMainClear { quickCommands } // an agent's, as its composer offered them before the shell's; the main chat adds /clear (#5100)
                     #endif
                 } modes: {
-                    SessionModesMenu(key: key, session: model.session(key), picksModel: canPickModel, setsModes: setsModes,
+                    SessionModesMenu(key: key, session: session, picksModel: canPickModel, setsModes: setsModes,
                                      setsEffortOnly: setsEffortOnly, mainConversation: isMainAssistantChat,
                                      otherModel: canPickModel ? { typingModel = true } : nil,
                                      assistantPick: openAssistantModel,
                                      assistantModelName: assistantEffectiveName, pick: pickMode)
+                } top: {
+                    if assistantChrome { ComposerTopSlot(key: key) }
                 }
             } else if AppStyle.current.usesBeautifulUI {
                 // The BeautifulUI style's prompt bar; every other style keeps the original input line. Its direct
@@ -6430,10 +6563,16 @@ struct Composer: View, Equatable {
         .onChange(of: focused) { _, f in onFocus?(f) }
         .onDisappear { if focused { onFocus?(false) } } // gone with the keyboard (a subagent opened, another pane)
         .modifier(CompactionTracking(key: key))
-        .onChange(of: model.composerFocus) { _, k in
-            guard k == key else { return }
-            model.composerFocus = nil
-            focused = true
+        // A quote (#1058) or Message Persona (#17789) asks for the keyboard. Taken once this chat is in front and the app
+        // is active: from a cold launch the field may be laid out before it can be first responder, so it tries briefly.
+        .tabActiveTask(id: model.composerFocus == key) {
+            guard model.composerFocus == key else { return }
+            for _ in 0..<10 {
+                focused = true
+                try? await Task.sleep(for: .milliseconds(150))
+                if focused || Task.isCancelled { break }
+            }
+            if model.composerFocus == key { model.composerFocus = nil }
         }
         #if DEBUG
         .task { // `-showClearConfirm YES`: the /clear confirmation, for screenshots
@@ -6658,6 +6797,9 @@ struct Composer: View, Equatable {
         // On screen at once; the request runs in the background (a failure turns the bubble into "Resend").
         guard model.sendNow(key, text: message, images: images.map(\.1)) else { return false }
         if raw == text { text = "" }
+        #if os(iOS)
+        if text.isEmpty, key == model.assistantMain { replySpeechContext?.sentDraft() }
+        #endif
         images = []
         held.sentFiles()
         model.composerContexts[key] = nil
@@ -8057,6 +8199,7 @@ struct WorkLine: View, Equatable {
     nonisolated static func == (a: Self, b: Self) -> Bool {
         a.isEmpty == b.isEmpty && a.counts == b.counts && a.live == b.live && a.accepting == b.accepting && a.start == b.start && a.end == b.end
             && a.open == b.open && (a.openTerminal == nil) == (b.openTerminal == nil) && a.agents == b.agents && a.doing == b.doing
+            && a.compaction == b.compaction
     }
 
     private let isEmpty: Bool
@@ -8071,12 +8214,15 @@ struct WorkLine: View, Equatable {
     /// Otherwise, while it runs, the step it names instead of its counts (#2987); drawn as `shown`, which follows it at
     /// most about twice a second.
     private let doing: WorkNow?
+    /// Persona's plugin says the main loop is compacting: the running line says so for as long as the same push lasts.
+    private let compaction: SessionLiveCompactionPresentation?
     @State private var shown: WorkNow?
     @State private var shownAt = Date.distantPast
     let openTerminal: (() -> Void)?
     let toggle: () -> Void
 
     init(items: [WorkItem], live: Bool, start: Date?, end: Date?, open: Bool, agents: AgentsWorking? = nil,
+         compaction: SessionLiveCompactionPresentation? = nil,
          accepting: Bool = false, openTerminal: (() -> Void)?, toggle: @escaping () -> Void) {
         isEmpty = items.isEmpty
         counts = WorkSummary(items)
@@ -8086,6 +8232,7 @@ struct WorkLine: View, Equatable {
         self.end = end
         self.open = open
         self.agents = live ? agents : nil
+        self.compaction = live ? compaction : nil
         doing = live && self.agents == nil ? WorkNow.of(items) : nil
         _shown = State(initialValue: doing)
         self.openTerminal = openTerminal
@@ -8186,7 +8333,20 @@ struct WorkLine: View, Equatable {
     }
 
     @ViewBuilder private func summary(now: Date) -> some View {
-        if let step { stepSummary(step, now: now) } else { counted(now: now) }
+        if let compaction { compactionSummary(compaction) } else if let step { stepSummary(step, now: now) } else { counted(now: now) }
+    }
+
+    /// The same words as the web for this push, with the elapsed time the node sent.
+    private func compactionSummary(_ compaction: SessionLiveCompactionPresentation) -> some View {
+        HStack(spacing: Theme.Space.flush) {
+            Text(Self.compactionWords).truncationMode(.tail)
+            let took = compaction.compactDuration
+            if !took.isEmpty {
+                Text(took).fixedSize()
+            }
+        }
+        .lineLimit(1)
+        .accessibilityElement(children: .combine)
     }
 
     /// One line: the step's words give way (a path or a command in the middle, a sentence at the end), "+2" and the
@@ -8211,6 +8371,11 @@ struct WorkLine: View, Equatable {
 
     private func label(now: Date, short: Bool) -> String {
         if accepting { return String(localized: "Processing…") }
+        if let compaction {
+            let took = compaction.compactDuration
+            let words = Self.compactionWords
+            return took.isEmpty ? words : "\(words) · \(took)"
+        }
         // The step in full: the line may have cut it.
         if let step { return step.text + step.trailer(took: Self.duration(from: start, to: now)) }
         let parts = agents.map { [SubagentGridText.working(count: $0.count, doing: $0.doing, short: short)] } ?? (short ? counts.short : counts.full)
@@ -8229,10 +8394,23 @@ struct WorkLine: View, Equatable {
 
     static func duration(from start: Date?, to end: Date) -> String {
         guard let start else { return "" }
-        let s = max(0, Int(end.timeIntervalSince(start)))
+        return duration(seconds: max(0, Int(end.timeIntervalSince(start))))
+    }
+
+    static func duration(seconds s: Int) -> String {
         if s < 60 { return String(localized: "\(s) s") }
         if s < 3600 { return s % 60 == 0 ? String(localized: "\(s / 60) min [Chat View a38788]") : String(localized: "\(s / 60)m \(s % 60)s") }
         return String(localized: "\(s / 3600) hr \(s % 3600 / 60) min")
+    }
+
+    /// The web's running-status words verbatim, within each interface language.
+    private static var compactionWords: String { String(localized: "Compacting context…") }
+}
+
+private extension SessionLiveCompactionPresentation {
+    var compactDuration: String {
+        guard let elapsedS else { return "" }
+        return WorkLine.duration(seconds: max(0, elapsedS))
     }
 }
 
@@ -8310,6 +8488,7 @@ private struct ChatLiveText: View {
     /// in a branch of its own beside this one (both rows `live`), the frozen words never showed, this view stayed in
     /// the lazy list and went on growing under the finger (2026-11-04, StreamingScrollTests: 9 to 30 pt every delta).
     var held: String?
+    var hidesBotmuxSentinel = false
     /// The new conversation layout: the answer streams in the box it settles in (#1666).
     @Environment(\.chatLayout) private var layout
 
@@ -8321,7 +8500,7 @@ private struct ChatLiveText: View {
         let text = held ?? (Self.shows(store) ? store.liveText : "")
         // Held, or the stream over: the words whole, not revealed further (#6651).
         let done = held != nil || store.liveDone
-        if !text.isEmpty {
+        if !text.isEmpty, !hidesBotmuxSentinel || !BotmuxDisplay.hidesSentinel(text, role: "assistant", mode: .decoded) {
             if layout.on {
                 StreamingText(text: text, done: done)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -8510,6 +8689,8 @@ final class ChatScratch {
         /// Whether completed Agent exchanges emit Changed Files cards (#12016), and the folder used for display paths.
         var turnChanges = false
         var cwd = ""
+        var botmuxMode: BotmuxDisplayMode = .decoded
+        var botmuxSession = false
     }
     /// What was sent from this chat lately: its transcript copy arriving brings you to the newest, others do not.
     var sentHere: [(id: UUID, text: String)] = []

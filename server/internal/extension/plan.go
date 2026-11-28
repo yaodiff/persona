@@ -341,13 +341,14 @@ func (r *Registry) commitPlan(ctx context.Context, id, previewID, digest string,
 	for i := range plans {
 		plan := &plans[i]
 		plan.next = r.fromRow(plan.row)
-		if r.yielding(r.extensions[plan.row.ID]) {
+		if plan.preview.builtinHandoff || r.yielding(r.extensions[plan.row.ID]) {
 			r.yielded[plan.row.ID] = r.extensions[plan.row.ID]
 		}
 		if plan.old != nil && plan.old.Record.ID != plan.row.ID {
 			delete(r.extensions, plan.old.Record.ID)
 		}
 		r.extensions[plan.row.ID] = plan.next
+		delete(r.dormant, plan.row.ID)
 		delete(r.previews, plan.preview.ID)
 		if plan.preview.ID == previewID {
 			main = plan.next
@@ -453,7 +454,12 @@ func (r *Registry) validatePlan(ctx context.Context, id, previewID, digest strin
 		}
 		row := Record{ID: m.ID, Source: SourceInstalled, Origin: pv.source.String(), Version: m.Version, Granted: m.Permissions, GrantedDigest: pv.Digest, Enabled: true, Config: json.RawMessage(`{}`), InstalledAt: r.now(), UpdatedAt: r.now()}
 		if pv.Upgrade {
-			if old == nil || old.Record.Source != SourceInstalled || old.Record.Version != pv.From {
+			if old != nil && (pv.builtinHandoff || old.Record.BuiltinPredecessor) {
+				if err := r.checkHandoffPreview(old, pv, requested); err != nil {
+					return nil, err
+				}
+			}
+			if old == nil || (!pv.builtinHandoff && old.Record.Source != SourceInstalled) || old.Record.Version != pv.From {
 				return nil, errors.New("扩展在预览之后变了，重新预览一次")
 			}
 			if old.Record.AttachedPackage() {
@@ -484,6 +490,15 @@ func (r *Registry) validatePlan(ctx context.Context, id, previewID, digest strin
 			row.PreviousOrigin, row.PreviousMarketKey = old.Record.Origin, old.Record.MarketKey
 			row.Origin = pv.source.String()
 			row.Granted, row.GrantedDigest = m.Permissions, pv.Digest
+			if pv.builtinHandoff {
+				row.Source, row.BuiltinPredecessor = SourceInstalled, true
+				row.PreviousOrigin = builtinOrigin(m.ID)
+			}
+			if row.BuiltinPredecessor {
+				if err := r.guardHandoff(ctx, old, &row); err != nil {
+					return nil, err
+				}
+			}
 		} else {
 			if pv.replaces != "" && r.extensions[pv.replaces] != nil {
 				return nil, ErrIdentity
@@ -494,11 +509,16 @@ func (r *Registry) validatePlan(ctx context.Context, id, previewID, digest strin
 			if requested != pv.Digest {
 				return nil, errPlanDigest
 			}
-			if old != nil && !r.yielding(old) {
+			if old != nil && (!r.yielding(old) || r.handoffs[m.ID]) {
 				return nil, fmt.Errorf("已经有扩展 %s", m.ID)
 			}
 			row.DisabledContributions = m.StartsOff(nil, nil)
 			row.NewInstallation = !r.yielding(old)
+			if held, ok := r.dormant[m.ID]; ok { // a row Load set aside: adopted in place, or refused (dormant.go)
+				if err := r.adoptDormant(ctx, held, pv, m, requested, &row); err != nil {
+					return nil, err
+				}
+			}
 		}
 		// Overwrite on every install/upgrade, including a return to unsigned code.
 		row.MarketKey = pv.verifiedMarketKey
@@ -522,6 +542,9 @@ func (r *Registry) validatePlan(ctx context.Context, id, previewID, digest strin
 			}
 			row.Config = migrated
 			row.ExpectedConfig = compactConfig(old.Record.Config)
+		}
+		if pv.builtinHandoff && len(row.Config) == 0 {
+			row.Config = compactConfig(row.Config)
 		}
 		if !json.Valid(row.Config) {
 			return nil, i18n.Err("extension-status.saved_config_json")

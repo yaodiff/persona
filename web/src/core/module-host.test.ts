@@ -293,6 +293,15 @@ describe("loading", () => {
     expect(code).not.toHaveBeenCalled();
   });
 
+  it("skips the chunk if the module is switched off while its catalog is loading", async () => {
+    registerModule(garden());
+    const pending = loadModule("garden");
+    setModuleSwitchedOff("garden", true);
+    await expect(pending).rejects.toThrow(/not enabled/);
+    expect(strings).toHaveBeenCalledOnce();
+    expect(code).not.toHaveBeenCalled();
+  });
+
   it("loads an enabled module's strings, then its code, once", async () => {
     const order: string[] = [];
     strings.mockImplementationOnce(async () => (order.push("strings"), { default: { "garden.title": "Garden" }, fallbacks: {} }));

@@ -496,6 +496,7 @@ Other values: allowing 450 tokens per append (500-token limit, rejection observe
 
 - **Opaque CONNECT tunnels** (#2745): the egress proxy can replay a bounded, complete ClientHello while no server byte has arrived; TCP success alone is insufficient. Preserve record/TCP fragments and stop before early application data. Observe both directions so server-first protocols are not delayed, and resume ordinary relay when the client sniff window expires.
   After HTTP Hijack, detach already-buffered bytes from the returned reader before applying probe deadlines: that reader still uses `net/http`'s connection reader, which cancels the request on a read timeout even after hijacking. Probe the raw connection and preserve the detached bytes instead; otherwise a banner or an idle client closes the entire tunnel. Real CONNECT banner tests catch this even when direct connection-helper tests pass.
+- **CONNECT through an upstream proxy** (#17802): an upstream 200 confirms the tunnel opened. Wait for the destination's first byte on the same terms as a direct connection. Reuse the selected route and checked numeric addresses on every TLS retry. Include the upstream handshake in the retry deadline and scope preferred addresses to the proxy endpoint.
 
 ## The realtime dialect against a Realtime endpoint (#4011, 2026-11-10)
 

@@ -169,7 +169,7 @@ internal class HandOffBarTestRepository(
         memoryGate?.await()
         handOffMemory.value = value
     }
-    override suspend fun personaContext(itemId: String): String = "Full example context"
+    override suspend fun personaContext(itemId: String): PersonaContext = PersonaContext("Full example context")
     override suspend fun draftReply(itemId: String, instruction: String): String = "AI reply"
     override suspend fun setDone(itemId: String, done: Boolean) {
         doneCalls++

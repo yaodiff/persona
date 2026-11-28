@@ -398,6 +398,9 @@ func (d *DB) MarkAssistantPageRefresh(ctx context.Context, id, device string, at
 		if err := old.kept(); err != nil {
 			return err
 		}
+		if old.Paused {
+			return ErrAssistantPagePaused
+		}
 		out, err = scanAssistantPage(tx.QueryRow(ctx, `UPDATE assistant_pages SET refresh_asked_at = $2, refresh_device = $3,
 			updated_at = $2 WHERE id = $1 RETURNING `+assistantPageSummary, id, at, device), false)
 		return err

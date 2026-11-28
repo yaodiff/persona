@@ -234,7 +234,10 @@ func (n *Node) mergeRuntimeTranscript(s *proto.Session) string {
 	}
 	n.setRuntimeSessionContext(s, m)
 	s.ModelFallback = m.modelFallback
-	s.LastText, s.Rev = snippet(m.lastText), st.Size()
+	if words := snippet(m.lastText); words != "" {
+		s.LastText = words
+	}
+	s.Rev = st.Size()
 	if u := lastUsed(m, st); u.After(s.UpdatedAt) {
 		s.UpdatedAt = u.UTC()
 	}

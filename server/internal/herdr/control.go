@@ -20,15 +20,18 @@ import (
 // the pane back to its own size only while a herdr client is attached, so the node ends it with CloseAt the size the
 // pane had before.
 type Control struct {
-	cmd    *exec.Cmd
-	in     io.WriteCloser
-	writes chan []byte
-	done   chan struct{}
-	once   sync.Once
-	reason string // terminal.closed's reason, once it came
-	cols   int    // the size the pane's programs see (the last asked for)
-	rows   int
-	mu     sync.Mutex
+	cmd       *exec.Cmd
+	in        io.WriteCloser
+	writes    chan []byte
+	writeDone chan struct{}
+	done      chan struct{}
+	once      sync.Once
+	reason    string // terminal.closed's reason, once it came
+	cols      int    // the size the pane's programs see (the last asked for)
+	rows      int
+	mu        sync.Mutex
+	aborted   bool // StartControl aborted before returning s; reader must not invoke fn
+	inFirstFn bool // reader is currently running fn for the first frame
 }
 
 // ErrAttachBusy: another client (Ovis, a second herdr client) holds the terminal's attach slot; take it over to go on.
@@ -43,6 +46,9 @@ const controlWait = 8 * time.Second
 // StartControl takes the pane's terminal at cols × rows and streams frames to fn until it ends (ctx ending ends it). It returns once
 // herdr answered: with the first frame already given to fn, or ErrAttachBusy (takeover false and the slot is held).
 func (c *Client) StartControl(ctx context.Context, pane string, cols, rows int, takeover bool, fn func(Frame)) (*Control, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	args := []string{"terminal", "session", "control", pane, "--cols", fmt.Sprint(cols), "--rows", fmt.Sprint(rows)}
 	if takeover {
 		args = append(args, "--takeover")
@@ -61,20 +67,23 @@ func (c *Client) StartControl(ctx context.Context, pane string, cols, rows int, 
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("herdr terminal session control: %w", err)
 	}
-	s := &Control{cmd: cmd, in: in, writes: make(chan []byte, 1024), done: make(chan struct{}), cols: cols, rows: rows}
-	first := make(chan error, 1)
+	s := &Control{
+		cmd:       cmd,
+		in:        in,
+		writes:    make(chan []byte, 1024),
+		writeDone: make(chan struct{}),
+		done:      make(chan struct{}),
+		cols:      cols,
+		rows:      rows,
+	}
+	first := make(chan error) // unbuffered handoff: frames after the first run only if StartControl returns s
+	abortCh := make(chan struct{})
+	firstFnDone := make(chan struct{})
 	go s.writeLoop()
-	go func() {
-		select {
-		case <-ctx.Done():
-			s.Close()
-		case <-s.done:
-		}
-	}()
 	go func() {
 		defer close(s.done)
 		r := bufio.NewReaderSize(stdout, 256<<10)
-		started := false
+		started, discard := false, false
 		for {
 			line, err := readLine(r, maxLine)
 			if err != nil {
@@ -90,10 +99,41 @@ func (c *Client) StartControl(ctx context.Context, pane string, cols, rows int, 
 			}
 			switch m.Type {
 			case "terminal.frame":
-				fn(m.Frame)
+				if discard {
+					continue
+				}
 				if !started {
-					started = true
-					first <- nil
+					s.mu.Lock()
+					if s.aborted {
+						s.mu.Unlock()
+						discard = true
+						continue
+					}
+					s.inFirstFn = true
+					s.mu.Unlock()
+					var aborted bool
+					func() {
+						defer func() {
+							s.mu.Lock()
+							s.inFirstFn = false
+							aborted = s.aborted
+							close(firstFnDone)
+							s.mu.Unlock()
+						}()
+						fn(m.Frame)
+					}()
+					if aborted {
+						discard = true
+						continue
+					}
+					select {
+					case first <- nil:
+						started = true
+					case <-abortCh:
+						discard = true
+					}
+				} else {
+					fn(m.Frame)
 				}
 			case "terminal.closed":
 				s.mu.Lock()
@@ -103,23 +143,50 @@ func (c *Client) StartControl(ctx context.Context, pane string, cols, rows int, 
 		}
 		_ = cmd.Wait()
 		if !started {
-			first <- s.endError(strings.TrimSpace(stderr.String()))
+			select {
+			case first <- s.endError(strings.TrimSpace(stderr.String())):
+			case <-abortCh:
+			}
 		}
 	}()
+	timer := time.NewTimer(controlWait)
+	defer timer.Stop()
 	select {
 	case err := <-first:
 		if err != nil {
 			s.Close()
 			return nil, err
 		}
+		if ctx.Done() != nil {
+			go func() {
+				select {
+				case <-ctx.Done():
+					s.Close()
+				case <-s.done:
+				}
+			}()
+		}
 		return s, nil
-	case <-time.After(controlWait):
-		s.Close()
-		return nil, fmt.Errorf("herdr terminal session control: no frame in %v", controlWait)
+	case <-timer.C:
+		return nil, s.abortStart(abortCh, firstFnDone, fmt.Errorf("herdr terminal session control: no frame in %v", controlWait))
 	case <-ctx.Done():
-		s.Close()
-		return nil, ctx.Err()
+		return nil, s.abortStart(abortCh, firstFnDone, ctx.Err())
 	}
+}
+
+// abortStart stops a control session whose StartControl timed out or was canceled, ensuring no
+// callback runs concurrently with or after StartControl returning an error.
+func (s *Control) abortStart(abortCh, firstFnDone chan struct{}, err error) error {
+	s.mu.Lock()
+	s.aborted = true
+	waitFirst := s.inFirstFn
+	s.mu.Unlock()
+	close(abortCh)
+	s.Close()
+	if waitFirst {
+		<-firstFnDone
+	}
+	return err
 }
 
 // endError is why the session ended, from herdr's terminal.closed reason (or its stderr).
@@ -141,6 +208,9 @@ func (s *Control) endError(stderr string) error {
 }
 
 func (s *Control) writeLoop() {
+	if s.writeDone != nil {
+		defer close(s.writeDone)
+	}
 	for {
 		select {
 		case b := <-s.writes:
@@ -149,6 +219,7 @@ func (s *Control) writeLoop() {
 				return
 			}
 			if _, err := s.in.Write(b); err != nil {
+				s.Close()
 				return
 			}
 		case <-s.done:
@@ -165,14 +236,20 @@ func (s *Control) send(v any) error {
 	select {
 	case <-s.done:
 		return errors.New("terminal control ended")
+	case <-s.writeDone:
+		return errors.New("terminal control ended")
 	default:
 	}
+	timer := time.NewTimer(2 * time.Second)
+	defer timer.Stop()
 	select {
 	case s.writes <- append(b, '\n'):
 		return nil
 	case <-s.done:
 		return errors.New("terminal control ended")
-	case <-time.After(2 * time.Second): // herdr stopped reading: the session is as good as gone
+	case <-s.writeDone:
+		return errors.New("terminal control ended")
+	case <-timer.C: // herdr stopped reading: the session is as good as gone
 		return errors.New("terminal control is not taking input")
 	}
 }
@@ -308,10 +385,15 @@ func (s *Control) CloseAt(cols, rows int) {
 		s.Close()
 		return
 	}
+	timer := time.NewTimer(2 * time.Second)
+	defer timer.Stop()
 	select {
 	case s.writes <- nil: // the write loop closes stdin when it gets here, after the resize
 	case <-s.done:
-	case <-time.After(2 * time.Second): // herdr stopped reading
+		s.Close()
+	case <-s.writeDone:
+		s.Close()
+	case <-timer.C: // herdr stopped reading
 		s.Close()
 	}
 }
@@ -321,11 +403,18 @@ func (s *Control) CloseAt(cols, rows int) {
 // killed (that releases it as well).
 func (s *Control) Close() {
 	s.once.Do(func() {
-		_ = s.in.Close()
+		if s.in != nil {
+			_ = s.in.Close()
+		}
+		if s.cmd == nil {
+			return
+		}
 		go func() {
+			timer := time.NewTimer(3 * time.Second)
+			defer timer.Stop()
 			select {
 			case <-s.done:
-			case <-time.After(3 * time.Second):
+			case <-timer.C:
 				if s.cmd.Process != nil {
 					_ = s.cmd.Process.Kill()
 				}

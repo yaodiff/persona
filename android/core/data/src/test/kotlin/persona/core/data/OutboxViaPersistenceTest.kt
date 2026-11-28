@@ -102,7 +102,7 @@ class OutboxViaPersistenceTest {
         val db = open(file)
         val row = db.records().message(scope.path, "old")!!
         assertNull(row.via)
-        assertEquals(7, db.openHelper.readableDatabase.version)
+        assertEquals(8, db.openHelper.readableDatabase.version)
         assertEquals("typed", row.text)
     }
 }

@@ -109,6 +109,8 @@ type Voice struct {
 	State func(VoiceSources) (setup string, warnings []string, err error)
 	// FormURL is the address in the settings form config ("" none).
 	FormURL func(config json.RawMessage) string
+	// FormTTSURL is the streaming TTS endpoint address in the settings form config ("" none).
+	FormTTSURL func(config json.RawMessage) string
 	// Handler serves the extension's HTTP side in this process on a configuration as hub.json gives it, reaching
 	// the hub at hubURL with hubToken: the manager's end-to-end tests of meeting transcription run it so.
 	Handler func(config json.RawMessage, hubURL, hubToken string, logger *log.Logger) (http.Handler, error)
@@ -116,9 +118,10 @@ type Voice struct {
 
 // VoiceSources are where the voice extension's settings come from (the extension's own Sources).
 type VoiceSources struct {
-	// Form is the settings form, Key its secret key ("set" when only whether it is set is known).
-	Form json.RawMessage
-	Key  string
+	// Form is the settings form, Key and TTSKey its secrets ("set" when only whether each is set is known).
+	Form   json.RawMessage
+	Key    string
+	TTSKey string
 	// HubJSON is the config of the hub.json entry the extension took over; Gateway the upstream a quota gateway gives.
 	HubJSON, Gateway json.RawMessage
 }

@@ -1,9 +1,13 @@
 // "herdr is not running on <computer>" with "Start", at the top of the Agents list (#1916, lib/herdr-notice.ts): one row per online
-// machine on classic herdr whose server does not answer. Asked while the page is visible; a failed start says why in
-// words, and the hub's own text with its request id is behind "Copy details" (right click / the copy button), not in the row.
+// machine with classic herdr in its engine set whose server does not answer. Asked while the page is visible; a failed start says
+// why in words, and the hub's own text with its request id is behind "Copy details" (right click / the copy button), not in the row.
+// Below them "Orca isn't running on <computer>" (#17037): one row per online machine with Orca in its engine set whose node says
+// Orca is installed and not running (engines.ts orcaStopped). The node keeps that current, so the row needs no polling; Persona
+// cannot open Orca for the user, so it has no button, only what to do.
 
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { HERDR_POLL_MS, HerdrWatch, herdrWatched, type HerdrFailure } from "../../lib/herdr-notice";
+import { orcaStopped } from "../../lib/engines";
 import { useStore } from "../../lib/store";
 import type { Machine } from "../../lib/types";
 import { contextMenuProps } from "../../ui/context-menu";
@@ -14,7 +18,7 @@ import { t } from "../../i18n";
 
 /** The machines the rows can be about, as a key: their ids and engines, not each heartbeat of theirs. */
 function watchKey(machines: Machine[]): string {
-  return machines.filter(herdrWatched).map((m) => `${m.id} ${m.engine ?? ""}`).sort().join("|");
+  return machines.filter(herdrWatched).map((m) => `${m.id} ${m.engine ?? ""} ${(m.engine_hosts ?? []).join(",")}`).sort().join("|");
 }
 
 export function HerdrNotices({ watch: given }: { watch?: HerdrWatch } = {}) {
@@ -44,12 +48,32 @@ export function HerdrNotices({ watch: given }: { watch?: HerdrWatch } = {}) {
 
   // Polling depends on ids and engines; labels must follow a rename even when that polling set stays the same.
   const rows = machines.filter((m) => herdrWatched(m) && snap.stopped.has(m.id));
-  if (!rows.length) return null;
+  const orca = machines.filter(orcaStopped);
+  if (!rows.length && !orca.length) return null;
   return (
     <div className="mt-1.5 flex flex-col gap-0.5">
       {rows.map((m) => (
         <HerdrNoticeRow key={m.id} machine={m} starting={snap.starting.has(m.id)} failure={snap.failures.get(m.id)} onStart={() => void watch.start(m.id)} />
       ))}
+      {orca.map((m) => (
+        <OrcaNoticeRow key={m.id} machine={m} />
+      ))}
+    </div>
+  );
+}
+
+/** The herdr row's layout, without its button: Orca is opened on the computer, not from here. */
+function OrcaNoticeRow({ machine }: { machine: Machine }) {
+  const name = machine.name || machine.id;
+  return (
+    <div data-testid="orca-notice" className="relative z-10 flex items-start gap-2 rounded-[7px] px-2 py-1.5 [@media(pointer:coarse)]:min-h-11">
+      <span className="mt-[3px] flex size-3.5 shrink-0 items-center justify-center text-orange">
+        <Icon name="warning" size={13} stroke={2.2} />
+      </span>
+      <div className="min-w-0 flex-1">
+        <div className="text-meta leading-[1.45] text-ink-2">{t("herdr-notice.orca_not_running", { machine: name })}</div>
+        <div className="mt-0.5 text-label leading-[1.45] text-ink-3">{t("herdr-notice.orca_hint")}</div>
+      </div>
     </div>
   );
 }

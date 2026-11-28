@@ -45,6 +45,14 @@ type apiSeen struct {
 // installed before the Persona-only rename (#6079), which keeps sending it until it is replaced.
 var portProbeAgents = []string{portProbeAgent, compat.PortProbeAgent}
 
+func isFakeAPICardContextPath(p string) bool {
+	parts := strings.Split(strings.Trim(p, "/"), "/")
+	if len(parts) >= 2 && (parts[0] == "api" || parts[0] == "agent") && parts[1] == "v1" {
+		parts = parts[2:]
+	}
+	return len(parts) == 2 && (parts[0] == "conversations" || parts[0] == "messages") && parts[1] != ""
+}
+
 type fakeAPI struct {
 	*httptest.Server
 	mu   sync.Mutex
@@ -59,6 +67,11 @@ func newFakeAPI(t *testing.T) *fakeAPI {
 			// A Persona node on the machine running these tests (the tests run under its agents) finds this server
 			// among an agent's ports and probes it (ports.go): that GET / is not a request the gate passed on. Only
 			// the probe's whole shape is left out, never a request the gate forwards.
+			return
+		}
+		if r.Method == http.MethodGet && r.Header.Get("User-Agent") == larkCardContextAgent && isFakeAPICardContextPath(r.URL.Path) {
+			// The node's read-only approval-card context lookup is not a gated command forwarded by the proxy.
+			w.WriteHeader(http.StatusNotFound)
 			return
 		}
 		b, _ := io.ReadAll(r.Body)

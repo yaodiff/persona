@@ -54,13 +54,15 @@ vi.mock("../../lib/extension-slots", () => ({ useInboxItemPlace: () => undefined
 vi.mock("../../lib/translate", async (original) => ({ ...(await original<typeof import("../../lib/translate")>()), useTranslatePrefs: () => world.prefs }));
 vi.mock("../../ui/atoms", async (original) => ({ ...(await original<typeof import("../../ui/atoms")>()), toast: vi.fn() }));
 
-import { connectModuleHub, MODULES_FEATURE, resetModulesForTest } from "../../core/module-host";
+import { connectModuleHub, loadModule, registerModule, MODULES_FEATURE, resetModulesForTest } from "../../core/module-host";
 import { initI18n, t } from "../../i18n";
 import { resetInboxForTests, type InboxItem } from "../../lib/inbox";
 import { handOffContext } from "../../lib/inbox-page";
 import { loadMailAccounts, mailItemReadOnly, mailReading, resetMailForTests, type MailReading } from "../../lib/mail";
 import { resetManagerChoice, settleRosterDefault } from "../../lib/manager-choice";
 import { reset } from "../../lib/store";
+import { MODULES } from "../../modules";
+import { setModuleSwitchedOff } from "../../core/module-switch";
 import { MailBody } from "./InboxBodies";
 import { InboxDetail } from "./InboxDetail";
 import { EventBody } from "./InboxEvent";
@@ -89,6 +91,9 @@ const HUBS: Record<"off" | "on" | "noMarker" | "noHello", { features: string[]; 
 };
 const setHub = (hub: keyof typeof HUBS) => Object.assign(world.hub, { features: [...HUBS[hub].features], loaded: HUBS[hub].loaded });
 
+const descriptor = MODULES.find((m) => m.mailbox);
+const chunk = vi.fn();
+const catalog = vi.fn();
 let host: HTMLDivElement;
 let root: Root;
 const flush = async (times = 8) => {
@@ -102,6 +107,13 @@ beforeEach(async () => {
   await initI18n("en");
   localStorage.clear();
   resetModulesForTest();
+  chunk.mockClear();
+  catalog.mockClear();
+  if (descriptor) registerModule({
+    ...descriptor,
+    load: () => { chunk(); return descriptor.load(); },
+    locales: { en: () => { catalog(); return descriptor.locales!.en(); } },
+  });
   reset();
   setHub("noHello");
   connectModuleHub(() => world.hub, () => () => {});
@@ -127,6 +139,10 @@ afterEach(() => {
 describe("how a mail is read, decided once", () => {
   it("is stored only when the hello names modules and leaves mail out", () => {
     const kinds = (Object.keys(HUBS) as (keyof typeof HUBS)[]).map((k) => [k, mailReading(HUBS[k]).kind]);
+    if (!descriptor) {
+      expect(kinds.every(([, kind]) => kind === "stored")).toBe(true);
+      return;
+    }
     expect(kinds).toEqual([["off", "stored"], ["on", "full"], ["noMarker", "full"], ["noHello", "full"]]);
   });
 
@@ -151,6 +167,8 @@ describe("a mail item's body with mail off", () => {
     expect(world.calls).toEqual([{ path: "/inbox/mail:a1:thread:7", method: undefined }]);
     expect(host.querySelector("[data-mail-stored-text]")?.textContent).toBe(STORED);
     expect(notice()?.textContent).toBe(t("inbox-inboxbodies.mail_off_stored"));
+    expect(chunk).not.toHaveBeenCalled();
+    expect(catalog).not.toHaveBeenCalled();
     // the notice comes after the text
     expect(host.querySelector("[data-mail-stored-text]")!.compareDocumentPosition(notice()!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     // who and when stay, from the item
@@ -261,11 +279,15 @@ describe("a mail item's actions with mail off", () => {
   });
 });
 
-describe.each(["on", "noMarker", "noHello"] as const)("a mail item with the hub %s", (hub) => {
-  beforeEach(() => setHub(hub));
+describe.skipIf(!descriptor).each(["on", "noMarker", "noHello"] as const)("a mail item with the hub %s", (hub) => {
+  beforeEach(async () => {
+    setHub(hub);
+    await loadModule(descriptor!.id);
+  });
 
   it("is read from the mail server as before, with its replies, flags and attachments", async () => {
     await act(async () => root.render(<MailBody item={mailItem()} />));
+    await act(async () => { await vi.dynamicImportSettled(); });
     await flush();
 
     expect(world.calls).toEqual([
@@ -295,4 +317,31 @@ describe.each(["on", "noMarker", "noHello"] as const)("a mail item with the hub 
     await flush();
     expect(button(t("inbox-inboxevent.edit"))).not.toBeNull();
   });
+});
+
+it("keeps historical mail readable on a mail-capable hub with no provider or a local opt-out", async () => {
+  setHub("on");
+  if (descriptor) setModuleSwitchedOff(descriptor.id, true);
+  try {
+    await act(async () => root.render(<MailBody item={mailItem()} />));
+    await flush();
+    expect(host.querySelector("[data-mail-stored-text]")?.textContent).toBe(STORED);
+    expect(mailCalls()).toEqual([]);
+    expect(handOffContext(mailItem({ context: "kept" })).text).toBe("kept");
+    expect(chunk).not.toHaveBeenCalled();
+    expect(catalog).not.toHaveBeenCalled();
+    expect(notice()?.textContent).toBe(t("inbox-inboxbodies.saved"));
+    if (descriptor) {
+      await act(async () => { setModuleSwitchedOff(descriptor.id, false); await vi.dynamicImportSettled(); });
+      await act(async () => { await vi.dynamicImportSettled(); });
+      expect(button(t("inbox-inboxbodies.reply"))).not.toBeNull();
+      expect(chunk).toHaveBeenCalledOnce();
+      expect(catalog).toHaveBeenCalledOnce();
+      await act(async () => { setModuleSwitchedOff(descriptor.id, true); });
+      expect(host.querySelector("[data-mail-stored-text]")?.textContent).toBe(STORED);
+    }
+  } finally {
+    act(() => root.render(null));
+    if (descriptor) setModuleSwitchedOff(descriptor.id, false);
+  }
 });

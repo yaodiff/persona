@@ -39,7 +39,7 @@ from wiregen.ts import gen_ts, ts_calls  # noqa: E402,F401
 ROOT = Path(__file__).resolve().parents[2]
 SCHEMA_DIR = ROOT / "schema" / "extension"
 SCHEMA_FILES = ["manifest.schema.json", "protocol.schema.json", "view.schema.json", "messaging.schema.json",
-                "connector.schema.json", "channel.schema.json", "kb.schema.json", "todos.schema.json", "leaders.schema.json", "models.schema.json", "assistant.schema.json", "assistant_data.schema.json", "machines.schema.json", "browser.schema.json", "storage.schema.json", "stream.schema.json", "transcription.schema.json", "repository.schema.json", "memory.schema.json", "offload.schema.json"]
+                "connector.schema.json", "channel.schema.json", "kb.schema.json", "todos.schema.json", "leaders.schema.json", "models.schema.json", "assistant.schema.json", "assistant_data.schema.json", "machines.schema.json", "browser.schema.json", "storage.schema.json", "stream.schema.json", "transcription.schema.json", "repository.schema.json", "memory.schema.json", "offload.schema.json", "routine.schema.json"]
 
 GO_OUT = ROOT / "sdk/go/wire/wire_gen.go"
 # The TypeScript SDK's types, and the web app's copy. A schema file marked "x-side": "plugin" (what only the hub and

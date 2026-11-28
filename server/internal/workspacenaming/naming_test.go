@@ -67,6 +67,27 @@ func TestTypedRefsAndOnlyUsedFields(t *testing.T) {
 		}
 	}
 }
+
+func TestFolderOnlyWorkspaceLayout(t *testing.T) {
+	s := source()
+	s.Rules.BranchTemplate = "persona/{base-branch}/{task-id}"
+	s.Repositories.Repositories = nil
+	n := NodeContext{Home: "/home/example"}
+	preview := Resolve(s, n)
+	if preview.Status != "complete" || preview.Plan == nil || preview.Plan.RootPath != "/home/example/workspace/task-todo_123" || len(preview.Plan.Repositories) != 0 {
+		t.Fatal(preview)
+	}
+	s.Layout = repository.LayoutRoot
+	if got := Resolve(s, n); got.Plan != nil || got.Status != "invalid" {
+		t.Fatal("root layout accepted without a repository", got)
+	}
+	plan := *preview.Plan
+	plan.Source.Layout = repository.LayoutRoot
+	plan.Digest = Digest(plan)
+	if err := CheckPlan(plan); err == nil {
+		t.Fatal("a matching digest accepted an invalid root layout")
+	}
+}
 func TestTemplateBoundaries(t *testing.T) {
 	for _, template := range []string{"../x", "a/../b", "/absolute", "a//b", "a\\b", "{repo}", "{branch}", "{unknown}", "{task-id", "$(whoami)", ".persona/x", "C:/x"} {
 		s := source()

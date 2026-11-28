@@ -164,6 +164,8 @@ type ExternalBindingMatch struct {
 	Source         ExternalBindingSource  `json:"source"`
 	BindingID      ExternalBindingID      `json:"binding_id,omitempty"`
 	RepositoryRole ExternalRepositoryRole `json:"repository_role,omitempty"`
+	TargetTitle    string                 `json:"target_title,omitempty"`
+	TargetDone     bool                   `json:"target_done,omitempty"`
 }
 
 type ExternalBindingLookup struct {
@@ -172,7 +174,9 @@ type ExternalBindingLookup struct {
 }
 
 type ExternalSourceSummary struct {
-	Bindings []ExternalBindingMatch `json:"bindings"`
+	Bindings         []ExternalBindingMatch `json:"bindings"`
+	OmittedDoneCount int                    `json:"omitted_done_count,omitempty"`
+	TotalCount       int                    `json:"total_count,omitempty"`
 }
 
 type ExternalEventID string

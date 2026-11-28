@@ -37,3 +37,36 @@ type LarkReplyObservation struct {
 	Reply     LarkReplyMessage `json:"reply"`
 	CheckedAt time.Time        `json:"checked_at"`
 }
+
+// LarkAppID identifies the application used to read a linked Lark topic.
+type LarkAppID string
+
+// LarkOpenID identifies a user within a Lark application.
+type LarkOpenID string
+
+// LarkChatID identifies a chat containing a linked Lark topic.
+type LarkChatID string
+
+// LarkThreadID identifies a topic within a Lark chat.
+type LarkThreadID string
+
+// LarkTopicIdentity is empty only when establishing the binding's configured source for the first time.
+type LarkTopicIdentity struct {
+	Brand         string     `json:"brand"`
+	AppID         LarkAppID  `json:"app_id"`
+	AccountOpenID LarkOpenID `json:"account_open_id"`
+}
+
+// LarkTopicWatch observes activity in an already linked topic.
+type LarkTopicWatch struct {
+	Identity LarkTopicIdentity `json:"identity"`
+	ChatID   LarkChatID        `json:"chat_id"`
+	ThreadID LarkThreadID      `json:"thread_id"`
+	Since    time.Time         `json:"since"`
+}
+
+type LarkTopicObservation struct {
+	Watch     LarkTopicWatch     `json:"watch"`
+	Messages  []LarkReplyMessage `json:"messages"`
+	CheckedAt time.Time          `json:"checked_at"`
+}

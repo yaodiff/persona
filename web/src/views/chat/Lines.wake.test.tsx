@@ -4,7 +4,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { chatLines } from "../../lib/turns";
+import { chatLines, mergeItems } from "../../lib/turns";
 import { emptyTaskIndex } from "../../lib/tasks";
 import type { Item } from "../../lib/types";
 import { ChatContext } from "./chat-context";
@@ -29,10 +29,10 @@ const slots = () => [...host.querySelectorAll("[data-latest-text]")];
 const details = () => [...host.querySelectorAll("[data-work-detail]")].map((d) => d.textContent ?? "");
 
 describe.each(["assistant", "agents"] as const)("%s background continuation", (style) => {
-  function render(items: Item[], live: boolean) {
+  function render(items: Item[], live: boolean, streaming?: string) {
     const lines = chatLines(items, { live });
     act(() => root.render(<ChatContext.Provider value={{ scope: "wake-test:", tasks: emptyTaskIndex(), subagents: [], lineStyle: style }}>
-      {lines.map((line) => <ChatLineView key={line.id} line={line} mid="machine" sid="session" expandFold={async () => {}} />)}
+      {lines.map((line) => <ChatLineView key={line.id} line={line} mid="machine" sid="session" streaming={line.kind === "segment" && line.live ? streaming : undefined} expandFold={async () => {}} />)}
     </ChatContext.Provider>));
   }
   it("keeps the answer before a wake and gives the woken work a collapsed summary of its own", () => {
@@ -89,5 +89,27 @@ describe.each(["assistant", "agents"] as const)("%s background continuation", (s
     expect(headers()[1].getAttribute("aria-expanded")).toBe("false");
     expect(slots()[1].textContent).toContain("Resumed final result.");
     expect(slots()[0].textContent).toContain("Earlier progress.");
+  });
+  it("keeps a complete reply visible outside Working... while a woken turn streams new progress text", () => {
+    const completeReply = item(3, "text", "Full completed reply delivered to the user.");
+    const delivered = [user, tool(2), completeReply];
+    render(delivered, false);
+    const firstSlot = slots()[0];
+    expect(firstSlot.textContent).toContain("Full completed reply delivered to the user.");
+
+    // Background run_command finishes: wake notice at same seq as non-numeric resumed thinking + live streaming progress.
+    const resumedThinking: Item = { id: "4@r#thinking", seq: 4, role: "assistant", kind: "thinking", text: "Inspecting task result.", ts: "2026-11-04T10:00:05Z" };
+    const sameSeqWake: Item = { id: "3@c#-1", seq: 4, role: "system", kind: "notice", wake: true, text: "Background task updated", ts: "2026-11-04T10:00:05Z" };
+    const wokenItems = mergeItems([...delivered, resumedThinking], [sameSeqWake]);
+    render(wokenItems, true, "Running the follow-up step now...");
+
+    // Prior complete reply stays independently visible (not swallowed into Working... and not overwritten by live progress).
+    expect(host.querySelectorAll("[data-segment]")).toHaveLength(2);
+    expect(slots()).toHaveLength(2);
+    expect(slots()[0]).toBe(firstSlot);
+    expect(slots()[0].textContent).toContain("Full completed reply delivered to the user.");
+    expect(slots()[1].textContent).toContain("Running the follow-up step now...");
+    expect(headers()).toHaveLength(2);
+    expect(headers().map((h) => h.getAttribute("aria-expanded"))).toEqual(["false", "false"]);
   });
 });

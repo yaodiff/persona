@@ -161,10 +161,22 @@ func TestTodosV2RuntimeLoopsBootEpochStartupSweepOnceAndCap(t *testing.T) {
 	}
 }
 
+// holdTodoBlockerSweep keeps superviseWatch from queuing its background blocker sweep (queueTodoBlockerSweep, #17767)
+// for the rest of t, as if one were already running. A test of the targeted reconciliation a close runs must not race a
+// full sweep that resolves the same blocker first and wakes the dependent from its own goroutine (#17942).
+func holdTodoBlockerSweep(t *testing.T, s *Service) {
+	t.Helper()
+	if !s.blockerReconcile.sweep.CompareAndSwap(false, true) {
+		t.Fatal("a blocker sweep is already running")
+	}
+	t.Cleanup(func() { s.blockerReconcile.sweep.Store(false) })
+}
+
 func TestTodosV2RuntimeLoopsActiveCheckpointAndResetOnCompletion(t *testing.T) {
 	st := newMemBlockerStore()
 	s, f := newQuietServiceOn(t, st)
 	s.superviseTimes = superviseTimings{gather: time.Hour, every: time.Hour, urgent: time.Hour}
+	holdTodoBlockerSweep(t, s) // step 1's superviseWatch would otherwise sweep the blockers step 2 reconciles
 	ctx := context.Background()
 	setRestartRecoveryTodosV2(t, s, true, false)
 
@@ -315,10 +327,10 @@ func TestTodosV2RuntimeLoopsPRStatusEventAndBlockedByPREndToEnd(t *testing.T) {
 		t.Fatalf("expected blocker for %s to be resolved, still active: %+v", prURL1, rem)
 	}
 	s.supervise.mu.Lock()
-	sig, hasWake := s.supervise.pending[waiterTodoID+"|"+sigTodoReady]
+	sig, hasWake := s.supervise.pending[waiterTodoID+"|"+sigBlockersUnblocked]
 	s.supervise.mu.Unlock()
-	if !hasWake || sig.Key != "blockers_unblocked:"+waiterTodoID {
-		t.Fatalf("expected sigTodoReady wake for %s, got has=%t sig=%+v", waiterTodoID, hasWake, sig)
+	if !hasWake || sig.Key == "" {
+		t.Fatalf("expected blockers_unblocked wake for %s, got has=%t sig=%+v", waiterTodoID, hasWake, sig)
 	}
 
 	// 2. task_plan with blocked_by_pr persists external_pr blocker and wakes on periodic superviseWatch fallback sweep.
@@ -382,6 +394,9 @@ func TestTodosV2RuntimeLoopsPRStatusEventAndBlockedByPREndToEnd(t *testing.T) {
 	})
 	s.superviseWatch(ctx, time.Now())
 
+	waitForCondition(t, 3*time.Second, "blocker observer to reconcile PR", func() bool {
+		return !s.blockerReconcile.sweep.Load()
+	})
 	if len(unblocked) != 2 || unblocked[1] != planTodoID {
 		t.Fatalf("expected periodic superviseWatch fallback sweep to unblock %s, got %+v", planTodoID, unblocked)
 	}

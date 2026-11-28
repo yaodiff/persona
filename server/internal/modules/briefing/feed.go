@@ -1,6 +1,7 @@
 package briefing
 
 import (
+	"cmp"
 	"context"
 	"time"
 
@@ -17,6 +18,7 @@ func (r *runner) Body(f *modapi.BriefSnapshot, title string) modapi.BriefBody {
 		return modapi.BriefBody{}
 	}
 	b := modapi.BriefBody{
+		Contributions:    f.Contributions,
 		Confirmations:    f.Confirmations,
 		Title:            title,
 		At:               f.At,
@@ -33,6 +35,7 @@ func (r *runner) Body(f *modapi.BriefSnapshot, title string) modapi.BriefBody {
 		Directions:       f.Directions,
 		DisabledRoutines: f.DisabledRoutines,
 	}
+	b.DeferredSupervision = f.DeferredSupervision
 	if b.Failed == nil {
 		b.Failed = []modapi.BriefFailure{}
 	}
@@ -79,7 +82,8 @@ func (r *runner) Body(f *modapi.BriefSnapshot, title string) modapi.BriefBody {
 	}
 	for _, x := range f.Accept {
 		out := row(x)
-		out.Title, out.Detail, out.AskedAt = x.ID, f.Changed[x.ID], x.Asked
+		out.Title, out.Detail, out.AskedAt = x.ID, cmp.Or(x.Detail, f.Changed[x.ID]), x.Asked
+		out.EvidenceLink = x.EvidenceLink
 		if a, ok := f.Asks[x.ID]; ok {
 			out.Verdict, out.Outcome = a.Verdict, a.Outcome
 			if a.Decide {
@@ -90,6 +94,9 @@ func (r *runner) Body(f *modapi.BriefSnapshot, title string) modapi.BriefBody {
 			if title, ok := r.todos.TodoTitle(x.ID); ok {
 				out.Title = title
 			}
+		}
+		if out.Detail == out.Verdict || out.Detail == out.Title {
+			out.Detail = ""
 		}
 		b.Accept = append(b.Accept, out)
 	}
@@ -123,13 +130,29 @@ func (r *runner) Body(f *modapi.BriefSnapshot, title string) modapi.BriefBody {
 }
 
 // writeFeed writes a run's facts into its conversation, with the time it was sent as its time: after the run's ⏰ message.
-func (r *runner) writeFeed(session, task, title string, f *modapi.BriefSnapshot) {
+func (r *runner) writeFeed(run modapi.BriefScheduleRun, title string, f *modapi.BriefSnapshot) {
 	if r.feed == nil {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err := r.feed.Append(ctx, session, modapi.FeedKindBrief, task, r.Body(f, title)); err != nil {
-		r.logf("brief: the feed item of %s: %v", task, err)
+	// Use the scheduled occurrence rather than the process-local start time: a
+	// redelivery after restart must resolve to the same chat entry.
+	id := "feed_brief_run_" + FallbackID(run.RefID, run.Due)
+	if err := r.feed.AppendOnce(ctx, id, run.SessionID, modapi.FeedKindBrief, run.RefID, r.Body(f, title)); err != nil {
+		r.logf("brief: the feed item of %s: %v", run.RefID, err)
+		return
 	}
+	r.supervisionBriefed(ctx, f)
+}
+
+func (r *runner) supervisionBriefed(ctx context.Context, f *modapi.BriefSnapshot) {
+	if r.todos == nil || f == nil || len(f.DeferredSupervision) == 0 {
+		return
+	}
+	ids := make([]string, 0, len(f.DeferredSupervision))
+	for _, row := range f.DeferredSupervision {
+		ids = append(ids, string(row.ID))
+	}
+	r.todos.SupervisionBriefed(ctx, ids, f.At)
 }

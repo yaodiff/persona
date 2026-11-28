@@ -13,10 +13,15 @@ func TestSessionNamingMetadataAdditive(t *testing.T) {
 	if err := json.Unmarshal([]byte(`{"session_id":"session","title":"Chosen title"}`), &old); err != nil {
 		t.Fatal(err)
 	}
-	if old.TitleManual || old.TitleSource != TitleSourceUnknown || old.OutputTokens != 0 {
+	if old.TitleManual || old.TitleSource != TitleSourceUnknown || old.OutputTokensValue() != 0 {
 		t.Fatal("older nodes must not imply automatic title provenance or token usage")
 	}
-	for _, s := range []Session{old, {Title: "Claude Code", TitleManual: true, TitleSource: TitleSourceManual, OutputTokens: 123}} {
+	for _, s := range []Session{old, func() Session {
+		var made Session
+		made.Title, made.TitleManual, made.TitleSource = "Claude Code", true, TitleSourceManual
+		made.SetOutputTokens(123)
+		return made
+	}()} {
 		b, err := json.Marshal(s)
 		if err != nil {
 			t.Fatal(err)
@@ -62,6 +67,14 @@ func TestSessionFitsItsSizeClass(t *testing.T) {
 		t.Errorf("Session is %d bytes, past the %d-byte size class with its %d-byte allocation header: a row copied on its "+
 			"own now costs the next class (1,792 bytes). Bools that take a word to themselves: %s", got, sessionSizeClass,
 			mallocHeader, strings.Join(loneBools(), ", "))
+	}
+}
+
+func TestOutputTokensSaturatesWithoutLeavingTheSizeClass(t *testing.T) {
+	var s Session
+	s.SetOutputTokens(1 << 40)
+	if s.OutputTokensValue() != 1<<31-1 || unsafe.Sizeof(s) > sessionSizeClass-mallocHeader {
+		t.Fatalf("output token saturation or size class changed: %d bytes, output=%d", unsafe.Sizeof(s), s.OutputTokensValue())
 	}
 }
 

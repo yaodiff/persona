@@ -130,7 +130,7 @@ func TestRepositoryCatalogWaitsForTheProviders(t *testing.T) {
 
 // A to-do link that can't be placed yet says, in the asker's language, that the extensions are still starting.
 func TestTodoRepositoryLinksSayTheProvidersAreStarting(t *testing.T) {
-	database, err := db.Open(t.Context(), newDatabase(t), db.ManagerSet)
+	database, err := db.Open(t.Context(), newMigratedDatabase(t, db.ManagerSet), db.ManagerSet)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -194,7 +194,7 @@ func (p *stuckAcme) RepositoryParse(ctx context.Context, provider, remote string
 // The links of one reply each get a provider budget of their own, and only a provider's answer stops a later reply
 // from asking again: a call out of time, or the providers still starting, does not.
 func TestReportedLinksEachGetTheirOwnBudget(t *testing.T) {
-	database, err := db.Open(t.Context(), newDatabase(t), db.ManagerSet)
+	database, err := db.Open(t.Context(), newMigratedDatabase(t, db.ManagerSet), db.ManagerSet)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -220,18 +220,19 @@ func TestReportedLinksEachGetTheirOwnBudget(t *testing.T) {
 		slices.Sort(out)
 		return out
 	}
-	reply := func(text string) {
+	report := repositoryReporter(t, s, todo.ID)
+	reply := func(text string, created ...string) {
 		t.Helper()
-		s.advanceTaskReply(t.Context(), todoNow(s, todo.ID), "", "", text)
+		report(text, created...)
 		s.reportedLinks.runs.Wait()
 	}
-	reply("Opened " + app + "/reviews/1 and " + app + "/reviews/2")
+	reply("Opened "+app+"/reviews/1 and "+app+"/reviews/2", app+"/reviews/1", app+"/reviews/2")
 	if got := links(); !slices.Equal(got, []string{app + "/reviews/2"}) {
 		t.Fatal("a slow first link left the second no time:", got, f.asked())
 	}
 	p.stuck = ""
 	f.asked()
-	reply("Still open: " + app + "/reviews/1 and " + app + "/reviews/2")
+	reply("Still open: "+app+"/reviews/1 and "+app+"/reviews/2", app+"/reviews/1", app+"/reviews/2")
 	if got := f.asked(); !slices.Equal(got, []string{"parse", "link", "describe"}) {
 		t.Fatal("asked again", got) // reviews/1 got no answer before; reviews/2 was answered
 	}
@@ -241,12 +242,12 @@ func TestReportedLinksEachGetTheirOwnBudget(t *testing.T) {
 	// Still starting: nothing is asked, and the next reply after the start asks.
 	started := make(chan struct{})
 	s.repoStarted = started
-	reply("Opened " + app + "/reviews/3")
+	reply("Opened "+app+"/reviews/3", app+"/reviews/3")
 	if got := f.asked(); len(got) != 0 {
 		t.Fatal("asked while starting", got)
 	}
 	close(started)
-	reply("Opened " + app + "/reviews/3")
+	reply("Opened "+app+"/reviews/3", app+"/reviews/3")
 	if got := links(); len(got) != 3 || !slices.Contains(got, app+"/reviews/3") {
 		t.Fatal("after the start:", got, f.asked())
 	}

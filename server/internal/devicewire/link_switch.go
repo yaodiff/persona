@@ -1,5 +1,7 @@
 package devicewire
 
+import "github.com/nwverse/persona/server/internal/buswire"
+
 // Switching an ssh computer to Persona Link (docs/operations/link.md "Switching from SSH", #10662). The manager that
 // carries the computer runs the switch over its own ssh access; the hub owns what only it may change: the kind in the
 // machine's entry and the computer's pairing code and credential. Two calls, each one step on the hub:
@@ -16,6 +18,11 @@ package devicewire
 const (
 	MethodLinkSwitchBegin = "devices.link_switch.begin"
 	MethodLinkSwitchEnd   = "devices.link_switch.end"
+)
+
+var (
+	LinkSwitchBeginMethod = buswire.Method[LinkSwitchBegin, LinkSwitchBegun]{Name: MethodLinkSwitchBegin}
+	LinkSwitchEndMethod   = buswire.Method[LinkSwitchEnd, buswire.None]{Name: MethodLinkSwitchEnd}
 )
 
 // LinkSwitchBegin is devices.link_switch.begin's params. Operation is the manager's id for the switch (the audit's);

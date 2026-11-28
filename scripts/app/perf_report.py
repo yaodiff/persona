@@ -211,20 +211,27 @@ def probe_lines(root):
     found, issues = {}, []
     for log in sorted(pathlib.Path(root).glob("test-*.log")):
         try:
-            for number, line in enumerate(log.read_text(errors="replace").splitlines(), 1):
-                match = re.search(r"perf-frames: (\S+) (.*)$", line)
-                if not match:
-                    continue
-                values = {}
-                for key, value in re.findall(r"(\w+)=(\S+)", match.group(2)):
+            with log.open(errors="replace") as stream:
+                for number, raw in enumerate(stream, 1):
+                    line = raw.rstrip("\n")
+                    match = re.search(r"perf-frames: (\S+) (.*)$", line)
+                    if not match:
+                        continue
                     try:
-                        values[key] = float(value)
-                    except ValueError:
-                        pass
-                found.setdefault(test_id(match.group(1)), []).append({
-                    "values": values, "source": "log_fallback_only", "raw_line": line,
-                    "provenance": {"log": str(log), "line": number}})
-        except (OSError, ValueError) as error:
+                        ident = test_id(match.group(1))
+                    except ValueError as error:
+                        issues.append(f"{log}:{number}: {error}")
+                        continue
+                    values = {}
+                    for key, value in re.findall(r"(\w+)=(\S+)", match.group(2)):
+                        try:
+                            values[key] = float(value)
+                        except ValueError:
+                            pass
+                    found.setdefault(ident, []).append({
+                        "values": values, "source": "log_fallback_only", "raw_line": line,
+                        "provenance": {"log": str(log), "line": number}})
+        except OSError as error:
             issues.append(f"cannot read {log}: {error}")
     return found, issues
 
@@ -550,7 +557,11 @@ def markdown(report, before=None):
     for ident, entry in sorted(report["tests"].items(), key=lambda pair: (pair[1]["suite"], pair[0])):
         cells = cells_of(entry)
         if before and ident in before:
-            cells = [f"{old} → {new}" for old, new in zip(cells_of(before[ident]), cells)]
+            try:
+                previous = cells_of(before[ident])
+            except (AttributeError, KeyError, OverflowError, TypeError, ValueError) as error:
+                raise ValueError(f"invalid comparison data for {ident}: {error}") from error
+            cells = [f"{old} → {new}" for old, new in zip(previous, cells)]
         probe = entry["probe"]
         label = probe["source"] + " / " + probe["trust"]
         lines.append("| " + " | ".join([ident, entry["result"] or "?", label] + cells) + " |")
@@ -597,16 +608,21 @@ def main(argv=None):
         if args.compare:
             path = args.compare / "report.json"
             baseline = json.loads(path.read_text()) if path.exists() else collect(args.compare, expected)
+            if not isinstance(baseline, dict):
+                raise ValueError("comparison report must be a JSON object")
             before = baseline.get("tests", baseline)
+            if not isinstance(before, dict):
+                raise ValueError("comparison tests must be a JSON object")
         report = collect(args.root, expected)
         report["expected_iterations_source"] = ("cli" if args.iterations is not None else "metadata" if args.metadata else
                                                 "env:PERF_ITERATIONS" if expected is not None else "sample_metadata_or_unknown")
         report["mode"] = "final_acceptance_integrity" if args.final_acceptance else "diagnostic"
+        rendered = markdown(report, before)
         output.mkdir(parents=True, exist_ok=True)
         with (output / "report.json").open("x") as stream:
             json.dump(report, stream, ensure_ascii=False, indent=2, allow_nan=False)
             stream.write("\n")
-        print(markdown(report, before), end="")
+        print(rendered, end="")
         ready = report["acceptance_eligible"] if args.final_acceptance else report["complete"]
         return 0 if ready else 1
     except (OSError, ValueError, TypeError) as error:

@@ -16,15 +16,17 @@ import (
 )
 
 // An item's parent (#2128, docs/assistant/inbox.md "Relationships: parents and children"): what the item grew out of, so a thing that started in a chat, became
-// a todo and went to a few agents reads as one line. The parent is another item, a todo or an agent session; it comes
-// from the event it continues, from its connector (InboxThing.Parent) or from the user. Persona only keeps it, lists
-// it and links to it: nothing guesses one, and todos keep no tree of their own (docs/assistant/todos.md "Design trade-offs").
+// a todo and went to a few agents reads as one line. The parent is another item, a todo, an Agent session or a personal
+// Agent session; it comes from the event it continues, from its connector (InboxThing.Parent) or from the user. Persona
+// only keeps it, lists it and links to it: nothing guesses one, and todos keep no tree of their own
+// (docs/assistant/todos.md "Design trade-offs").
 
 // The kinds of parent.
 const (
 	ParentInbox   = "inbox"
 	ParentTodo    = "todo"
-	ParentSession = "session" // id "<machine>/<session>"
+	ParentSession = "session" // id "<machine>/<session>", a coding Agent's conversation
+	ParentAgent   = "agent"   // id "<agent source>:<sessionKey>", a personal Agent's session
 )
 
 // Who set a parent: a user's is never replaced by one that comes on its own; a connector's replaces continues.
@@ -54,7 +56,7 @@ var (
 )
 
 func knownParentKind(k string) bool {
-	return k == ParentInbox || k == ParentTodo || k == ParentSession
+	return k == ParentInbox || k == ParentTodo || k == ParentSession || k == ParentAgent
 }
 
 func checkParentRef(kind, id string) error {
@@ -63,6 +65,12 @@ func checkParentRef(kind, id string) error {
 	}
 	if id == "" || len(id) > maxParentID || strings.TrimSpace(id) != id || strings.IndexFunc(id, unicode.IsControl) >= 0 {
 		return errParentID
+	}
+	if kind == ParentAgent {
+		source, key, ok := strings.Cut(id, ":")
+		if !ok || source == "" || key == "" {
+			return errParentID
+		}
 	}
 	return nil
 }
@@ -174,7 +182,8 @@ type InboxTree struct {
 	Children  []InboxItem   `json:"children"`
 }
 
-// InboxTreeUp is one ancestor: an item (Item set) or the todo / session / gone item a chain ends on (Item nil).
+// InboxTreeUp is one ancestor: an item (Item set) or the todo / session / personal Agent / gone item a chain ends on
+// (Item nil).
 type InboxTreeUp struct {
 	InboxParent
 	Item *InboxItem `json:"item,omitempty"`

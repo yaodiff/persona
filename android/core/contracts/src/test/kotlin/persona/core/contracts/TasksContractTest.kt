@@ -3,9 +3,12 @@ package persona.core.contracts
 import kotlinx.serialization.json.*
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import persona.core.contracts.api.ScheduledTask
+import persona.core.contracts.generated.TodoWaitKind
+import persona.core.contracts.generated.TodoWaitPRBlocker
 
 /** The unified entry's wire shapes (docs/protocol/protocol.md "Tasks and the chat feed") decode, and its events enter the stream. */
 class TasksContractTest {
@@ -134,6 +137,21 @@ class TasksContractTest {
         assertEquals("concern", JsonCodec.decodeFromString<Todo>("""{"id":"c","kind":"concern"}""").kind)
         assertEquals("", JsonCodec.decodeFromString<Todo>("""{"id":"t"}""").kind)
         assertEquals("future-kind", JsonCodec.decodeFromString<Todo>("""{"id":"u","kind":"future-kind"}""").kind)
+    }
+
+    @Test fun todoCarriesTheServersTypedWaitAndAnOlderHubHasNone() {
+        val todo = JsonCodec.decodeFromString<Todo>("""{"id":"t1","title":"Ship the release",
+            "wait":{"kind":"pr_merge","waiting_on":"PR #88","reason":"Fix CSV escaping",
+              "wake_condition":"Checks pass","wake_at":"2026-11-19T10:15:00Z",
+              "until":"2026-11-19T11:30:00Z","since":"2026-11-18T09:45:00Z",
+              "url":"https://github.com/example/app/pull/88",
+              "pr_blockers":["review_required","checks_pending"]}}""")
+        val wait = todo.wait ?: error("wait missing")
+        assertEquals(TodoWaitKind.PrMerge, wait.kind)
+        assertEquals("PR #88", wait.waitingOn)
+        assertEquals("Checks pass", wait.wakeCondition)
+        assertEquals(listOf(TodoWaitPRBlocker.ReviewRequired, TodoWaitPRBlocker.ChecksPending), wait.prBlockers)
+        assertNull(JsonCodec.decodeFromString<Todo>("""{"id":"older","title":"Older hub"}""").wait)
     }
 
     @Test fun unknownKindsAndTodosDecode() {

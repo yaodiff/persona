@@ -1,6 +1,6 @@
 {
   "label": "来源",
-  "show_more_other": "再显示 {count} 个来源",
+  "show_more_other": "显示其余 {count} 个来源",
   "more": "+{count}",
   "show_less": "收起"
 }

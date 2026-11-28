@@ -18,7 +18,11 @@ export type PasswordLoginMode = "password" | "token";
 
 export interface PasswordLoginDeps {
   passwordApi?: (path: string, json?: unknown) => Promise<PasswordState>;
-  loginWithPassword?: (password: string, native: NativeLogin | null) => Promise<PasswordCredential | { code: string }>;
+  loginWithPassword?: (
+    password: string,
+    native: NativeLogin | null,
+    options?: { replaces?: boolean },
+  ) => Promise<PasswordCredential | { code: string }>;
   pair?: (input: string, signal?: AbortSignal) => Promise<void>;
   setToken?: (token: string, id?: string) => void;
   formatError?: (error: unknown) => string;
@@ -152,6 +156,7 @@ export function PasswordLogin({ onDone, error: linkError = "", native = null, sc
   const [prevLinkError, setPrevLinkError] = useState(linkError);
   const [token, setTok] = useState("");
   const [passwordEnabled, setPasswordEnabled] = useState(false);
+  const [supportsReplaces, setSupportsReplaces] = useState(false);
   const [mode, setMode] = useState<PasswordLoginMode>("password");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -163,6 +168,7 @@ export function PasswordLogin({ onDone, error: linkError = "", native = null, sc
     setPrevLinkError(linkError);
     setTok("");
     setPasswordEnabled(false);
+    setSupportsReplaces(false);
     setMode("password");
     setLoading(true);
     setBusy(false);
@@ -211,6 +217,7 @@ export function PasswordLogin({ onDone, error: linkError = "", native = null, sc
     request.then((state) => {
       if (!isCurrent()) return;
       setPasswordEnabled(state.enabled);
+      setSupportsReplaces(Boolean(state.replaces));
       if (!state.enabled) {
         setMode("token");
         if (runNative) setError(t("password.disabled"));
@@ -244,7 +251,7 @@ export function PasswordLogin({ onDone, error: linkError = "", native = null, sc
       if (runMode === "password") {
         const runLogin = depsRef.current?.loginWithPassword ?? loginWithPassword;
         setTok("");
-        const result = await runLogin(credential, runNative);
+        const result = await runLogin(credential, runNative, { replaces: supportsReplaces });
         if (!isCurrent()) return;
         if (runNative) {
           if (!("code" in result)) throw new Error(t("password.invalid_native_result"));

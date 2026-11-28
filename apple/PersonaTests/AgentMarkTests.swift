@@ -31,13 +31,13 @@ struct AgentMarkTests {
             let session = Self.session(",\"agent\":\"\(id)\"")
             let mark = AgentKind(session)
             #expect(session.agentLabel == "TRAE CLI" && mark.name == "TRAE CLI" && mark.letter == "T")
-            #expect(mark.brand == (id == "traex" ? nil : Theme.Brand.trae))
+            #expect(mark.brand == Theme.Brand.trae)
         }
         let dsh = AgentKind(Self.session(#","agent":"dsh","agent_label":"DSH""#))
         #expect(dsh.brand == Theme.Brand.dsh)
     }
 
-    @Test func namesTheBuiltinLauncherOnOlderHubs() {
+    @Test func namesTheBuiltinLaunchersAndKeepsCustomTitles() {
         #expect(Launcher(name: "traex", baseURL: "(traex)").title == "TRAE CLI")
         for displayName in [nil, "TRAEX", "TraeCLI"] as [String?] {
             let launcher = Launcher(name: "traex", displayName: displayName, agent: "traex", source: "path")
@@ -48,6 +48,17 @@ struct AgentMarkTests {
         }
         #expect(Launcher(name: "traex", displayName: "My CLI", agent: "traex").title == "My CLI")
         #expect(Launcher(name: "team-cli", agent: "traex").title == "team-cli")
+        for (id, expected) in [
+            ("claude", "Claude Code"), ("codex", "Codex"),
+            ("claude-desktop", "Claude Desktop"), ("codex-app", "Codex App"),
+            ("agy", "Antigravity CLI"), ("omp", "Oh My Pi"),
+            ("cursor", "Cursor"), ("gemini", "Gemini CLI"),
+        ] {
+            #expect(Launcher(name: id).title == expected)
+            #expect(Launcher(name: id, displayName: id).title == expected)
+            #expect(Launcher(name: id, displayName: "Custom Name").title == "Custom Name")
+            #expect(LauncherView(name: id, source: "zshrc").title == expected)
+        }
     }
 
     @Test func namesPaseoLaunchersByProductOrCustomTitle() {
@@ -63,11 +74,11 @@ struct AgentMarkTests {
         }
     }
 
-    @MainActor @Test func sharesAndExportsKeepLegacyMarksWhenTheNameChanges() async throws {
+    @MainActor @Test func sharesAndExportsUseBrandMarksConsistently() async throws {
         let menu = MessageMenu()
         for (fields, name, letter, terminal) in [
-            (#","agent":"traex""#, "TRAE CLI", true, true),
-            (#","agent":"paseo","launcher":"traex","agent_label":"TRAEX""#, "TRAE CLI", true, false),
+            (#","agent":"traex""#, "TRAE CLI", false, true),
+            (#","agent":"paseo","launcher":"traex","agent_label":"TRAEX""#, "TRAE CLI", false, false),
             (#","agent":"traecli""#, "TRAE CLI", false, false),
             (#","agent":"trae","agent_label":"TRAE""#, "TRAE", false, false),
         ] {

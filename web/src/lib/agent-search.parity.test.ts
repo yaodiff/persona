@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { agentSearchHit } from "./agent-search";
-import { stateOf } from "./format";
+import { activityOf } from "./format";
 import { runtimeOrder } from "./runtime-list";
 import type { AgentPins } from "./pins";
 import type { Interaction, Machine, Session } from "./types";
@@ -25,7 +25,7 @@ describe("runtime search shared local/server query contract", () => {
   for (const test of fixture.cases) it(test.name, () => {
     const hits = fixture.sessions.map((session) => ({ session, hit: agentSearchHit(session, test.query, context) }))
       .filter(({ hit }) => hit.score > 0)
-      .map(({ session, hit }) => ({ session, score: hit.score + (stateOf(session) === "offline" ? 0 : 5) }))
+      .map(({ session, hit }) => ({ session, score: hit.score + (activityOf(session) === "offline" ? 0 : 5) }))
       .sort((a, b) => b.score - a.score || runtimeOrder(a.session, b.session))
       .map(({ session, score }) => ({ machine_id: session.machine_id, session_id: session.session_id, score }));
     expect(hits).toEqual(test.expected);

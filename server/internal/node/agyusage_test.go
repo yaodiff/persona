@@ -405,8 +405,8 @@ func TestAgyPaneSessionTokensAndInfo(t *testing.T) {
 		Models: []proto.ProviderModel{{ID: "gemini-4-carbon", ContextWindow: 1_000_000}},
 	}})
 	row := listed(t, n)[agyTestRow]
-	if row.Model != "gemini-4-carbon-high" || row.ContextTokens != 35_000 || row.ContextWindow != 1_000_000 || row.OutputTokens != 400 {
-		t.Fatalf("pane row = model:%q ctx:%d/%d out:%d", row.Model, row.ContextTokens, row.ContextWindow, row.OutputTokens)
+	if row.Model != "gemini-4-carbon-high" || row.ContextTokens != 35_000 || row.ContextWindow != 1_000_000 || row.OutputTokensValue() != 400 {
+		t.Fatalf("pane row = model:%q ctx:%d/%d out:%d", row.Model, row.ContextTokens, row.ContextWindow, row.OutputTokensValue())
 	}
 	bd := row.ContextBreakdown()
 	if bd == nil || bd.Source != proto.ContextBreakdownEstimated || bd.Free == nil || *bd.Free != 965_000 {
@@ -445,8 +445,8 @@ func TestAgyPaneSessionTokensAndInfo(t *testing.T) {
 	seedAgents(t, n, herdr, agyTestAgent(agyTestPane, home, agyOtherTestID))
 	n.state.put(agyTestRow, sessionState{Launcher: "agy", Cwd: home, StartedAt: time.Now()})
 	row = listed(t, n)[agyTestRow]
-	if row.ContextTokens != 8000 || row.ContextWindow != 0 || row.OutputTokens != 90 {
-		t.Fatalf("unknown model row = ctx:%d/%d out:%d, want 8000/0 out 90", row.ContextTokens, row.ContextWindow, row.OutputTokens)
+	if row.ContextTokens != 8000 || row.ContextWindow != 0 || row.OutputTokensValue() != 90 {
+		t.Fatalf("unknown model row = ctx:%d/%d out:%d, want 8000/0 out 90", row.ContextTokens, row.ContextWindow, row.OutputTokensValue())
 	}
 	if bd := row.ContextBreakdown(); bd == nil || bd.Free != nil {
 		t.Fatalf("unknown model breakdown = %+v, want an estimate with no free count", bd)
@@ -547,17 +547,17 @@ func TestAgyRuntimeSessionTokensItemsAndInfo(t *testing.T) {
 	})
 
 	got := listed(t, n)
-	if s := got[claudeSID]; s.Model != "claude-opus-5-5-high" || s.ContextTokens != 51_500 || s.ContextWindow != 1_000_000 || s.OutputTokens != 250 {
-		t.Fatalf("claudeSID row = model:%q ctx:%d/%d out:%d", s.Model, s.ContextTokens, s.ContextWindow, s.OutputTokens)
+	if s := got[claudeSID]; s.Model != "claude-opus-5-5-high" || s.ContextTokens != 51_500 || s.ContextWindow != 1_000_000 || s.OutputTokensValue() != 250 {
+		t.Fatalf("claudeSID row = model:%q ctx:%d/%d out:%d", s.Model, s.ContextTokens, s.ContextWindow, s.OutputTokensValue())
 	}
 	if row := got[claudeSID]; row.ContextBreakdown() != nil {
 		t.Fatalf("runtime row used unrelated disk stats: %+v", row.ContextBreakdown())
 	}
-	if s := got[unknownSID]; s.Model != "opaque-agy-model-medium" || s.ContextTokens != 10_000 || s.ContextWindow != 0 || s.OutputTokens != 55 {
-		t.Fatalf("unknownSID row = model:%q ctx:%d/%d out:%d", s.Model, s.ContextTokens, s.ContextWindow, s.OutputTokens)
+	if s := got[unknownSID]; s.Model != "opaque-agy-model-medium" || s.ContextTokens != 10_000 || s.ContextWindow != 0 || s.OutputTokensValue() != 55 {
+		t.Fatalf("unknownSID row = model:%q ctx:%d/%d out:%d", s.Model, s.ContextTokens, s.ContextWindow, s.OutputTokensValue())
 	}
-	if s := got[rewoundSID]; s.Model != "" || s.ContextTokens != 0 || s.ContextWindow != 0 || s.OutputTokens != 0 {
-		t.Fatalf("rewoundSID row must stay cleared despite stale disk transcript = model:%q ctx:%d/%d out:%d", s.Model, s.ContextTokens, s.ContextWindow, s.OutputTokens)
+	if s := got[rewoundSID]; s.Model != "" || s.ContextTokens != 0 || s.ContextWindow != 0 || s.OutputTokensValue() != 0 {
+		t.Fatalf("rewoundSID row must stay cleared despite stale disk transcript = model:%q ctx:%d/%d out:%d", s.Model, s.ContextTokens, s.ContextWindow, s.OutputTokensValue())
 	}
 	if row := got[rewoundSID]; row.ContextBreakdown() != nil {
 		t.Fatalf("rewound runtime row breakdown = %+v", row.ContextBreakdown())
@@ -686,8 +686,9 @@ func TestAgyPanePrefersCompanionProjectedUsageOverUnfilteredDisk(t *testing.T) {
 	runtime.ready, runtime.hello.Runtime, runtime.hello.Agent = true, agyAgent, agyAgent
 	companion := proto.Session{
 		SessionID: agyAgent + "-" + agyTestID, Agent: agyAgent, Cwd: home, Status: proto.StatusIdle,
-		Model: "claude-opus-5-5-high", ContextTokens: 12_000, OutputTokens: 110,
+		Model: "claude-opus-5-5-high", ContextTokens: 12_000,
 	}
+	companion.SetOutputTokens(110)
 	n.runtimes.setSessions(runtime, []proto.Session{companion})
 
 	var row proto.Session
@@ -696,8 +697,8 @@ func TestAgyPanePrefersCompanionProjectedUsageOverUnfilteredDisk(t *testing.T) {
 			row = r
 		}
 	}
-	if row.Model != "claude-opus-5-5-high" || row.ContextTokens != 12_000 || row.ContextWindow != 1_000_000 || row.OutputTokens != 110 {
-		t.Fatalf("pane row with companion = model:%q ctx:%d/%d out:%d", row.Model, row.ContextTokens, row.ContextWindow, row.OutputTokens)
+	if row.Model != "claude-opus-5-5-high" || row.ContextTokens != 12_000 || row.ContextWindow != 1_000_000 || row.OutputTokensValue() != 110 {
+		t.Fatalf("pane row with companion = model:%q ctx:%d/%d out:%d", row.Model, row.ContextTokens, row.ContextWindow, row.OutputTokensValue())
 	}
 	if bd := row.ContextBreakdown(); bd != nil {
 		t.Fatalf("companion row used stale transcript stats: %+v", bd)
@@ -741,8 +742,8 @@ func TestAgyPanePrefersCompanionProjectedUsageOverUnfilteredDisk(t *testing.T) {
 			row = r
 		}
 	}
-	if row.Model != "" || row.ContextTokens != 0 || row.ContextWindow != 0 || row.OutputTokens != 0 {
-		t.Fatalf("fully rewound pane row must stay cleared = model:%q ctx:%d/%d out:%d", row.Model, row.ContextTokens, row.ContextWindow, row.OutputTokens)
+	if row.Model != "" || row.ContextTokens != 0 || row.ContextWindow != 0 || row.OutputTokensValue() != 0 {
+		t.Fatalf("fully rewound pane row must stay cleared = model:%q ctx:%d/%d out:%d", row.Model, row.ContextTokens, row.ContextWindow, row.OutputTokensValue())
 	}
 	if got := row.ContextBreakdown(); got != nil {
 		t.Fatalf("rewound pane row breakdown = %+v", got)
@@ -775,11 +776,11 @@ func TestAgyRuntimeRowContextWindowWithoutLocalTranscript(t *testing.T) {
 		return g["agy-remote-1"].SessionID != "" && g["agy-remote-2"].SessionID != ""
 	})
 	got := listed(t, n)
-	if s := got["agy-remote-1"]; s.ContextTokens != 42_000 || s.ContextWindow != 1_000_000 || s.OutputTokens != 120 {
-		t.Fatalf("agy-remote-1 = ctx:%d/%d out:%d", s.ContextTokens, s.ContextWindow, s.OutputTokens)
+	if s := got["agy-remote-1"]; s.ContextTokens != 42_000 || s.ContextWindow != 1_000_000 || s.OutputTokensValue() != 120 {
+		t.Fatalf("agy-remote-1 = ctx:%d/%d out:%d", s.ContextTokens, s.ContextWindow, s.OutputTokensValue())
 	}
-	if s := got["agy-remote-2"]; s.ContextTokens != 9_000 || s.ContextWindow != 0 || s.OutputTokens != 30 {
-		t.Fatalf("agy-remote-2 = ctx:%d/%d out:%d", s.ContextTokens, s.ContextWindow, s.OutputTokens)
+	if s := got["agy-remote-2"]; s.ContextTokens != 9_000 || s.ContextWindow != 0 || s.OutputTokensValue() != 30 {
+		t.Fatalf("agy-remote-2 = ctx:%d/%d out:%d", s.ContextTokens, s.ContextWindow, s.OutputTokensValue())
 	}
 	if s := got["agy-remote-3"]; s.ContextTokens != 15_000 || s.ContextWindow != 1_048_576 {
 		t.Fatalf("Gemini runtime row = %d/%d", s.ContextTokens, s.ContextWindow)
@@ -841,5 +842,109 @@ func TestAgyPaneUpdatedAtFromRuntimeAndTranscript(t *testing.T) {
 	}
 	if paneIdx < 0 || olderIdx < 0 || paneIdx >= olderIdx {
 		t.Fatalf("expected live herdr agy pane (idx=%d) to sort ahead of older companion row (idx=%d)", paneIdx, olderIdx)
+	}
+
+	companion := proto.Session{SessionID: agyAgent + "-" + agyTestID, Agent: agyAgent, Cwd: home, Status: proto.StatusDone,
+		UpdatedAt: newerAt.Add(time.Minute), LastText: "BOTMUX_NOTHING_TO_SEND"}
+	n.runtimes.setSessions(runtime, normalizeRuntimeSessions(runtime, []proto.Session{companion}))
+	if got := findPane(); got.LastText != "Latest reply" || !got.UpdatedAt.Equal(companion.UpdatedAt) {
+		t.Fatalf("pane after a delivery marker: last text %q, updated %v", got.LastText, got.UpdatedAt)
+	}
+	// A transcript with no step timestamps uses its modification time.
+	companion.LastText = "Earlier companion reply"
+	companion.UpdatedAt = transcriptAt.Add(-time.Minute)
+	n.runtimes.setSessions(runtime, []proto.Session{companion})
+	if got := findPane(); got.LastText != "Hi there" {
+		t.Fatalf("older companion snapshot displaced transcript preview: %q", got.LastText)
+	}
+
+	// Later checkpoint writes do not change the time of the visible assistant text.
+	agyTestAppend(t, transcriptPath, `{"step_index":2,"type":"PLANNER_RESPONSE","status":"ACTIVE","created_at":"2026-11-24T11:00:00Z","content":"Checking the example"}`+"\n"+
+		`{"step_index":3,"type":"CHECKPOINT","created_at":"2026-11-24T13:00:00Z"}`+"\n")
+	checkpointAt := transcriptAt.Add(3 * time.Hour)
+	if err := os.Chtimes(transcriptPath, checkpointAt, checkpointAt); err != nil {
+		t.Fatal(err)
+	}
+	companion.LastText = "Companion update"
+	companion.UpdatedAt = transcriptAt.Add(2 * time.Hour)
+	n.runtimes.setSessions(runtime, []proto.Session{companion})
+	if got := findPane(); got.LastText != "Companion update" {
+		t.Fatalf("checkpoint displaced newer companion preview: %q", got.LastText)
+	}
+
+	agyTestAppend(t, transcriptPath, `{"step_index":4,"type":"PLANNER_RESPONSE","created_at":"2026-11-24T14:00:00Z","content":"Transcript update"}`+"\n")
+	companion.UpdatedAt = transcriptAt.Add(5 * time.Hour)
+	companion.LastText = "BOTMUX_NOTHING_TO_SEND"
+	n.runtimes.setSessions(runtime, normalizeRuntimeSessions(runtime, []proto.Session{companion}))
+	if got := findPane(); got.LastText != "Transcript update" || !got.UpdatedAt.Equal(companion.UpdatedAt) {
+		t.Fatalf("marker displaced transcript preview: %q, updated %v", got.LastText, got.UpdatedAt)
+	}
+
+	agyTestAppend(t, transcriptPath, `{"step_index":5,"type":"USER_INPUT","content":"Next question"}`+"\n")
+	if got := findPane(); got.LastText != "" {
+		t.Fatalf("new turn showed previous companion preview: %q", got.LastText)
+	}
+}
+
+// A herdr agy pane's Rev is its transcript's size, with or without a companion row: the light revs event carries only
+// rows whose Rev changed, so it is what tells an app an unopened pane gained items (proto.Session.Rev, revsChanged).
+// The companion's own rev counts steps, so borrowing it would switch the pane's one row between two scales as the
+// companion came and went (#13710).
+func TestAgyPaneRevFollowsTheTranscript(t *testing.T) {
+	resetAgyModelWindowCache(t)
+	n, herdr, home := herdrNode(t)
+	t.Setenv("ANTIGRAVITY_CLI_CONFIG_DIR", "")
+	t.Cleanup(freshOffline)
+
+	const first = `{"step_index":0,"type":"USER_INPUT","content":"Hello"}` + "\n" +
+		`{"step_index":1,"type":"PLANNER_RESPONSE","content":"Hi there","model":"gemini-3.1-pro-low","input_tokens":500,"output_tokens":20}` + "\n"
+	transcriptPath := agyTestFile(t, n.agyDataRoot(), agyTestID, first)
+	seedAgents(t, n, herdr, agyTestAgent(agyTestPane, home, agyTestID))
+
+	findPane := func() proto.Session {
+		for _, r := range listSessions(t, n) {
+			if r.SessionID == agyTestRow {
+				return r
+			}
+		}
+		t.Fatalf("missing pane row %s", agyTestRow)
+		return proto.Session{}
+	}
+	size := func() int64 {
+		st, err := os.Stat(transcriptPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return st.Size()
+	}
+
+	// Standalone pane: Rev is the transcript's size.
+	if got, want := findPane().Rev, size(); got != want || got == 0 {
+		t.Fatalf("standalone pane rev = %d, want the transcript's %d bytes", got, want)
+	}
+
+	// A companion row supplies its own step-count rev; the pane keeps the transcript's size instead.
+	n.runtimes = newRuntimeRegistry()
+	runtime := n.runtimes.add(nil)
+	runtime.ready, runtime.hello.Runtime, runtime.hello.Agent = true, agyAgent, agyAgent
+	companion := proto.Session{SessionID: agyAgent + "-" + agyTestID, Agent: agyAgent, Cwd: home, Status: proto.StatusWorking,
+		UpdatedAt: time.Now().UTC(), Rev: 7}
+	n.runtimes.setSessions(runtime, []proto.Session{companion})
+	if got, want := findPane().Rev, size(); got != want {
+		t.Fatalf("pane with a companion row rev = %d, want the transcript's %d, not the companion's %d", got, want, companion.Rev)
+	}
+
+	// A transcript that grows moves the pane's Rev, so the revs event can carry the pane.
+	agyTestAppend(t, transcriptPath, `{"step_index":2,"type":"PLANNER_RESPONSE","content":"More"}`+"\n")
+	if got, want := findPane().Rev, size(); got != want || got <= companion.Rev {
+		t.Fatalf("pane rev after an append = %d, want %d", got, want)
+	}
+
+	// A pane whose transcript is not on this computer keeps Rev 0, never the companion's step count.
+	if err := os.Remove(transcriptPath); err != nil {
+		t.Fatal(err)
+	}
+	if got := findPane().Rev; got != 0 {
+		t.Fatalf("pane without a transcript rev = %d, want 0", got)
 	}
 }

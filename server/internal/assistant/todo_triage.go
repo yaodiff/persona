@@ -41,6 +41,7 @@ const (
 	ruleAgentAsks      = "agent_asks"
 	ruleOwnerDecides   = "owner_decides"
 	ruleAgentRunning   = "agent_running"
+	ruleParked         = "parked"
 	ruleClosed         = "closed"
 	ruleAccepted       = "accepted"
 	ruleDeployed       = "deployed"
@@ -329,6 +330,59 @@ func triageOpenPRs(t Todo, now time.Time) []TodoPRStatus {
 	return out
 }
 
+// openPRSnapshotState maps fresh open non-draft PR facts (or a non-draft target repo gate) to a snapshot status key.
+// Empty when no open non-draft PR applies.
+func openPRSnapshotState(prs []TodoPRStatus, gate *repoGate) string {
+	if len(prs) > 0 {
+		for _, p := range prs {
+			if p.Conflicts {
+				return "pr_conflicts"
+			}
+		}
+		for _, p := range prs {
+			if p.Review == "changes_requested" {
+				return "pr_changes_requested"
+			}
+		}
+		for _, p := range prs {
+			if p.Checks == "failure" || p.Checks == "failing" {
+				return "pr_checks_failed"
+			}
+		}
+		for _, p := range prs {
+			if p.Review == "required" || p.Review == "review_required" {
+				return "pr_in_review"
+			}
+		}
+		for _, p := range prs {
+			if p.Checks == "pending" {
+				return "pr_checks_pending"
+			}
+		}
+		return "pr_waiting_merge"
+	}
+	if !repoGateOpenNonDraftPR(gate) {
+		return ""
+	}
+	switch gate.State {
+	case repoGateBlockedConflict:
+		return "pr_conflicts"
+	case repoGateBlockedChanges:
+		return "pr_changes_requested"
+	case repoGateBlockedCI:
+		return "pr_checks_failed"
+	case repoGateAwaitingReview:
+		return "pr_in_review"
+	case repoGateChecksPending:
+		if strings.EqualFold(strings.TrimSpace(gate.Reason), "checks_pending") {
+			return "pr_checks_pending"
+		}
+		return "pr_waiting_merge"
+	default:
+		return ""
+	}
+}
+
 // triageWaitingForMerge requires a fresh observation of an open, non-draft PR of the task, its current one or an
 // earlier one still open (#7935). PR facts are display signals on the existing todo lifecycle: active Agents and
 // genuine owner decisions retain priority, while stale or legacy delivery/stage hints cannot claim that a PR is
@@ -381,6 +435,24 @@ func triageShelvable(t Todo, now time.Time, loc *time.Location) bool {
 // can file an unsupervised finished turn (#5707); a supervised or unaccepted delivery stays awaiting review (#5732).
 // restoredAt is a restore from Shelved (zero on the hub: restores are kept on each device); loc is the user's zone, for
 // a due day; superseded: a failed start whose row's work really finished (triageSupersededFailedStarts, #3713).
+func triageExecuting(t Todo, look triageLookup) bool {
+	if look == nil {
+		return false
+	}
+	for _, a := range t.Agents {
+		if a.ReleasedAt != nil || a.StartError != "" {
+			continue
+		}
+		if s, ok := look(a.MachineID, a.SessionID); ok &&
+			(triageStateOf(s) == proto.StateWorking || s.Starting || s.BackgroundWorking || backgroundRunning(s) ||
+				s.Children().Working > 0 ||
+				s.Work != nil && s.Work.Phase == proto.WorkWorking) {
+			return true
+		}
+	}
+	return false
+}
+
 func triageTodo(t listedTodo, look triageLookup, now, restoredAt time.Time, loc *time.Location, superseded bool) todoTriage {
 	last := triageLastActivity(t, look, restoredAt)
 	status := triageStatus(t.Todo, look, now)
@@ -420,10 +492,15 @@ func triageTodo(t listedTodo, look triageLookup, now, restoredAt time.Time, loc 
 	case t.DoneAt == nil && (review == reviewUserCheck || t.Delivery.waitsForOwner() ||
 		!dismissed && (review == reviewNeedsUser || ask != nil && (ask.Outcome == outcomeDecide || ask.Outcome == outcomeCannot))):
 		return at(triageWaiting, ruleOwnerDecides)
+	case t.DoneAt == nil && review == reviewParked && triageExecuting(t.Todo, look):
+		return at(triageWorking, ruleAgentRunning)
 	case !settled && !(finished && (!seen(last) || acceptanceRequired) && review != reviewParked) && triageWaitingForMerge(t, status, now):
 		// rule 9 after rule 8: a turn or review nobody has looked at stays Just finished even with its PR open. A parked
 		// hold is its supervisor's reading of the latest turn, so an agent session left unread does not hide its PR.
 		return at(triagePR, rulePROpen)
+	case t.DoneAt == nil && review == reviewParked:
+		// Generic external waiting is not execution and cannot hide an explicit supervisor hold.
+		return at(triagePR, ruleParked)
 	case status == "working" || status == "waiting":
 		return at(triageWorking, ruleAgentRunning)
 	case t.DoneAt != nil:

@@ -2,7 +2,7 @@
 // state, so only its entries for the page's visible, non-Assistant Agent sessions join the current assistant's scope.
 // The same result drives both the rows and the section count; resolving the source state removes the item everywhere.
 import { isPending, neverConnected } from "./add-computer";
-import { machineDeployment } from "./machine-deploy";
+import { disconnectExpected } from "./machine-connection-state";
 import { offlineManagerOf, type ManagerList } from "./managers";
 import type { OutboxEntry } from "./outbox";
 import type { Machine, Session } from "./types";
@@ -33,7 +33,7 @@ export interface OverviewActions {
  * instead of offering Reconnect) has nothing to reconnect: neither is an owner action here. */
 export function computerNeedsAction(machine: Machine, roster: ManagerList | null = null): boolean {
   if (isPending(machine) || neverConnected(machine)) return true;
-  return !machine.online && !machineDeployment(machine).expectedDisconnect && !offlineManagerOf(roster, machine);
+  return !machine.online && !disconnectExpected(machine) && !offlineManagerOf(roster, machine);
 }
 
 export function overviewActions(input: {

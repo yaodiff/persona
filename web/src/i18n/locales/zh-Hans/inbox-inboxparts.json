@@ -13,5 +13,5 @@
   "agent_working_task": "AI 分身正在处理：{task}",
   "status_unset": "未设置",
   "status_value": "{name}：{value}",
-  "status_change": "{name}：{value}，点按修改"
+  "status_change": "{name}：{value}，点击修改"
 }

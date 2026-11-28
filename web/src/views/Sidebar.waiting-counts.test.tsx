@@ -40,6 +40,7 @@ let host: HTMLDivElement;
 let root: Root;
 
 const flush = async () => {
+  await act(async () => { await vi.dynamicImportSettled(); });
   for (let i = 0; i < 8; i++) await act(async () => { await Promise.resolve(); });
 };
 
@@ -52,8 +53,9 @@ beforeEach(async () => {
   root = createRoot(host);
 });
 
-afterEach(() => {
+afterEach(async () => {
   act(() => root.unmount());
+  await act(async () => { await vi.dynamicImportSettled(); });
   host.remove();
   reset();
   resetDirectionNames();
@@ -147,7 +149,8 @@ describe("sidebar waiting counts and cross-surface agreement", () => {
     const sessions: Session[] = [
       // Four agents waiting only on supervisor-held read-only permission cards (including one folded child).
       { machine_id: "m1", session_id: "s-held-1", title: "Alpha reader 1", cwd: "/work/a", status: "blocked", state: "needs_you", pending_interactions: 1, updated_at: AT },
-      { machine_id: "m1", session_id: "s-held-2", title: "Alpha parent", cwd: "/work/a", status: "blocked", state: "needs_you", pending_interactions: 1, children: { total: 1, needs_you: 1 }, updated_at: AT },
+      { machine_id: "m1", session_id: "s-held-2", title: "Alpha parent", cwd: "/work/a", status: "working", state: "working", children: { total: 1, needs_you: 1 }, updated_at: AT },
+      { machine_id: "m1", session_id: "s-held-2-sub", folded_under: "s-held-2", title: "Alpha child", cwd: "/work/a", status: "blocked", state: "needs_you", pending_interactions: 1, updated_at: AT },
       { machine_id: "m1", session_id: "s-held-3", title: "Beta reader 1", cwd: "/work/b", status: "blocked", state: "needs_you", pending_interactions: 1, updated_at: AT },
       { machine_id: "m1", session_id: "s-held-4", title: "Beta reader 2", cwd: "/work/b", status: "blocked", state: "needs_you", pending_interactions: 1, updated_at: AT },
       // One genuinely escalated agent card for the owner.

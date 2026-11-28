@@ -59,6 +59,19 @@ type botmuxHost struct {
 	// instead of observing ("" otherwise): until bin changes, that answer holds for botmuxTooOldReuse.
 	bin    string
 	tooOld string
+	// caps caches the read-only GET /api/sessions/:id/turns probe for the current BotMux instance, and turnsCache
+	// keeps incrementally fetched structured turns per session (hostbotmux_turns.go).
+	caps           botmuxCaps
+	capsProbing    bool
+	capsProbeAfter map[string]time.Time
+	ownerUnechoed  botmuxOwnerUnechoed
+	// owner is the BotMux Owner Union ID the hub handed (node.configure botmux_owner_union_id): sends go as actor
+	// "owner" only with one (Prompt); "" sends the plain external-event trigger.
+	owner             proto.BotmuxOwnerUnionID
+	turnsCache        map[string]*botmuxSessionTurnsCache
+	turnsBackoffUntil time.Time
+	unknownBackoff    map[string]time.Time
+	turnsRefreshing   map[string]bool
 }
 
 var (
@@ -144,6 +157,7 @@ func (n *Node) useBotmux(on, fallback bool) {
 	case on && len(hs) < len(all): // registered already
 	case on && bin != "":
 		n.hosts.Set(append(hs, newBotmux(bin, n.logf))...)
+		n.syncBotmuxOwner()
 	case removed:
 		n.hosts.Set(hs...)
 	}
@@ -176,7 +190,9 @@ func (n *Node) botmuxPending() bool {
 func newBotmuxHost(bin string, logf func(format string, args ...any)) *botmuxHost {
 	return &botmuxHost{
 		run: func(ctx context.Context, args ...string) ([]byte, error) {
-			return exec.CommandContext(ctx, bin, args...).Output()
+			cmd := exec.CommandContext(ctx, bin, args...)
+			killGroupOnCancel(cmd)
+			return cmd.Output()
 		},
 		// A redirect is the dashboard's login page: the token is stale (Prompt asks for the current one).
 		client: &http.Client{Timeout: 15 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error {
@@ -678,6 +694,11 @@ func (h *botmuxHost) PaneProcesses(context.Context, host.PaneRef) ([]int, error)
 // fire and forget): botmux queues it behind a running turn, resumes a parked session, and answers in the Feishu topic
 // as for a message there. A refusal (4xx, or 503: the bot's daemon is not up) or a dashboard that cannot be reached
 // delivered nothing; anything else may have.
+//
+// It goes as the bot's owner (`actor: "owner"`) only when a BotMux Owner Union ID is set and the probed instance
+// advertises ownerActor, with that id as `actorUnionId` when it also advertises ownerUnionId (an instance without it
+// would refuse the unknown field). Otherwise it is the plain external-event trigger. botmux's 403 owner_unresolved /
+// owner_mismatch refuses the owner and is not a stale token: it is never retried (botmuxOwnerRefusedError).
 func (h *botmuxHost) Prompt(ctx context.Context, pane host.PaneRef, text string) error {
 	r, _, err := h.row(ctx, pane.ID)
 	if err != nil {
@@ -686,26 +707,62 @@ func (h *botmuxHost) Prompt(ctx context.Context, pane host.PaneRef, text string)
 	if why := h.daemonDown(r.Identity.LarkAppID); why != "" { // its bot's daemon did not answer the last observe (#8949)
 		return host.Mark(&botmuxDownError{App: r.Identity.LarkAppID, Why: why}, host.ErrNotDelivered)
 	}
-	req := map[string]any{
-		"source":      map[string]any{"type": "webhook", "connectorId": "persona"},
-		"target":      map[string]any{"kind": "turn", "botId": r.Identity.LarkAppID, "sessionId": r.Identity.SessionID},
-		"instruction": text,
-		"envelope":    map[string]any{"format": "text", "sourceName": "Persona", "trusted": false},
-	}
-	if h.dryRun {
-		req["options"] = map[string]any{"dryRun": true}
-	}
-	body, _ := json.Marshal(req)
 	for attempt := 0; ; attempt++ {
-		status, msg, err := h.trigger(ctx, body, attempt > 0)
-		stale := err != nil || status == http.StatusUnauthorized || status == http.StatusForbidden ||
-			(status >= 300 && status < 400)
+		if attempt > 0 {
+			if _, _, err := h.dashboard(ctx, true); err != nil {
+				return host.Mark(err, host.ErrNotDelivered)
+			}
+		}
+		// Read-only capability check (cached per BotMux instance; invalidated on restart/upgrade).
+		// Never probe with a real message and never retry a delivered turn.
+		caps := h.probeCaps(ctx, r.Identity.SessionID)
+		req := map[string]any{
+			"source":      map[string]any{"type": "webhook", "connectorId": "persona"},
+			"target":      map[string]any{"kind": "turn", "botId": r.Identity.LarkAppID, "sessionId": r.Identity.SessionID},
+			"instruction": text,
+			"envelope":    map[string]any{"format": "text", "sourceName": "Persona", "trusted": false},
+		}
+		owner := h.ownerUnionID()
+		asOwner := owner != "" && caps.ownerActor
+		if asOwner {
+			req["actor"] = "owner"
+			if caps.ownerUnionID {
+				req["actorUnionId"] = string(owner)
+			}
+		}
+		if h.dryRun {
+			req["options"] = map[string]any{"dryRun": true}
+		}
+		body, _ := json.Marshal(req)
+		// Post to the dashboard the probe answered for: a concurrent refresh may have moved h.base/h.token since, and
+		// actor=owner must only reach the instance that advertised ownerActor.
+		base, token := caps.base, caps.token
+		if !caps.known {
+			if base, token, err = h.dashboard(ctx, false); err != nil {
+				return host.Mark(err, host.ErrNotDelivered)
+			}
+		}
+		status, res, err := h.trigger(ctx, base, token, body)
+		msg := res.message()
+		refusedOwner := err == nil && status == http.StatusForbidden && botmuxOwnerRefusal(res.code())
+		stale := !refusedOwner && (err != nil || status == http.StatusUnauthorized || status == http.StatusForbidden ||
+			(status >= 300 && status < 400))
 		switch {
+		case refusedOwner:
+			return host.Mark(&botmuxOwnerRefusedError{Code: res.code(), Message: strings.TrimSpace(res.Error + " " + res.Message)},
+				host.ErrNotDelivered)
 		case stale && attempt == 0:
-			continue // the dashboard moved or its token was rotated: ask botmux for the current one
+			continue // the dashboard moved or its token was rotated: refresh and re-probe before retrying
 		case err != nil:
 			return host.Mark(err, host.ErrNotDelivered)
 		case status >= 200 && status < 300:
+			if asOwner && res.Actor != "owner" {
+				// Older BotMux ignored actor and still ran the turn: never resend, just mark ownerActor unavailable.
+				h.noteOwnerActorUnechoed(caps.base, caps.token, caps.stamp)
+				if h.logf != nil {
+					h.logf("botmux: /api/trigger did not echo actor=owner; falling back to external-event mode")
+				}
+			}
 			h.mu.Lock()
 			h.at = time.Time{} // its state changes now: look again at the next refresh
 			h.mu.Unlock()
@@ -717,16 +774,59 @@ func (h *botmuxHost) Prompt(ctx context.Context, pane host.PaneRef, text string)
 	}
 }
 
-// trigger posts body to the dashboard's /api/trigger; fresh asks botmux for the dashboard again. err: nothing was
-// delivered (no dashboard, no connection).
-func (h *botmuxHost) trigger(ctx context.Context, body []byte, fresh bool) (int, string, error) {
-	base, token, err := h.dashboard(ctx, fresh)
-	if err != nil {
-		return 0, "", err
+// botmuxTriggerAnswer is /api/trigger's answer: Actor is the echoed `actor` ("owner" when ownerActor took effect),
+// ErrorCode botmux's code (owner_unresolved, …) and Error / Message its words.
+type botmuxTriggerAnswer struct {
+	OK        bool   `json:"ok"`
+	Actor     string `json:"actor"`
+	ErrorCode string `json:"errorCode"`
+	Error     string `json:"error"`
+	Message   string `json:"message"`
+}
+
+func (a botmuxTriggerAnswer) message() string {
+	return strings.TrimSpace(strings.TrimSpace(a.ErrorCode+" "+a.Error) + " " + a.Message)
+}
+
+// code is botmux's error code: errorCode, else an error that is a bare code (an answer without errorCode).
+func (a botmuxTriggerAnswer) code() string {
+	if a.ErrorCode != "" {
+		return a.ErrorCode
 	}
+	if a.Error != "" && !strings.ContainsAny(a.Error, " \t\n") {
+		return a.Error
+	}
+	return ""
+}
+
+// Codes of botmux's 403 for actor "owner" (deepcoldy/botmux, actorUnionId): no owner could be resolved for the bot
+// (several allowedUsers and no ownerUnionId), or the union_id sent is not its owner.
+const (
+	botmuxOwnerUnresolved = "owner_unresolved"
+	botmuxOwnerMismatch   = "owner_mismatch"
+)
+
+// botmuxOwnerRefusal: botmux refused the owner, not the dashboard token (any owner_… code of a 403).
+func botmuxOwnerRefusal(code string) bool { return strings.HasPrefix(code, "owner_") }
+
+// botmuxOwnerRefusedError is botmux's 403 refusal of the owner a send spoke for: nothing ran (deliveryRefusal words it
+// by Code; Message, botmux's own words, is kept for the log).
+type botmuxOwnerRefusedError struct {
+	Code    string
+	Message string
+}
+
+func (e *botmuxOwnerRefusedError) Error() string {
+	return strings.TrimSpace(fmt.Sprintf("botmux refused the owner (403 %s): %s", e.Code, e.Message))
+}
+
+// trigger posts body to /api/trigger of the dashboard at base with token. err: nothing was delivered (no
+// connection).
+func (h *botmuxHost) trigger(ctx context.Context, base, token string, body []byte) (int, botmuxTriggerAnswer, error) {
+	var res botmuxTriggerAnswer
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/api/trigger", bytes.NewReader(body))
 	if err != nil {
-		return 0, "", err
+		return 0, res, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.AddCookie(&http.Cookie{Name: "botmux_dashboard_token", Value: token})
@@ -734,23 +834,17 @@ func (h *botmuxHost) trigger(ctx context.Context, body []byte, fresh bool) (int,
 	if err != nil {
 		var op *net.OpError
 		if errors.As(err, &op) && op.Op == "dial" {
-			return 0, "", fmt.Errorf("botmux: the dashboard does not answer: %w", err)
+			return 0, res, fmt.Errorf("botmux: the dashboard does not answer: %w", err)
 		}
-		return http.StatusBadGateway, err.Error(), nil // it may have arrived
+		return http.StatusBadGateway, botmuxTriggerAnswer{Message: err.Error()}, nil // it may have arrived
 	}
 	defer resp.Body.Close()
 	b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-	var res struct {
-		OK      bool   `json:"ok"`
-		Error   string `json:"error"`
-		Message string `json:"message"`
-	}
 	_ = json.Unmarshal(b, &res)
-	msg := strings.TrimSpace(res.Error + " " + res.Message)
 	if resp.StatusCode < 300 && !res.OK {
-		return http.StatusBadGateway, msg, nil // accepted, then failed: it may have run
+		return http.StatusBadGateway, res, nil // accepted, then failed: it may have run
 	}
-	return resp.StatusCode, msg, nil
+	return resp.StatusCode, res, nil
 }
 
 // botmuxShowLink makes `botmux dashboard current` print the dashboard's loopback link: botmux 3.58 and later hide it
@@ -775,6 +869,9 @@ func (h *botmuxHost) dashboard(ctx context.Context, fresh bool) (string, string,
 		base, token = dashboardLink(out)
 	}
 	if base == "" {
+		if err := ctx.Err(); err != nil {
+			return "", "", fmt.Errorf("botmux dashboard current: %w", err)
+		}
 		if out, err = h.run(ctx, "dashboard", "current"); err != nil {
 			return "", "", fmt.Errorf("botmux dashboard current: %w", err)
 		}

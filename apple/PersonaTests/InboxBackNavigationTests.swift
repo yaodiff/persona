@@ -141,7 +141,7 @@ struct InboxBackNavigationTests {
                 handOff: { _, _, _ in agent },
                 record: { _, _, _, _, _ in },
                 showMain: { _, _, _ in },
-                plainToMain: { _ in agent },
+                plainToMain: { _, _ in agent },
                 startNew: { _ in agent },
                 sendToAgent: { _, _, _ in .sent },
                 open: { _, _ in fallback += 1 },

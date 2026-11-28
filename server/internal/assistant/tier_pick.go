@@ -119,7 +119,7 @@ func (s *Service) pickTierCandidateKeeping(ctx context.Context, p *ModelProfile,
 		})
 	}
 	t := p.Tiers[name]
-	list := t.list()
+	list := s.reprojectCandidates(ctx, t.list())
 	pick := tierPick{Profile: p.ID, Active: active, Name: name, Of: len(list), Reason: tierReasonOnly}
 	if !s.keepTierCandidate(ctx, p, machine, keep, &pick, list) && len(list) > 1 {
 		s.chooseTierCandidate(ctx, machine, &pick, list, -1)

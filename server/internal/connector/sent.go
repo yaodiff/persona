@@ -12,6 +12,10 @@ import (
 const (
 	ThroughRule = "rule" // a connector_gate rule allowed it
 	ThroughCard = "card" // the user allowed it on the phone
+	// ThroughAutoConfirm is a gated write let through by guarded conditional auto-confirm: both a matching hub-side
+	// policy (connector_auto_confirm) for a trusted extension installation and a valid short-lived credential returned by
+	// actions.describe succeeded, so no phone confirmation card was shown. Distinct from ThroughCard and ThroughAuto.
+	ThroughAutoConfirm = "auto_confirm"
 	// ThroughAuto is a send an extension's connector made on its own, outside the gate (sent.record): no rule and no
 	// card were involved.
 	ThroughAuto = "auto"
@@ -25,8 +29,10 @@ type LetThrough struct {
 	// UserRule says the rule was one the user made from the ledger ("don't ask again in this chat", SetUserRules), not a
 	// hand-written one (ThroughRule).
 	UserRule bool
-	// Summary is the words the card showed (ThroughCard): Describe's, cut to cardMost.
+	// Summary is the words the card showed (ThroughCard), or Describe's words for ThroughAutoConfirm, cut to cardMost.
 	Summary string
+	// AutoConfirm carries non-secret policy and verified-extension attribution for ThroughAutoConfirm (never the token).
+	AutoConfirm *AutoConfirmAudit
 }
 
 // Sent is a write that went out as the user: the gate let it through and the action ran without an error. A write the

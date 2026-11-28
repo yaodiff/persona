@@ -2,24 +2,25 @@
 // This controller owns manager routing, configuration drafts, authentication and mutation results;
 // extensions supply only their configuration fields and custom content (docs/extensions/extension-settings.md).
 import { OwnerMark } from "./OwnerMark";
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { enc, errorText, subscribeCredentialOwner } from "../../lib/api";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { currentListViewKey, listViewCache, useListViewKey } from "../../lib/list-view-cache";
+import { enc, errorText, isAbort } from "../../lib/api";
 import { OfflineState, useShownOffline } from "../ManagerParts";
 import { defaultManager, otherManager, pinManagerAt, useChosenManager } from "../../lib/manager-choice";
 import { useRoster } from "../../lib/managers";
 import { isResumed } from "../../lib/reconnect";
 import { onHubEvent, useStore } from "../../lib/store";
 import { EXTENSIONS_CHANGED } from "../../lib/extension-prompts";
-import { operations, operationsListed, opOf, watchOperations } from "../../lib/extension-operations";
+import { watchOperations } from "../../lib/extension-operations";
 import { extensionsRoute, routeSub } from "../../lib/extension-market";
 import { composing } from "../../lib/send-history";
 import {
-  asksFirst, changed, checkError, choiceLabel, clearedSecrets, clearExtensionSecret, compact, configError, entryID, entryItems, entryKey, fieldLabel, fieldPath, fieldTitle, isDirty, isEntryList, listItems, listExtensionsInfo, listSummary, numberProblems,
-  placeholder, extensionDetail, extensionState, extensionTone, pointText, readNumber, rebaseDraft, runNote, same, secretState, setupSecret, setAt, setContribution, setExtensionConfig, setExtensionConfigPreservingEntries, setExtensionEnabled,
+  asksFirst, choiceLabel, clearExtensionSecret, entryID, entryItems, entryKey, fieldLabel, fieldPath, fieldTitle, isEntryList, listItems, listExtensionsInfo, listSummary,
+  placeholder, extensionDetail, extensionState, extensionTone, pointText, runNote, same, secretState, setupSecret, setContribution, setExtensionEnabled,
   channelOf, machineStatus, nodeProgramStatus, pickerChoices, sandboxState, saveFooter, setExtensionAutoUpgrade, setExtensionSecret, sourceText, stateLine, valueAt,
-  removeHandoffRule, setExtensionSecretReference, type HandoffRule, type SecretUser,
+  removeHandoffRule, setExtensionSecretReference, permissionDetail, permissionTitle, type HandoffRule, type SecretUser,
   type HubExtension, type HubExtensionDetail, type Json, type JsonObject, type ExtensionField, type ExtensionNodeState, type ExtensionSandbox, type ExtensionSecret,
-  type PickerLauncher,
+  type ExtensionPermission, type PickerLauncher,
 } from "../../lib/extensions";
 import { loadLaunchers } from "../../lib/launcher-list";
 import { hubHasExt } from "../../lib/extension-api";
@@ -36,7 +37,7 @@ import { ExtensionSettingsPage } from "./ExtensionSettingsPage";
 import { ExtensionInfoAccess } from "./ExtensionInfoAccess";
 import { ExtensionUI } from "./ExtensionView";
 import { ExtensionConnectorInbox } from "./HubConnector";
-import { getAuth, listAuthNote, onAuthChange, shownPages, signInAsked, takeSignIn, withAuth, type ExtensionAuth } from "../../lib/extension-auth";
+import { listAuthNote, onAuthChange, shownPages, signInAsked, takeSignIn, withAuth } from "../../lib/extension-auth";
 import { AuthGroup } from "./ExtensionAuth";
 import { dependencyText, dependentError, type Contribution, type Dependent } from "../../lib/extension-model";
 import { Group, Pill, Row, Switch, SettingsHint } from "./SettingsParts";
@@ -46,14 +47,20 @@ import { ago } from "../../lib/format";
 import { scoped, useScope } from "../../lib/current-assistant";
 import { SubscriptionsEntry } from "../subscriptions/SubscriptionsEntry";
 import { isOpenBeside } from "./open-beside";
+import {
+  dropGoneExtensionDrafts, extensionDraftKey, useExtensionBinding, useExtensionConfiguration, useUnsavedExtensions,
+  type ExtensionBinding, type ExtensionMutation, type Typed,
+} from "./integrations/extensionDrafts";
 
 /**
  * The tab's pages, by its `extension` parameter (lib/extension-market.ts extensionsRoute): the list, an extension, a page an extension
  * draws, and the market (its catalog, one extension of it, the markets).
  */
-export function Extensions({ open, onOpen, onChannel, onConnector, headerBack, openBeside, onPageWide }: {
+export function Extensions({ open, onOpen, onBack, onChannel, onConnector, headerBack, openBeside, onPageWide, prefill, manager: scope }: {
   open: string | null;
   onOpen: (id: string | null) => void;
+  onBack?: () => void;
+  manager?: string;
   /** The page's top bar has the way back (a phone, Settings.tsx itemParent): an extension's page, a page it draws, the
    *  market's catalog, one of its extensions and the list of markets draw no Back of their own. */
   headerBack?: boolean;
@@ -63,39 +70,42 @@ export function Extensions({ open, onOpen, onChannel, onConnector, headerBack, o
   onChannel?: (id: string, manager?: string) => void;
   onConnector?: (id: string, manager?: string) => void;
   onPageWide?: (wide: boolean) => void;
+  /** Proposed ordinary configuration values from an extension page's settings link. */
+  prefill?: JsonObject;
 }) {
   const r = extensionsRoute(open);
   const go = (to: Parameters<typeof routeSub>[0]) => onOpen(routeSub(to));
   // what is installed from a market goes to the current assistant (none: the default, named by no header)
   const picked = useChosenManager();
-  const installTo = otherManager(picked ?? undefined);
+  const installTo = scope ?? otherManager(picked ?? undefined);
   switch (r.kind) {
     case "extension":
       return (
-        <OwnedExtension id={r.id} manager={r.manager}>
+        <OwnedExtension id={r.id} manager={r.manager ?? scope}>
           {(manager) => (
             <ExtensionDetail
               key={`${r.id}@${manager ?? ""}`}
               id={r.id}
               manager={manager}
-              onBack={() => onOpen(null)}
+              onBack={onBack ?? (() => onOpen(null))}
               headerBack={headerBack}
               onPage={(ui) => go({ kind: "page", id: r.id, ui, manager })}
               onUpgrade={(market, id) => go({ kind: "item", market, id, manager })}
               onChannel={onChannel}
               onConnector={onConnector}
+              prefill={prefill}
             />
           )}
         </OwnedExtension>
       );
     case "page":
       return (
-        <OwnedExtension id={r.id} manager={r.manager}>
-          {(manager) => <ExtensionPage key={`${open}@${manager ?? ""}`} id={r.id} ui={r.ui} manager={manager} onBack={headerBack ? undefined : () => go({ kind: "extension", id: r.id, manager })} onWide={onPageWide} />}
+        <OwnedExtension id={r.id} manager={r.manager ?? scope}>
+          {(manager) => <ExtensionPage key={`${open}@${manager ?? ""}`} id={r.id} ui={r.ui} manager={manager} onBack={headerBack ? undefined : onBack ?? (() => go({ kind: "extension", id: r.id, manager }))} onWide={onPageWide} />}
         </OwnedExtension>
       );
     case "catalog":
-      return <MarketCatalog onBack={headerBack ? undefined : () => onOpen(null)} onOpen={(it) => go({ kind: "item", market: it.market, id: it.id })} onMarkets={() => go({ kind: "markets" })} />;
+      return <MarketCatalog manager={installTo} onBack={headerBack ? undefined : onBack ?? (() => onOpen(null))} onOpen={(it) => go({ kind: "item", market: it.market, id: it.id })} onMarkets={() => go({ kind: "markets" })} />;
     case "item":
       // another manager's upgrade goes back to that manager's extension: the catalog is the default's
       return (
@@ -104,14 +114,14 @@ export function Extensions({ open, onOpen, onChannel, onConnector, headerBack, o
           market={r.market}
           id={r.id}
           manager={r.manager ?? installTo}
-          onBack={headerBack ? undefined : () => go(r.manager ? { kind: "extension", id: r.id, manager: r.manager } : { kind: "catalog" })}
+          onBack={headerBack ? undefined : onBack ?? (() => go(r.manager ? { kind: "extension", id: r.id, manager: r.manager } : { kind: "catalog" }))}
           onInstalled={(id) => go({ kind: "extension", id, manager: r.manager })}
         />
       );
     case "markets":
-      return <Markets onBack={headerBack ? undefined : () => go({ kind: "catalog" })} />;
+      return <Markets manager={installTo} onBack={headerBack ? undefined : onBack ?? (() => go({ kind: "catalog" }))} />;
     default:
-      return <ExtensionList onOpen={onOpen} onMarket={() => go({ kind: "catalog" })} onMarkets={() => go({ kind: "markets" })} openBeside={openBeside} />;
+      return <ExtensionList manager={scope} onOpen={onOpen} onMarket={() => go({ kind: "catalog" })} onMarkets={() => go({ kind: "markets" })} openBeside={openBeside} />;
   }
 }
 
@@ -126,11 +136,12 @@ function OwnedExtension({ id: _id, manager, children }: { id: string; manager?: 
 }
 
 /** A page an extension draws (placement plugin_page), under the extension's name. `onBack`: none where the page's top
- *  bar has the way back (a phone). */
+ *  bar has the way back (a phone), or while that page has pushed one of its own: its Back returns to the page below. */
 function ExtensionPage({ id, ui, manager, onBack, onWide }: { id: string; ui: string; manager?: string; onBack?: () => void; onWide?: (wide: boolean) => void }) {
   usePinnedExtension(id, manager);
   const [d, setD] = useState<HubExtensionDetail | null>(null);
   const [n, setN] = useState(0);
+  const [depth, setDepth] = useState(1);
   useEffect(() => {
     extensionDetail(id).then(setD, () => {});
   }, [id]);
@@ -139,7 +150,7 @@ function ExtensionPage({ id, ui, manager, onBack, onWide }: { id: string; ui: st
   return (
     <>
       <div className="mb-3 flex items-center gap-2">
-        {onBack && (
+        {onBack && depth === 1 && (
           <Button tone="quiet" icon="chevronLeft" onClick={onBack} className="-ml-2">
             <span className="max-w-[240px] truncate">{d?.name ?? id}</span>
           </Button>
@@ -149,7 +160,7 @@ function ExtensionPage({ id, ui, manager, onBack, onWide }: { id: string; ui: st
       </div>
       {/* its extension id scopes what a graph's `key` keeps (lib/extension-owner.tsx) */}
       <ExtensionOwnerScope owner={id}>
-        <ExtensionUI key={n} extension={id} ui={ui} title={title} manager={manager} onWide={onWide} />
+        <ExtensionUI key={n} extension={id} ui={ui} title={title} manager={manager} onWide={onWide} onDepth={setDepth} />
       </ExtensionOwnerScope>
     </>
   );
@@ -172,26 +183,48 @@ function StateDot({ extension }: { extension?: HubExtension | null }) {
 
 // ── the list ────────────────────────────────────────────
 
+type ExtensionListProps = { onOpen: (id: string) => void; onMarket: () => void; onMarkets: () => void; openBeside?: string | null; manager?: string };
+type ExtensionListView = { extensions: HubExtension[]; markets: boolean };
+const extensionViews = listViewCache<ExtensionListView>();
+
+function ExtensionList(props: ExtensionListProps) {
+  const viewKey = useListViewKey();
+  return <ScopedExtensionList key={viewKey} viewKey={viewKey} {...props} />;
+}
+
 /** `openBeside`: the extension open beside the list (Settings' two columns): its row is marked current, and every row
  *  puts its state under its name (with a warning, when it has one, in place of the description), so the narrow column
  *  shows the name whole. */
-function ExtensionList({ onOpen, onMarket, onMarkets, openBeside }: { onOpen: (id: string) => void; onMarket: () => void; onMarkets: () => void; openBeside?: string | null }) {
-  const picked = useChosenManager();
-  const [extensions, setExtensions] = useState<HubExtension[] | null>(null);
-  const [markets, setMarkets] = useState(false);
+function ScopedExtensionList({ viewKey, onOpen, onMarket, onMarkets, openBeside, manager }: ExtensionListProps & { viewKey: string }) {
+  const chosen = useChosenManager();
+  const picked = manager ?? chosen;
+  const [view, setView] = useState(() => manager ? undefined : extensionViews.read(viewKey));
+  const extensions = view?.extensions;
+  const markets = view?.markets;
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   // Reads are numbered: an answer older than the last one asked for is dropped.
   const reads = useRef(0);
-  const load = () => {
+  const active = useRef(false);
+  useLayoutEffect(() => {
+    active.current = true;
+    return () => { active.current = false; };
+  }, []);
+  const load = useCallback(() => {
     const mine = ++reads.current;
+    const current = () => active.current && mine === reads.current && viewKey === currentListViewKey();
+    if (!current()) return;
     setLoading(true);
-    listExtensionsInfo()
-      .then((r) => mine === reads.current && (setExtensions(r.extensions), setMarkets(r.markets), setError(""), dropGone(r.extensions)))
-      .catch((e) => mine === reads.current && setError(errorText(e)))
-      .finally(() => mine === reads.current && setLoading(false));
-  };
-  useEffect(load, []);
+    listExtensionsInfo(current).then((r) => {
+      if (!current()) return;
+      setView(r);
+      setError("");
+      dropGoneExtensionDrafts(r.extensions);
+    }, (e) => {
+      if (current()) setError(errorText(e));
+    }).finally(() => { if (current()) setLoading(false); });
+  }, [viewKey]);
+  useEffect(load, [load]);
   // An install, upgrade or uninstall that finished (here, on another device, or the hub's auto-upgrade) changes the
   // list: lib/extension-operations.ts sends EXTENSIONS_CHANGED when one succeeds. watchOperations starts its push
   // listener, which otherwise only a market page starts. Several at once read the list once.
@@ -211,18 +244,26 @@ function ExtensionList({ onOpen, onMarket, onMarkets, openBeside }: { onOpen: (i
       window.removeEventListener(EXTENSIONS_CHANGED, again);
       stop();
     };
-  }, []);
+  }, [load]);
   // a sign-in that changed (signed in, out, expired) shows at once
   // only the row of the manager whose extension signed in (or out): another manager's of the same id stays as it is
-  useEffect(() => onAuthChange((id, auth, from) => setExtensions((cur) => cur?.map((x) => ((x.manager || defaultManager()) === from ? withAuth(x, id, auth) : x)) ?? cur)), []);
+  useEffect(() => onAuthChange((id, auth, from) => setView((cur) => cur && ({
+    ...cur, extensions: cur.extensions.map((x) => (x.manager || defaultManager()) === from ? withAuth(x, id, auth) : x),
+  }))), []);
   // a reconnect the hub could not resume: the extension_auth pushes missed meanwhile are not replayed (#4954)
-  useEffect(() => onHubEvent("hello", (m) => !isResumed(m) && load()), []);
+  useEffect(() => onHubEvent("hello", (m) => !isResumed(m) && load()), [load]);
   // the current assistant's extensions only (docs/assistant/managers.md "The current assistant"); one assistant: all
   const scope = useScope();
-  const own = useMemo(() => (extensions ? scoped(extensions, scope) : null), [extensions, scope]);
-  const drafts = useUnsaved();
+  const own = useMemo(() => (extensions ? manager
+    ? extensions.filter((extension) => (extension.manager || defaultManager()) === manager)
+    : scoped(extensions, scope) : null), [extensions, manager, scope]);
+  useEffect(() => {
+    if (!manager && own && markets !== undefined) extensionViews.keep(viewKey, { extensions: own, markets });
+  }, [manager, viewKey, own, markets]);
+  const drafts = useUnsavedExtensions();
   // an offline current assistant: the hub has none of its extensions to merge in, which must not read as "none installed"
-  const offline = useShownOffline();
+  const shownOffline = useShownOffline();
+  const offline = manager && shownOffline?.manager.id !== manager ? null : shownOffline;
 
   return (
     <>
@@ -287,7 +328,7 @@ function ExtensionList({ onOpen, onMarket, onMarkets, openBeside }: { onOpen: (i
           </div>
         )}
         {(own ?? []).map((p, i) => {
-          const kept = drafts.has(unsavedKey(p.id, p.manager));
+          const kept = drafts.has(extensionDraftKey(p.id, p.manager));
           // the kept edits' mark goes before what is still missing, not instead of it
           const needs = p.needs_setup?.length ? t("settings-extensions.needs_setup", { items: formatList(p.needs_setup, NARROW_LIST) }) : "";
           const warning = p.error || [kept ? t("settings-extensions.unsaved") : "", needs].filter(Boolean).join(" · ");
@@ -344,85 +385,13 @@ function ExtensionList({ onOpen, onMarket, onMarkets, openBeside }: { onOpen: (i
 // ── one extension ──────────────────────────────────────────
 
 /** A number field as typed, by dotted path, until it reads as one. */
-export type Typed = Record<string, { text: string; integer: boolean }>;
-
 /** Requests about extension id (its details, settings, models, pages) go to manager while the view is open: the same
  *  id may be installed under several managers (each one's built-ins), and the default's own keep going to it elsewhere. */
 function usePinnedExtension(id: string, manager: string | undefined) {
   useLayoutEffect(() => pinManagerAt([`/extensions/${enc(id)}`, `/plugins/${enc(id)}`], manager), [id, manager]);
 }
 
-// ── unsaved configuration ──────────────────────────────────
-
-/** A form's unsaved edits: the draft and the configuration it was made on (`base`), so that only what the user changed is
- *  put back on a newer read (lib/extensions.ts rebaseDraft). */
-type Unsaved = { base: JsonObject; draft: JsonObject; typed: Typed };
-
-/** Configuration edits not saved yet, by manager and extension (`unsavedKey`). They stay in memory while the page is
- *  closed, so leaving it any way (another extension, another category or page, Back) and coming back finds them on top of
- *  the configuration read then; saving or Revert drops them, and so does a new credential. Never written to storage: a
- *  reload asks first instead. */
-const unsaved = new Map<string, Unsaved>();
-/** A detail without a configuration: one object, so reading it again is not a change. */
-const NO_CONFIG: JsonObject = {};
-const unsavedListeners = new Set<() => void>();
-let unsavedVersion = 0;
-
-/** The default manager's extension has no manager in its route (the list's rows, OwnedExtension): both name it "". */
-const unsavedOwner = (manager?: string) => (manager && manager !== defaultManager() ? manager : "");
-const unsavedKey = (id: string, manager?: string) => `${unsavedOwner(manager)}|${id}`;
-
-function warnUnsaved(e: BeforeUnloadEvent) {
-  e.preventDefault();
-  e.returnValue = true; // browsers before preventDefault() counted here (Chrome before 119) ask only when it is set
-}
-
-function unsavedChanged() {
-  unsavedVersion++;
-  if (unsaved.size) addEventListener("beforeunload", warnUnsaved);
-  else removeEventListener("beforeunload", warnUnsaved);
-  unsavedListeners.forEach((l) => l());
-}
-
-/** Keep an extension's unsaved edits, or drop them (null). The list and the reload prompt follow whether any are kept. */
-function keepUnsaved(key: string, kept: Unsaved | null) {
-  const had = unsaved.has(key);
-  if (kept) unsaved.set(key, kept);
-  else unsaved.delete(key);
-  if (had !== unsaved.has(key)) unsavedChanged();
-}
-
-/** After the list is read: the kept edits of an extension it no longer has (uninstalled while its page was closed) go, or
- *  a reload would keep asking about edits nobody can open. Only for managers the list has rows of: another one may just
- *  not have answered. */
-function dropGone(list: HubExtension[]) {
-  const there = new Set(list.map((x) => unsavedKey(x.id, x.manager)));
-  const owners = new Set(list.map((x) => unsavedOwner(x.manager)));
-  const gone = [...unsaved.keys()].filter((k) => !there.has(k) && owners.has(k.slice(0, k.indexOf("|"))));
-  if (!gone.length) return;
-  gone.forEach((k) => unsaved.delete(k));
-  unsavedChanged();
-}
-
-// Signing out or pairing again: another person's hub (or none), so the edits are not theirs.
-subscribeCredentialOwner(() => {
-  if (!unsaved.size) return;
-  unsaved.clear();
-  unsavedChanged();
-});
-
-function subscribeUnsaved(listener: () => void) {
-  unsavedListeners.add(listener);
-  return () => void unsavedListeners.delete(listener);
-}
-
-/** The kept edits, redrawn when an extension gains or loses them. */
-function useUnsaved(): ReadonlyMap<string, Unsaved> {
-  useSyncExternalStore(subscribeUnsaved, () => unsavedVersion);
-  return unsaved;
-}
-
-function ExtensionDetail({ id, manager, onBack: back, headerBack, onPage, onUpgrade, onChannel, onConnector }: {
+type ExtensionDetailProps = {
   id: string;
   /** Whose extension it is (several managers); none: the default's. */
   manager?: string;
@@ -433,287 +402,67 @@ function ExtensionDetail({ id, manager, onBack: back, headerBack, onPage, onUpgr
   onUpgrade: (market: string, id: string) => void;
   onChannel?: (id: string, manager?: string) => void;
   onConnector?: (id: string, manager?: string) => void;
-}) {
-  usePinnedExtension(id, manager);
+  prefill?: JsonObject;
+};
+
+function ExtensionDetail(props: ExtensionDetailProps) {
+  const binding = useExtensionBinding(props.id, props.manager);
+  return <ExtensionResourceDetail key={binding.client.key} {...props} binding={binding} />;
+}
+
+function ExtensionResourceDetail({ binding, id, manager, onBack: back, headerBack, onPage, onUpgrade, onChannel, onConnector, prefill }: ExtensionDetailProps & { binding: ExtensionBinding }) {
   const roster = useRoster();
-  const offline = roster?.managers.find((m) => m.id === (manager || defaultManager()))?.online === false;
+  const offline = roster?.managers.find((m) => m.id === binding.client.managerId)?.online === false;
+  const {
+    detail, error, loading, draft, typed, fieldErrors, checkFailed, saving, toggling, saveBarLabel, editable,
+    canSave, problems, load, reload, authChanged, connectorRefreshKey, mutate, remove: onBack, edit, type, revert, save, saveNow,
+  } = useExtensionConfiguration(id, binding, prefill, back);
   const [removing, setRemoving] = useState(false);
-  const [detail, setDetail] = useState<HubExtensionDetail | null>(null);
-  const [error, setError] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [draft, setDraft] = useState<JsonObject>({});
-  const [typed, setTyped] = useState<Typed>({});
-  // The hub's word on a field it refused, by dotted path ("" = the whole form).
-  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
-  // The extension's own word on a save it turned down (check_failed, check_rate_limited, settings_moved): shown at the
-  // save bar, where the draft stays to be changed and saved again; gone once the draft changes.
-  const [checkFailed, setCheckFailed] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [toggling, setToggling] = useState(false);
   const [secret, setSecret] = useState<ExtensionSecret | null>(null);
   const [dependents, setDependents] = useState<Dependent[] | null>(null);
-  // Switching a pack off takes its members along: they are named before anything changes (#1830).
+  // Switching a pack off takes its members along (#1830).
   const [packOff, setPackOff] = useState(false);
-
-  const apply = (d: HubExtensionDetail) => {
-    setDetail(d);
-    setDraft(d.config ?? {});
-    setError("");
-  };
-  // Reads of the detail overlap (opening the page, an operation that succeeded, a save that cleared secrets), and so do
-  // the writes that answer with the whole detail. All are numbered in the order they leave, and an answer is dropped
-  // when one that left after it is already shown, so an older detail (the version before an upgrade, the settings before
-  // a save) is not put back.
-  const order = useRef({ asked: 0, shown: 0 });
-  const readDetail = (then: (d: HubExtensionDetail) => void, failed?: (e: unknown) => void) => {
-    const n = ++order.current.asked;
-    return extensionDetail(id).then(
-      (d) => {
-        if (n <= order.current.shown) return;
-        order.current.shown = n;
-        then(d);
-      },
-      (e) => void (n > order.current.shown && failed?.(e)),
-    );
-  };
-  /** A write leaving: its number, for `wrote` when it answers. */
-  const writing = () => ++order.current.asked;
-  /** A write answered with `d`: shown (and true) unless something that left after it is shown already. */
-  const wrote = (n: number, d: HubExtensionDetail) => {
-    if (n <= order.current.shown) return false;
-    order.current.shown = n;
-    setDetail(d);
-    return true;
-  };
-  const load = () => {
-    setLoading(true);
-    void readDetail((d) => (apply(d), setTyped({}), setFieldErrors({})), (e) => setError(errorText(e))).finally(() => setLoading(false));
-  };
-  useEffect(load, [id]);
-  // its sign-in as the hub pushes it; an install whose next step is signing in opens the dialog once
-  useEffect(() => onAuthChange((x, auth, from) => (manager || defaultManager()) === from && setDetail((cur) => (cur ? withAuth(cur, x, auth) : cur))), [manager]);
   const [startSignIn] = useState(() => signInAsked(id));
   useEffect(() => void takeSignIn(id), [id]);
-  const authChanged = (a?: ExtensionAuth) => {
-    if (a) setDetail((cur) => (cur ? { ...cur, auth: a } : cur));
-    else void getAuth(id).then((v) => setDetail((cur) => (cur ? { ...cur, auth: v } : cur)), () => {});
-  };
-  // a reconnect the hub could not resume: an extension_auth push missed meanwhile is not replayed (#4954); only the
-  // sign-in is read again, so what is being typed into the settings stays. Only an extension one signs in to has a
-  // sign-in to read: the hub answers the others 404 (#8854)
-  const signsIn = !!detail?.auth;
-  useEffect(() => (signsIn ? onHubEvent("hello", (m) => !isResumed(m) && authChanged()) : undefined), [id, signsIn]);
 
-  const problems = useMemo(() => numberProblems(typed), [typed]);
   const fields = detail?.form?.fields ?? [];
-  const requiredEntryLists = new Set(fields.filter((f) => isEntryList(f) && f.required).map((f) => f.name));
-  const dirty = !!detail && (isDirty(draft, detail.config, requiredEntryLists) || Object.keys(problems).length > 0);
-  const canSave = dirty && !Object.keys(problems).length && !saving && !offline;
-  const editable = !!detail && !detail.read_only && detail.source !== "dev" && detail.source !== "hub.json";
   const setupTarget = editable ? setupSecret(detail?.needs_setup, detail?.secrets) : undefined;
-  // Nothing to set here: the configuration's heading stands over "No configuration required". Otherwise every group in
-  // it has a heading of its own and the configuration's would stand over nothing (#8853).
   const noConfiguration = !!detail && editable && !fields.length && !detail.secrets?.length && !shownPages(detail.ui, detail.auth).length && !detail.auth
     && !channelOf(detail) && !detail.contributes?.connectors?.length;
 
-  // The draft is the user's edits on top of `base`, the configuration last read (null until the page's first read is
-  // shown). Each newer configuration the hub sends (another device's or app's change, an upgrade, a save) takes the
-  // fields the user did not touch, so the form never shows or saves back an old value of them; the touched ones keep
-  // the edit. Edits outlive the page: kept while the form is dirty, and put back on the first read of the next visit,
-  // where the save bar shows them as unsaved. Saving or Revert leaves the form clean, which drops them.
-  const keptKey = unsavedKey(id, manager);
-  const base = useRef<JsonObject | null>(null);
-  useEffect(() => {
-    if (base.current) keepUnsaved(keptKey, dirty ? { base: base.current, draft, typed } : null);
-  }, [keptKey, dirty, draft, typed]);
-  const config = detail ? (detail.config ?? NO_CONFIG) : null;
-  useEffect(() => {
-    if (!config) return;
-    const edits = base.current ? { base: base.current, draft, typed } : unsaved.get(keptKey);
-    base.current = config;
-    if (!edits) return;
-    const next = rebaseDraft(edits, config, requiredEntryLists);
-    setDraft(next.draft);
-    setTyped(next.typed);
-  }, [config, keptKey]);
-  /** Back to the list once the extension is gone (uninstalled here or elsewhere): its edits go with it. */
-  const onBack = () => {
-    base.current = null;
-    keepUnsaved(keptKey, null);
-    back();
-  };
-
-  // An operation of this extension that succeeds while the page is open (an upgrade, also the hub's auto-upgrade, or
-  // an install or uninstall from another device): its version, upgrades and permissions are read again. A dirty form
-  // keeps the user's edits, as a switch does (the fields not touched follow the new read); an uninstall goes back to
-  // the list. Those that ended before the page opened are not acted on: when this page is the first to start listening,
-  // the hub's list (which keeps ended operations a while) arrives after it opened, and what it brings that was not
-  // pushed meanwhile is old.
-  const dirtyNow = useRef(dirty);
-  dirtyNow.current = dirty;
-  // A save answers to the local revision it submitted, which may be older than the form by then.
-  const editRevision = useRef(0);
-  const draftNow = useRef(draft);
-  const typedNow = useRef(typed);
-  draftNow.current = draft;
-  typedNow.current = typed;
-  const backNow = useRef(onBack);
-  backNow.current = onBack;
-  useEffect(() => {
-    // this manager's operations of the extension: another manager's upgrade of the same id is not this page's
-    const ended = () => operations().filter((o) => o.extension === id && o.state === "succeeded" && opOf(o, manager));
-    const seen = new Set(ended().map((o) => o.id));
-    let listed = operationsListed();
-    return watchOperations(() => {
-      if (!listed && operationsListed()) {
-        listed = true;
-        ended().forEach((o) => seen.add(o.id));
-        return;
-      }
-      const fresh = ended().filter((o) => !seen.has(o.id));
-      if (!fresh.length) return;
-      fresh.forEach((o) => seen.add(o.id));
-      // newest first: an uninstall followed by a fresh install stays on the page
-      if (fresh[0].kind === "uninstall") return backNow.current();
-      void readDetail((d) => (dirtyNow.current ? setDetail(d) : (apply(d), setTyped({}), setFieldErrors({}))));
-    });
-  }, [id, manager]);
-
-  const edit = (path: string[], value: Json | undefined) => {
-    editRevision.current++;
-    setDraft((d) => setAt(d, path, value));
-    const key = fieldPath(path);
-    if (fieldErrors[key] || fieldErrors[""]) setFieldErrors(({ [key]: _a, [""]: _b, ...rest }) => rest);
-    setCheckFailed("");
-  };
-  const type = (path: string[], text: string, integer: boolean) => {
-    const key = fieldPath(path);
-    setTyped((t) => ({ ...t, [key]: { text, integer } }));
-    setCheckFailed("");
-    const n = readNumber(text, integer);
-    if (!n.error) edit(path, n.value);
-    else editRevision.current++;
-  };
-  const revert = () => {
-    if (!detail) return;
-    editRevision.current++;
-    setDraft(detail.config ?? {});
-    setTyped({});
-    setFieldErrors({});
-    setCheckFailed("");
-  };
-
-  const save = async () => {
-    if (!canSave) return;
-    setSaving(true);
-    setFieldErrors({});
-    setCheckFailed("");
-    const n = writing();
-    const submitted = draft;
-    const revision = editRevision.current;
-    try {
-      const d = await setExtensionConfig(id, compact(draft, requiredEntryLists));
-      const unchanged = editRevision.current === revision;
-      if (wrote(n, d)) {
-        if (unchanged) apply(d);
-        else {
-          // Only edits made after submission remain local; submitted and untouched fields take the authoritative answer.
-          const fresh = d.config ?? {};
-          const next = rebaseDraft({ base: submitted, draft: draftNow.current, typed: typedNow.current }, fresh, requiredEntryLists);
-          base.current = fresh;
-          setDraft(next.draft);
-          setTyped(next.typed);
-          setError("");
-        }
-      }
-      if (unchanged) setTyped({});
-      toast(t("settings-extensions.saved_restart"), "ok");
-    } catch (e) {
-      const ce = configError(e);
-      const refused = checkError(e);
-      if (ce) setFieldErrors({ [ce.field]: ce.message });
-      else if (refused) setCheckFailed(refused);
-      else toast(t("settings-extensions.not_saved", { error: errorText(e) }), "error");
-      // The configuration stayed as it was, but some of its secrets are gone: read the page again so the Secrets group
-      // says so; the draft and what is being typed stay. The hub restarts the program without them, so its entries,
-      // cards and quick prompts are asked for again too, as after clearing a secret.
-      if (clearedSecrets(e).length) {
-        changed(null);
-        void readDetail(setDetail);
-      }
-    } finally {
-      setSaving(false);
-    }
-  };
-
   const toggleAutoUpgrade = async (on: boolean) => {
-    setToggling(true);
-    const n = writing();
     try {
-      wrote(n, await setExtensionAutoUpgrade(id, on));
-      toast(on ? t("settings-extensions.auto_upgrade_on") : t("settings-extensions.auto_upgrade_off"), "ok");
-    } catch (e) {
-      toast(t(on ? "settings-extensions.auto_upgrade_on_failed" : "settings-extensions.auto_upgrade_off_failed", { error: errorText(e) }), "error");
-    } finally {
-      setToggling(false);
+      await mutate("management", (client) => setExtensionAutoUpgrade(id, on, client));
+      toast(t(on ? "settings-extensions.auto_upgrade_on" : "settings-extensions.auto_upgrade_off"), "ok");
+    } catch (error) {
+      if (!isAbort(error)) toast(t(on ? "settings-extensions.auto_upgrade_on_failed" : "settings-extensions.auto_upgrade_off_failed", { error: errorText(error) }), "error");
     }
   };
-
   const toggle = async (on: boolean, cascade = false) => {
-    setToggling(true);
-    const n = writing();
     try {
-      const d = await setExtensionEnabled(id, on, cascade);
-      // A switch never overwrites the unsaved configuration draft.
-      wrote(n, d);
+      const detail = await mutate("management", (client) => setExtensionEnabled(id, on, cascade, client));
       setDependents(null);
       setPackOff(false);
-      toast(t(on ? "settings-extensions.enabled_name" : "settings-extensions.disabled_name", { name: d.name }), "ok");
-    } catch (e) {
-      const deps = dependentError(e);
+      toast(t(on ? "settings-extensions.enabled_name" : "settings-extensions.disabled_name", { name: detail.name }), "ok");
+    } catch (error) {
+      if (isAbort(error)) return;
+      const deps = dependentError(error);
       setPackOff(false);
       if (!on && deps) setDependents(deps);
-      else toast(t(on ? "settings-extensions.enable_failed" : "settings-extensions.disable_failed", { error: errorText(e) }), "error");
-    } finally {
-      setToggling(false);
+      else toast(t(on ? "settings-extensions.enable_failed" : "settings-extensions.disable_failed", { error: errorText(error) }), "error");
     }
   };
   const toggleContribution = async (c: Contribution, on: boolean) => {
-    setToggling(true);
-    const n = writing();
     try {
-      wrote(n, await setContribution(id, c.point, c.id, on));
-      toast(on ? t("settings-extensions.contribution_on") : t("settings-extensions.contribution_off"), "ok");
-    } catch (e) {
-      toast(t("settings-extensions.change_failed", { error: errorText(e) }), "error");
-    } finally {
-      setToggling(false);
-    }
-  };
-
-  // A machine's switch (format machine) is saved at once, on top of what the hub has; the rest of the draft stays.
-  const saveNow = async (path: string[], value: Json | undefined) => {
-    if (!detail) return;
-    const saved = detail.config ?? {};
-    editRevision.current++;
-    setDraft((d) => setAt(d, path, value));
-    const n = writing();
-    try {
-      const d = await setExtensionConfigPreservingEntries(id, compact(setAt(saved, path, value), requiredEntryLists));
-      if (wrote(n, d)) setDraft((cur) => setAt(cur, path, valueAt(d.config ?? {}, path)));
-    } catch (e) {
-      setDraft((cur) => setAt(cur, path, valueAt(saved, path)));
-      toast(t("settings-extensions.not_saved", { error: errorText(e) }), "error");
+      await mutate("management", (client) => setContribution(id, c.point, c.id, on, client));
+      toast(t(on ? "settings-extensions.contribution_on" : "settings-extensions.contribution_off"), "ok");
+    } catch (error) {
+      if (!isAbort(error)) toast(t("settings-extensions.change_failed", { error: errorText(error) }), "error");
     }
   };
   const computers = !!detail?.contributes?.computer;
   const nodes = detail?.node_machines ? { field: detail.node_machines, states: detail.nodes ?? [] } : undefined;
   const launchers = useFormLaunchers(hasLauncherField(detail?.form?.fields), detail?.id);
-
-  // A secret's answer is a whole detail too; keep the form's draft as it is.
-  // The dialog's request is numbered as it leaves, like the page's own writes.
-  const secretStart = () => writing();
-  const secretDone = (n: number, d: HubExtensionDetail) => wrote(n, d);
 
   const p = detail;
   // A pack's members by their installed names (#4122); one not installed keeps its id.
@@ -774,7 +523,7 @@ function ExtensionDetail({ id, manager, onBack: back, headerBack, onPage, onUpgr
           onAutoUpgrade={(on) => void toggleAutoUpgrade(on)}
           onUpgrade={onUpgrade}
           onUninstall={() => setRemoving(true)}
-          onChecked={async () => { await readDetail((d) => dirtyNow.current ? setDetail(d) : apply(d), (error) => { throw error; }); }}
+          onChecked={reload}
           configurationTitle={noConfiguration}
           configuration={<>
           {p.auth && <AuthGroup id={p.id} auth={p.auth} enabled={p.enabled ?? true} start={startSignIn} onChange={authChanged} />}
@@ -799,10 +548,20 @@ function ExtensionDetail({ id, manager, onBack: back, headerBack, onPage, onUpgr
             </Group>
           )}
 
-          {(p.enabled ?? true) && !!p.contributes?.connectors?.length && <ExtensionConnectorInbox ids={p.contributes.connectors} manager={manager} onOpen={onConnector} />}
-          <ConnectorExternalSourceSettings ids={[...(p.contributes?.connectors ?? []), ...(p.contributes?.channel ?? [])]} manager={manager} />
+          {(p.enabled ?? true) && !!p.contributes?.connectors?.length && <ExtensionConnectorInbox ids={p.contributes.connectors} manager={manager} onOpen={onConnector} refreshKey={connectorRefreshKey} />}
+          <ConnectorExternalSourceSettings
+            ids={[...(p.contributes?.connectors ?? []), ...(p.contributes?.channel ?? [])]}
+            manager={manager}
+            copy={{
+              channelDefaultsTitle: t("settings-extensions.source_defaults_title"),
+              channelHint: t("settings-extensions.source_defaults_hint"),
+              flowsTitle: t("settings-extensions.source_flows_title"),
+              flowsHint: t("settings-extensions.source_flows_hint"),
+              hideEmptyFlows: true,
+            }}
+          />
           {/* source subscriptions (#2041) of its connectors, the default manager's */}
-          {(p.enabled ?? true) && !manager && !!p.contributes?.connectors?.length && <SubscriptionsEntry pick={(l) => l.extension === p.id} scope={{ ext: p.id }} />}
+          {(p.enabled ?? true) && !manager && !!p.contributes?.connectors?.length && <SubscriptionsEntry pick={(l) => l.extension === p.id} scope={{ ext: p.id }} description={t("settings-extensions.subscriptions_footer")} />}
 
           {editable && fields.length > 0 && (
             <>
@@ -850,9 +609,8 @@ function ExtensionDetail({ id, manager, onBack: back, headerBack, onPage, onUpgr
 
           </>}
           information={<>
-          <SecretProviderGroups extension={id} users={p.secret_users} rules={p.handoff_rules} editable={editable} onStart={secretStart} onDone={secretDone} />
-          {/* extension trust is the default manager's (docs/web/web.md "Domain spaces"): another manager's page leaves it out */}
-          {!manager && <ExtensionInfoAccess extension={id} editable={editable} />}
+          <SecretProviderGroups extension={id} users={p.secret_users} rules={p.handoff_rules} editable={editable} mutate={mutate} />
+          <ExtensionInfoAccess client={binding.client} extension={id} editable={editable && !offline} />
           {!!p.depends?.length && (
             <Group title={t("settings-extensions.depends_title")} footer={t("settings-extensions.depends_footer")}>
               {p.depends.map((d) => <Row key={d.id} label={d.name || d.id} hint={d.version}><span className={cx(d.state !== "ok" && "text-orange")}>{dependencyText(d)}</span></Row>)}
@@ -889,23 +647,16 @@ function ExtensionDetail({ id, manager, onBack: back, headerBack, onPage, onUpgr
           {p.sandbox && <SandboxGroup s={p.sandbox} id={p.id} name={p.name} />}
 
           {!!p.permissions?.length && (
-            <Group title={t("settings-extensions.permissions_title")} footer={t("settings-extensions.permissions_footer")}>
-              {p.permissions.map((perm) => (
-                <div key={perm.key} className="px-4 py-2.5">
-                  <div className="text-[13px] text-ink">{perm.title}</div>
-                  {perm.detail && <div className="mt-0.5 text-[11.5px] leading-snug text-ink-3">{perm.detail}</div>}
-                </div>
-              ))}
-            </Group>
+            <Permissions permissions={p.permissions} />
           )}
 
           </>}
-          saveBar={dirty && (
+          saveBar={saveBarLabel && (
             <Group>
               {checkFailed && <SettingsHint alert>{t("settings-extensions.not_saved", { error: checkFailed })}</SettingsHint>}
-              <Row label={Object.keys(problems).length ? t("settings-extensions.not_a_number") : t("settings-extensions.unsaved")}>
+              <Row label={saveBarLabel}>
                 <Button tone="quiet" onClick={revert} disabled={saving}>{t("settings-extensions.revert")}</Button>
-                <Button tone="accent" busy={saving} disabled={!canSave} onClick={() => void save()}>{t("common.save")}</Button>
+                <Button tone="accent" busy={saving} disabled={!canSave || offline} onClick={() => void save()}>{t("common.save")}</Button>
               </Row>
             </Group>
           )}
@@ -924,7 +675,7 @@ function ExtensionDetail({ id, manager, onBack: back, headerBack, onPage, onUpgr
       )}
 
 
-      {secret && <SecretDialog extension={id} secret={secret.list && secret.entry_title ? { ...secret, title: `${secret.entry_title} · ${secret.title}` } : secret} onClose={() => setSecret(null)} onStart={secretStart} onDone={secretDone} />}
+      {secret && <SecretDialog extension={id} secret={secret.list && secret.entry_title ? { ...secret, title: `${secret.entry_title} · ${secret.title}` } : secret} onClose={() => setSecret(null)} mutate={mutate} />}
     </div>
   );
 }
@@ -970,6 +721,21 @@ export function SandboxGroup({ s, id, name }: { s: ExtensionSandbox; id: string;
           </div>
         </div>
       )}
+    </Group>
+  );
+}
+
+/** What an extension may do, in user-facing terms: internal point keys and socket filenames stay behind the explanation. */
+export function Permissions({ permissions }: { permissions: ExtensionPermission[] }) {
+  return (
+    <Group title={t("settings-extensions.permissions_title")} footer={t("settings-extensions.permissions_footer")}>
+      {permissions.map((perm) => (
+        <div key={perm.key} className="px-4 py-2.5">
+          <div className="text-[13px] text-ink">{permissionTitle(perm)}</div>
+          {permissionDetail(perm) && <div className="mt-0.5 text-[11.5px] leading-snug text-ink-3">{permissionDetail(perm)}</div>}
+        </div>
+      ))}
+      {permissions.some((perm) => perm.key === "network") && <SettingsHint>{t("settings-extensions.permission_network_hint")}</SettingsHint>}
     </Group>
   );
 }
@@ -1392,7 +1158,7 @@ function ListControl({ field: f, path, draft, onEdit, id, ring }: Pick<FieldProp
 // ── a secret ────────────────────────────────────────────
 
 /** Sets one secret: typed in hidden, saved to the hub, never shown again; one that is set can be cleared. */
-export function SecretDialog({ extension, secret, onClose, onStart, onDone }: { extension: string; secret: ExtensionSecret; onClose: () => void; onStart: () => number; onDone: (n: number, d: HubExtensionDetail) => void }) {
+export function SecretDialog({ extension, secret, onClose, mutate }: { extension: string; secret: ExtensionSecret; onClose: () => void; mutate: ExtensionMutation }) {
   // a provider's reference in place of the value (docs/extensions/secret-providers.md), where the hub takes one
   const references = useStore((s) => hubHasExt(s.features, "secret_references"));
   const [byRef, setByRef] = useState(!!secret.reference);
@@ -1414,16 +1180,14 @@ export function SecretDialog({ extension, secret, onClose, onStart, onDone }: { 
     setBusy(kind);
     setError("");
     try {
-      const n = onStart();
-      const d = kind === "clear" ? await clearExtensionSecret(extension, secret.name)
-        : byRef ? await setExtensionSecretReference(extension, secret.name, v) : await setExtensionSecret(extension, secret.name, v);
-      // a saved value leaves the page: nothing keeps it once the hub has it
+      await mutate("secret", (client) => kind === "clear" ? clearExtensionSecret(extension, secret.name, client)
+        : byRef ? setExtensionSecretReference(extension, secret.name, v, client) : setExtensionSecret(extension, secret.name, v, client));
+      // A saved value leaves the page.
       setValue("");
-      onDone(n, d);
       toast(t(kind === "clear" ? "settings-extensions.secret_cleared" : byRef ? "settings-extensions.secret_reference_saved" : "settings-extensions.secret_saved", { title: secret.title }), "ok");
       onClose();
     } catch (e) {
-      setError(errorText(e));
+      if (!isAbort(e)) setError(errorText(e));
     } finally {
       setBusy("");
     }
@@ -1525,13 +1289,12 @@ export function SecretDialog({ extension, secret, onClose, onStart, onDone }: { 
  * A secret provider's page (docs/extensions/secret-providers.md): the settings that hold its references, each the
  * user's standing approval, and the Always rules of hand-offs to Agents, each removable (the next hand-off asks again).
  */
-export function SecretProviderGroups({ extension, users, rules, editable, onStart, onDone }: {
+export function SecretProviderGroups({ extension, users, rules, editable, mutate }: {
   extension: string;
   users?: SecretUser[];
   rules?: HandoffRule[];
   editable: boolean;
-  onStart: () => number;
-  onDone: (n: number, d: HubExtensionDetail) => void;
+  mutate: ExtensionMutation;
 }) {
   const machines = useStore((s) => s.machines);
   const [removing, setRemoving] = useState<HandoffRule | null>(null);
@@ -1540,12 +1303,11 @@ export function SecretProviderGroups({ extension, users, rules, editable, onStar
   const remove = async (rule: HandoffRule) => {
     setBusy(true);
     try {
-      const n = onStart();
-      onDone(n, await removeHandoffRule(extension, rule.id));
+      await mutate("secret", (client) => removeHandoffRule(extension, rule.id, client));
       toast(t("settings-extensions.rule_removed"), "ok");
       setRemoving(null);
     } catch (e) {
-      toast(errorText(e), "error");
+      if (!isAbort(e)) toast(errorText(e), "error");
     } finally {
       setBusy(false);
     }

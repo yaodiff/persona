@@ -1,6 +1,5 @@
 {
   "title": "マシンファイル",
-  "machine_label": "マシン",
   "machine_offline": "このマシンはオフラインです。再接続するとファイルを参照できます。",
   "no_machines": "利用可能なマシンがありません。",
   "roots_label": "クイックルート",

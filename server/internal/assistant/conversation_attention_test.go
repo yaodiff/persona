@@ -1,8 +1,11 @@
 package assistant
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -255,5 +258,276 @@ func TestDirectUserInteraction(t *testing.T) {
 				t.Fatalf("directUserInteraction=%v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+// jsonContainsPostgresJSONBNUL reports whether raw JSON contains a raw NUL byte or an unescaped \u0000
+// escape sequence, which Postgres rejects for jsonb values with SQLSTATE 22P05.
+func jsonContainsPostgresJSONBNUL(raw []byte) bool {
+	if bytes.IndexByte(raw, 0) >= 0 {
+		return true
+	}
+	inString := false
+	for i := 0; i < len(raw); i++ {
+		if !inString {
+			if raw[i] == '"' {
+				inString = true
+			}
+			continue
+		}
+		if raw[i] == '"' {
+			inString = false
+			continue
+		}
+		if raw[i] == '\\' {
+			if i+5 < len(raw) && (raw[i+1] == 'u' || raw[i+1] == 'U') && string(raw[i+2:i+6]) == "0000" {
+				return true
+			}
+			i++ // skip the escaped character (including '\\')
+		}
+	}
+	return false
+}
+
+// jsonbSafeAttentionStore wraps fleetMem and enforces Postgres jsonb's SQLSTATE 22P05 NUL rejection on PutSetting.
+type jsonbSafeAttentionStore struct {
+	*fleetMem
+	lastRaw map[string][]byte
+}
+
+func (s *jsonbSafeAttentionStore) PutSetting(ctx context.Context, key string, v any) error {
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	if jsonContainsPostgresJSONBNUL(raw) {
+		return errors.New("ERROR: unsupported Unicode escape sequence (SQLSTATE 22P05)")
+	}
+	if s.lastRaw == nil {
+		s.lastRaw = map[string][]byte{}
+	}
+	s.lastRaw[key] = raw
+	return s.fleetMem.PutSetting(ctx, key, v)
+}
+
+func TestConversationAttentionCacheKeyJSONBSafeAndCollisionFree(t *testing.T) {
+	if got := conversationAttentionCacheKey("server", "conv1"); got != "server|conv1" {
+		t.Fatalf("standard key = %q, want %q", got, "server|conv1")
+	}
+	pairs := [][2]string{
+		{"server", "conv1"},
+		{"a|b", "c"},
+		{"a", "b|c"},
+		{"a%7Cb", "c"},
+		{"worker/a", "b"},
+		{"worker", "a/b"},
+		{"m", ""},
+		{"", "m"},
+		{"m\x001", "s\x002"},
+	}
+	seen := make(map[string][2]string, len(pairs))
+	entries := make(map[string]conversationAttentionEntry, len(pairs))
+	for i, pair := range pairs {
+		key := conversationAttentionCacheKey(pair[0], pair[1])
+		if strings.ContainsRune(key, '\x00') {
+			t.Fatalf("key for %q contains NUL byte: %q", pair, key)
+		}
+		if prev, dup := seen[key]; dup {
+			t.Fatalf("key collision between %q and %q: both encoded to %q", prev, pair, key)
+		}
+		seen[key] = pair
+		entries[key] = conversationAttentionEntry{Rev: int64(i + 1), Silent: true}
+	}
+	raw, err := json.Marshal(entries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if jsonContainsPostgresJSONBNUL(raw) {
+		t.Fatalf("serialized conversation attention payload contains NUL / \\u0000: %s", raw)
+	}
+}
+
+func TestConversationAttentionPersistenceJSONBSafeAndRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	st := &jsonbSafeAttentionStore{fleetMem: newFleetMem()}
+	s, f := newQuietServiceOn(t, st)
+	logs := &logBuffer{}
+	s.logf = logs.logf
+	t0 := time.Date(2026, 11, 22, 9, 0, 0, 0, time.UTC)
+	f.setItems(attentionTranscript(t0, false, false)...)
+
+	row := proto.Session{
+		MachineID: "server", SessionID: "conv1", Assistant: true,
+		Status: proto.StatusDone, State: proto.StateUnread, Rev: 9,
+		UpdatedAt: t0.Add(5 * time.Minute), SeenAt: t0.Add(2 * time.Minute),
+	}
+	s.decorateMainConversationAttention(&row, s.settings(ctx))
+	if row.State != proto.StateIdle {
+		t.Fatalf("state = %s, want idle", row.State)
+	}
+	// Also persist an entry whose machine ID contains '|' to verify collision-safe escaping in JSONB.
+	pipeEntry := conversationAttentionEntry{Rev: 4, Silent: true, HasVisible: true, VisibleAt: t0.Add(time.Minute)}
+	s.putConversationAttention(ctx, "box|1", "conv-pipe", pipeEntry)
+
+	if strings.Contains(logs.String(), "22P05") || strings.Contains(logs.String(), "save conversation attention:") {
+		t.Fatalf("unexpected persistence error logs:\n%s", logs.String())
+	}
+	raw := st.lastRaw[conversationAttentionKey]
+	if len(raw) == 0 {
+		t.Fatalf("expected persisted payload under %q", conversationAttentionKey)
+	}
+	if jsonContainsPostgresJSONBNUL(raw) {
+		t.Fatalf("persisted JSON contains NUL / \\u0000: %s", raw)
+	}
+
+	var stored map[string]conversationAttentionEntry
+	if ok, err := st.Setting(ctx, conversationAttentionKey, &stored); err != nil || !ok {
+		t.Fatalf("Setting(%q) = ok:%v err:%v", conversationAttentionKey, ok, err)
+	}
+	if got := stored["server|conv1"]; got.Rev != 9 || !got.Silent {
+		t.Fatalf("stored entry under server|conv1 = %+v", got)
+	}
+	if got := stored[conversationAttentionCacheKey("box|1", "conv-pipe")]; got != pipeEntry {
+		t.Fatalf("stored pipe-machine entry = %+v, want %+v", got, pipeEntry)
+	}
+
+	// Restart on the same store and verify full round-trip without re-reading the transcript.
+	again, f2 := newQuietServiceOn(t, st)
+	f2.setItems(attentionTranscript(t0, false, false)...)
+	row.State = proto.StateUnread
+	again.decorateMainConversationAttention(&row, again.settings(ctx))
+	if row.State != proto.StateIdle || attentionReads(f2) != 0 {
+		t.Fatalf("restart round-trip failed: state=%s reads=%d", row.State, attentionReads(f2))
+	}
+	gotPipe, ok := again.conversationAttentionCached("box|1", "conv-pipe", 4)
+	if !ok || gotPipe != pipeEntry {
+		t.Fatalf("restart pipe-machine lookup = %+v, %v; want %+v", gotPipe, ok, pipeEntry)
+	}
+}
+
+func TestConversationAttentionLegacyNULKeyMigration(t *testing.T) {
+	ctx := context.Background()
+	base := newFleetMem()
+	t0 := time.Date(2026, 11, 22, 9, 0, 0, 0, time.UTC)
+	// Seed a legacy store value with NUL-delimited keys, including a newer canonical conflict and a newer legacy conflict.
+	legacyEntries := map[string]conversationAttentionEntry{
+		"server\x00conv1":          {Rev: 9, Silent: true, HasVisible: true, VisibleAt: t0.Add(time.Minute)},
+		"box|1\x00conv2":           {Rev: 3, Silent: true},
+		"server|conv-canonical":    {Rev: 12, Silent: true},
+		"server\x00conv-canonical": {Rev: 5, Silent: false},
+		"server|conv-older":        {Rev: 4, Silent: false},
+		"server\x00conv-older":     {Rev: 8, Silent: true},
+	}
+	if err := base.PutSetting(ctx, conversationAttentionKey, legacyEntries); err != nil {
+		t.Fatal(err)
+	}
+
+	st := &jsonbSafeAttentionStore{fleetMem: base}
+	s, f := newQuietServiceOn(t, st)
+	logs := &logBuffer{}
+	s.logf = logs.logf
+	f.setItems(attentionTranscript(t0, false, false)...)
+
+	// Reading must find migrated legacy entries without hitting the transcript RPC.
+	row := proto.Session{
+		MachineID: "server", SessionID: "conv1", Assistant: true,
+		Status: proto.StatusDone, State: proto.StateUnread, Rev: 9,
+		UpdatedAt: t0.Add(5 * time.Minute), SeenAt: t0.Add(2 * time.Minute),
+	}
+	s.decorateMainConversationAttention(&row, s.settings(ctx))
+	if row.State != proto.StateIdle || attentionReads(f) != 0 {
+		t.Fatalf("legacy NUL cache was not read on load: state=%s reads=%d", row.State, attentionReads(f))
+	}
+	if e, ok := s.conversationAttentionCached("box|1", "conv2", 3); !ok || !e.Silent {
+		t.Fatalf("legacy NUL key with '|' machine failed to migrate: %+v, %v", e, ok)
+	}
+	if e, ok := s.conversationAttentionCached("server", "conv-canonical", 12); !ok || !e.Silent {
+		t.Fatalf("canonical higher-rev entry lost to stale legacy key: %+v, %v", e, ok)
+	}
+	if e, ok := s.conversationAttentionCached("server", "conv-older", 8); !ok || !e.Silent {
+		t.Fatalf("legacy higher-rev entry did not supersede stale canonical key: %+v, %v", e, ok)
+	}
+
+	// Inject a direct in-memory legacy NUL key as well; reads must still accept it and the next save must scrub it.
+	s.convAttention.mu.Lock()
+	s.convAttention.entries["mem\x00legacy"] = conversationAttentionEntry{Rev: 6, Silent: true}
+	s.convAttention.mu.Unlock()
+	if e, ok := s.conversationAttentionCached("mem", "legacy", 6); !ok || !e.Silent {
+		t.Fatalf("in-memory legacy NUL key lookup failed: %+v, %v", e, ok)
+	}
+
+	// Saving another entry must succeed under strict JSONB NUL validation and emit zero NUL keys.
+	s.putConversationAttention(ctx, "server", "conv-new", conversationAttentionEntry{Rev: 2, Silent: true})
+	if strings.Contains(logs.String(), "22P05") || strings.Contains(logs.String(), "save conversation attention:") {
+		t.Fatalf("saving after legacy load failed:\n%s", logs.String())
+	}
+	raw := st.lastRaw[conversationAttentionKey]
+	if len(raw) == 0 || jsonContainsPostgresJSONBNUL(raw) {
+		t.Fatalf("persisted JSON after migration invalid or contains NUL: %s", raw)
+	}
+
+	var stored map[string]conversationAttentionEntry
+	if ok, err := st.Setting(ctx, conversationAttentionKey, &stored); err != nil || !ok {
+		t.Fatalf("Setting(%q) = ok:%v err:%v", conversationAttentionKey, ok, err)
+	}
+	for k := range stored {
+		if strings.ContainsRune(k, '\x00') {
+			t.Fatalf("migrated store still contains NUL key %q", k)
+		}
+	}
+	for _, wantKey := range []string{
+		conversationAttentionCacheKey("server", "conv1"),
+		conversationAttentionCacheKey("box|1", "conv2"),
+		conversationAttentionCacheKey("server", "conv-canonical"),
+		conversationAttentionCacheKey("server", "conv-older"),
+		conversationAttentionCacheKey("mem", "legacy"),
+		conversationAttentionCacheKey("server", "conv-new"),
+	} {
+		if _, ok := stored[wantKey]; !ok {
+			t.Fatalf("migrated store missing expected key %q; got keys: %v", wantKey, stored)
+		}
+	}
+}
+
+func TestConversationAttentionPersistencePostgres(t *testing.T) {
+	database := todoTestDB(t)
+	ctx := t.Context()
+	s, f := newQuietServiceOn(t, database)
+	logs := &logBuffer{}
+	s.logf = logs.logf
+	t0 := time.Date(2026, 11, 22, 9, 0, 0, 0, time.UTC)
+	f.setItems(attentionTranscript(t0, false, false)...)
+
+	row := proto.Session{
+		MachineID: "server", SessionID: "conv1", Assistant: true,
+		Status: proto.StatusDone, State: proto.StateUnread, Rev: 9,
+		UpdatedAt: t0.Add(5 * time.Minute), SeenAt: t0.Add(2 * time.Minute),
+	}
+	s.decorateMainConversationAttention(&row, s.settings(ctx))
+	if row.State != proto.StateIdle {
+		t.Fatalf("state = %s, want idle", row.State)
+	}
+	s.putConversationAttention(ctx, "box|1", "conv-pipe", conversationAttentionEntry{Rev: 4, Silent: true})
+	if strings.Contains(logs.String(), "22P05") || strings.Contains(logs.String(), "save conversation attention:") {
+		t.Fatalf("Postgres JSONB save failed:\n%s", logs.String())
+	}
+
+	var stored map[string]conversationAttentionEntry
+	if ok, err := database.Setting(ctx, conversationAttentionKey, &stored); err != nil || !ok {
+		t.Fatalf("Postgres Setting(%q) = ok:%v err:%v", conversationAttentionKey, ok, err)
+	}
+	if got := stored["server|conv1"]; got.Rev != 9 || !got.Silent {
+		t.Fatalf("Postgres stored server|conv1 = %+v", got)
+	}
+	if got := stored[conversationAttentionCacheKey("box|1", "conv-pipe")]; got.Rev != 4 || !got.Silent {
+		t.Fatalf("Postgres stored pipe-machine entry = %+v", got)
+	}
+
+	again, f2 := newQuietServiceOn(t, database)
+	f2.setItems(attentionTranscript(t0, false, false)...)
+	row.State = proto.StateUnread
+	again.decorateMainConversationAttention(&row, again.settings(ctx))
+	if row.State != proto.StateIdle || attentionReads(f2) != 0 {
+		t.Fatalf("Postgres restart round-trip failed: state=%s reads=%d", row.State, attentionReads(f2))
 	}
 }

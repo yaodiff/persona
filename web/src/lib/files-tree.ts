@@ -115,10 +115,37 @@ export function writeExpanded(store: Store, key: string, dirs: string[]) {
   }
 }
 
+/** Canonical comparison key for a tree path: forward slashes, collapsed separators, no trailing slash (except "/"), lowercase Windows drive letter. */
+export function treePathKey(p: string): string {
+  const unc = p.startsWith("\\\\");
+  let s = p.replace(/\\/g, "/").replace(/\/+/g, "/");
+  if (unc) s = "/" + s;
+  if (/^[A-Za-z]:(?:\/|$)/.test(s)) s = s[0].toLowerCase() + s.slice(1);
+  if (s.length > 1) s = s.replace(/\/+$/, "");
+  return s;
+}
+
+/** Relative path segments of `target` strictly below `root`, or null when `target` is not inside `root`. */
+export function relativeSegments(root: string, target: string): string[] | null {
+  if (!root || !target) return null;
+  const nr = treePathKey(root);
+  const nt = treePathKey(target);
+  if (!nr || !nt || nt === nr) return null;
+  const prefix = nr === "/" ? "/" : nr + "/";
+  if (!nt.startsWith(prefix)) return null;
+  const parts = nt.slice(prefix.length).split("/").filter(Boolean);
+  return parts.length ? parts : null;
+}
+
 /** The folder opened (appended) or closed; closing a folder also closes the ones inside it. */
 export function toggleExpanded(open: string[], dir: string): string[] {
-  if (!open.includes(dir)) return [...open, dir];
-  return open.filter((d) => d !== dir && !d.startsWith(dir.replace(/\/+$/, "") + "/"));
+  const dk = treePathKey(dir);
+  if (!open.some((d) => treePathKey(d) === dk)) return [...open, dir];
+  const prefix = dk === "/" ? "/" : dk + "/";
+  return open.filter((d) => {
+    const k = treePathKey(d);
+    return k !== dk && !k.startsWith(prefix);
+  });
 }
 
 /** The folders on the way to `path` under `root` (outermost first), opened so the path shows. */
@@ -132,9 +159,28 @@ export function ancestors(root: string, stack: string[]): string[] {
   return out;
 }
 
-/** `open` plus `more`, without repeats, order kept. */
+/** Ancestor directories of `target` strictly below `root` (outermost first), so the tree expands down to `target`. */
+export function revealDirs(root: string, target?: string): string[] {
+  if (!root || !target) return [];
+  const parts = relativeSegments(root, target);
+  return parts && parts.length > 1 ? ancestors(root, parts.slice(0, -1)) : [];
+}
+
+/** Whether two tree paths point to the same entry (tolerates trailing slashes, Windows separators, and Windows drive-letter case). */
+export function sameTreePath(a?: string, b?: string): boolean {
+  if (!a || !b) return false;
+  return a === b || treePathKey(a) === treePathKey(b);
+}
+
+/** `open` plus `more`, without repeats (matched by canonical tree path key), order kept. */
 export function withExpanded(open: string[], more: string[]): string[] {
-  const add = more.filter((d) => !open.includes(d));
+  const keys = new Set(open.map(treePathKey));
+  const add = more.filter((d) => {
+    const k = treePathKey(d);
+    if (keys.has(k)) return false;
+    keys.add(k);
+    return true;
+  });
   return add.length ? [...open, ...add] : open;
 }
 
@@ -157,6 +203,9 @@ export type TreeRow =
  * but not listed yet has a loading row, one that failed an error row, an empty one an empty row.
  */
 export function treeRows(root: string, open: ReadonlySet<string>, listed: (dir: string) => Listed | undefined, showHidden: boolean): TreeRow[] {
+  const openKeys = new Set<string>();
+  for (const d of open) openKeys.add(treePathKey(d));
+  const isOpen = (dir: string) => open.has(dir) || openKeys.has(treePathKey(dir));
   const rows: TreeRow[] = [];
   const walk = (dir: string, depth: number) => {
     const l = listed(dir);
@@ -164,11 +213,11 @@ export function treeRows(root: string, open: ReadonlySet<string>, listed: (dir: 
       rows.push(l?.error ? { kind: "error", key: `${dir}\0error`, path: dir, depth, error: l.error } : { kind: "loading", key: `${dir}\0loading`, path: dir, depth });
       return;
     }
-    const entries = l.listing.entries.filter((e) => showHidden || !e.name.startsWith("."));
+    const entries = (l.listing.entries ?? []).filter((e) => showHidden || !e.name.startsWith("."));
     if (!entries.length) rows.push({ kind: "empty", key: `${dir}\0empty`, path: dir, depth });
     for (const e of entries) {
       const path = joinPath(dir, e.name);
-      const expanded = e.dir && open.has(path);
+      const expanded = e.dir && isOpen(path);
       rows.push({ kind: "entry", key: path, path, depth, entry: e, expanded });
       if (expanded) walk(path, depth + 1);
     }
@@ -180,11 +229,14 @@ export function treeRows(root: string, open: ReadonlySet<string>, listed: (dir: 
 
 /** The folders to list: the root and every open folder that shows (its parents are open too). */
 export function visibleDirs(root: string, open: ReadonlySet<string>, listed: (dir: string) => Listed | undefined): string[] {
+  const openKeys = new Set<string>();
+  for (const d of open) openKeys.add(treePathKey(d));
+  const isOpen = (dir: string) => open.has(dir) || openKeys.has(treePathKey(dir));
   const out = [root];
   const walk = (dir: string) => {
     for (const e of listed(dir)?.listing?.entries ?? []) {
       const path = joinPath(dir, e.name);
-      if (e.dir && open.has(path)) {
+      if (e.dir && isOpen(path)) {
         out.push(path);
         walk(path);
       }

@@ -587,7 +587,7 @@ func (s *Service) promoteFanoutWake(ctx context.Context, sender, target string, 
 	}
 	// If another delivery into target is in flight right now, it may already have reserved Later[target]. Wait for it
 	// to settle before deciding whether a wake is still needed so we never double-wake.
-	if b.draining[target] || len(b.ownerLater[target]) > 0 {
+	if b.draining[target] || s.hasInFlightOwnerLaterLocked(target, now) {
 		b.mu.Unlock()
 		return false, now.Add(fanoutInFlightDelay), false, true
 	}

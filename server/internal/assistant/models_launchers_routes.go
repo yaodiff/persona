@@ -175,7 +175,7 @@ func (s *Service) launcherRoutes() {
 			apierr.Write(w, http.StatusConflict, i18n.Err("assistant-models_launchers.err_name_taken", i18n.Args{"name": in.Name}))
 			return
 		}
-		if err := s.sealKeyReferences(ctx, &in, false); err != nil {
+		if err := s.sealKeyReferences(ctx, &in); err != nil {
 			apierr.Write(w, http.StatusBadRequest, err)
 			return
 		}
@@ -226,6 +226,10 @@ func (s *Service) launcherRoutes() {
 			apierr.Write(w, http.StatusNotFound, i18n.Err("assistant-models_launchers.err_not_managed"))
 			return
 		}
+		if old.channelAlias != "" {
+			apierr.Write(w, http.StatusBadRequest, errChannelAlias(*old))
+			return
+		}
 		if err := s.checkScope(r.Context(), in.scopeInput); err != nil {
 			apierr.Write(w, http.StatusBadRequest, err)
 			return
@@ -234,7 +238,7 @@ func (s *Service) launcherRoutes() {
 			apierr.Write(w, http.StatusBadRequest, err)
 			return
 		}
-		if err := s.sealKeyReferences(r.Context(), &in, true); err != nil {
+		if err := s.sealKeyReferences(r.Context(), &in); err != nil {
 			apierr.Write(w, http.StatusBadRequest, err)
 			return
 		}
@@ -262,6 +266,11 @@ func (s *Service) launcherRoutes() {
 			return
 		}
 		if i := slices.IndexFunc(list, func(l storedLauncher) bool { return l.Name == name }); i >= 0 {
+			if list[i].channelAlias != "" {
+				s.models.mu.Unlock()
+				apierr.Write(w, http.StatusBadRequest, errChannelAlias(list[i]))
+				return
+			}
 			// Check dependencies, delete and publish the confirmed snapshot under the configuration lock.
 			uses, err := s.providerModelUses(withManagedSnapshot(ctx, list), launcherProvider(name))
 			if err == nil && len(uses) == 0 {
@@ -291,6 +300,7 @@ func (s *Service) launcherRoutes() {
 			apierr.Write(w, http.StatusInternalServerError, err)
 			return
 		}
+		s.invalidateLauncherListCache("")
 		apierr.WriteJSON(w, map[string]any{"ok": true, "hidden": true})
 	})
 	// "Test": one real request through the launcher on a machine (default: the assistant's).
@@ -324,6 +334,9 @@ func (s *Service) launcherRoutes() {
 		}
 		apierr.WriteJSON(w, out)
 	})
+	// "Refresh key": the provider extension is asked again for the launcher's keys that are references (the secret was
+	// rotated in it); until then what is kept answers every use (launcher_secrets.go). Never a value in the answer.
+	s.handle("POST /api/v1/launchers/{name}/refresh-key", s.refreshLauncherKey)
 	// What still names a launcher as its own (Model configuration's purposes, extensions' too, scheduled tasks, model
 	// profiles and their tiers), in words, for the hide confirmation (#4661): hiding an rc-file launcher only takes it
 	// out of the pickers, and these keep running on it.
@@ -352,6 +365,7 @@ func (s *Service) launcherRoutes() {
 			apierr.Write(w, http.StatusInternalServerError, err)
 			return
 		}
+		s.invalidateLauncherListCache("")
 		apierr.WriteJSON(w, map[string]any{"ok": true})
 	})
 }
@@ -453,6 +467,11 @@ func (s *Service) hiddenLauncherInventory(ctx context.Context, machine, name str
 	return list, known, known && slices.ContainsFunc(list, func(l proto.Launcher) bool { return l.Name == name })
 }
 
+func queryRefresh(r *http.Request) bool {
+	v := strings.TrimSpace(r.URL.Query().Get("refresh"))
+	return v == "1" || strings.EqualFold(v, "true")
+}
+
 // machineLauncherRoutes are "New Agent"'s pickers on one machine: its launchers with the agent each starts
 // (sessionLaunchers), and a launcher's /model list (node/launcher_models.go; the node keeps a list 10 minutes,
 // ?refresh=1 asks the CLI again) with the ids the user typed for it before (models_custom.go).
@@ -470,6 +489,7 @@ func (s *Service) machineLauncherRoutes() {
 		// engine that runs only its own launchers (Paseo), its providers alone (#8140). The main chat's menu lists the
 		// computer's own launchers: the assistant runs them on its command line, whatever the engine.
 		purpose := r.URL.Query().Get("purpose")
+		refresh := queryRefresh(r)
 		host := ""
 		if purpose == "" || purpose == "agent.new" {
 			host = agentStartHost(d, r.URL.Query().Get("host"))
@@ -484,9 +504,13 @@ func (s *Service) machineLauncherRoutes() {
 				// Leave a short window for own-service checks even when the shell uses its full sync timeout.
 				ctx = context.WithValue(ctx, pickerDiscoveryDeadline{}, time.Now().Add(launcherSyncTimeout+time.Second))
 			}
-			all, list, unavailable, err = s.assistantPickerLaunchers(ctx, d, r.URL.Query().Get("refresh") == "1", s.requestLang(r))
+			all, list, unavailable, err = s.assistantPickerLaunchers(ctx, d, refresh, s.requestLang(r))
 		case "task":
-			all, err = s.pickerLaunchersOn(ctx, mid, "")
+			callCtx := ctx
+			if refresh {
+				callCtx = withLauncherRefresh(ctx)
+			}
+			all, err = s.pickerLaunchersOn(callCtx, mid, "")
 			if err == nil {
 				list, err = s.assistantLaunchersOf(ctx, mid, all)
 				if err == nil {
@@ -494,7 +518,11 @@ func (s *Service) machineLauncherRoutes() {
 				}
 			}
 		default:
-			list, err = s.pickerLaunchersOn(ctx, mid, host)
+			callCtx := ctx
+			if refresh {
+				callCtx = withLauncherRefresh(ctx)
+			}
+			list, err = s.pickerLaunchersOn(callCtx, mid, host)
 			list = slices.DeleteFunc(list, func(l ConfiguredLauncher) bool {
 				return proto.IsExternalLauncher(l.Name) || l.Source == proto.ExternalLauncherSource
 			})
@@ -540,6 +568,10 @@ func (s *Service) machineLauncherRoutes() {
 			out["unavailable"] = unavailable
 		}
 		if purpose == "" || purpose == "agent.new" {
+			// where a start that keeps the default opens, when the computer starts New Agents as Orca chats (#17650)
+			if opens := s.orcaChatDefault(ctx, d, def, r.URL.Query().Get("host")); opens != nil {
+				out["default_opens"] = opens
+			}
 			usable := make([]ConfiguredLauncher, 0, len(shown))
 			for _, l := range shown {
 				usable = append(usable, l.ConfiguredLauncher)

@@ -21,7 +21,9 @@ const ManifestMost = 256 << 10
 const SecretsMost = 32
 
 var (
-	idPattern     = lazyre.New(`^[a-z0-9][a-z0-9_-]{0,31}$`)
+	idPattern = lazyre.New(`^[a-z0-9][a-z0-9_-]{0,31}$`)
+	// textLookupID is an extension-point item id that may be longer than a manifest id (up to 64).
+	textLookupID  = lazyre.New(`^[a-z0-9][a-z0-9_-]{0,63}$`)
 	secretPattern = lazyre.New(`^[a-z][a-z0-9_]{0,31}$`)
 	envPattern    = lazyre.New(`^[A-Za-z_][A-Za-z0-9_]*$`)
 	platformKey   = lazyre.New(`^[a-z0-9]+-[a-z0-9]+$`)

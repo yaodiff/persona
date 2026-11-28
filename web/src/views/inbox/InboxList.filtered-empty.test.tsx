@@ -2,6 +2,7 @@
 // Audit items 15 and 84: a list emptied by its filters or a search is not "All caught up" (no green check, a way back
 // to the whole Inbox, Clean up all names the filters instead of "Nothing to do"); while the list loads or after a failed
 // read Clean up all claims nothing, and the failure line over waiting agents has its own Retry.
+import { registerTestMailbox } from "../../test/mailbox-fixture";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -83,6 +84,8 @@ afterEach(() => {
   localStorage.clear();
 });
 
+registerTestMailbox();
+
 describe("a list emptied by its filters (audit item 15)", () => {
   it("chips that leave nothing say so, offer Clear filters, and Clean up all names them instead of 没有未处理的", async () => {
     // the chips are kept on this device: Lark and the Mail kind, which no item is both
@@ -92,10 +95,10 @@ describe("a list emptied by its filters (audit item 15)", () => {
     await flush();
     showAll();
     const empty = host.querySelector("[data-inbox-filtered-empty]");
-    expect(empty?.textContent).toContain("没有符合筛选的未处理条目");
-    expect(host.textContent).not.toContain("都处理完了");
+    expect(empty?.textContent).toContain("没有符合筛选条件的未处理消息");
+    expect(host.textContent).not.toContain("已全部处理完毕");
     expect(host.querySelector(".bg-green-tint")).toBeNull();
-    expect(cleanAll().textContent).not.toContain("没有未处理的");
+    expect(cleanAll().textContent).not.toContain("暂无待处理事项");
     expect(cleanAll().textContent).toContain("飞书 · 邮件");
     expect(cleanAll().disabled).toBe(true);
 
@@ -114,7 +117,7 @@ describe("a list emptied by its filters (audit item 15)", () => {
     expect(localStorage.getItem("inbox.kind")).toBeNull();
     expect(host.querySelector("[data-inbox-filtered-empty]")).toBeNull();
     expect(rows()).toEqual(["l1", "m1"]);
-    expect(cleanAll().textContent).toContain("全部 · 2 件");
+    expect(cleanAll().textContent).toContain("全部 · 2 项");
   });
 
   it("keeps only one 全部 button across the Inbox header and renders filters on a single non-wrapping row", async () => {
@@ -148,9 +151,9 @@ describe("a list emptied by its filters (audit item 15)", () => {
     showAll();
     await typeSearch("zzzz");
     const empty = host.querySelector("[data-inbox-filtered-empty]");
-    expect(empty?.textContent).toContain("没有匹配的");
+    expect(empty?.textContent).toContain("无匹配结果");
     expect(host.querySelector(".bg-green-tint")).toBeNull();
-    expect(cleanAll().textContent).not.toContain("没有未处理的");
+    expect(cleanAll().textContent).not.toContain("暂无待处理事项");
 
     const clear = button("清除搜索")!;
     act(() => clear.focus());
@@ -165,9 +168,9 @@ describe("a list emptied by its filters (audit item 15)", () => {
     hub.items = [];
     act(() => root.render(<InboxList />));
     await flush();
-    expect(host.textContent).toContain("都处理完了");
+    expect(host.textContent).toContain("已全部处理完毕");
     expect(host.querySelector("[data-inbox-filtered-empty]")).toBeNull();
-    expect(cleanAll().textContent).toContain("没有未处理的");
+    expect(cleanAll().textContent).toContain("暂无待处理事项");
   });
 });
 
@@ -189,7 +192,7 @@ describe("Clean up all before the list is known (audit item 84)", () => {
       await flush();
       expect(cleanAll().textContent?.trim()).toBe("全部清理");
       const line = host.querySelector("[data-inbox-read-failed]");
-      expect(line?.textContent).toContain("连不上 hub");
+      expect(line?.textContent).toContain("无法连接 hub");
       expect(host.textContent).toContain("改登录页");
 
       hub.mode = "ok";
@@ -199,7 +202,7 @@ describe("Clean up all before the list is known (audit item 84)", () => {
       await flush();
       expect(hub.calls.filter((c) => c.startsWith("/inbox?")).length).toBe(before + 1);
       expect(host.querySelector("[data-inbox-read-failed]")).toBeNull();
-      expect(cleanAll().textContent).toContain("全部 · 2 件");
+      expect(cleanAll().textContent).toContain("全部 · 2 项");
     } finally {
       fakeStore.waiting = false;
     }

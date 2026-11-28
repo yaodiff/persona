@@ -59,8 +59,13 @@ func (c *conversation) readApp() {
 		switch msg.Type {
 		case "interrupt":
 			c.mu.Lock()
-			c.dropAudio, c.lastAudio, c.cutAt = true, time.Now(), time.Time{}
-			c.pace.playEnd = c.lastAudio // the app drops what it had not played
+			now := time.Now()
+			c.dropAudio, c.lastAudio, c.cutAt = true, now, time.Time{}
+			c.pace.playEnd = now // the app drops what it had not played
+			c.barge = barge{}
+			if c.tts != nil {
+				c.ttsCutLocked(now, false) // clear and closeReply happen right below
+			}
 			c.closeAsst()
 			c.sendApp(map[string]any{"type": "clear"})
 			c.closeReply(true)
@@ -128,9 +133,11 @@ func (c *conversation) frameLen(n int) time.Duration {
 }
 
 // cutIn takes a frame of the app's audio, n bytes long, voiced or not (mu held): the user talking over the model's
-// speech for bargeMin drops what the app has not played of it (gate.go "Barging in"). Protocol 2 only, and only on
-// an upstream that does not say when the model is cut in on (signals): there clear follows its word. Protocol 1 does
-// as it always did (a clear when the upstream says so, or the app asks).
+// speech for bargeMin drops what the app has not played of it (gate.go "Barging in"). Protocol 2 only. For non-TTS
+// calls this runs only on an upstream that does not signal its own interruptions (signals): there clear follows its
+// word. With external TTS, the upstream finishes its text seconds before TTS speech finishes playing, so the energy
+// rule stays armed whenever TTS is still active or playing (unless echo_cancellation is false, where speaker echo
+// would otherwise cut TTS off). Protocol 1 does as it always did.
 func (c *conversation) cutIn(now time.Time, voiced bool, n int) {
 	if c.version < 2 || c.p == nil {
 		return
@@ -139,7 +146,24 @@ func (c *conversation) cutIn(now time.Time, voiced bool, n int) {
 	if rate <= 0 {
 		return
 	}
-	talked := c.barge.add(voiced, time.Duration(n/2)*time.Second/time.Duration(rate))
+	d := time.Duration(n/2) * time.Second / time.Duration(rate)
+	if c.tts != nil {
+		if c.gate.echoes || !c.ttsPlaying(now) {
+			c.barge = barge{}
+			return
+		}
+		talked := c.barge.add(voiced, d)
+		if talked < bargeMin {
+			return
+		}
+		c.logf("the user cut in on the model (%v of voice): TTS speech is dropped", talked.Round(10*time.Millisecond))
+		c.barge = barge{}
+		c.pace.playEnd = now // the app drops what it had not played
+		c.ttsCutLocked(now, true)
+		c.closeAsst()
+		return
+	}
+	talked := c.barge.add(voiced, d)
 	if talked < bargeMin || c.signals || c.dropAudio || !now.Before(c.pace.playEnd) {
 		return
 	}

@@ -183,9 +183,11 @@ func TestSessionCatalogGroupsARepositoryAcrossComputers(t *testing.T) {
 	if !reflect.DeepEqual(got.Projects, want) {
 		t.Fatalf("projects:\n got %+v\nwant %+v", got.Projects, want)
 	}
+	// A space's folder is the one most of its rows are in, the first listed among equals (TestSessionCatalogSpaceFolder).
 	wantSpaces := []catalogSpace{
-		{MachineID: "mac", ID: "w1", Name: "Release", Total: 2, NeedsYou: 1}, {MachineID: "pc", ID: "ws-9", Name: "ws-9", Total: 2},
-		{MachineID: "pc", ID: "w1", Name: "Desk", Total: 1}, {MachineID: "mac", ID: "w2", Name: "Writing", Total: 1},
+		{MachineID: "mac", ID: "w1", Name: "Release", Path: "/Users/me/code/app/web", Total: 2, NeedsYou: 1},
+		{MachineID: "pc", ID: "ws-9", Name: "ws-9", Path: `D:\work\Notes`, Total: 2},
+		{MachineID: "pc", ID: "w1", Name: "Desk", Path: `C:\code\App`, Total: 1}, {MachineID: "mac", ID: "w2", Name: "Writing", Path: "/Users/me/notes", Total: 1},
 		// each computer's rows in no space, last
 		{MachineID: "nas", Total: 2}, {MachineID: "mac", Total: 1},
 	}
@@ -220,6 +222,32 @@ func TestSessionCatalogGroupsARepositoryAcrossComputers(t *testing.T) {
 	}
 	if projects != got.Total || spaces != got.Total {
 		t.Fatalf("projects hold %d, spaces %d of %d", projects, spaces, got.Total)
+	}
+}
+
+// A space says the folder its rows are in: workspace_cwd, else cwd, the one most of its listed rows are in, the first
+// of them among equals; an archived row's only when no listed row says one; none for a space no row places, nor for the
+// rows in no space.
+func TestSessionCatalogSpaceFolder(t *testing.T) {
+	h := newTestHub(t)
+	m := catalogMachine(h, "box", nil,
+		proto.Session{SessionID: "s1", Cwd: "/srv/app/web", WorkspaceCwd: "/srv/app", SpaceID: "w1", SpaceName: "app"},
+		proto.Session{SessionID: "s2", Cwd: "/srv/other", SpaceID: "w1", SpaceName: "app"},
+		proto.Session{SessionID: "s3", Cwd: "/srv/app", SpaceID: "w1", SpaceName: "app"},
+		proto.Session{SessionID: "s4", Cwd: "/srv/b", SpaceID: "w2", SpaceName: "tie"},
+		proto.Session{SessionID: "s5", Cwd: "/srv/a", SpaceID: "w2", SpaceName: "tie"},
+		proto.Session{SessionID: "s6", SpaceID: "w3", SpaceName: "old"},
+		proto.Session{SessionID: "s7", SpaceID: "w4", SpaceName: "nowhere"},
+		proto.Session{SessionID: "s8", Cwd: "/srv/loose"},
+	)
+	m.archived = []proto.Session{{MachineID: "box", SessionID: "a1", Cwd: "/srv/old", SpaceID: "w3", SpaceName: "old"}}
+	got := map[string]string{}
+	for _, sp := range readCatalog(t, h, "").Spaces {
+		got[sp.ID] = sp.Path
+	}
+	want := map[string]string{"w1": "/srv/app", "w2": "/srv/b", "w3": "/srv/old", "w4": "", "": ""}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("space folders %v, want %v", got, want)
 	}
 }
 

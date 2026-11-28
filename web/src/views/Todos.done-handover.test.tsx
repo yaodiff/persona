@@ -91,7 +91,7 @@ describe("交给 Agent 与待办是否完成", () => {
     await show("t2");
     expect(button("交给 Agent")).toBeUndefined();
     expect(button("重新打开")).toBeTruthy();
-    expect(document.body.textContent).toContain("现在没有 Agent 在做。要交给 Agent，先重新打开。");
+    expect(document.body.textContent).toContain("当前没有 Agent 在处理此待办。如需交给 Agent，请先重新打开。");
     expect(document.body.textContent).not.toContain("点击下方按钮开始");
   });
 

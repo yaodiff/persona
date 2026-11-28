@@ -45,6 +45,8 @@ class GroupStack internal constructor(
     internal val actions: ChatActions by lazy { HttpChatActions(connection).inGroup(names) }
     /** Successful manager snapshots follow this pairing across refreshed HTTP routes. */
     internal val metricSnapshots = HttpMachineMetricsApi.Cache()
+    /** The single TasksStore shared by shell badges, the To-dos page and chat bindings for this hub group. */
+    val tasks: persona.core.domain.tasks.TasksStore? get() = plainBindings.tasks
     val current: Boolean get() = group.data === data && group.active
 }
 

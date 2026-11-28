@@ -5,6 +5,7 @@ import SwiftUI
 struct FeishuBotView: View {
     @State private var model = FeishuBotModel()
     @State private var sync = LarkSyncModel()
+    @State private var groupAccess = FeishuGroupAccessModel()
     @State private var confirmUnpair = false
 
     var body: some View {
@@ -15,6 +16,10 @@ struct FeishuBotView: View {
             if model.status?.hasSecret == true {
                 pairingSection
                 featuresSection
+                // Who else may @ the bot in a group (#16848): only once it is paired, and only when the hub has the route.
+                if model.status?.owner != nil {
+                    FeishuGroupAccessSections(model: groupAccess)
+                }
             }
             if let agents = model.status?.agents, !agents.isEmpty {
                 Section("Agents You've Chatted With in Lark") {
@@ -32,9 +37,11 @@ struct FeishuBotView: View {
         .navigationBarTitleDisplayMode(.inline)
         .task { await model.load() }
         .task(id: model.status?.appID) { await sync.load() } // the chat bot's app, read again when it changes
+        .task(id: model.status?.owner?.pairedAt) { await groupAccess.load() } // paired, or paired again: read group access
         .refreshable {
             await model.load()
             await sync.load()
+            await groupAccess.load()
         }
         .task(id: model.status?.pairing?.code) { // waiting for the code: look again until it is used
             guard model.status?.pairing != nil else { return }

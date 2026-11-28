@@ -1,0 +1,20 @@
+{
+  "state_open": "Open",
+  "state_accepted": "Accepted",
+  "state_not_accepted": "Not accepted",
+  "why_self": "Can’t go under itself",
+  "why_below": "It’s under this project",
+  "why_here": "Already here",
+  "warn_deep": "{levels} levels: deeper than the suggested {suggested}",
+  "flag_accepted": "Accepted",
+  "flag_not_accepted": "Not accepted",
+  "no_tag": "No tag",
+  "also_under_one": "Also under {count} more tag",
+  "also_under_other": "Also under {count} more tags",
+  "sub_count_one": "{count} sub-project",
+  "sub_count_other": "{count} sub-projects",
+  "root": "Projects",
+  "root_by_tag": "By tag",
+  "root_count_one": "{count} project",
+  "root_count_other": "{count} projects"
+}

@@ -4,6 +4,7 @@ package workspacenaming
 
 import (
 	"bytes"
+	"cmp"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -264,6 +265,8 @@ type Source struct {
 	RuleSources  map[string]string                  `json:"rule_sources,omitempty"`
 	Layout       repositorywire.Layout              `json:"layout"`
 	Repositories repositorywire.PreparationSnapshot `json:"repository_snapshot"`
+	// TaskBranch is the literal branch explicitly requested for a single checkout.
+	TaskBranch string `json:"task_branch,omitempty"`
 }
 type NodeContext struct {
 	Home        string `json:"home"`
@@ -288,10 +291,36 @@ type Plan struct {
 	Digest       string           `json:"digest"`
 }
 type Preview struct {
-	Status      string    `json:"status"`
-	Sample      bool      `json:"sample"`
-	Plan        *Plan     `json:"plan,omitempty"`
-	Diagnostics []Problem `json:"diagnostics"`
+	Status         string         `json:"status"`
+	Sample         bool           `json:"sample"`
+	Plan           *Plan          `json:"plan,omitempty"`
+	Diagnostics    []Problem      `json:"diagnostics"`
+	SystemDefaults *Rules         `json:"system_defaults,omitempty"`
+	BranchSources  []BranchSource `json:"branch_sources,omitempty"`
+}
+
+type BranchSource = repositorywire.BranchSource
+
+func branchSource(repo repositorywire.PreparationRepository) BranchSource {
+	id := repositorywire.RepositoryID(repo.RepoID)
+	switch repo.RequestedRef.Kind {
+	case "default", "":
+		return BranchSource{RepoID: id, Kind: repositorywire.BranchRepositoryDefault}
+	case "branch":
+		return BranchSource{RepoID: id, Kind: repositorywire.BranchExplicit, Branch: strings.TrimPrefix(repo.RequestedRef.Value, "refs/heads/")}
+	default:
+		return BranchSource{RepoID: id, Kind: repositorywire.BranchOtherRef}
+	}
+}
+
+// Describe supplies preview metadata independently of the target Node version.
+func (p *Preview) Describe(s Source) {
+	p.SystemDefaults = new(Defaults())
+	p.BranchSources = nil
+	for _, repo := range s.Repositories.Repositories {
+		p.BranchSources = append(p.BranchSources, branchSource(repo))
+	}
+	slices.SortFunc(p.BranchSources, func(a, b BranchSource) int { return cmp.Compare(a.RepoID, b.RepoID) })
 }
 
 func (p *Preview) add(code, field, repo, severity string) {
@@ -324,8 +353,34 @@ func InPrivateState(path, state string) bool { return within(state, path) }
 // Resolve never reads the clock, filesystem, Git, environment or network. Node
 // supplies its own path context. Paths are lexical, not ownership attestation.
 func Resolve(s Source, n NodeContext) Preview {
+	return ResolveWithPhysicalHome(s, n, n.Home)
+}
+
+// PhysicalHomePath substitutes only the configured home prefix. Any remaining
+// symlinks and non-clean source paths must reach the node's path checks intact.
+func PhysicalHomePath(path, home, physicalHome string) string {
+	if home == physicalHome || !filepath.IsAbs(home) || !filepath.IsAbs(physicalHome) ||
+		!filepath.IsAbs(path) || path != filepath.Clean(path) {
+		return path
+	}
+	rel, err := filepath.Rel(home, path)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+		return path
+	}
+	return filepath.Join(physicalHome, rel)
+}
+
+// ResolveWithPhysicalHome uses the node-supplied physical prefix to derive each
+// workspace path before checking its length and freezing the plan. The original
+// context and rules stay in the snapshot, including for previously valid plans.
+func ResolveWithPhysicalHome(s Source, n NodeContext, physicalHome string) Preview {
 	p := Preview{Status: "complete", Diagnostics: []Problem{}}
-	if err := Validate(s.Rules); err != nil {
+	p.Describe(s)
+	rules := s.Rules
+	if len(s.Repositories.Repositories) == 0 || s.TaskBranch != "" {
+		rules.BranchTemplate = ""
+	}
+	if err := Validate(rules); err != nil {
 		e := err.(Problem)
 		p.add(e.Code, e.Field, "", "error")
 		return p
@@ -379,6 +434,7 @@ func Resolve(s Source, n NodeContext) Preview {
 		p.add("base_scope_denied", "base_directory", "", "error")
 		return p
 	}
+	base = PhysicalHomePath(base, n.Home, physicalHome)
 	rel, err := expand(s.Rules.TaskDirectoryTemplate, "task_directory_template", values, false)
 	if err != nil {
 		e := err.(Problem)
@@ -398,8 +454,12 @@ func Resolve(s Source, n NodeContext) Preview {
 		p.add("path_too_long", "task_directory_template", "", "error")
 		return p
 	}
-	if s.Layout != repositorywire.LayoutRoot && s.Layout != repositorywire.LayoutContainer || s.Layout == repositorywire.LayoutRoot && len(s.Repositories.Repositories) != 1 {
+	if !repositorywire.ValidLayout(s.Layout, len(s.Repositories.Repositories)) {
 		p.add("layout_invalid", "layout", "", "error")
+		return p
+	}
+	if s.TaskBranch != "" && len(s.Repositories.Repositories) != 1 {
+		p.add("branch_invalid", "branch_template", "", "error")
 		return p
 	}
 	plan := Plan{Version: Version, Source: s, Node: n, TaskSlug: slug, BasePath: base, RootPath: root, Repositories: []RepositoryPlan{}}
@@ -438,19 +498,21 @@ func Resolve(s Source, n NodeContext) Preview {
 		v["repo"] = alias
 		v["branch"] = ""
 		v["base-branch"] = ""
-		if repo.RequestedRef.Kind == "branch" {
-			branch := strings.TrimPrefix(repo.RequestedRef.Value, "refs/heads/")
+		if branch := branchSource(repo).Branch; branch != "" {
 			v["branch"] = fragment(branch, 0)
 			v["base-branch"] = v["branch"]
 			if v["branch"] != branch && (strings.Contains(s.Rules.BranchTemplate, "{branch}") || strings.Contains(s.Rules.BranchTemplate, "{base-branch}")) {
 				p.add("fragment_normalized", "branch_template", repo.RepoID, "warning")
 			}
 		}
-		branch, err := expand(s.Rules.BranchTemplate, "branch_template", v, false)
-		if err != nil {
-			e := err.(Problem)
-			p.add(e.Code, e.Field, repo.RepoID, "error")
-			continue
+		branch := s.TaskBranch
+		if branch == "" {
+			branch, err = expand(s.Rules.BranchTemplate, "branch_template", v, false)
+			if err != nil {
+				e := err.(Problem)
+				p.add(e.Code, e.Field, repo.RepoID, "error")
+				continue
+			}
 		}
 		if _, err = repositorywire.NormalizeRef(repositorywire.RequestedRef{Kind: "branch", Value: branch}); err != nil {
 			p.add("branch_invalid", "branch_template", repo.RepoID, "error")
@@ -485,6 +547,18 @@ func Digest(p Plan) string {
 // CheckPlan checks a frozen snapshot's version and integrity. It must not resolve
 // paths again: a manager may run on a different OS than the target Node.
 func CheckPlan(p Plan) error {
+	if len(p.Repositories) != len(p.Source.Repositories.Repositories) || !repositorywire.ValidLayout(p.Source.Layout, len(p.Repositories)) {
+		return problem("layout_invalid", "layout")
+	}
+	for _, repo := range p.Source.Repositories.Repositories {
+		if repo.Local == nil {
+			continue
+		}
+		snapshot, err := repositorywire.LocalSnapshot(p.Source.Manager, p.Source.TodoID, repo)
+		if err != nil || p.Source.Layout != repositorywire.LayoutRoot || snapshot.Digest != p.Source.Repositories.Digest {
+			return problem("repository_invalid", "repositories")
+		}
+	}
 	if p.Version != Version || p.Digest == "" || p.Digest != Digest(p) {
 		return problem("plan_invalid", "plan")
 	}

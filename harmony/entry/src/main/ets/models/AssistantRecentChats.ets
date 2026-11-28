@@ -23,6 +23,9 @@ export class ScheduledChatOrigins {
     const match = /^\s*[0-9]{4}\s*\|\s*定时\s*\|\s*(.+?)\s*$/.exec(row.title);
     return !!match && this.topics.some((topic:string) => topic.startsWith(match[1]) || match[1].startsWith(topic));
   }
+  taskSessionIds(rows: readonly ResourceRow[]): string[] {
+    return rows.filter((row: ResourceRow) => this.contains(row)).map((row: ResourceRow) => row.session || row.id);
+  }
 }
 
 export class SidebarChats {

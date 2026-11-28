@@ -362,23 +362,24 @@ struct RecordingDayStoreTests {
     @Test func aChunkAfterTheDaysAudioDeadlineIsSettledAsLost() async throws {
         let f = Fixture()
         defer { f.cleanUp() }
-        // The earliest of 7 days after the day, `recording_days` after it, and 3 days after its final recap.
+        // The earliest of 7 days after the day, `audio_days` after it, and 3 days after its final recap.
         var record = RecordingDayRecord(header: f.header(0))
         #expect(record.dayEnd == shanghaiMidnight)
-        #expect(record.audioDeadline(recordingDays: nil) == shanghaiMidnight.addingTimeInterval(7 * day))
-        #expect(record.audioDeadline(recordingDays: 2) == shanghaiMidnight.addingTimeInterval(2 * day))
+        #expect(record.audioDeadline(audioDays: nil) == shanghaiMidnight.addingTimeInterval(7 * day))
+        #expect(record.audioDeadline(audioDays: 0) == shanghaiMidnight.addingTimeInterval(7 * day), "forever keeps the 7-day maximum")
+        #expect(record.audioDeadline(audioDays: 2) == shanghaiMidnight.addingTimeInterval(2 * day))
         record.parts = [RecordingDayPart(hubID: f.id, part: 1, startedAt: anchor, recapFinalAt: shanghaiMidnight.addingTimeInterval(3600))]
-        #expect(record.audioDeadline(recordingDays: 14) == shanghaiMidnight.addingTimeInterval(3600 + 3 * day))
+        #expect(record.audioDeadline(audioDays: 14) == shanghaiMidnight.addingTimeInterval(3600 + 3 * day))
         // A part without its final recap yet holds the 3-day clock back: the audio serves every part.
         record.parts.append(RecordingDayPart(hubID: UUID(), part: 2, startedAt: anchor))
-        #expect(record.audioDeadline(recordingDays: 14) == shanghaiMidnight.addingTimeInterval(7 * day))
+        #expect(record.audioDeadline(audioDays: 14) == shanghaiMidnight.addingTimeInterval(7 * day))
 
         // Within the hub's 2 days the chunk is kept; a minute past them it is acknowledged, discarded and lost.
         let early = f.store(now: shanghaiMidnight.addingTimeInterval(2 * day - 60))
-        early.useRecordingDays(2)
+        early.useAudioDays(2)
         #expect(try early.store(header: f.header(0), audio: f.audio(0)) == .stored)
         let late = f.store(now: shanghaiMidnight.addingTimeInterval(2 * day + 60))
-        late.useRecordingDays(2)
+        late.useAudioDays(2)
         #expect(try late.store(header: f.header(1, at: 10), audio: f.audio(1)) == .settled)
         #expect(!f.exists("seg-001.m4a") && f.exists("seg-001.json"))
         #expect(try f.sidecar(1).settled == .lost)
@@ -1149,7 +1150,7 @@ struct RecordingDayStoreTests {
         #expect(!consent.agreed && consent.agreedVersion == nil && consent.agreedAt == nil)
 
         var sent: [RecordingDayCapabilities] = []
-        let capabilities = RecordingDayPhoneCapabilities(consent: consent, store: store, hub: false, recordingDays: nil,
+        let capabilities = RecordingDayPhoneCapabilities(consent: consent, store: store, hub: false, audioDays: nil,
                                                          send: { sent.append($0) })
         capabilities.start()
         #expect(sent == [RecordingDayCapabilities(consent: false, hub: false, keepDays: 7)])
@@ -1163,24 +1164,29 @@ struct RecordingDayStoreTests {
         #expect(sent.count == 2, "agreeing again changes nothing")
         #expect(RecordingDayConsent(defaults: defaults).agreed, "kept for the next launch")
 
-        // The hub flag and the hub's retention, each pushed when it changes: keep days are min(7, recording_days).
+        // The hub flag and the hub's audio retention, each pushed when it changes: keep days are min(7, audio_days).
         capabilities.hubChanged(offered: true)
         capabilities.hubChanged(offered: true)
-        capabilities.recordingDaysChanged(3)
-        capabilities.recordingDaysChanged(30)
+        capabilities.audioDaysChanged(3)
+        capabilities.audioDaysChanged(30)
         #expect(Array(sent.dropFirst(2)) == [RecordingDayCapabilities(consent: true, hub: true, keepDays: 7),
                                              RecordingDayCapabilities(consent: true, hub: true, keepDays: 3),
                                              RecordingDayCapabilities(consent: true, hub: true, keepDays: 7)])
 
         // The store's audio deadline counts the same retention: a day after a one-day retention ran out, a chunk is lost.
-        capabilities.recordingDaysChanged(1)
+        capabilities.audioDaysChanged(1)
         #expect(try store.store(header: f.header(0), audio: f.audio(0)) == .settled)
 
         // An agreement a newer build stored counts; one to an older sheet would ask again.
         defaults.set(RecordingDayConsent.version + 1, forKey: RecordingDayConsent.versionKey)
         #expect(RecordingDayConsent(defaults: defaults).agreed)
         defaults.set(RecordingDayConsent.version - 1, forKey: RecordingDayConsent.versionKey)
-        #expect(!RecordingDayConsent(defaults: defaults).agreed)
+        let upgraded = RecordingDayConsent(defaults: defaults)
+        #expect(!upgraded.agreed)
+        // A version bump asks again, but the phone still tells the watch it takes day recordings: 0, never nothing.
+        // A recording that started under the older sheet then goes on under it (`WatchPhoneCapabilities.takesDays`).
+        let afterUpgrade = RecordingDayPhoneCapabilities(consent: upgraded, store: store, hub: false, audioDays: nil, send: { _ in })
+        #expect(afterUpgrade.current.context[RecordingDayContract.phoneKey] as? Int == 0)
     }
 }
 
@@ -1252,7 +1258,7 @@ struct RecordingDayIntakeTests {
                           deletes: @escaping (RecordingDayDelete) -> Void = { _ in },
                           retain: @escaping () -> Void = {}) -> RecordingDayReceiver {
         let consent = RecordingDayConsent(defaults: UserDefaults(suiteName: "recording-day-receiver-\(f.id.uuidString)") ?? .standard)
-        let capabilities = RecordingDayPhoneCapabilities(consent: consent, store: store, hub: false, recordingDays: nil, send: { _ in })
+        let capabilities = RecordingDayPhoneCapabilities(consent: consent, store: store, hub: false, audioDays: nil, send: { _ in })
         return RecordingDayReceiver(store: store, library: library, summaries: RecordingDaySummaries(store: store, hubOffered: { false }),
                                     capabilities: capabilities, sendErase: erases, sendDelete: deletes, retain: retain, now: now)
     }

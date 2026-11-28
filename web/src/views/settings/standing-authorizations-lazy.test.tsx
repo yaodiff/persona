@@ -41,6 +41,9 @@ it("keeps the other settings groups when the standing authorizations import fail
     if (path.endsWith("/assistant")) return Response.json({ manager: "assistant", notes: "", agent_tasks: false });
     if (path.endsWith("/tasks")) return Response.json({ tasks: [] });
     if (path.endsWith("/memory")) return Response.json({ files: [] });
+    if (path.endsWith("/assistant/leaders")) return Response.json({ leaders: [] });
+    if (path.endsWith("/assistant/outbound-messages")) return Response.json({ identity: "bot" });
+    if (path.endsWith("/assistant/standing-authorizations")) return Response.json({ revision: 0, authorizations: [] });
     throw new Error(`Unexpected path: ${path}`);
   }));
   const host = document.createElement("div"); document.body.append(host);
@@ -53,6 +56,7 @@ it("keeps the other settings groups when the standing authorizations import fail
       expect(host.textContent).toContain(t("settings-nav.tab_model_config"));
       expect(host.querySelector(`select[aria-label="${t("settings-assistantsettings.default_permissions")}"]`)).not.toBeNull();
       expect(host.querySelector("textarea")).not.toBeNull();
+      expect(host.querySelector<HTMLSelectElement>(`select[aria-label="${t("settings-outbound.identity")}"]`)?.value).toBe("bot");
       expect(reportBoundary).toHaveBeenCalledWith(expect.objectContaining({ cause: expect.any(TypeError) }), "page_boundary", false, expect.any(String));
     }, { timeout: 20_000 });
   } finally {

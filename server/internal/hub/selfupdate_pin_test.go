@@ -43,11 +43,16 @@ func pinRelease(t *testing.T, version string, build int64, pad string) map[strin
 	file := func(name string, body []byte) update.File {
 		packed := gz(body)
 		outer, inner := sha256.Sum256(packed), sha256.Sum256(body)
-		files[name] = packed
-		return update.File{Name: name, Size: int64(len(packed)), SHA256: hex.EncodeToString(outer[:]), BinarySHA256: hex.EncodeToString(inner[:])}
+		served := update.ThisEdition.Served(name)
+		files[served] = packed
+		f := update.File{Name: name, Size: int64(len(packed)), SHA256: hex.EncodeToString(outer[:]), BinarySHA256: hex.EncodeToString(inner[:])}
+		if update.ThisEdition.Marker() != "" {
+			f.Served = served
+		}
+		return f
 	}
 	script := pinScript(version, build, pad)
-	m := update.Manifest{Version: version, Build: build, Protocol: proto.Protocol, Released: time.Now().UTC().Truncate(time.Second),
+	m := update.Manifest{Version: version, Build: build, Protocol: proto.Protocol, Released: time.Now().UTC().Truncate(time.Second), Edition: update.ThisEdition.Marker(),
 		Files: map[string]update.File{
 			own:             file("personad-"+own+".gz", script),
 			pinNodePlatform: file("personad-"+pinNodePlatform+".gz", []byte("node build of "+version+"\n"+pad)),
@@ -57,7 +62,7 @@ func pinRelease(t *testing.T, version string, build int64, pad string) map[strin
 	if err != nil {
 		t.Fatal(err)
 	}
-	files["latest.json"] = data
+	files[update.FeedName(update.ThisEdition)] = data
 	return files
 }
 
@@ -102,8 +107,9 @@ func TestUpdateInstallsTheCheckedReleaseFromItsTag(t *testing.T) {
 	}
 	own := runtime.GOOS + "-" + runtime.GOARCH
 	for _, name := range []string{"personad-" + own + ".gz", "persona-hub-" + own + ".gz", "personad-" + pinNodePlatform + ".gz"} {
-		if got := src.Fetched(name); !slices.Equal(got, []string{updatetest.TagPath("v0.6.1", name)}) {
-			t.Fatalf("%s fetched from %v", name, got)
+		served := update.ThisEdition.Served(name)
+		if got := src.Fetched(served); !slices.Equal(got, []string{updatetest.TagPath("v0.6.1", served)}) {
+			t.Fatalf("%s fetched from %v", served, got)
 		}
 	}
 	var pend update.Pending
@@ -145,11 +151,12 @@ func TestUpdateAfterANewerReleaseFromAMovingSource(t *testing.T) {
 		t.Fatalf("offers %+v", v.Latest)
 	}
 	own := "personad-" + runtime.GOOS + "-" + runtime.GOARCH + ".gz"
-	if got := src.Fetched(own); len(got) != 1 {
+	if got := src.Fetched(update.ThisEdition.Served(own)); len(got) != 1 {
 		t.Fatalf("fetched %v", got)
 	}
-	if got := src.Fetched("latest.json"); len(got) != 2 {
-		t.Fatalf("latest.json read %v, want the check and once more", got)
+	feed := update.FeedName(update.ThisEdition)
+	if got := src.Fetched(feed); len(got) != 2 {
+		t.Fatalf("%s read %v, want the check and once more", feed, got)
 	}
 	if hs := failures(); len(hs) != 1 || hs[0].Result != "failed" || hs[0].ToVersion != "0.6.1" {
 		t.Fatalf("history %+v", hs)
@@ -176,7 +183,8 @@ func TestUpdateBrokenDownloadStillMismatches(t *testing.T) {
 	src := updatetest.NewReleases(t)
 	files := pinRelease(t, "0.6.1", 202611160928, "")
 	own := "personad-" + runtime.GOOS + "-" + runtime.GOARCH + ".gz"
-	files[own] = append(bytes.Clone(files[own]), "garbage"...)
+	servedOwn := update.ThisEdition.Served(own)
+	files[servedOwn] = append(bytes.Clone(files[servedOwn]), "garbage"...)
 	src.Publish("v0.6.1", files, true)
 	h, target, execs := releasesHub(t, src, src.DL())
 	ctx := context.Background()
@@ -193,7 +201,7 @@ func TestUpdateBrokenDownloadStillMismatches(t *testing.T) {
 	if v := h.upd.view(); !strings.Contains(v.Error, "does not match the release's manifest") || v.Latest == nil || v.Latest.Version != "0.6.1" {
 		t.Fatalf("error %q, offers %+v", v.Error, v.Latest)
 	}
-	if got := src.Fetched(own); len(got) != 1 {
+	if got := src.Fetched(servedOwn); len(got) != 1 {
 		t.Fatalf("fetched %v", got)
 	}
 }

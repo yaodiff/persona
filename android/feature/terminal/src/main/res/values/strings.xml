@@ -61,18 +61,18 @@
     <!-- The font size steps: the same in every language (a full-width plus, as the minus beside it). -->
     <string name="terminal_font_down" translatable="false">A−</string>
     <string name="terminal_font_up" translatable="false">A＋</string>
-    <string name="terminal_panes_title">Terminal</string>
-    <string name="terminal_panes_summary">Agents and plain shells open as terminals. While you have control, the pane takes the phone\'s size and goes back when you leave.</string>
+    <string name="terminal_panes_title">Tabs</string>
+    <string name="terminal_panes_summary">Open a tab to use its terminal. While you have control, the terminal fits your phone and returns to its original size when you leave.</string>
     <string name="terminal_panes_refresh">Refresh list</string>
     <string name="terminal_panes_offline">Offline</string>
     <string name="terminal_panes_loading">Loading…</string>
-    <string name="terminal_panes_no_panes">No terminals open on this computer.</string>
-    <string name="terminal_panes_no_panes_agent">Terminals open here when an Agent starts on this computer.</string>
+    <string name="terminal_panes_no_panes">No tabs open on this computer.</string>
+    <string name="terminal_panes_no_panes_agent">Tabs appear here when an agent starts on this computer.</string>
     <string name="terminal_panes_no_computers">No computers yet</string>
-    <string name="terminal_panes_no_computers_detail">Connect a computer and its terminals show up here.</string>
+    <string name="terminal_panes_no_computers_detail">Connect a computer to see its tabs here.</string>
     <string name="terminal_panes_tab">Tab %1$s</string>
-    <string name="terminal_panes_untitled">Terminal</string>
+    <string name="terminal_panes_untitled">Shell</string>
     <string name="terminal_panes_new_tab">New tab</string>
-    <string name="terminal_panes_new_terminal">New Terminal</string>
+    <string name="terminal_panes_new_terminal">New shell</string>
     <string name="terminal_panes_new_tab_failed">Couldn\'t open a new tab: %1$s</string>
 </resources>

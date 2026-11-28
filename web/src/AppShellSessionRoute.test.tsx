@@ -225,6 +225,13 @@ describe("the shell's session links", () => {
     expect(drawn.chatSid).toBe("remote-kid");
   });
 
+  it.each(["asst-parent", "mate"])("keeps a standalone terminal link on the exact session %s", async (sid) => {
+    const path = `/s/mac/${sid}?view=term&standalone=1`;
+    await open(path);
+    expect(location.pathname + location.search).toBe(path);
+    expect(drawn.chatSid).toBe(sid);
+  });
+
   it("an unlisted child opens as itself until its row says whose it is", async () => {
     await open("/s/mac/kid2");
     expect(drawn.chatSid).toBe("kid2");

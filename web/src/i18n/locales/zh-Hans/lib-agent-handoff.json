@@ -1,5 +1,5 @@
 {
   "context": "机器：{machine}（{machine_id}）\n会话：{session}\n目录：{cwd}\n状态：{state}",
-  "last_said": "最后说的：{text}",
-  "ask": "看一下这个 Agent（agent_read）：它在做什么、做到哪了、有没有在等我。它属于哪个项目就把进展记进项目（kb_update，没登记目录的顺便登记 dirs）；需要我拍板的列出来，能替我推进的直接推进。"
+  "last_said": "最后一条消息：{text}",
+  "ask": "请查看这个 Agent（agent_read）：了解它正在做什么、进展如何、是否需要我处理。将其进展记录到所属项目中（使用 kb_update，若尚未登记目录请一并登记 dirs）。列出需要我决策的事项，其余你能代为推进的部分请直接推进。"
 }

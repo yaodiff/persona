@@ -81,7 +81,7 @@ export default function TakeoverAction({
       const result = await api<CodexTakeoverPlan>(path);
       setPlan(result);
       if (!result.can_resume) return;
-      if (result.running) { setConfirmStop(true); return; }
+      if (result.running || result.app_owned) { setConfirmStop(true); return; }
       await commit(result, false);
     } catch (e) { toast(errorText(e), "error"); }
     finally { setLoading(false); }
@@ -161,13 +161,16 @@ export default function TakeoverAction({
         : <><Button tone="quiet" disabled={busy} onClick={() => { setPlan(null); setConfirmStop(false); }}>{t("chat-chatview.not_now")}</Button>
           {plan?.can_resume && <Button tone={confirmStop ? "danger" : "accent"} busy={busy} onClick={() => plan && void commit(plan, confirmStop)}>{t("chat-takeover.takeover_confirm")}</Button>}
           {plan && <Button tone="secondary" disabled={busy} onClick={continueElsewhere}>{t("chat-takeover.takeover_new")}</Button>}</>}>
-      {confirmStop ? <p>{t("chat-takeover.takeover_running_confirm")}</p> : <p>{takeoverReason(plan?.reason)}</p>}
+      {confirmStop ? <p>{plan?.app_owned && !plan?.running
+        ? t("chat-takeover.takeover_app_confirm")
+        : t("chat-takeover.takeover_running_confirm")}</p> : <p>{takeoverReason(plan?.reason)}</p>}
     </Dialog>
   </>;
 }
 
 function takeoverReason(reason: string | undefined): string {
   switch (reason) {
+    case "app_running": return t("chat-takeover.reason_app_running");
     case "encrypted_context": return t("chat-takeover.reason_encrypted_context");
     case "unavailable": return t("chat-takeover.reason_unavailable");
     default: return t("chat-takeover.reason_unavailable");

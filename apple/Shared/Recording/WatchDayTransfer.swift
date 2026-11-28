@@ -601,9 +601,11 @@ final class WatchDayTransfer {
 
     // MARK: - Helpers
 
-    /// Sending waits for a phone that takes all-day recordings and whose user agreed (`recordingDay` ≥ 1); everything
-    /// stays until then.
-    private static var phoneTakesDays: Bool { UserDefaults.standard.integer(forKey: WatchSync.phoneDayKey) >= 1 }
+    /// Sending waits for a phone that takes all-day recordings (`recordingDay` set; a phone from before sets nothing).
+    /// Its value is the user's consent to the sheet's current version, which gates a new start
+    /// (`AllDayAlertPolicy.access`), never one already running: a recording that started under an older agreement goes
+    /// on under it, so `0` (a new version asks again) still sends what the watch recorded.
+    private static var phoneTakesDays: Bool { WatchPhoneCapabilities.takesDays() }
 
     /// The app is in front, where it keeps running.
     private static var appActive: Bool { WKApplication.shared().applicationState == .active }

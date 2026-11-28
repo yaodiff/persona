@@ -40,7 +40,7 @@ func TestAgentNameUsesHerdrTabAndProtectsManualRename(t *testing.T) {
 	s.tryAgentName(ctx, "server", c, now)
 	c.SlotName = "My export work"
 	c.UpdatedAt = now.Add(2 * time.Hour)
-	c.OutputTokens++
+	c.SetOutputTokens(int(c.OutputTokensValue()) + 1)
 	f.sessions["server"][0] = c
 	if s.tryAgentName(ctx, "server", c, c.UpdatedAt) || calls.Load() != 1 {
 		t.Fatal("renamed an owner-named tab")

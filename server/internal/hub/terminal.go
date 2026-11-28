@@ -129,6 +129,14 @@ func (h *Hub) terminalSubscribe(ctx context.Context, c *client, machineID, sessi
 	key := [2]string{machineID, sessionID}
 	t := &h.terms
 	t.mu.Lock()
+	// Page presence outlives the stream: an unsupported stream keeps being viewed through screen polling.
+	// Only terminalLeave (unsubscribe or client disconnect) removes this record.
+	c.mu.Lock()
+	if c.termSubs == nil {
+		c.termSubs = map[[3]string]bool{}
+	}
+	c.termSubs[[3]string{machineID, sessionID, asked}] = true
+	c.mu.Unlock()
 	if t.relays == nil {
 		t.relays = map[[2]string]*termRelay{}
 	}
@@ -172,6 +180,7 @@ func (h *Hub) terminalSubscribe(ctx context.Context, c *client, machineID, sessi
 		}
 	}
 	t.mu.Unlock()
+	h.fleetClientsChanged()
 	if sync {
 		go h.terminalSync(context.WithoutCancel(ctx), m, key, r)
 	}
@@ -428,6 +437,10 @@ func (h *Hub) terminalUnsubscribe(c *client, machineID, sessionID string) {
 // terminalLeave takes asked off the app's subscription to the relay under key (the computer's own id); m is that
 // computer (nil: it is gone, the relay only goes).
 func (h *Hub) terminalLeave(c *client, m *Machine, key [2]string, asked string) {
+	c.mu.Lock()
+	delete(c.termSubs, [3]string{key[0], key[1], asked})
+	c.mu.Unlock()
+	h.fleetClientsChanged()
 	t := &h.terms
 	t.mu.Lock()
 	r := t.relays[key]
@@ -479,19 +492,16 @@ func (h *Hub) terminalUnwatch(m *Machine, key [2]string) {
 
 // terminalDrop unsubscribes a client that went away from every terminal it watched.
 func (h *Hub) terminalDrop(c *client) {
-	t := &h.terms
-	t.mu.Lock()
 	type sub struct {
 		key   [2]string
 		asked string
 	}
 	var subs []sub
-	for k, r := range t.relays {
-		for asked := range r.subs[c] {
-			subs = append(subs, sub{k, asked})
-		}
+	c.mu.Lock()
+	for key := range c.termSubs {
+		subs = append(subs, sub{[2]string{key[0], key[1]}, key[2]})
 	}
-	t.mu.Unlock()
+	c.mu.Unlock()
 	// By the relay's own key: an id the app asked by may no longer reach the computer.
 	for _, s := range subs {
 		h.terminalLeave(c, h.localMachine(s.key[0]), s.key, s.asked)

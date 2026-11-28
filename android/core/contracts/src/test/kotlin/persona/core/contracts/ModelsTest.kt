@@ -186,7 +186,11 @@ class ModelsTest {
         }
         assertEquals("traex", builtIn.name)
         assertEquals("My CLI", builtIn.copy(displayName = "My CLI").title)
-        assertEquals("claude", builtIn.copy(name = "claude", agentType = "claude").title)
+        assertEquals("Claude Code", builtIn.copy(name = "claude", agentType = "claude").title)
+        assertEquals("Codex", builtIn.copy(name = "codex", agentType = "codex").title)
+        assertEquals("Claude Desktop", AgentLauncher(name = "claude-desktop", agentType = "claude").title)
+        assertEquals("Codex App", AgentLauncher(name = "codex-app", agentType = "codex").title)
+        assertEquals("Antigravity CLI", AgentLauncher(name = "agy", agentType = "agy").title)
         assertEquals("Custom Claude", HubLauncher(name = "traex", displayName = "Custom Claude").title)
     }
 
@@ -199,8 +203,8 @@ class ModelsTest {
         assertEquals("TRAE CLI", launcher.title)
         assertEquals("TRAE CLI", settings.title)
         assertEquals("My CLI", launcher.copy(displayName = "My CLI").title)
-        assertEquals("traex", launcher.copy(source = "persona").title)
-        assertEquals("traex", launcher.copy(baseUrl = null).title)
+        assertEquals("custom-cli", launcher.copy(name = "custom-cli", source = "persona").title)
+        assertEquals("TRAE CLI", launcher.copy(baseUrl = null).title)
     }
 
     @Test fun aPaseoProviderIsNamedByItsOwnNameNeverTheEngines() {
@@ -409,5 +413,27 @@ class ModelsTest {
             """{"id":"ix_malformed","kind":"permission","can_clarify":"yes"}""",
         )
         assertFalse(JsonCodec.encodeToString(malformed).contains("can_clarify"))
+    }
+
+    @Test fun noHandBackRoundTripsAndDefaultsFalseForOlderHubs() {
+        val headless = JsonCodec.decodeFromString<Interaction>(
+            """{"id":"ix_headless","machine_id":"computer","session_id":"chat","kind":"permission","no_hand_back":true}""",
+        )
+        assertTrue(headless.noHandBack)
+        val wire = JsonCodec.encodeToString(headless)
+        assertTrue(wire, wire.contains(""""no_hand_back":true"""))
+        assertEquals(headless, JsonCodec.decodeFromString<Interaction>(wire))
+
+        val legacy = JsonCodec.decodeFromString<Interaction>("""{"id":"ix_legacy","kind":"permission"}""")
+        assertFalse(legacy.noHandBack)
+        val legacyWire = JsonCodec.encodeToString(legacy)
+        assertFalse(legacyWire, legacyWire.contains("no_hand_back"))
+        assertEquals(legacy, JsonCodec.decodeFromString<Interaction>(legacyWire))
+
+        val malformed = JsonCodec.decodeFromString<Interaction>(
+            """{"id":"ix_malformed_hb","kind":"permission","no_hand_back":"yes"}""",
+        )
+        assertFalse(malformed.noHandBack)
+        assertFalse(JsonCodec.encodeToString(malformed).contains("no_hand_back"))
     }
 }

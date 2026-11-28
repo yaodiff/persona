@@ -14,6 +14,16 @@ Both `deploy.sh` and the old SSH deploy run the staged `.new` file's `version` c
 
 ## Node packages
 
+Hub self-update and `deploy.sh` publish platform packages of `personad`, `persona-node`, `persona-manager` and
+`persona-link` by atomic rename. The publisher refreshes the legacy daemon name with a relative symlink, including
+replacing prior publisher-owned copies. A node package directory supplied by a release publisher stays under that
+publisher's control.
+
+Resident nodes that support in-place updates use the same idle handover on local, SSH, tailcat and Persona Link
+connections. A local stdio node takes its manager's build when it starts. The legacy SSH installer signals the main
+process of the resident service using the executable it replaced. Nodes that cannot reload through their supervisor
+can still be updated through their supported installer.
+
 ### Confirmed Web development builds
 
 The Hub tells each independent assistant which development commit it has confirmed, along
@@ -52,6 +62,13 @@ program in the following order (`server/internal/devices/packages.go`).
 3. **The fallback, on by default**: with no build of the hub's version anywhere (an `edge`, dev or pull request image), the newest release (`dl/latest.json`) when it has a package for the running program that this manager can drive. The manager checks the manifest's `node_protocol`, `node_protocol_min` and `node_capabilities`, judged like a connected node's handshake (`docs/protocol/protocol.md` ("Node handshake")). Such a node runs another build than the hub, and that is up to date: the machine shows the build it runs, and no update is offered while it runs it. A fallback build is never sent by itself (on connect or after the hub's update): it is offered on the machine's card and sent only on **Redeploy**, as nobody chose to run another version than the hub's. Builds of the hub's own version, its own or its release's, go out by themselves as before when automatic node updates are on (`auto_update_nodes`, below).
 4. **Nothing**: **Redeploy** is not offered (`can_deploy` false) and `deploy_reason` says why and what to do, in the app's language.
 
+**Editions** ([core-install.md](core-install.md), "Updates stay core-only"): a node says in `node.info` whether it is
+the core edition (`edition: "core"`; a full build and every older node say nothing). The manager reads only its own
+edition's manifests (`core-manifest.json`, `core-latest.json` for a core-only hub) and sends a node only a build of
+the node's edition: a build in the node binary dir is checked by the build tag its Go build info records, and a node
+of the other edition than the hub gets no release build (`deploy_reason` says so). The node checks the staged file
+the same way before it replaces its program.
+
 The Persona Link connector a switch from SSH sends ([link.md](link.md) "Switching from SSH") is found the same way, of the hub's version only: `persona-link-<os>-<arch>` in the node binary dir when its `.version` says the hub's (`scripts/deploy/deploy.sh` puts it there beside the node builds), else the release's (`dl/<version>/`, listed under `links` in its manifest), with the same checks and cache. There is no fallback to another release; without one the switch is not offered for that platform (`no_package`).
 
 A fetched build is used only after it checks out, the way hub self-update checks its own (nothing is signed, `docs/operations/hub-update.md` ("Security: no signing")): size and sha256 of the archive and sha256 of the unpacked binary, from the manifest over HTTPS; its Go build info says that OS, architecture and kind of program; on the manager's own platform it runs and its `version -v` says the release's version and build. Other platforms' builds cannot run on the hub. Downloads go through `node_packages.proxy` (an `http://` proxy, `internal/netproxy`; the environment's proxies are not used) with a timeout, are staged and checked beside the cache, and land in `<data dir>/cache/nodes/<version>/` with a record of what they are only then (nothing half written is ever used); the cache serves them again, also while the site does not answer. Lookups are remembered for ten minutes, a site that does not answer for one; the machine list never waits for one: it is looked up in the background, the build found before standing meanwhile, and **Redeploy** looks it up afresh. While the site does not answer, the build found or fetched before stands (after a restart, the newest cached fallback this manager drives); a queued update waits, and a node already running what it was sent is confirmed. A mirror must answer 404 for a file it does not have: any other error counts as the site being away.
@@ -60,7 +77,7 @@ Windows release downloads keep `.exe` before `.gz` (`personad-windows-amd64.exe.
 
 ### Redeploy and automatic updates
 
-When the web Machines page or machine detail shows a version mismatch, click **Redeploy**. The page then shows **Waiting for idle**, **Transferring**, **Restarting**, **Confirming** in turn. Finishing the file transfer does not mean success: the machine must reconnect and actually run the target version before the hub confirms the update is complete.
+When the web Machines page or machine detail shows a version mismatch, click **Redeploy**. The page then shows **Waiting for idle**, **Transferring**, **Waiting to restart**, **Restarting**, **Confirming** in turn. Finishing the file transfer does not mean success: the machine must reconnect and actually run the target version before the hub confirms the update is complete.
 
 The assistant's `machine_redeploy` tool starts this same operation for one machine and waits for its confirmed success or failure. Its wait is separate from the job: canceling the tool call does not cancel the deployment, and the machine card keeps the same phases and result as a button-started update. The tool refuses to target the machine running its own conversation, since that conversation would keep the node busy while waiting for the result; use a conversation on another machine.
 
@@ -88,7 +105,7 @@ Updates are offered only for resident nodes with a supported way to recover the 
 
 ## Protocol and install boundaries
 
-`node.info` gains the optional `node_update` and `node_update_reason`. Old nodes do not report them and are treated as unsupported. The existing `POST /api/v1/machines/{mid}/deploy` is unchanged; the machine model gains `can_deploy`, `deploy_reason` and `deploy_phase`, and old clients that ignore the new fields still work.
+`node.info` gains the optional `node_update`, `node_update_reason`, `update_draining` (present with `{id, target}` while a resident node is draining active work for an accepted update), and `edition` (above). Nodes that report draining advertise `node_update_drain_v1` in `capabilities`. Old nodes do not report these fields and are treated as unsupported or legacy-confirming. The existing `POST /api/v1/machines/{mid}/deploy` is unchanged; the machine model gains `can_deploy`, `deploy_reason` and `deploy_phase` (`waiting_idle`, `transferring`, `draining`, `restarting`, `confirming`), and old clients that ignore the new fields still work.
 
 node RPC:
 
@@ -124,13 +141,31 @@ content (#12528), so the first run of a file the process has not seen pass gets 
 later runs get the short limit again (5 s for this preflight, 20 s for the update's own staging and signing checks,
 which follow the same rule). Each check is one run, so 60 s is the most it waits, and a replacement that never answers
 still fails. A check that ran out of time says `node-update-check timed out after …`, which tells it apart from a
-version, platform or program mismatch. If preflight fails, the resident keeps serving and
+version, platform or program mismatch. `node.update.commit` answers only after the upload's checks, and with a signer those of up to
+two signed copies, each a new file. The hub's deploy and its relay therefore wait for that answer for
+`nodeupdate.CommitWait` (three first runs, two signings with their checks of the signature, and a margin: 4 min 40 s) and 10 s more, instead of taking a slow scan for a lost
+answer and showing a failed check as the two-minute `not_confirmed`. The relay's one client, `scripts/release/promote_node_release.py`, reads
+that commit for `COMMIT_WAIT` (300 s), and a hub test keeps it at least the relay's wait. If preflight fails, the resident keeps serving and
 logs the exact error along with the replacement's reported version, OS, architecture, program and listener handover
 support when it could read them. For an RPC deployment, the node sends `node.update.preflight_failed` with the
 transaction `id` and `error`. The hub ends the matching deploy job with that error, and the local watchdog still
 handles recovery. Retrying the same commit while recovery is pending returns the same error. When no failure
 notification arrives, including from older nodes, the hub keeps the two-minute confirmation timeout. Older hubs
 ignore the notification.
+
+Once `node.update.commit` succeeds and its reply is written on a `node_update_drain_v1` resident node, the node enters
+the `draining` phase (`node.update.draining` event and `node.info.update_draining`) and holds the local rollback
+watchdog in draining mode while active work finishes, rather than starting the post-restart confirmation deadline
+before handover (#16517). The resident keeps the marker's `draining` flag set and slides its deadline while alive (so
+an older backup watchdog from disk drift also stays alive without falsely rolling back a live drain); for an adopted
+external binary (#15708) it refreshes only the adoption deadline without ever creating a backup or watchdog. Once
+draining finishes, the resident emits `node.restarting` (carrying `{id, target}`) and arms the fresh post-`exec`
+rollback deadline right before `exec`. On the hub, the two-minute post-restart confirmation timer (`not_confirmed`)
+starts only at that handover (or after a sustained disconnect during `draining`), not on the commit reply. During
+`draining`, the hub tolerates brief connection flaps that reconnect with a matching `update_draining` state, resumes
+tracking across a hub restart without misclassifying an online draining old-version node as `rolled_back`, and caps
+draining at a bounded maximum wait (`devices-deploy.drain_timeout`). Older nodes without `node_update_drain_v1` keep
+the legacy post-commit confirmation timer.
 
 An independent recovery process from the old version stays next to the executable; it restores the backup if the new version crashes, fails to start or times out before confirmation. Under systemd it is a separate transient user service, so it does not exit when the node's cgroup is cleaned up; under launchd, and under a supervisor declared with `--supervised`, it is a process detached in a session of its own, outside the node's process group. Replacement is allowed only after the recovery process is ready. The switch itself is the same on Linux and macOS: the node runs the new executable in place (exec, same process id), and the supervisor only matters when the node exits: a crash, or the recovery process stopping a new version that never confirmed, after which the supervisor's restart runs the restored old file. Windows has no exec and will not replace a running program's file: the node moves its file aside, puts the new one in place and exits with `nodeproto.RestartExitCode`, which persona-link's supervisor answers by starting it again at once; the recovery process there is detached and reports itself ready through the transaction marker, and rolls back the same way ([windows.md](windows.md) "Updates through the hub"). The recovery process distinguishes the node from a process that later reused its id by its exact start time, with `ps -o lstart=` as the portable fallback; with a declared supervisor the node checks at startup that `ps` can report it (BusyBox's cannot) and otherwise says why it cannot be updated. Recovery does not depend on the new node starting successfully, nor on the hub being online at the time. The necessary local recovery transaction marker is stored next to the binary, for the same reason as the hub's self-update: recovery must work when the database and remote connections are unavailable; the hub's business state and update tasks are not written to local JSON.
 
@@ -146,7 +181,7 @@ Markers written by binaries without the exact identity still work through their 
 
 On Linux, a killed or exited process that has not yet been reaped (state `Z` or `X` in procfs) has no live identity. The node treats such a watchdog as gone and starts a replacement, even if `ps` still reports its old start time. An authoritative missing-process or zombie result never falls back to `ps`; the fallback remains for unavailable exact readings and older transaction markers without an exact start time, after checking that the process is not known to be gone.
 
-After reconnecting, the hub first confirms the node can read sessions normally, then confirms the target version; confirmation can complete even if the original update task vanished because the hub restarted. Until it is confirmed online, the client keeps the failed or confirming state and does not treat a successful file transfer as a finished update. A failed update of one node does not trigger a rollback of the whole hub.
+After reconnecting, the hub first confirms the node can read sessions normally, then confirms the target version; confirmation can complete even if the original update task vanished because the hub restarted. If a previous deployment record in Postgres (`node.deploy.<machine id>`) had already been marked `failed` (for example after a late confirmation), confirming the matching target version on reconnect updates that persisted record to `succeeded` and clears the stored error so stale `not_confirmed` failures never resurface across later disconnects or hub restarts. Until it is confirmed online, the client keeps the failed or confirming state and does not treat a successful file transfer as a finished update. A failed update of one node does not trigger a rollback of the whole hub.
 
 ## Verification
 

@@ -56,6 +56,7 @@ function hub(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
 let host: HTMLDivElement;
 let root: Root;
 const flush = async () => {
+  await act(async () => { await vi.dynamicImportSettled(); });
   for (let i = 0; i < 8; i++) await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
 };
 const $ = (sel: string) => document.body.querySelector(sel);
@@ -104,7 +105,7 @@ afterEach(() => {
 describe("alert chips on the Machines page", () => {
   it("puts a chip per alert on each card, and the worst computers first", async () => {
     health = [{ machine: "ok", launcher: "codex", state: "failing", kind: "usage_limit" }, { machine: "ok", launcher: "claude", state: "ok" }];
-    act(() => root.render(<Machines onToggleSidebar={() => {}} />));
+    await act(async () => root.render(<Machines onToggleSidebar={() => {}} />));
     await flush();
     expect([...host.querySelectorAll("section h2")].map((h) => h.textContent).filter((n) => n !== "今日 Token")).toEqual(["Garage NAS", "Travel Laptop", "Office Mini", "Build Box"]); // two warnings keep the hub's order
     const chips = (name: string) => [...(card(name)?.querySelectorAll("[data-alert]") ?? [])].map((b) => `${b.getAttribute("data-alert")}:${b.getAttribute("data-severity")}`);
@@ -115,32 +116,28 @@ describe("alert chips on the Machines page", () => {
     const memory = card("Travel Laptop")!.querySelector("[data-alert=memory]")!;
     expect(memory.tagName).toBe("BUTTON");
     expect(memory.getAttribute("aria-label")).toBe("严重：内存占用 · 95%");
-    expect(card("Garage NAS")!.querySelector("[data-alert]")?.textContent).toBe("离线 · 排查");
+    expect(card("Garage NAS")!.querySelector("[data-alert]")?.textContent).toBe("离线 · 排查建议");
     // the offline card keeps its one red notice
     expect(card("Garage NAS")!.querySelectorAll(".bg-red-tint")).toHaveLength(1);
     // what load counts, once, under the cards (#12519)
     expect(host.querySelectorAll("[data-testid=load-definition]")).toHaveLength(1);
-    expect(host.querySelector("[data-testid=load-definition]")?.textContent).toMatch(/^负载 = /);
+    expect(host.querySelector("[data-testid=load-definition]")?.textContent).toMatch(/^负载指/);
   });
 
-  it("opens the sheet on the chip's alert and stays on the page", async () => {
-    act(() => root.render(<Machines onToggleSidebar={() => {}} />));
+  it("takes the disk chip to recovery on the affected computer without starting a cleanup", async () => {
+    await act(async () => root.render(<Machines onToggleSidebar={() => {}} />));
     await flush();
-    await click(card("Build Box")!.querySelector("[data-alert=disk]"));
-    expect(location.pathname).toBe("/machines");
-    expect($("[data-testid=alert-sheet]")?.getAttribute("data-kind")).toBe("disk");
-    expect($("[data-testid=alert-sheet]")?.getAttribute("data-machine")).toBe("box");
-    expect($("[data-testid=alert-sheet-title]")?.textContent).toBe("Build Box 的问题");
-    // a click inside the sheet doesn't open the computer either
-    await click($("[data-part=what]"));
-    expect(location.pathname).toBe("/machines");
+    await click(card("Build Box")!.querySelector('[data-alert="disk"]'));
+    expect(location.pathname + location.search).toBe("/machines/box/storage?mode=reclaim");
+    expect($("[data-testid=alert-sheet]")).toBeNull();
+    expect(requests.some(r => r.startsWith("POST") && r.includes("/cleanup"))).toBe(false);
   });
 
   // A check that answers no record for its launcher (#14534): the page reads the records again, so a record the hub
   // no longer holds leaves the sheet and the card instead of staying as it was.
   it("reads the launcher records again after a check with no result", async () => {
     health = [{ machine: "ok", launcher: "codex", state: "failing", kind: "cli_outdated", error: "Method not found: session/set_mode", checked_at: new Date().toISOString() }];
-    act(() => root.render(<Machines onToggleSidebar={() => {}} />));
+    await act(async () => root.render(<Machines onToggleSidebar={() => {}} />));
     await flush();
     await click(card("Office Mini")!.querySelector("[data-alert=launcher]"));
     expect($$("[data-testid=failing-launchers] [data-launcher]").map((l) => l.getAttribute("data-launcher"))).toEqual(["codex"]);
@@ -157,7 +154,7 @@ describe("alert chips on the Machines page", () => {
   it("opens the version sheet from the mismatch strip's Details", async () => {
     fake.machines = [{ id: "studio", name: "Studio Mac", online: true, kind: "ssh", node_mismatch: true, can_deploy: true, node_version: "v1-202611110815" }];
     metricsList = [];
-    act(() => root.render(<Machines onToggleSidebar={() => {}} />));
+    await act(async () => root.render(<Machines onToggleSidebar={() => {}} />));
     await flush();
     expect(card("Studio Mac")!.querySelector("[data-alert]")).toBeNull(); // the strip says it, not a chip as well
     await click(card("Studio Mac")!.querySelector("[data-testid=deploy-details]"));
@@ -166,7 +163,7 @@ describe("alert chips on the Machines page", () => {
   });
 
   it("hands work to another computer through one message to Persona's main chat", async () => {
-    act(() => root.render(<Machines onToggleSidebar={() => {}} />));
+    await act(async () => root.render(<Machines onToggleSidebar={() => {}} />));
     await flush();
     await click(card("Travel Laptop")!.querySelector("[data-alert=memory]"));
     await click($("[data-testid=handoff]"));
@@ -195,7 +192,7 @@ describe("alert chips on the Machines page", () => {
 
 describe("the Capabilities view", () => {
   it("lists every computer with what it can run, reads tools and launchers lazily, and is remembered", async () => {
-    act(() => root.render(<Machines onToggleSidebar={() => {}} />));
+    await act(async () => root.render(<Machines onToggleSidebar={() => {}} />));
     await flush();
     await click([...host.querySelectorAll("[role=radio]")].find((b) => b.textContent === "能力") ?? null);
     await flush();
@@ -206,7 +203,7 @@ describe("the Capabilities view", () => {
     expect(laptop).toContain("Claude Code");
     expect(laptop).toContain("Codex");
     expect(laptop).toContain("Git 2.47");
-    expect($("[data-row=nas]")?.textContent).toContain("连上后才能看到");
+    expect($("[data-row=nas]")?.textContent).toContain("连接后显示");
     // only the online computers are asked, once each
     expect(requests.filter((r) => r.includes("/diagnosis?sections=tools")).sort()).toEqual(["GET /api/v1/machines/box/diagnosis?sections=tools", "GET /api/v1/machines/laptop/diagnosis?sections=tools", "GET /api/v1/machines/ok/diagnosis?sections=tools"]);
     expect(localStorage.getItem("persona.machines.view")).toBe("capabilities");

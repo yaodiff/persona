@@ -41,7 +41,7 @@ func TestFinishedPushSourceAncestry(t *testing.T) {
 			}
 			// Completion suppression is not a session mute: both necessary cards still notify.
 			for _, kind := range []string{proto.IxPermission, proto.IxQuestion} {
-				ft.s.announce(proto.Interaction{ID: kind, MachineID: "mac", SessionID: "subject", Kind: kind,
+				ft.s.announce(proto.Interaction{ID: kind, MachineID: "mac", SessionID: "subject", Kind: kind, OutwardWrite: kind == proto.IxPermission,
 					ToolName: "Bash", Questions: []proto.Question{{Question: "Which option?"}}})
 			}
 			if got := ft.pushesOf(assistantwire.NotifyInput, 2, time.Second); len(got) != 2 {

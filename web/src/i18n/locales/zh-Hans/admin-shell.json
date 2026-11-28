@@ -11,15 +11,15 @@
   "appearance": "外观",
   "restarted": "hub 已重启",
   "restarting": "正在重启 hub…",
-  "restarting_detail": "通常几秒钟就好；这期间 App 会短暂断开再自己连上。",
-  "slow": "hub 还没回来",
-  "slow_detail": "已经等了 90 秒。到 hub 机器上看看日志：常驻服务（服务名沿用旧名）用 journalctl --user -u personad，Docker 用 docker compose logs hub。",
+  "restarting_detail": "通常只需几秒钟。在此期间 App 会短暂断开，随后自动重新连接。",
+  "slow": "hub 尚未恢复",
+  "slow_detail": "已等待 90 秒。请前往 hub 机器查看日志：后台服务（服务名沿用旧名）请运行 journalctl --user -u personad，Docker 部署请运行 docker compose logs hub。",
   "got_it": "知道了",
   "reason_separator": "；",
-  "restart_manual": "{reasons}。在 hub 机器上重启：systemctl --user restart personad，或 docker compose restart hub。",
+  "restart_manual": "{reasons}。请在 hub 机器上运行以下命令重启：systemctl --user restart personad，或 docker compose restart hub。",
   "restart_hub": "重启 hub",
   "restart_confirm_title": "重启 hub？",
   "restart": "重启",
-  "restart_confirm_body": "hub 会退出，由 systemd 或 Docker 马上拉起来。重启期间手机和网页会断开几秒钟，正在进行的 Agent 不受影响（它们跑在各自的电脑上）。",
-  "change_primary": "换中心"
+  "restart_confirm_body": "hub 退出后会由 systemd 或 Docker 立即重新启动。重启期间手机和网页端会断开几秒钟，但正在运行的 Agent 不受影响（它们运行在各自的电脑上）。",
+  "change_primary": "更换中心"
 }

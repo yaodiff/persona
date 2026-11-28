@@ -3,16 +3,20 @@
 // while Agents open in the side panel (lib/agent-open.ts, #5424); loaded with the first one (SidePanel).
 
 import { lazy, Suspense, useState } from "react";
-import { isRemovable, openAsk } from "../../lib/todos";
+import { isRemovable, openAsk, todoStatusLabel } from "../../lib/todos";
+import { decisionLaterKey } from "../../lib/assistant-entries";
 import { statusWord } from "../../lib/todo-wait-reason";
 import { TodoAskLine } from "../TodoAsk";
-import { reportText } from "../../lib/supervision";
+import { decisionDismissed, reportText, reviewState } from "../../lib/supervision";
+import { VerificationReport } from "./VerificationReport";
+import { openPanel } from "../../lib/panel";
+import { TaskWaitInfo } from "./TaskWaitInfo";
 import { LatestReport } from "./Supervision";
 import { useStore } from "../../lib/store";
 import { Button, IconButton, Menu, useMenu, type MenuItem } from "../../ui/atoms";
 import { ChatView } from "../chat/ChatView";
 import { PanelHeader } from "../../ui/PanelHeader";
-import { place, removeTaskNow, retryTaskNow, useRetrying, useTaskState, useTodo } from "./Tasks";
+import { NeedsYouBody, place, removeTaskNow, retryTaskNow, useRetrying, useTaskState, useTodo } from "./Tasks";
 import { retryOnLauncherNow, useFailedStart } from "./FailedTaskRow";
 import { stateOf } from "../../lib/format";
 import { usageLimitLabel } from "../../lib/usage-limit";
@@ -38,6 +42,7 @@ export function TaskPanel({ todoId, onClose }: { todoId: string; onClose: () => 
   const retrying = useRetrying(todoId);
   const { task: failedTask, instead } = useFailedStart(todo);
   const plans = useFeed((s) => s.plans);
+  const deferred = useFeed((s) => todo?.part_of ? s.later[decisionLaterKey(todo)] : undefined);
   const planned = Object.values(plans).flatMap((p) => p.tasks).find((t) => t.todo_id === todoId);
   if (!todo || !st) {
     return (
@@ -47,6 +52,14 @@ export function TaskPanel({ todoId, onClose }: { todoId: string; onClose: () => 
       </>
     );
   }
+  if (reviewState(todo) === "user_check") {
+    return <>
+      <PanelHeader icon="todo" title={todo.title} subtitle={t("assistant-taskpanel.report")} onClose={onClose} />
+      <div className="min-h-0 flex-1 overflow-y-auto p-4">
+        <VerificationReport todo={todo} onOpenWorker={(mid, sid) => openPanel({ kind: "agent", mid, sid }, { push: true })} />
+      </div>
+    </>;
+  }
   const agents = (todo.agents ?? []).filter((a) => !a.released_at);
   const lead = st.lead;
   const chosen = agents.find((a) => `${a.machine_id}/${a.session_id}` === picked) ?? (lead ? agents.find((a) => a.session_id === lead.session_id) : agents[0]);
@@ -54,7 +67,10 @@ export function TaskPanel({ todoId, onClose }: { todoId: string; onClose: () => 
   // the header also stands for the agent shown: after ⌄ picks another, its machine and project, not the lead's
   const shown = chosen ? (sessions[chosen.machine_id] ?? []).find((x) => x.session_id === chosen.session_id) : undefined;
   // The chat header prepends the usage-limit line of the agent it shows, so the status word is not said twice.
-  const head = st.status === "usage_limit" && usageLimitLabel(shown ?? lead) ? "" : starting ? t("assistant-tasks.status_starting") : statusWord(st.status, st.wait);
+  const ask = openAsk(todo);
+  const hasStepAction = todo.part_of && todo.view?.section === "needs_you" && ask && !deferred && !decisionDismissed(todo);
+  const head = hasStepAction ? todoStatusLabel(todo, "needs_you") :
+    st.status === "usage_limit" && usageLimitLabel(shown ?? lead) ? "" : starting ? t("assistant-tasks.status_starting") : st.supervisorLabel ?? statusWord(st.status, st.wait);
   const subtitle = [head, chosen ? place({ ...todo, agents: [chosen] }, shown ?? lead) : place(todo, lead)].filter(Boolean).join(" · ");
   const taskItems: MenuItem[] = [
     openInWindow(chosen ? { name: "session", mid: chosen.machine_id, sid: chosen.session_id } : { name: "todos", id: todo.id }),
@@ -66,6 +82,13 @@ export function TaskPanel({ todoId, onClose }: { todoId: string; onClose: () => 
     const key = `${a.machine_id}/${a.session_id}`;
     return { key, label: s?.title || a.title || a.agent || a.session_id.slice(0, 8), state: s ? stateOf(s) : undefined, checked: chosen === a, onSelect: () => setPicked(key) };
   });
+  // Steps opened from Needs you use the same complete, round-bound action as the tray.
+  const stepAction = hasStepAction ? (
+    <div className="border-b border-line bg-inset p-2.5">
+      <NeedsYouBody item={{ kind: "task", key: todo.id, todo, status: st.status, asks: [], countsOpen: true }} nested />
+    </div>
+  ) : null;
+  const waitInfo = todo.wait != null && <div className="border-b border-line px-4 py-2"><TaskWaitInfo todo={todo} /></div>;
   if (chosen) {
     return (
       <div className="flex min-h-0 flex-1 flex-col">
@@ -77,10 +100,11 @@ export function TaskPanel({ todoId, onClose }: { todoId: string; onClose: () => 
           panel={{ onClose, page: { name: "session", mid: chosen.machine_id, sid: chosen.session_id }, title: todo.title, sub: subtitle, items: taskItems, beside: switcher.length > 1 ? <AgentSwitch agents={switcher} /> : undefined }}
           // what the task's result waits on from the user (#2056), and what its agent last reported, as it wrote it (#3181),
           // over its agent's chat
-          banner={openAsk(todo) || reportText(todo.supervision) || planned?.workspace ? (
+          banner={waitInfo || ask || reportText(todo.supervision) || planned?.workspace ? (
             <>
+              {waitInfo}
               {planned?.workspace && <div className="border-b border-line px-4 py-2"><TaskWorkspaceLine task={planned} /></div>}
-              {openAsk(todo) && <TodoAskLine todo={todo} className="border-b border-line bg-inset px-4 py-2.5" />}
+              {stepAction ?? (ask && <TodoAskLine todo={todo} className="border-b border-line bg-inset px-4 py-2.5" />)}
               <LatestReport todo={todo} banner />
             </>
           ) : undefined}
@@ -92,8 +116,9 @@ export function TaskPanel({ todoId, onClose }: { todoId: string; onClose: () => 
     <>
       <PanelHeader icon="todo" title={todo.title} subtitle={subtitle} actions={<PanelMore items={taskItems} />} onClose={onClose} />
       <div className="flex min-h-0 flex-1 flex-col">
+        {waitInfo}
         {planned?.workspace && <div className="border-b border-line px-4 py-2"><TaskWorkspaceLine task={planned} /></div>}
-        {st.failure || todo.agents?.some((a) => a.start_error) ? (
+        {stepAction ?? (st.failure || todo.agents?.some((a) => a.start_error) ? (
           <div className="flex flex-col items-start gap-3 p-6 text-[13px]">
             <div className="font-semibold text-red">{t("assistant-taskpanel.start_failed")}</div>
             <div className="text-ink-2">{st.failure ?? todo.agents?.find((a) => a.start_error)?.start_error}</div>
@@ -117,7 +142,7 @@ export function TaskPanel({ todoId, onClose }: { todoId: string; onClose: () => 
           </div>
         ) : (
           <div className="p-6 text-[13px] text-ink-2">{starting ? t("assistant-taskpanel.starting") : t("assistant-taskpanel.no_agent")}</div>
-        )}
+        ))}
       </div>
     </>
   );

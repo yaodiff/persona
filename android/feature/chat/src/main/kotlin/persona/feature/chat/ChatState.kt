@@ -9,12 +9,34 @@ import persona.core.designsystem.StatusLineKind
 import persona.core.designsystem.resolveStatusLine
 import persona.core.domain.lines.Fold as LineFold
 import persona.core.domain.lines.TaskNote as LineTask
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.locks.ReentrantLock
+import kotlin.concurrent.withLock
 
 internal fun Item.asLineItem() = LineItem(this,
     fold?.let { LineFold(it.items, it.tools, it.thoughts, it.throughSeq, it.throughId, parseTime(it.until)) },
     task?.let { LineTask(it.kind, it.title, it.status, it.toolUseId, it.taskId, it.detail, it.exitCode, it.outputFile) })
 
-internal val chatItemOrder = compareBy<Item> { it.seq }.thenBy { it.id.substringAfterLast('#', "").toIntOrNull() ?: 0 }
+internal fun itemBlockPart(id: String): Int {
+    val hash = id.lastIndexOf('#')
+    if (hash < 0 || hash == id.lastIndex) return 0
+    val start = hash + 1
+    val first = id[start]
+    if (first == '-' || first == '+') return id.substring(start).toIntOrNull() ?: 0
+    var value = 0
+    for (i in start until id.length) {
+        val digit = id[i] - '0'
+        if (digit !in 0..9) return 0
+        if (value > (Int.MAX_VALUE - digit) / 10) return 0
+        value = value * 10 + digit
+    }
+    return value
+}
+
+internal val chatItemOrder = Comparator<Item> { a, b ->
+    val bySeq = a.seq.compareTo(b.seq)
+    if (bySeq != 0) bySeq else itemBlockPart(a.id).compareTo(itemBlockPart(b.id))
+}
 
 internal fun ChatLine.lastItem(): Item? = when (this) {
     is ChatLine.Row -> row.item?.item
@@ -42,48 +64,332 @@ private fun WorkItem.lastItem(): Item? = when (this) {
 }
 
 /** Keep the actual item snapshot: changing turn keys cannot move a historical reading window. */
-internal class ChatTimeline {
+internal class ChatTimeline(
+    /** Optional hook invoked right before memoized line projection, used by concurrency tests to stall [lines]. */
+    private val beforeMemo: (() -> Unit)? = null,
+) {
+    private data class ExpandedFold(val fold: Item, val items: List<Item>, val anchorId: String?)
+
+    private data class ControlState(
+        val frozen: Boolean = false,
+        val freezeToken: Long = 0L,
+        val frozenLiveId: String? = null,
+        val frozenLiveSeq: Long = 0L,
+        val frozenLiveTargetSeq: Long = 0L,
+        val frozenLivePending: Boolean = false,
+        val frozenItemsRef: List<Item>? = null,
+        val expanded: Map<String, ExpandedFold> = emptyMap(),
+    )
+
+    private data class LinesCache(
+        val sourceItems: List<Item>,
+        val frozen: Boolean,
+        val freezeToken: Long,
+        val live: Boolean,
+        val liveTurnId: String?,
+        val open: Set<String>,
+        val expanded: Map<String, ExpandedFold>,
+        val snapshot: persona.core.domain.lines.ChatSnapshot,
+    )
+
     private val window = ChatListWindow<Item>({ it.id },
         chatItemOrder,
         { it.role == "assistant" && it.kind == "text" })
-    private var frozenLiveId: String? = null
-    private var shownLiveId: String? = null
-    private val expanded = mutableMapOf<String, Pair<Item, List<Item>>>()
+    private val stateLock = Any()
+    private val memoLock = ReentrantLock()
+    private val liveBackfillDone = memoLock.newCondition()
+    @Volatile private var control = ControlState()
+    @Volatile private var shownLiveId: String? = null
+    private var shownLiveSeq = 0L
+    private var nextLivePassSeq = 0L
+    private val inFlightLivePassSeqs = HashSet<Long>()
+    private var nextFreezeToken = 0L
+    @Volatile private var lastLines: LinesCache? = null
+
+    /** Keeps the lines of turns that did not change since the last [lines]: a chat changes at its end. */
+    private val memo = ChatLinesMemo()
 
     /** A frozen window keeps the turn that was running when it froze, even after a newer one starts. */
-    @Synchronized fun freeze(items: List<Item>) {
-        if (!window.isFrozen) { window.freeze(items); frozenLiveId = shownLiveId }
+    fun freeze(items: List<Item>) {
+        val _ = freezeChanged(items)
     }
-    @Synchronized fun follow() { window.follow(); frozenLiveId = null }
-    @Synchronized fun isFrozen(): Boolean = window.isFrozen
-    @Synchronized fun newMessageCount(items: List<Item>, below: Item?, lastRead: Item?, defer: Boolean = false) =
+
+    /** Freezes only on a following -> frozen transition without contending with background [lines] or [searchItems]. */
+    internal fun freezeChanged(items: List<Item>): Boolean {
+        if (control.frozen) return false
+        synchronized(stateLock) {
+            if (control.frozen) return false
+            window.freeze(items)
+            val targetSeq = inFlightLivePassSeqs.maxOrNull() ?: 0L
+            val pending = targetSeq > shownLiveSeq
+            control = control.copy(
+                frozen = true,
+                freezeToken = ++nextFreezeToken,
+                frozenLiveId = shownLiveId,
+                frozenLiveSeq = shownLiveSeq,
+                frozenLiveTargetSeq = if (pending) targetSeq else 0L,
+                frozenLivePending = pending,
+                frozenItemsRef = items,
+            )
+            return true
+        }
+    }
+
+    fun follow() {
+        val _ = followChanged()
+    }
+
+    /** Resumes following only on a frozen -> following transition without contending with background computation. */
+    internal fun followChanged(): Boolean {
+        if (!control.frozen) return false
+        synchronized(stateLock) {
+            if (!control.frozen) return false
+            window.follow()
+            control = control.copy(
+                frozen = false,
+                frozenLiveId = null,
+                frozenLiveSeq = 0L,
+                frozenLiveTargetSeq = 0L,
+                frozenLivePending = false,
+                frozenItemsRef = null,
+            )
+            return true
+        }
+    }
+
+    fun isFrozen(): Boolean = control.frozen
+
+    fun newMessageCount(items: List<Item>, below: Item?, lastRead: Item?, defer: Boolean = false): Int =
         window.newMessageCount(items, below, lastRead, defer)
-    @Synchronized fun unfold(fold: Item, items: List<Item>) { expanded[fold.id] = fold to items }
+
+    fun unfold(fold: Item, items: List<Item>) {
+        val anchorId = items.asSequence()
+            .filter { it.kind != "tool_result" && !(it.kind == "image" && it.toolUseId != null) }
+            .minWithOrNull(chatItemOrder)
+            ?.id
+        synchronized(stateLock) {
+            control = control.copy(expanded = control.expanded + (fold.id to ExpandedFold(fold, items, anchorId)))
+        }
+    }
+
+    /**
+     * Whether [lines] for ([items], [live], [open]) would already match the last computed snapshot, so a freeze or
+     * follow transition does not need to restart background projection or recompose the page.
+     */
+    internal fun matchesLastProjection(items: List<Item>, live: Boolean, open: Set<String>): Boolean {
+        val cached = lastLines ?: return false
+        val state = control
+        if (cached.expanded !== state.expanded || cached.open != open) return false
+        if (state.frozen) {
+            if (state.frozenLivePending) return false
+            if (state.frozenItemsRef !== items || cached.sourceItems !== items) return false
+            return cached.snapshot.liveTurnId == state.frozenLiveId
+        }
+        return !cached.frozen && cached.sourceItems === items && cached.live == live
+    }
 
     /**
      * A frozen window keeps the fold it froze with and also takes in the work the store put in its place when the fold
      * was opened: the fold's own items then come twice, and every step of the open work line counted twice.
      */
-    @Synchronized fun searchItems(items: List<Item>): List<Item> = window.items(items).flatMap { item ->
-        expanded[item.id]?.takeIf { it.first.fold == item.fold }?.second ?: listOf(item)
-    }.distinctBy { it.id }
+    fun searchItems(items: List<Item>): List<Item> {
+        val state = control
+        return resolveItems(items, state.frozen, state.expanded)
+    }
 
-    /** Keeps the lines of turns that did not change since the last [lines]: a chat changes at its end. */
-    private val memo = ChatLinesMemo()
+    private fun resolveItems(items: List<Item>, frozen: Boolean, folds: Map<String, ExpandedFold>): List<Item> {
+        val windowed = if (frozen) window.items(items) else items
+        if (folds.isEmpty()) {
+            // A frozen window's snapshot is already keyed uniquely by item.id.
+            return if (windowed !== items) windowed else deduplicateItems(windowed)
+        }
+        val seen = HashSet<String>(windowed.size)
+        val out = ArrayList<Item>(windowed.size)
+        for (item in windowed) {
+            val expanded = folds[item.id]?.takeIf { it.fold.fold == item.fold }
+            if (expanded != null) {
+                for (step in expanded.items) {
+                    if (seen.add(step.id)) out += step
+                }
+            } else if (seen.add(item.id)) {
+                out += item
+            }
+        }
+        return out
+    }
+
+    private fun deduplicateItems(items: List<Item>): List<Item> {
+        if (items.size <= 1) return items
+        val seen = HashSet<String>(items.size)
+        var duplicate = false
+        for (item in items) {
+            if (!seen.add(item.id)) {
+                duplicate = true
+                break
+            }
+        }
+        if (!duplicate) return items
+        seen.clear()
+        val out = ArrayList<Item>(items.size)
+        for (item in items) {
+            if (seen.add(item.id)) out += item
+        }
+        return out
+    }
+
+    /**
+     * Records a completed unfrozen pass under [memoLock]. Returns true when this pass is the newest completed
+     * unfrozen pass (so callers do not overwrite [lastLines] with an older pass's snapshot).
+     */
+    private fun finishUnfrozenUnderMemoLock(passSeq: Long, liveTurnId: String?): Boolean {
+        var shouldSignal = false
+        var isNewest = false
+        synchronized(stateLock) {
+            if (passSeq >= shownLiveSeq) {
+                shownLiveId = liveTurnId
+                shownLiveSeq = passSeq
+                isNewest = true
+            }
+            val current = control
+            if (current.frozen && current.frozenLivePending && passSeq <= current.frozenLiveTargetSeq) {
+                // Keep the freshest completed pass up to the freeze target, and clear pending only once the
+                // newest pass that was in flight at freeze finishes.
+                val updatedId = if (passSeq > current.frozenLiveSeq) liveTurnId else current.frozenLiveId
+                val updatedSeq = if (passSeq > current.frozenLiveSeq) passSeq else current.frozenLiveSeq
+                val reachedTarget = passSeq >= current.frozenLiveTargetSeq
+                control = current.copy(
+                    frozenLiveId = updatedId,
+                    frozenLiveSeq = updatedSeq,
+                    frozenLiveTargetSeq = if (reachedTarget) 0L else current.frozenLiveTargetSeq,
+                    frozenLivePending = !reachedTarget,
+                )
+                shouldSignal = reachedTarget
+            }
+        }
+        if (shouldSignal) liveBackfillDone.signalAll()
+        return isNewest
+    }
 
     /** [live]: the agent is at work; [open] is the same persisted choice for live and historical lines. */
-    @Synchronized fun lines(items: List<Item>, live: Boolean, open: Set<String>): persona.core.domain.lines.ChatSnapshot {
-        val options = if (window.isFrozen) LineOptions(liveTurnId = frozenLiveId, openWork = open)
-            else LineOptions(openWork = open, live = live)
-        val foldAnchors = expanded.values.mapNotNull { (fold, page) ->
-            page.filter { it.kind != "tool_result" && !(it.kind == "image" && it.toolUseId != null) }
-                .minWithOrNull(chatItemOrder)?.let { it.id to "tools-${fold.id}" }
-        }.toMap()
-        val source = searchItems(items).filter { it.kind != "turn_duration" }.map { item ->
-            item.asLineItem().copy(exchangeId = foldAnchors[item.id])
+    fun lines(items: List<Item>, live: Boolean, open: Set<String>): persona.core.domain.lines.ChatSnapshot {
+        var passSeq = 0L
+        val stateBefore = synchronized(stateLock) {
+            val current = control
+            if (!current.frozen) {
+                passSeq = ++nextLivePassSeq
+                val _ = inFlightLivePassSeqs.add(passSeq)
+            }
+            current
         }
-        return memo.lines(source, options)
-            .also { if (!window.isFrozen) shownLiveId = it.liveTurnId }
+        try {
+            val resolved = resolveItems(items, stateBefore.frozen, stateBefore.expanded)
+            return memoLock.withLock {
+                if (stateBefore.frozen) {
+                    while (true) {
+                        val current = control
+                        if (!current.frozen || current.freezeToken != stateBefore.freezeToken || !current.frozenLivePending) {
+                            break
+                        }
+                        try {
+                            val _ = liveBackfillDone.await(50L, TimeUnit.MILLISECONDS)
+                        } catch (_: InterruptedException) {
+                            Thread.currentThread().interrupt()
+                            break
+                        }
+                    }
+                }
+                val currentControl = control
+                val effectiveLiveId = if (stateBefore.frozen) {
+                    if (currentControl.frozen && currentControl.freezeToken == stateBefore.freezeToken) {
+                        currentControl.frozenLiveId
+                    } else {
+                        stateBefore.frozenLiveId
+                    }
+                } else {
+                    null
+                }
+                val cached = lastLines
+                if (cached != null &&
+                    cached.sourceItems === resolved &&
+                    cached.frozen == stateBefore.frozen &&
+                    (!stateBefore.frozen || cached.freezeToken == stateBefore.freezeToken) &&
+                    (if (stateBefore.frozen) cached.liveTurnId == effectiveLiveId else cached.live == live) &&
+                    cached.open == open &&
+                    cached.expanded === stateBefore.expanded
+                ) {
+                    if (!stateBefore.frozen) {
+                        val _ = finishUnfrozenUnderMemoLock(passSeq, cached.snapshot.liveTurnId)
+                    }
+                    return@withLock cached.snapshot
+                }
+                beforeMemo?.invoke()
+                val options = if (stateBefore.frozen) LineOptions(liveTurnId = effectiveLiveId, openWork = open)
+                    else LineOptions(openWork = open, live = live)
+                val foldAnchors = if (stateBefore.expanded.isEmpty()) emptyMap() else buildMap(stateBefore.expanded.size) {
+                    for ((foldId, entry) in stateBefore.expanded) {
+                        val anchor = entry.anchorId
+                        if (anchor != null) this[anchor] = "tools-$foldId"
+                    }
+                }
+                val source = ArrayList<LineItem>(resolved.size)
+                for (item in resolved) {
+                    if (item.kind == "turn_duration") continue
+                    val lineItem = item.asLineItem()
+                    val anchor = foldAnchors[item.id]
+                    source += if (anchor != null) lineItem.copy(exchangeId = anchor) else lineItem
+                }
+                val built = memo.lines(source, options)
+                val isNewestUnfrozen = if (!stateBefore.frozen) {
+                    finishUnfrozenUnderMemoLock(passSeq, built.liveTurnId)
+                } else {
+                    true
+                }
+                val stateAfter = control
+                if (isNewestUnfrozen &&
+                    stateAfter.frozen == stateBefore.frozen &&
+                    stateAfter.freezeToken == stateBefore.freezeToken &&
+                    (!stateBefore.frozen || stateAfter.frozenLiveId == effectiveLiveId)
+                ) {
+                    lastLines = LinesCache(
+                        sourceItems = resolved,
+                        frozen = stateBefore.frozen,
+                        freezeToken = stateBefore.freezeToken,
+                        live = live,
+                        liveTurnId = built.liveTurnId,
+                        open = open.toSet(),
+                        expanded = stateBefore.expanded,
+                        snapshot = built,
+                    )
+                }
+                built
+            }
+        } finally {
+            if (!stateBefore.frozen) {
+                val clearedPending = synchronized(stateLock) {
+                    val _ = inFlightLivePassSeqs.remove(passSeq)
+                    val current = control
+                    if (current.frozen && current.frozenLivePending && passSeq == current.frozenLiveTargetSeq) {
+                        // Target pass aborted before reaching finishUnfrozenUnderMemoLock: fall back to the newest
+                        // remaining in-flight pass up to the target, or release waiters with the freshest available ID.
+                        val fallbackTarget = inFlightLivePassSeqs.asSequence()
+                            .filter { it <= current.frozenLiveTargetSeq && it > current.frozenLiveSeq }
+                            .maxOrNull()
+                        if (fallbackTarget != null) {
+                            control = current.copy(frozenLiveTargetSeq = fallbackTarget)
+                            false
+                        } else {
+                            control = current.copy(frozenLivePending = false, frozenLiveTargetSeq = 0L)
+                            true
+                        }
+                    } else {
+                        false
+                    }
+                }
+                if (clearedPending) {
+                    memoLock.withLock { liveBackfillDone.signalAll() }
+                }
+            }
+        }
     }
 }
 
@@ -200,6 +506,7 @@ internal fun ChatLine.contentType(): String = when (this) {
     is ChatLine.ApiError -> "api_error"
     is ChatLine.Recaps -> "recaps"
     is ChatLine.Viewed -> "viewed"
+    is ChatLine.BotmuxReplies -> "botmux_replies"
     is ChatLine.Extra -> "extra"
     is ChatLine.ModelChange -> "model_change"
     is ChatLine.EngineChanged -> "engine_change"

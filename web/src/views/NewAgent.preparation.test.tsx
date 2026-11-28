@@ -130,7 +130,7 @@ beforeEach(async () => {
       const catalog = launcherModels[launcher?.name ?? ""] ?? { models: [{ id: "synthetic-model", name: "Synthetic model", efforts: ["low", "high"] }] };
       const host = new URL(url, "http://localhost").searchParams.get("host");
       return json({ agent: launcher?.agent_type || launcher?.agent || "claude", ...catalog,
-        supports_start_model: host === "herdr" ? catalog.supports_start_model : undefined });
+        supports_start_model: host === "herdr" || host === "orca" ? catalog.supports_start_model : undefined });
     }
     if (url.endsWith("/launchers")) return json({ launchers: launcherRows, tiers: launcherTiers });
     if (url.includes("/dirs?")) return json({ path: "/projects", entries: [] });
@@ -512,7 +512,20 @@ describe("New Agent workspace list (#7259)", () => {
     expect(starts()[0].body).toMatchObject({ machine_id: "computer", cwd: "/paseo/demo/persona-submitted-task", workspace_id: "made-for-it", host: "paseo" });
   });
 
-  it("offers no worktree for a chosen Orca workspace, and a switch turned on does not carry to the next choice", async () => {
+  it("starts in a new worktree Orca makes under the Orca workspace chosen (#17050)", async () => {
+    await list([{ ...paseo("orca-row"), source: "orca" }]);
+    await act(async () => choices()[0].click());
+    const request = await prepare();
+    // Orca says where its worktree goes and makes it, as a child of the workspace chosen
+    expect(calls.filter((c) => c.url.endsWith("/worktree/status")).at(-1)?.body).toEqual({ cwd: "/projects/orca-row", kind: "orca" });
+    expect(request.body).toMatchObject({ cwd: "/projects/orca-row", kind: "orca" });
+    await answer(request, { path: "/orca/workspaces/demo/persona-submitted-task", branch: "persona/submitted-task", root: "/projects/orca-row", workspace_id: "made-for-it" });
+    expect(starts()).toHaveLength(1);
+    // into the worktree Orca made, not the one chosen
+    expect(starts()[0].body).toMatchObject({ machine_id: "computer", cwd: "/orca/workspaces/demo/persona-submitted-task", workspace_id: "made-for-it", host: "orca" });
+  });
+
+  it("offers a chosen Orca workspace's worktree off, and a switch turned on does not carry to the next choice", async () => {
     await list([paseo("fix-login"), { ...paseo("orca-row"), source: "orca" }]);
     await act(async () => choices().find((b) => b.textContent?.includes("fix-login"))!.click());
     await tick(401);
@@ -520,7 +533,7 @@ describe("New Agent workspace list (#7259)", () => {
     await click(t("newagent-workspace.choose_folder"));
     await act(async () => choices().find((b) => b.textContent?.includes("orca-row"))!.click());
     await tick(401);
-    expect(document.querySelector('[data-testid="new-agent-worktree"]')).toBeNull();
+    expect(document.querySelector('[data-testid="new-agent-worktree"] [role="switch"]')!.getAttribute("aria-checked")).toBe("false");
     await click(t("newagent.start")); await tick();
     expect(pending).toHaveLength(0);
     expect(starts()[0].body).toMatchObject({ cwd: "/projects/orca-row", workspace_id: "orca-row", host: "orca" });
@@ -601,7 +614,7 @@ describe("New Agent with an omp launcher (#11964)", () => {
     await click("Close externally");
     launcherRows = [{ name: launcher, agent: "omp", source: "zshrc" }];
     launcherModels[launcher] = { models: [], supports_start_model: true };
-    await act(async () => applyMachine({ id: "computer", name: "Synthetic computer", online: true, engine_hosts: ["herdr", "orca"], engine_default: "herdr" }));
+    await act(async () => applyMachine({ id: "computer", name: "Synthetic computer", online: true, engine_hosts: ["herdr", "paseo"], engine_default: "herdr" }));
     resetModelListsForTests();
     await click("Reopen start"); await flush();
     await openPanel();
@@ -610,14 +623,14 @@ describe("New Agent with an omp launcher (#11964)", () => {
     expect(typed).toBeDefined();
     await act(async () => typed!.click());
     expect(pill().title).toContain(model);
-    await click("Orca"); await flush();
+    await click("Paseo"); await flush();
     expect(pill().title).not.toContain(model);
     await openPanel();
     await input(document.querySelector<HTMLInputElement>("[data-model-panel] input")!, model);
     expect(row(`typed:${launcher}\n${model}`)).toBeUndefined();
     await act(async () => pill().click());
     await click(t("newagent.start")); await tick();
-    expect(starts()[0].body).toMatchObject({ launcher, host: "orca" });
+    expect(starts()[0].body).toMatchObject({ launcher, host: "paseo" });
     expect(starts()[0].body).not.toHaveProperty("model");
   });
 
@@ -626,10 +639,10 @@ describe("New Agent with an omp launcher (#11964)", () => {
     launcherRows = [{ name: launcher, agent: "omp", source: "zshrc" }, { name: "codex-app", agent: "codex", source: "codex_app" }];
     launcherModels[launcher] = { models: [], supports_start_model: true };
     launcherModels["codex-app"] = { models: [] };
-    await act(async () => applyMachine({ id: "computer", name: "Synthetic computer", online: true, engine_hosts: ["herdr", "orca"], engine_default: "herdr" }));
+    await act(async () => applyMachine({ id: "computer", name: "Synthetic computer", online: true, engine_hosts: ["herdr", "paseo"], engine_default: "herdr" }));
     resetModelListsForTests();
     await click("Reopen start"); await flush();
-    await click("Orca"); await flush();
+    await click("Paseo"); await flush();
     await openPanel("codex-app");
     const desktop = row("model:codex-app\ndefault");
     expect(desktop).toBeDefined();

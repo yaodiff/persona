@@ -6,7 +6,7 @@
   "source_patrol": "定时巡检",
   "source_followup": "跟进",
   "source_supervision": "督办巡检",
-  "source_scheduled_task": "由已安排任务发送",
+  "source_scheduled_task": "由定时任务发送",
   "show_more": "显示更多",
   "source_other": "来源",
   "open_task": "{line}，打开任务"

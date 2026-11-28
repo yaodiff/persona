@@ -134,10 +134,12 @@ func nothingRunning(out []byte, dir string) ([]string, bool) {
 	if json.Unmarshal(out, &res) != nil {
 		return nil, false
 	}
-	sockets := make([]string, 0, len(res.Sessions))
+	sockets := make([]string, 0, len(res.Sessions)+1)
+	hasDefault := false
 	for _, s := range res.Sessions {
 		got, want := filepath.Dir(s.Dir), dir // a named session's directory is in the sessions directory
 		if s.Default {
+			hasDefault = true
 			got, want = s.Dir, filepath.Dir(dir) // the default one's is the config directory
 		}
 		if s.Running || s.Socket == "" || filepath.Clean(got) != filepath.Clean(want) {
@@ -147,6 +149,13 @@ func nothingRunning(out []byte, dir string) ([]string, bool) {
 			return nil, false
 		}
 		sockets = append(sockets, s.Socket)
+	}
+	if !hasDefault {
+		defSock := filepath.Join(filepath.Dir(dir), "herdr.sock")
+		if _, err := os.Lstat(defSock); !errors.Is(err, fs.ErrNotExist) {
+			return nil, false
+		}
+		sockets = append(sockets, defSock)
 	}
 	return sockets, true
 }

@@ -1,5 +1,18 @@
 @reference "../styles.css";
 
-.workspace-naming-toggle { @apply rounded-none; }
-.workspace-naming-actions { @apply sm:justify-end; }
+.workspace-naming-toggle { @apply min-h-11 w-full rounded-none px-4 font-medium text-ink; }
+.workspace-naming-field { @apply flex min-w-0 flex-col gap-1; }
+.workspace-naming-actions { @apply flex flex-wrap items-center justify-end gap-2 border-t border-line pt-3; }
 .workspace-naming-options { @apply sm:items-end; }
+
+/* Let an inherited template wrap at rest. Focusing the native input restores its caret and placeholder. */
+.workspace-naming-input { @apply grid; }
+.workspace-naming-input > * { grid-area: 1 / 1; }
+.workspace-naming-input > input { @apply h-full min-h-8; }
+.workspace-naming-input > input:not(:focus)::placeholder { @apply text-transparent; }
+.workspace-naming-input > span { @apply pointer-events-none self-center break-all px-2.5 py-1 font-mono text-label text-ink-3; }
+.workspace-naming-input > input:not(:placeholder-shown) + span,
+.workspace-naming-input > input:focus + span { @apply sr-only; }
+@media (pointer: coarse) {
+  [data-workspace-naming] button, .workspace-naming-input > input { @apply min-h-11; }
+}

@@ -134,6 +134,16 @@ describe("actual app UI stream adapter contract", () => {
     expect(await f.page.readResult(sent!)).toEqual({ lines: { path: "demo.ts", start: 7, lines: ["synthetic line"] } });
     expect(f.effects).toMatchObject([{ version: 2, event: { value: { path: "demo.ts", start: "7" } }, r: { push: { state: "saved-native-state" }, open_url: "https://example.com/" } }]);
   });
+  it("presents a page's own quick prompt as its one in-app receipt URL (#16697)", async () => {
+    const f = fixture(); await f.open();
+    const event = f.page.session.eventDisplayed(f.page.session.getState().snapshot!, "button", "save", "press", {});
+    const request = f.sent.at(-1)!;
+    f.receipt(request, { open_url: "persona://compose?prompt=today&text=What%20happened%20today%3F" });
+    f.delta();
+    expect(await event).not.toBeNull(); await tick();
+    expect(f.failures).toEqual([]);
+    expect(f.effects).toMatchObject([{ r: { open_url: "persona://compose?prompt=today&text=What%20happened%20today%3F" } }]);
+  });
   it("settles the native caller before a receipt effect synchronously disposes its navigation page", async () => {
     const f = fixture((page) => page.dispose()); await f.open();
     const event = f.page.session.event("button", "save", "press", {});
@@ -224,7 +234,20 @@ describe("actual app UI stream adapter contract", () => {
     expect(f.effects).toMatchObject([{ event: { action: "save", value: { saved: "native" } }, version: 2 }]);
   });
   it("rejects result-derived views and credentials before any effects", async () => {
-    for (const result of [{ toast: "Wrong", view: {} }, { open_url: "https://user:pass@example.com" }, { push: { state: "é".repeat(9000) } }]) {
+    for (const result of [
+      { toast: "Wrong", view: {} },
+      { open_url: "https://user:pass@example.com" },
+      { open_url: "https:/admin" },
+      { open_url: "https://@evil.example/a" },
+      { open_url: "https://good.example\\@evil.example/a" },
+      { open_url: "https://evil.example/a\tb" },
+      // the one in-app URL allowed is a well-formed persona://compose; no other persona:// action, and malformed compose, pass
+      { open_url: "persona://settings/extensions/other" },
+      { open_url: "persona://ask?text=today" },
+      { open_url: "persona://compose?prompt=today" },
+      { open_url: "persona://compose?prompt=today&text=today&x=1" },
+      { push: { state: "é".repeat(9000) } },
+    ]) {
       const f = fixture(); await f.open();
       const event = f.page.session.event("button", "save", "press", null).catch(() => {});
       const request = f.sent.at(-1)!; f.delta(); f.receipt(request, result);

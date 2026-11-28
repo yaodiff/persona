@@ -229,7 +229,7 @@ def point_versions(sources):
             for match in re.finditer(r'^\t"([a-z0-9_]+)":\s*\{Name:[^\n]*?\bVersion:\s*(\w+)',
                                      block(code, "var Points = map[string]Point{"), re.M):
                 found[match.group(1)] = match.group(2)
-        for match in re.finditer(r'\bPoints\["([a-z0-9_]+)"\]\s*=\s*Point\{[^\n]*?\bVersion:\s*(\w+)', code):
+        for match in re.finditer(r'\bPoints\["([a-z0-9_]+)"\]\s*=\s*Point\{[^{}]*?\bVersion:\s*(\w+)', code, re.S):
             found[match.group(1)] = match.group(2)
     return found
 
@@ -493,8 +493,18 @@ class ParserTests(unittest.TestCase):
                           '\t"ui": {Name: "ui", Version: UIVersion, Item: nil},\n}\n'),
             "looks.go": ('package extension\n\nfunc init() {\n'
                          '\tPoints["looks"] = Point{Name: "looks", Version: 1, Item: nil}\n}\n'),
+            "routine_facts.go": ('package extension\n\nfunc init() {\n'
+                                 '\tPoints["routine_facts"] = Point{\n'
+                                 '\t\tName: "routine_facts", Namespace: "routine_facts", Version: 1, NeedsRPC: true,\n'
+                                 '\t\tItem: func(raw json.RawMessage) (string, error) {\n'
+                                 '\t\t\tvar item wire.RoutineFactsItem\n'
+                                 '\t\t\tif err := strict(raw, &item); err != nil { return "", err }\n'
+                                 '\t\t\treturn item.ID.String(), nil\n'
+                                 '\t\t},\n'
+                                 '\t}\n'
+                                 '}\n'),
         }
-        self.assertEqual({"conn": "2", "ui": "UIVersion", "looks": "1"}, point_versions(sources))
+        self.assertEqual({"conn": "2", "ui": "UIVersion", "looks": "1", "routine_facts": "1"}, point_versions(sources))
 
     def test_section_and_tables(self):
         markdown = ("# Doc\n\n## Wire\n\nServer → client:\n\n| type | Fields |\n| --- | --- |\n"

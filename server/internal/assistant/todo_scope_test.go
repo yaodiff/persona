@@ -221,30 +221,13 @@ func TestTodoRowsToAnExtension(t *testing.T) {
 // them (conversation_space.go) without reading the computer, and those it never noted by one read of the assistant's
 // computer, not one a conversation.
 func TestTodoListToAnExtensionReadsEachComputerOnce(t *testing.T) {
-	calls := func(e *todoEnv, from int) (lists, gets int) {
-		e.f.mu.Lock()
-		defer e.f.mu.Unlock()
-		for _, c := range e.f.calls[from:] {
-			switch c.Method {
-			case DeviceSessionsList:
-				lists++
-			case DeviceSessionGet:
-				gets++
-			}
-		}
-		return lists, gets
-	}
 	read := func(t *testing.T, e *todoEnv, role string, want int) (lists, gets int) {
 		t.Helper()
-		// The marks the links give the computer's panes go out in the background, and read its list once: not the read's.
-		waitFor(t, "the panes' marks", func() bool {
-			ts := e.s.tokenSyncOf("server")
-			ts.mu.Lock()
-			defer ts.mu.Unlock()
-			return !ts.sending
-		})
-		from := e.f.callCount()
-		rows, _ := rowsAs(t, e, role)
+		// The hub's background workers can also read the computer. Measure the list request's calls.
+		var trace []DeviceCall
+		ctx := context.WithValue(t.Context(), deviceCallsForTest{}, &trace)
+		w := e.doAsContext(ctx, role, "GET", "/api/v1/todos", "")
+		rows, _ := readTodoRows(t, role, w)
 		if len(rows) != want {
 			t.Fatalf("%q reads %d rows, want %d", role, len(rows), want)
 		}
@@ -253,7 +236,17 @@ func TestTodoListToAnExtensionReadsEachComputerOnce(t *testing.T) {
 				t.Fatalf("%q reads %v", role, r)
 			}
 		}
-		return calls(e, from)
+		e.f.mu.Lock()
+		defer e.f.mu.Unlock()
+		for _, call := range trace {
+			switch call.Method {
+			case DeviceSessionsList:
+				lists++
+			case DeviceSessionGet:
+				gets++
+			}
+		}
+		return lists, gets
 	}
 	t.Run("runs", func(t *testing.T) {
 		e := newTodoEnv(t, nil)

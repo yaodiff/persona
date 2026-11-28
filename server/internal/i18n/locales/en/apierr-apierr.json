@@ -18,6 +18,8 @@
   "assistant_control_failed": "Claude could not apply this setting: {reason}",
   "shell_waiting": "The new terminal tab on {machine} stopped on a question before the agent could start: “{line}”. Nothing ran. Where Persona lists the question's answers, pick one and the agent starts in that tab; or answer it in the tab on {machine} and start the agent again. The tab stays open for a few minutes.",
   "shell_waiting_here": "The new terminal tab on this computer stopped on a question before the agent could start: “{line}”. Nothing ran. Where Persona lists the question's answers, pick one and the agent starts in that tab; or answer it in the tab on this computer and start the agent again. The tab stays open for a few minutes.",
+  "codex_not_logged_in": "Codex isn’t signed in on {machine}, so the agent didn’t start. Run codex login in a terminal on {machine}, then start the agent again.",
+  "codex_not_logged_in_here": "Codex isn’t signed in on this computer, so the agent didn’t start. Run codex login in a terminal on this computer, then start the agent again.",
   "start_line_rejected": "The new terminal tab on {machine} didn't take the start command, twice (it printed “{line}”). Nothing ran; check what that shell does when it starts, then try again.",
   "start_line_rejected_here": "The new terminal tab on this computer didn't take the start command, twice (it printed “{line}”). Nothing ran; check what that shell does when it starts, then try again.",
   "session_no_transcript": "This computer has a record of this conversation, but Persona can't find its history there.",

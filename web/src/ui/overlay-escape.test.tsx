@@ -119,4 +119,50 @@ describe("Escape closes only the topmost overlay", () => {
     escape();
     expect(closed).not.toHaveBeenCalled();
   });
+
+  it("ignores Escape while an IME composition is active (isComposing or keyCode 229)", () => {
+    const closed = vi.fn();
+    act(() => root.render(<Closable name="form" onClose={closed}><input /></Closable>));
+    const input = document.querySelector("input")!;
+
+    act(() => {
+      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", isComposing: true, bubbles: true, cancelable: true }));
+    });
+    expect(closed).not.toHaveBeenCalled();
+
+    const safari = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+    Object.defineProperty(safari, "keyCode", { value: 229 });
+    act(() => {
+      input.dispatchEvent(safari);
+    });
+    expect(closed).not.toHaveBeenCalled();
+
+    escape();
+    expect(closed).toHaveBeenCalledTimes(1);
+  });
+
+  it("respects defaultPrevented when a child inside the Dialog already consumed Escape", () => {
+    const closed = vi.fn();
+    const consumed = vi.fn();
+    act(() =>
+      root.render(
+        <Closable name="form" onClose={closed}>
+          <input
+            onKeyDown={(e) => {
+              if (e.key === "Escape") {
+                e.preventDefault();
+                consumed();
+              }
+            }}
+          />
+        </Closable>,
+      ),
+    );
+    const input = document.querySelector("input")!;
+    act(() => {
+      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+    });
+    expect(consumed).toHaveBeenCalledTimes(1);
+    expect(closed).not.toHaveBeenCalled();
+  });
 });

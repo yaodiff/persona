@@ -19,6 +19,8 @@ export const STALE_PULL_EVERY_MS = 10000;
 export const STALE_SLACK_MS = 1000;
 /** Asks in a row that found what the stream should have brought (or failed) before the page says it is not live. */
 export const STALE_HINT_AFTER = 2;
+/** Two isolated recoveries farther apart than this are treated as separate blips rather than a broken stream. */
+export const STALE_RECOVERY_WINDOW_MS = 120_000;
 
 export interface StaleView {
   /** The session's `updated_at` as the list has it now. */
@@ -31,6 +33,8 @@ export interface StaleView {
   revMovedAt?: number;
   /** When items last came (a push, a page, an ask), in ms. */
   lastArrival: number;
+  /** When the tab most recently became visible, in ms (0: visible since open): give a waking socket time to push. */
+  visibleSince?: number;
   /** When this session was last asked for, in ms (0: never). */
   lastPull: number;
   /** The `updated_at` the last ask was for: a write that added no items (a title, a mode) is not asked about twice. */
@@ -44,7 +48,7 @@ export interface StaleView {
 /** Whether to ask for what the page may be missing now. */
 export function shouldPull(v: StaleView): boolean {
   if (!v.visible || v.pulling || (!v.revUnread && !newerThanItems(v))) return false;
-  const quietSince = Math.max(v.lastArrival, v.revMovedAt ?? 0);
+  const quietSince = Math.max(v.lastArrival, v.revMovedAt ?? 0, v.visibleSince ?? 0);
   return v.now - quietSince >= STALE_QUIET_MS && v.now - v.lastPull >= STALE_PULL_EVERY_MS;
 }
 
@@ -100,15 +104,28 @@ export interface StaleTally {
   recovered: number;
   /** Asks in a row that failed. */
   failed: number;
+  /** When the previous recovery landed, in ms, so isolated blips minutes apart do not accumulate. */
+  lastRecoveredAt?: number;
 }
 
 export const FRESH_TALLY: StaleTally = { recovered: 0, failed: 0 };
 
 export type PullOutcome = "found" | "empty" | "failed";
 
-export function afterPull(t: StaleTally, outcome: PullOutcome): StaleTally {
-  if (outcome === "failed") return { recovered: t.recovered, failed: t.failed + 1 };
-  return { recovered: outcome === "found" ? t.recovered + 1 : t.recovered, failed: 0 };
+export function afterPull(t: StaleTally, outcome: PullOutcome, now?: number): StaleTally {
+  if (outcome === "failed") {
+    return t.lastRecoveredAt !== undefined
+      ? { recovered: t.recovered, failed: t.failed + 1, lastRecoveredAt: t.lastRecoveredAt }
+      : { recovered: t.recovered, failed: t.failed + 1 };
+  }
+  if (outcome === "found") {
+    const expired = now !== undefined && t.recovered > 0 && t.lastRecoveredAt !== undefined && now - t.lastRecoveredAt > STALE_RECOVERY_WINDOW_MS;
+    const recovered = expired ? 1 : t.recovered + 1;
+    return now !== undefined ? { recovered, failed: 0, lastRecoveredAt: now } : { recovered, failed: 0 };
+  }
+  return t.lastRecoveredAt !== undefined
+    ? { recovered: t.recovered, failed: 0, lastRecoveredAt: t.lastRecoveredAt }
+    : { recovered: t.recovered, failed: 0 };
 }
 
 /** The stream brought items itself: it works. */

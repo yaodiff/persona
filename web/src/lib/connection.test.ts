@@ -13,23 +13,23 @@ describe("connPhase: what the pill says once the socket dropped", () => {
   });
 
   it("titles and explanations like the app's", () => {
-    expect(phaseTitle("no_network")).toBe("没有网络");
+    expect(phaseTitle("no_network")).toBe("无网络连接");
     expect(phaseTitle("restarting")).toBe("hub 正在更新…");
     expect(phaseTitle("connecting")).toBe("连接中…");
-    expect(phaseTitle("unreachable")).toBe("连不上 hub，正在重试…");
-    expect(phaseExplanation("unreachable")).toContain("会一直自动重试");
+    expect(phaseTitle("unreachable")).toBe("无法连接 hub，正在重试…");
+    expect(phaseExplanation("unreachable")).toContain("系统将持续自动重试");
   });
 });
 
 describe("connFacts", () => {
   it("the next try counts down, then 正在重试…; since when the page was last connected", () => {
     const link = { ...NO_LINK, nextTry: now + 4_200, lastOnline: now - 75_000 };
-    expect(connFacts("unreachable", link, now)).toEqual(["5 秒后重试", "上次连上：1 分钟前"]);
-    expect(connFacts("connecting", { ...link, nextTry: now - 10 }, now)).toEqual(["正在重试…", "上次连上：1 分钟前"]);
+    expect(connFacts("unreachable", link, now)).toEqual(["5 秒后重试", "上次连接：1 分钟前"]);
+    expect(connFacts("connecting", { ...link, nextTry: now - 10 }, now)).toEqual(["正在重试…", "上次连接：1 分钟前"]);
   });
 
-  it("no network has no next try to promise; online says nothing; a page never connected has no 上次连上", () => {
-    expect(connFacts("no_network", { ...NO_LINK, nextTry: now + 3_000, lastOnline: now - 5_000 }, now)).toEqual(["上次连上：5 秒前"]);
+  it("no network has no next try to promise; online says nothing; a page never connected has no 上次连接", () => {
+    expect(connFacts("no_network", { ...NO_LINK, nextTry: now + 3_000, lastOnline: now - 5_000 }, now)).toEqual(["上次连接：5 秒前"]);
     expect(connFacts("online", { ...NO_LINK, nextTry: now + 3_000 }, now)).toEqual([]);
     expect(connFacts("connecting", { ...NO_LINK, nextTry: now + 1_000 }, now)).toEqual(["1 秒后重试"]);
   });
@@ -58,7 +58,7 @@ describe("the dot and the sidebar's footer follow the same phase as the pill", (
 
   it("connStatus: the computers online, else the pill's words for no network and a restart", () => {
     expect(connStatus("online", 2, 3)).toContain("2");
-    expect(connStatus("no_network", 2, 3)).toBe("没有网络");
+    expect(connStatus("no_network", 2, 3)).toBe("无网络连接");
     expect(connStatus("restarting", 2, 3)).toBe("hub 正在更新…");
     expect(connStatus("connecting", 0, 0)).not.toBe(connStatus("unreachable", 0, 0));
   });

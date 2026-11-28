@@ -44,16 +44,20 @@ const setValue = (el: HTMLInputElement | HTMLTextAreaElement, value: string) => 
   el.dispatchEvent(new Event("input", { bubbles: true }));
 });
 
-it("keeps plain Allow and Always until the text actually changes, then sends only edited_text", async () => {
+it("confirms the edited message before sending only edited_text", async () => {
   act(() => root.render(<InteractionCard ix={editable} />));
   expect(host.querySelector("textarea")).toBeNull();
-  expect(button("总是允许")).toBeTruthy();
+  expect(button("总是允许")).toBeUndefined();
   act(() => button("编辑正文").click());
   await flush();
   setValue(host.querySelector("textarea")!, "hello $USER\nSecond line `literal`");
   await flush();
   expect(button("总是允许")).toBeUndefined();
   act(() => button("允许").click());
+  expect(calls).toEqual([]);
+  expect(host.querySelector("textarea")?.value).toBe("hello $USER\nSecond line `literal`");
+  expect(host.querySelector("textarea")?.matches(":disabled")).toBe(true);
+  act(() => button("确认允许").click());
   await flush();
   expect(calls).toEqual([{ path: "/interactions/p_edit/resolve", body: { allow: true, edited_text: "hello $USER\nSecond line `literal`" } }]);
 });
@@ -66,6 +70,8 @@ it("keeps an unchanged allow plain and disables a whitespace-only edit", async (
   setValue(area, "hello world");
   await flush();
   act(() => button("允许").click());
+  expect(calls).toEqual([]);
+  act(() => button("确认允许").click());
   await flush();
   expect(calls).toEqual([{ path: "/interactions/p_edit/resolve", body: { allow: true } }]);
   setValue(area, "  \n");

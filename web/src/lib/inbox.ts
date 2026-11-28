@@ -27,8 +27,9 @@ import { supervisorHeld } from "./supervisor-held";
 import { inFolderFilter } from "./inbox-folders";
 import type { ChainEntry, InboxHandling, InboxRelated, InboxStatus, InboxSuggestion, InboxSuggestionAttempt, SuggestionAction } from "./inbox-events";
 import { actedText, actOnSuggestion, statusOf } from "./inbox-suggestion"; // not inbox-events.ts: that one is the Inbox page's
-import type { MailAccount } from "./mail";
+import type { MailAccount } from "./agent-settings";
 import type { ExternalRef } from "../features/external-sources/api";
+import type { InboxStoredSources } from "./inbox-sources-wire";
 
 // Not the Inbox's: re-exported from their own modules until their importers import them from there (#11538).
 export { withToken } from "./media-url";
@@ -148,14 +149,17 @@ export interface InboxItem {
   /** Only in GET /inbox/{id}: the conversation as text. */
   context?: string;
   /** Only in GET /inbox/{id}, for a mail: whether the hub clipped the newest mail's text when it stored `context`.
-   *  Absent: the hub does not know (or is from before it sent this). Read it through storedMailClipping (lib/mail.ts). */
+   *  Absent: the hub does not know (or is from before it sent this). Read it through storedMailClipping (lib/mail-stored.ts). */
   mail_body_truncated?: boolean;
+  /** Only in GET /inbox/{id}: the knowledge base chat it came from, when there is one (#15356). */
+  kb_chat?: { id: string; path?: string } | null;
   agent?: InboxAgent;
   /** Deterministic PR/Issue auto-forward status and linked to-do metadata (#12492). */
   todo_forward?: InboxTodoForward;
   /** New foreign mail translated by the hub as it came in (for a device whose Settings › Translation asks), by target language. */
   translations?: Record<string, { subject: string; preview: string }>;
-  /** What it grew out of (docs/assistant/inbox.md "Relationships: parents and children"): another item, a todo or an agent session ("<machine>/<session>"). */
+  /** What it grew out of (docs/assistant/inbox.md "Relationships: parents and children"): another item, a todo, a
+   *  coding Agent's session ("<machine>/<session>") or a personal Agent's session ("<source>:<sessionKey>"). */
   parent?: InboxParent;
   /** The folder path it is filed under ("work/alerts/engine"; docs/assistant/inbox.md "Folders"); absent: unfiled. `folder_by`
    *  says who filed it: the model, or the user (then the model leaves it alone). */
@@ -211,11 +215,11 @@ export interface InboxMute extends InboxMuteOption {
   manager?: string;
 }
 
-export type InboxParentKind = "inbox" | "todo" | "session";
+export type InboxParentKind = "inbox" | "todo" | "session" | "agent";
 export interface InboxParent { kind: InboxParentKind; id: string; by?: "continues" | "connector" | "user" }
 
-/** GET /api/v1/inbox/tree/{kind}/{id}: the node's ancestors (nearest first; the last may be a todo or a session,
- * with no item) and the items right under it. */
+/** GET /api/v1/inbox/tree/{kind}/{id}: the node's ancestors (nearest first; the last may be a todo, a coding Agent
+ * session or a personal Agent session, with no item) and the items right under it. */
 export interface InboxTree {
   node: InboxParent;
   item?: InboxItem;
@@ -536,7 +540,7 @@ export function waitingAgents(interactions: Interaction[], sessions: Record<stri
   if (f.source || f.folder || (f.kind && f.kind !== "agent")) return [];
   // a card a task's supervisor holds is not the user's yet (lib/supervisor-held.ts)
   const shown = interactions
-    .filter((ix) => !supervisorHeld(ix) && !interactionMuted(ix, sessions, mutes) && hasText([ix.session_title, ix.summary, interactionTitle(ix), interactionAsk(ix)], f.query))
+    .filter((ix) => !ix.mirror_of && !supervisorHeld(ix) && !interactionMuted(ix, sessions, mutes) && hasText([ix.session_title, ix.summary, interactionTitle(ix), interactionAsk(ix)], f.query))
     .sort((a, b) => byTime(a.created_at, b.created_at) || a.id.localeCompare(b.id));
   return withChildCardsUnderParents(shown);
 }
@@ -671,6 +675,8 @@ interface InboxState {
   items: InboxItem[];
   /** The hub's triage state from the last list; null from an older hub. */
   triage: InboxTriage | null;
+  /** Every retained built-in source, including completed history. Null from an old or mixed-version hub (unknown). */
+  storedSources: InboxStoredSources | null;
   loaded: boolean;
   loading: boolean;
   error: string;
@@ -699,7 +705,7 @@ interface InboxState {
   routing: string[];
 }
 
-const EMPTY: InboxState = { items: [], triage: null, loaded: false, loading: false, error: "", sending: [], uncertainReplies: {}, moving: [], history: [], historyMore: [""], historyLoading: false, historyError: {}, doneDays: {}, groupLoading: [], groupComplete: [], routing: [] };
+const EMPTY: InboxState = { items: [], triage: null, storedSources: null, loaded: false, loading: false, error: "", sending: [], uncertainReplies: {}, moving: [], history: [], historyMore: [""], historyLoading: false, historyError: {}, doneDays: {}, groupLoading: [], groupComplete: [], routing: [] };
 let state: InboxState = EMPTY;
 const listeners = new Set<() => void>();
 /** A Map that tells its watchers when it changes. The unsent replies live outside InboxState: a keystroke in the draft
@@ -889,7 +895,7 @@ let again = false;
 /** The hub's last list as it came (before the marks were laid over it) and what names it: its cursor, so a reload asks
  * only for what changed since (docs/protocol/protocol.md "Inbox delta"), and its validator, sent as If-None-Match: a
  * 304 says the list is still this one ("Inbox validator"). Memory only: a page's first list is whole. */
-let lastList: { etag: string; cursor: string; items: InboxItem[]; triage: InboxTriage | null } | null = null;
+let lastList: { etag: string; cursor: string; items: InboxItem[]; triage: InboxTriage | null; storedSources: InboxStoredSources | null } | null = null;
 /** What a reload sends before it has a validator: a tag no list has, which asks the hub for its own. */
 const NO_LIST_TAG = 'W/"i1-"';
 /** Until when reloads ask without `since`: an answer had no cursor (an older hub or manager, or one that failed), so the
@@ -938,7 +944,7 @@ export function reloadInbox(): Promise<void> {
           // "0" until a list is held: one no list has, so the hub answers the whole list and its cursor
           const since = Date.now() < deltasOff ? "" : held?.cursor || "0";
           // If-None-Match too: a hub that knows no `since` still answers a list it has with a 304
-          const r = await api<{ items?: InboxItem[]; triage?: InboxTriage; cursor?: string; delta?: boolean; removed?: { id: string; manager?: string }[] }>(`/inbox?sources=all${since && `&since=${enc(since)}`}`, {
+          const r = await api<{ items?: InboxItem[]; triage?: InboxTriage; stored_sources?: InboxStoredSources | null; cursor?: string; delta?: boolean; removed?: { id: string; manager?: string }[] }>(`/inbox?sources=all${since && `&since=${enc(since)}`}`, {
             headers: { "If-None-Match": held?.etag || NO_LIST_TAG },
             onResponse: (headers, code) => {
               status = code;
@@ -951,10 +957,10 @@ export function reloadInbox(): Promise<void> {
             const cursor = r.cursor ?? "";
             if (since && !cursor) deltasOff = Date.now() + 600_000;
             // a delta answers only the cursor sent, so the list it changes is the one held
-            list = { etag, cursor, items: r.delta && held ? applyInboxDelta(held.items, r.items ?? [], r.removed ?? []) : r.items ?? [], triage: r.triage ?? null };
+            list = { etag, cursor, items: r.delta && held ? applyInboxDelta(held.items, r.items ?? [], r.removed ?? []) : r.items ?? [], triage: r.triage ?? null, storedSources: r.stored_sources ?? null };
             lastList = etag || cursor ? list : null;
           }
-          if (list) set({ items: keepSameItems(state.items, withPending(list.items, seq)), triage: list.triage, loaded: true, error: "",
+          if (list) set({ items: keepSameItems(state.items, withPending(list.items, seq)), triage: list.triage, storedSources: list.storedSources, loaded: true, error: "",
             uncertainReplies: replyHintsAfterRead(status === 304 ? [] : r.items ?? [], observed) });
         } finally {
           endList(seq);
@@ -994,8 +1000,8 @@ export async function refreshInbox(): Promise<void> {
   const seq = beginList();
   const observed = state.uncertainReplies;
   try {
-    const r = await api<{ items?: InboxItem[]; triage?: InboxTriage }>("/inbox/refresh?sources=all", { method: "POST" });
-    set({ items: keepSameItems(state.items, withPending(r.items ?? [], seq)), triage: r.triage ?? null, loaded: true, error: "",
+    const r = await api<{ items?: InboxItem[]; triage?: InboxTriage; stored_sources?: InboxStoredSources | null }>("/inbox/refresh?sources=all", { method: "POST" });
+    set({ items: keepSameItems(state.items, withPending(r.items ?? [], seq)), triage: r.triage ?? null, storedSources: r.stored_sources ?? null, loaded: true, error: "",
       uncertainReplies: replyHintsAfterRead(r.items ?? [], observed) });
   } catch (e) {
     toast(t("lib-inbox.refresh_failed", { error: errorText(e) }), "error");
@@ -1423,7 +1429,7 @@ export async function setAllDone(items: InboxItem[], action: BulkAction | boolea
 /** "Send": the hub replies in the chat / by mail / in the document (moving the rows' status in `changes` first) and
  * files the item as done. Filed at once; a failure puts the item back and keeps the text and the unticked changes for
  * the draft card and dialog. */
-export async function sendReply(item: InboxItem, text: string, changes: DocChange[] = []): Promise<boolean> {
+export async function sendReply(item: InboxItem, text: string, changes: DocChange[] = [], expectedSender?: "bot" | "user"): Promise<boolean> {
   const key = itemKey(item);
   if (state.sending.includes(key)) return false;
   const before = listed(item);
@@ -1437,7 +1443,7 @@ export async function sendReply(item: InboxItem, text: string, changes: DocChang
   unsentReplies.delete(key);
   droppedChanges.delete(key);
   try {
-    const r = await api<InboxItem>(`${itemPath(item.id)}/reply`, { method: "POST", json: { text, changes: changes.length ? changes : undefined }, headers: itemRequest(item) });
+    const r = await api<InboxItem>(`${itemPath(item.id)}/reply`, { method: "POST", json: { text, changes: changes.length ? changes : undefined, expected_sender_identity: expectedSender }, headers: itemRequest(item) });
     const hub = r?.id === item.id ? keepStamp(r, item) : undefined;
     settleMark(key, mark, true, hub);
     if (hub) replaceItem(withPending([hub])[0]);
@@ -1531,6 +1537,9 @@ export async function suggestionAct(item: InboxItem, action: SuggestionAction, t
       if (r.item) reconcileSuggestionItem(current, r.item);
       else void reloadInbox();
       toast(r.error, "info");
+    } else if (s.kind === "handoff" && r.code === "handoff_target_unavailable") {
+      if (r.item) reconcileSuggestionItem(current, r.item);
+      toast(t("lib-inbox-events.handoff_unavailable"), "error");
     } else {
       if (confirmation) {
         set({ uncertainReplies: { ...state.uncertainReplies, [uncertainKey]: {

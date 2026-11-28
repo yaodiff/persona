@@ -136,6 +136,13 @@ export const canonicalTool = (name: string): string => TOOL_ALIASES[name] ?? nam
 export const managedProvider = (source?: string): boolean => source === "persona" || source === "jarvis";
 /** A launcher's explicit model ID; older nodes sent Chinese display text when they meant no override. */
 export const explicitLauncherModel = (model?: string): string | undefined => model && model !== "默认" ? model : undefined; // i18n-ignore: legacy wire value, never displayed
+/** Legacy hubs wrote the Codex terminal fallback notice into Supervision.Progress and report feed items (#14822). */
+const LEGACY_CODEX_ROUTE_NOTICES = new Set([
+  "Codex will start in the terminal to use the requested reasoning effort. Approvals and questions will use the terminal screen.",
+  "为使用指定的推理强度，Codex 将通过终端启动。审批和提问将通过终端画面处理。", // i18n-ignore: legacy hub notice literal, never displayed
+  "指定された推論レベルを使うため、Codex はターミナルで起動します。承認や質問はターミナル画面を通じて行います。", // i18n-ignore: legacy hub notice literal, never displayed
+]);
+export const isLegacyCodexRouteNotice = (text?: string): boolean => Boolean(text && LEGACY_CODEX_ROUTE_NOTICES.has(text.trim()));
 export const legacyBuiltins = ["jarvis", "jarvis-circuit", "jarvis-pixel", "jarvis-facet", "jarvis-blob"];
 
 /** Apply only to typed session objects; tool input and message text stay opaque. */

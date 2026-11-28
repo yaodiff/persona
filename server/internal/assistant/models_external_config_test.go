@@ -194,7 +194,8 @@ func TestExternalNeverEntersAutomaticFallbackCandidates(t *testing.T) {
 	if got := s.mainChatInstead(t.Context(), Device{ID: "server"}, "missing", "claude", []ConfiguredLauncher{{Launcher: l, AgentType: "claude"}}, []string{l.Name}); got != "" {
 		t.Fatalf("external launcher chosen as main-chat fallback: %s", got)
 	}
-	if startableLauncher(l) || startableLauncher(fakeShell) || s.launcherEverywhere(t.Context(), l.Name) {
+	withoutList, _ := s.launcherWithoutInventory(t.Context(), "mac", l.Name)
+	if startableLauncher(l) || startableLauncher(fakeShell) || withoutList.agent != "" {
 		t.Fatal("reserved external identity was treated as an ordinary automatic launcher")
 	}
 	if !startableLauncher(proto.Launcher{Name: "external_example", Source: "path"}) {

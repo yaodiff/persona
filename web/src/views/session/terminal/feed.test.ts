@@ -85,8 +85,13 @@ vi.mock("./xterm", () => {
 });
 
 vi.mock("./cjk", () => ({ cjkFontStack: () => Promise.resolve(null), terminalFontReady: () => Promise.resolve() }));
+vi.mock("../../../lib/api", async (load) => ({
+  ...(await load<typeof import("../../../lib/api")>()),
+  api: vi.fn(async () => ({ text: "terminal screen" })),
+}));
 
 import { TerminalFeed } from "./feed";
+import { api } from "../../../lib/api";
 import { t } from "../../../i18n";
 
 const TICK_MS = 250;
@@ -110,6 +115,7 @@ describe("the side panel's terminal when the hub link drops", () => {
     hub.machines = [];
     hub.listeners.clear();
     typed.onData = null;
+    vi.mocked(api).mockClear();
     localStorage.clear();
     globalThis.ResizeObserver ??= class {
       observe() {}
@@ -121,6 +127,38 @@ describe("the side panel's terminal when the hub link drops", () => {
   afterEach(() => {
     feed?.dispose();
     vi.useRealTimers();
+  });
+
+  it("keeps an unsupported stream's page subscribed while polling, then leaves on disposal", async () => {
+    feed = new TerminalFeed("m1", "s1");
+    await feed.mount(document.createElement("div"), document.createElement("div"));
+    emit("terminal", { machine_id: "m1", session_id: "s1", error: "unsupported stream", unsupported: true });
+    expect(feed.snapshot().mode).toBe("poll");
+    hub.sent = [];
+
+    await vi.advanceTimersByTimeAsync(11 * 60 * 1000);
+    expect(api).toHaveBeenCalled();
+    expect(vi.mocked(api).mock.calls.some(([path]) => String(path).includes("/screen?"))).toBe(true);
+    expect(hub.sent).toEqual([]);
+
+    feed.dispose();
+    expect(hub.sent).toEqual([{ type: "terminal_unsubscribe", machine_id: "m1", session_id: "s1" }]);
+    const calls = vi.mocked(api).mock.calls.length;
+    await vi.advanceTimersByTimeAsync(TICK_MS * 4);
+    expect(vi.mocked(api).mock.calls).toHaveLength(calls);
+    feed.dispose();
+    expect(hub.sent).toHaveLength(1);
+  });
+
+  it("restores a polling page's view-only presence when the hub reconnects", async () => {
+    feed = new TerminalFeed("m1", "s1");
+    await feed.mount(document.createElement("div"), document.createElement("div"));
+    emit("terminal", { machine_id: "m1", session_id: "s1", error: "unsupported stream", unsupported: true });
+    hub.sent = [];
+    emit("hello", {});
+    expect(feed.snapshot().mode).toBe("poll");
+    expect(feed.driving).toBe(false);
+    expect(hub.sent).toEqual([{ type: "terminal_subscribe", machine_id: "m1", session_id: "s1" }]);
   });
 
   it("uses the host's selected mono family each time the single-pane terminal mounts", async () => {

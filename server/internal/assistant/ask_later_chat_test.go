@@ -19,7 +19,7 @@ import (
 
 func noWaitDeadlineArgs(deadline string) string {
 	args := strings.Replace(strings.Replace(askDeadlineArgsJSON, "%s", deadline, 1), "%s", "true", 1)
-	return strings.Replace(args, `{"deadline"`, `{"wait":false,"deadline"`, 1)
+	return strings.Replace(args, `"deadline"`, `"wait":false,"deadline"`, 1)
 }
 
 const expiredAnswer = `{"dismiss":true,"reason":"` + proto.DismissedExpired + `"}`

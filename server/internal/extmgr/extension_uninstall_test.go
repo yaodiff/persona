@@ -1,6 +1,8 @@
 package extmgr
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"os"
@@ -8,7 +10,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/extension"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 func installUninstallFixture(t *testing.T, h *Manager, id string, pack bool) *extension.Extension {
@@ -29,6 +33,26 @@ func installUninstallFixture(t *testing.T, h *Manager, id string, pack bool) *ex
 	// Fixtures use market origins so a full-rights remote device may remove them.
 	p.Record.Origin = "market:demo/" + id
 	return p
+}
+
+func TestExtensionTrustForgetRunsOnlyOnUninstall(t *testing.T) {
+	h, phone, _ := marketDevices(t)
+	installUninstallFixture(t, h, "example", false)
+	var forgotten []string
+	h.opts.Assistant = func(_ context.Context, method string, params json.RawMessage) (json.RawMessage, error) {
+		if method == assistantwire.MethodExtensionTrustForget {
+			forgotten = append(forgotten, string(params))
+			return nil, &rpc.Error{Code: extension.CodeUnknownMethod, Message: "unknown method " + method}
+		}
+		return json.RawMessage(`{}`), nil
+	}
+	if err := h.extensions.reg.SetEnabled(t.Context(), "example", false, "test"); err != nil || len(forgotten) != 0 {
+		t.Fatalf("switching off: forgot %v, error %v", forgotten, err)
+	}
+	code, out := call(t, h.routes(), "DELETE", "/api/v1/extensions/example/-/?keep_data=1", phone, "")
+	if code != 200 || len(forgotten) != 1 || forgotten[0] != `{"extension":"example"}` {
+		t.Fatalf("uninstall with an older assistant: HTTP %d %v, forgot %v", code, out, forgotten)
+	}
 }
 
 func TestPackUninstallPartialFailure(t *testing.T) {

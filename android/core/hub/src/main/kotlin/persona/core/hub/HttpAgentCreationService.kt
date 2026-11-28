@@ -33,6 +33,8 @@ class HttpAgentCreationService(
     private val startHttp = http.newBuilder().readTimeout(130, TimeUnit.SECONDS).build()
     // The hub gives the node 70 s to ask the launcher's CLI for its models (it starts it once, then caches the list).
     private val modelsHttp = http.newBuilder().readTimeout(75, TimeUnit.SECONDS).build()
+    /** Orca's worktree create, rename and delete (#17054), on the same pairing and client. */
+    override val worktrees: WorktreeManagement = HttpWorktreeManagement(base, token, client, isCurrent)
     private fun url(vararg segments: String) = base.newBuilder().apply { segments.forEach(::addPathSegment) }.build()
     private fun checkScope() { if (!isCurrent()) throw CancellationException("Pairing changed") }
     private suspend fun read(request: Request, client: OkHttpClient = http): JsonObject {
@@ -54,8 +56,10 @@ class HttpAgentCreationService(
             catch (_: IllegalArgumentException) { emptyList() }
         val profile = try { JsonCodec.decodeFromJsonElement<PickerTierProfile?>(body["tiers_profile"] ?: JsonNull) }
             catch (_: IllegalArgumentException) { null }
+        val opens = try { JsonCodec.decodeFromJsonElement<DefaultOpens?>(body["default_opens"] ?: JsonNull) }
+            catch (_: IllegalArgumentException) { null }
         return AssistantLaunchers(JsonCodec.decodeFromJsonElement(body["launchers"] ?: JsonArray(emptyList())),
-            unavailable = unavailable, tiers = tiers, tiersProfile = profile)
+            unavailable = unavailable, tiers = tiers, tiersProfile = profile, defaultOpens = opens)
     }
     override suspend fun directories(machineId: String, path: String): AgentDirectories = JsonCodec.decodeFromJsonElement(read(
         request("api", "v1", "machines", machineId, "dirs")
@@ -164,7 +168,7 @@ class HttpAgentCreationService(
             else -> throw IllegalStateException("Malformed workspace catalog errors")
         }
         // Existing hubs flatten source failures to machine_id/error; never parse their localized error text.
-        val failed = errors.any { element ->
+        val failedSources = errors.mapNotNull { element ->
             val error = element as? JsonObject ?: throw IllegalStateException("Malformed workspace catalog error")
             val errorMachine = (error["machine_id"] as? JsonPrimitive)?.takeIf { it.isString }?.content?.takeIf(String::isNotBlank)
                 ?: throw IllegalStateException("Malformed workspace catalog error machine")
@@ -173,12 +177,16 @@ class HttpAgentCreationService(
                 is JsonPrimitive -> value.takeIf { it.isString }?.content ?: throw IllegalStateException("Malformed workspace catalog error source")
                 else -> throw IllegalStateException("Malformed workspace catalog error source")
             }
-            errorMachine == machineId && (source.isNullOrBlank() || source == "paseo")
+            source.orEmpty().takeIf { errorMachine == machineId }
         }
         // Every computer's workspaces: decoded off the caller's (the form's main) thread.
         return kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
             AgentWorkspaceCatalog(JsonCodec.decodeFromJsonElement<List<AgentWorkspace>>(workspaces)
-                .filter { it.machineId == machineId }, complete = !failed)
+                .filter { it.machineId == machineId },
+                complete = failedSources.none { it.isBlank() || it == "paseo" },
+                failedSources = failedSources.filter(String::isNotBlank).toSet(),
+                unscopedFailure = failedSources.any(String::isBlank),
+            )
         }
     }
 

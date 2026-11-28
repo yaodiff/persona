@@ -7,6 +7,7 @@ import type { AgentSession } from "../lib/agents";
 import type { Session } from "../lib/types";
 import { setAgentDetails } from "../lib/context-usage";
 import { AgentRow, PersonaRow, SessionRow } from "./Sidebar";
+import { unreadShown } from "./SidebarRows";
 import { conversationMenuItems } from "./ConversationMenu";
 
 // the sidebar's modules read the colour scheme and this browser's settings when they load
@@ -23,13 +24,36 @@ vi.mock("./assistant/Persona", async (importOriginal) => ({ ...(await importOrig
 const session: Session = { machine_id: "mac", session_id: "s1", title: "整理文档", cwd: "/code", status: "idle", state: "idle" };
 const rowProps = { s: session, k: "s:mac/s1", reg: () => () => {}, hover: () => {}, to: { name: "session", mid: "mac", sid: "s1" } as const, go: () => () => {}, onMenu: () => {} };
 const link = (html: string) => html.match(/<a [^>]*>/)![0];
-const more = (html: string) => html.match(/<button [^>]*aria-label="Agent 的操作"[^>]*>/)![0];
+const more = (html: string) => html.match(/<button [^>]*aria-label="Agent 操作"[^>]*>/)![0];
+
+describe("unread shown in sidebar counts", () => {
+  const unseen: Session["view"] = { phase: "done", reason: { kind: "unseen" }, rank: 30 };
+
+  it.each<{ name: string; patch: Partial<Session>; counted: boolean }>([
+    { name: "an unopened reply", patch: { view: unseen }, counted: true },
+    { name: "an unopened question", patch: { view: { phase: "done", reason: { kind: "asks", unseen: true }, rank: 30 } }, counted: true },
+    { name: "an opened question", patch: { view: { phase: "done", reason: { kind: "asks" }, rank: 31 } }, counted: false },
+    { name: "a just-finished turn", patch: { view: { phase: "done", reason: { kind: "just_finished" }, rank: 32 } }, counted: false },
+    { name: "a reply marked seen locally", patch: { view: unseen, locallySeen: true }, counted: false },
+    { name: "a usage-limit stop", patch: { state: "unread", view: { phase: "error", reason: { kind: "usage_limit" }, rank: 10 } }, counted: false },
+    { name: "a legacy unread reply", patch: { state: "unread", status: "done" }, counted: true },
+    { name: "a legacy usage-limit stop", patch: { state: "unread", status: "done", turn_error_kind: "usage_limit", turn_error: "Usage limit reached" }, counted: false },
+  ])("checks the unread count for $name", ({ patch, counted }) => {
+    expect(unreadShown({ ...session, ...patch })).toBe(counted);
+  });
+});
 
 describe("an agent's row", () => {
   it("is aria-current with the open row's fill when it is open", () => {
     const html = renderToStaticMarkup(<SessionRow {...rowProps} active />);
     expect(link(html)).toContain('aria-current="page"');
     expect(link(html)).toMatch(/class="[^"]*\bbg-hover-2\b/);
+  });
+  it("draws an error phase with the error mark, not the Seen dot its activity folds it into (#16873)", () => {
+    const mark = (s: Session) => renderToStaticMarkup(<SessionRow {...rowProps} s={s} showState active={false} />).match(/class="status-mark[^"]*"[^>]*data-state="([^"]+)"/)?.[1];
+    expect(mark({ ...session, view: { phase: "error", reason: { kind: "start_refused" }, rank: 10 } } as Session)).toBe("error");
+    expect(mark({ ...session, view: { phase: "done", reason: { kind: "unseen" }, rank: 30 } } as Session)).toBe("unread");
+    expect(mark(session)).toBe("idle");
   });
   it("is neither when it is not", () => {
     const html = renderToStaticMarkup(<SessionRow {...rowProps} active={false} />);
@@ -47,10 +71,11 @@ describe("where an agent was opened, as a mark at its row's end (#2526)", () => 
   const mark = (html: string) => html.match(/<span data-source="[^"]*"[^>]*>.*?<\/span>/)?.[0];
   it("draws a terminal pane's as the terminal icon, named but without words", () => {
     const html = render({ pane_id: "w1:p1" });
-    expect(mark(html)).toMatch(/aria-label="终端"/);
-    expect(mark(html)).toMatch(/title="终端"/);
+    expect(mark(html)).toMatch(/aria-label="在标签页中"/);
+    expect(mark(html)).toMatch(/title="在标签页中"/);
     expect(mark(html)).toContain("text-ink-3");
-    expect(mark(html)).toContain("<svg");
+    expect(mark(html)).toContain('<rect x="2" y="4" width="20" height="16" rx="2.5"');
+    expect(mark(html)).toContain("m6 9 3 3-3 3M12 15h5");
     expect(mark(html)).not.toMatch(/>终端</); // no visible word any more
     expect(link(html)).not.toContain(" title=");
   });
@@ -59,14 +84,17 @@ describe("where an agent was opened, as a mark at its row's end (#2526)", () => 
       const html = render(patch);
       expect(mark(html)).toMatch(/aria-label="桌面端"/);
       expect(mark(html)).toContain("text-source-desktop");
-      expect(mark(html)).not.toContain("text-source-terminal");
+      expect(mark(html)).not.toContain("m6 9 3 3-3 3M12 15h5");
     }
   });
   it("draws Lark's mark for a Lark group, a link to its topic when it has one", () => {
     expect(mark(render({ pane_id: "botmux:oc_1/t1" }))).toMatch(/^<span data-source="feishu" role="img"[^>]*aria-label="飞书群"/);
     const linked = mark(render({ pane_id: "botmux:oc_1/t1", external_url: "https://example.com/topic" }));
-    expect(linked).toMatch(/^<span data-source="feishu" role="link" tabindex="0"[^>]*aria-label="飞书群 · 在飞书里打开这个话题"/);
+    expect(linked).toMatch(/^<span data-source="feishu" role="link" tabindex="0"[^>]*aria-label="飞书群 · 在飞书中打开该话题"/);
     expect(linked).toContain("<img");
+    for (const bad of ["javascript:alert(1)", "http://example.com/topic", "https:/admin", "https://user:pw@evil.example/topic"]) {
+      expect(mark(render({ pane_id: "botmux:oc_1/t1", external_url: bad })), bad).toMatch(/^<span data-source="feishu" role="img"/);
+    }
   });
   it("keeps the source mark and pending count without trailing age", () => {
     const timed = render({ pane_id: "botmux:oc_1/t1", external_url: "https://example.com/topic",
@@ -86,11 +114,11 @@ describe("where an agent was opened, as a mark at its row's end (#2526)", () => 
     expect(mark(render({ pane_id: "w1:p1" }))).toContain("group-hover/row:invisible");
     expect(mark(renderToStaticMarkup(<SessionRow {...rowProps} s={{ ...session, pane_id: "w1:p1" }} active />))).not.toContain("invisible");
   });
-  it("tells terminal and desktop apart by shape too: a framed terminal prompt, and a framed window", () => {
+  it("tells a framed terminal prompt and a desktop window apart by shape", () => {
     const svg = (html: string) => mark(html)!.match(/<svg[^>]*>(.*?)<\/svg>/)![1];
     const terminal = svg(render({ pane_id: "w1:p1" }));
     const desktop = svg(render({ space_kind: "codex_app", source_kind: "codex_history" }));
-    expect(terminal).toContain("<rect"); // framed terminal icon with prompt chevron and underscore
+    expect(terminal).toContain("<rect");
     expect(desktop).toContain("<rect");
     expect(terminal).not.toBe(desktop);
   });
@@ -196,10 +224,10 @@ describe("Persona's main row", () => {
   });
   it("has a ⋯ for the conversation's menu when the main conversation is there", () => {
     const html = renderToStaticMarkup(<PersonaRow {...props} active={false} onMenu={() => {}} />);
-    expect(html).toMatch(/<button [^>]*aria-label="对话的操作"[^>]*aria-haspopup="menu"/);
+    expect(html).toMatch(/<button [^>]*aria-label="对话操作"[^>]*aria-haspopup="menu"/);
   });
   it("draws no ⋯ without it", () => {
-    expect(renderToStaticMarkup(<PersonaRow {...props} main={undefined} active={false} />)).not.toContain("对话的操作");
+    expect(renderToStaticMarkup(<PersonaRow {...props} main={undefined} active={false} />)).not.toContain("对话操作");
   });
   it("whose menu has only 复制会话 ID and 结束…", () => {
     expect(conversationMenuItems(main, { main: true }).map((i) => i.key)).toEqual(["copy", "end"]);
@@ -217,7 +245,7 @@ describe("a 常驻 lead row (#6214 keepTrailing)", () => {
     const counts = html.match(/<span[^>]*>在做 1 · 等你 1<\/span>/)![0];
     expect(counts).not.toContain("group-hover/row:invisible");
     // the ⋯ is an in-flow fader, not an absolute overlay covering the words
-    const button = html.match(/<button [^>]*aria-label="Agent 的操作"[^>]*>/)![0];
+    const button = html.match(/<button [^>]*aria-label="Agent 操作"[^>]*>/)![0];
     expect(button).toContain("opacity-0 group-hover/row:opacity-100");
     expect(button).not.toContain("absolute");
     // and the anchor reserves no overlay room of its own
@@ -280,5 +308,27 @@ describe("a session's associated tab name (#7595)", () => {
     const html = render({ ...named, slot_id: undefined, tab_id: undefined, slot_name: "Workspace name", updated_at: undefined }, { tab: true, hint: undefined });
     expect(html).toContain("Workspace name");
     expect(html).not.toContain(tabName("Workspace name"));
+  });
+});
+
+describe("a logical conversation's undelivered input on its row (#17431)", () => {
+  const at = "2026-11-27T12:00:00Z";
+  it("says how many wait, or that an expired one needs the owner, and leaves other rows alone", () => {
+    const waiting: Session = { ...session, assistant: true, state: "working", undelivered: [
+      { id: "head", text: "a", at, state: "waiting", reason: "awaiting_receipt", deadline: at },
+      { id: "q", text: "b", at, state: "waiting", reason: "behind_unconfirmed", blocked_by: "head" },
+    ] };
+    const html = renderToStaticMarkup(<SessionRow {...rowProps} s={waiting} active={false} />);
+    expect(html).toContain('data-undelivered-line="waiting"');
+    expect(html).toContain(t("sidebar.undelivered_waiting", { count: 2 }));
+    const expired: Session = { ...waiting, state: "needs_you", undelivered: [...waiting.undelivered!, { id: "old", text: "c", at, state: "failed", reason: "receipt_expired" }] };
+    const alert = renderToStaticMarkup(<SessionRow {...rowProps} s={expired} active={false} />);
+    expect(alert).toContain('data-undelivered-line="expired"');
+    expect(alert).toContain('role="alert"');
+    expect(alert).toContain(t("sidebar.undelivered_expired", { count: 1 }));
+    // #10194's kept messages say it in their bubbles alone; a row without any draws nothing new
+    const kept: Session = { ...session, undelivered: [{ id: "k", text: "d", at, state: "failed" }] };
+    expect(renderToStaticMarkup(<SessionRow {...rowProps} s={kept} active={false} />)).not.toContain("data-undelivered-line");
+    expect(renderToStaticMarkup(<SessionRow {...rowProps} active={false} />)).not.toContain("data-undelivered-line");
   });
 });

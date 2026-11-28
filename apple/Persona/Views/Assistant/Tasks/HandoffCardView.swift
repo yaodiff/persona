@@ -200,8 +200,169 @@ struct HandoffCardView: View {
     }
 }
 
-/// Over the main conversation's composer: "Wrap up: <title>" for each open item handed to it, which asks it for the
-/// final summary and reply through the same hand-off (the item's id goes with it, #5932).
+/// Shared hand-off wrap-up request (#5932): asks the main conversation for the final summary and reply back to the
+/// handed-off Inbox item.
+private enum HandoffWrapUpRequest {
+    @MainActor static func send(_ item: InboxItem) async throws {
+        guard let api = AppModel.shared.api?.manager(AppModel.shared.itemManager(item.manager)) else { return }
+        _ = try await api.inboxHandoff(
+            item.id,
+            text: String(localized: "Let's wrap this up: write the final summary and reply back to this Inbox item."),
+            clientID: UUID()
+        )
+    }
+}
+
+/// Neutral entry in the main conversation's action bar for open Inbox items handed off to this conversation (#5932).
+/// Keeps `InboxStore.shared.items` reads scoped to this child view (P5) and collapses to zero height when empty.
+struct WrapUpEntry: View {
+    var conversation: String
+    var open: Bool
+    var toggle: () -> Void
+    private var inbox: InboxStore { .shared }
+
+    var body: some View {
+        let items = HandoffWrapUp.items(inbox.items, sessionID: conversation)
+        if !items.isEmpty || open {
+            Button {
+                Haptics.tap()
+                toggle()
+            } label: {
+                HStack(spacing: Theme.Space.xs) {
+                    ThemedIcon(Theme.Icon.inbox).accessibilityHidden(true)
+                    Text("Wrap Up [Action Bar]")
+                    if let count = CountBadge.text(items.count) { Text(count).monospacedDigit() }
+                }
+                .dockCapsule(open ? .selected : .plain)
+                .background(Theme.pageBackground, in: .capsule)
+                .fixedSize()
+            }
+            .buttonStyle(.plain)
+            .accessibilityAddTraits(open ? .isSelected : [])
+            .accessibilityIdentifier("action-bar.wrap-up")
+        }
+    }
+}
+
+/// Tray opened from `WrapUpEntry` in the action bar's shared tray slot: lists open Inbox items handed off to the main
+/// conversation, each with a one-tap Wrap Up action and inline error feedback.
+struct WrapUpTray: View {
+    var conversation: String
+    var close: () -> Void
+    @State private var busy: String?
+    @State private var error: String?
+    private var inbox: InboxStore { .shared }
+
+    var body: some View {
+        let items = HandoffWrapUp.items(inbox.items, sessionID: conversation)
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: Theme.Space.s) {
+                Text("Wrap Up [Action Bar]")
+                    .font(Theme.Font.sectionHeader)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                Spacer(minLength: Theme.Space.s)
+                Button(action: close) {
+                    ThemedIcon(Theme.Icon.close)
+                        .font(Theme.Font.labelStrong)
+                        .foregroundStyle(.secondary)
+                        .scaledFrame(width: Theme.Size.badge, height: Theme.Size.badge)
+                        .tapTargetFrame()
+                        .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Close")
+                .accessibilityIdentifier("action-tray.wrap-up.close")
+            }
+            .padding(.leading, Theme.Space.m)
+
+            if let error {
+                Text(error)
+                    .font(Theme.Font.caption)
+                    .foregroundStyle(Theme.danger)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, Theme.Space.m)
+                    .padding(.bottom, Theme.Space.s)
+                    .accessibilityIdentifier("action-tray.wrap-up.error")
+            }
+
+            if items.isEmpty {
+                Text("Nothing to wrap up [Action Bar]")
+                    .font(Theme.Font.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .padding(.horizontal, Theme.Space.m)
+                    .padding(.bottom, Theme.Space.m)
+                    .accessibilityIdentifier("action-tray.wrap-up.empty")
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: Theme.Space.s) {
+                        ForEach(items) { item in
+                            row(item)
+                        }
+                    }
+                    .padding(.horizontal, Theme.Space.m)
+                    .padding(.bottom, Theme.Space.m)
+                }
+                .scrollBounceBehavior(.basedOnSize)
+                .frame(maxHeight: Theme.Size.box280)
+            }
+        }
+        .surface(in: .rect(cornerRadius: Theme.Radius.panel, style: .continuous))
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("action-tray.wrap-up")
+        .onChange(of: items.isEmpty) { _, empty in if empty { close() } }
+    }
+
+    private func row(_ item: InboxItem) -> some View {
+        let isBusy = busy == item.id
+        return HStack(spacing: Theme.Space.s) {
+            ThemedIcon(Theme.Icon.inbox)
+                .font(Theme.Font.labelStrong)
+                .foregroundStyle(.secondary)
+                .scaledFrame(width: Theme.Size.markM)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+                Text(item.title)
+                    .font(Theme.Font.secondaryMedium)
+                    .foregroundStyle(.primary)
+                    .lineLimit(2)
+                Text("Handed off from Inbox [Action Bar]")
+                    .font(Theme.Font.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: Theme.Space.s)
+            Button { Task { await wrapUp(item) } } label: {
+                Text("Wrap Up [Action Bar]")
+                    .lineLimit(1)
+                    .fixedSize()
+                    .opacity(isBusy ? 0 : 1)
+                    .overlay { if isBusy { ProgressView().controlSize(.mini) } }
+            }
+            .themedButton(prominent: true)
+            .disabled(busy != nil)
+            .accessibilityLabel(String(localized: "Wrap up: \(item.title)"))
+            .accessibilityIdentifier("wrapUp.chip")
+        }
+        .padding(Theme.Space.m)
+        .background(Theme.Fill.well, in: .rect(cornerRadius: Theme.Radius.control, style: .continuous))
+    }
+
+    private func wrapUp(_ item: InboxItem) async {
+        guard busy == nil else { return }
+        busy = item.id
+        error = nil
+        defer { busy = nil }
+        do {
+            try await HandoffWrapUpRequest.send(item)
+        } catch {
+            self.error = String(localized: "Couldn't ask to wrap up: \(error.localizedDescription)")
+        }
+    }
+}
+
+/// Standalone wrap-up chips for surfaces that do not host `AssistantActionBar` (#5932).
 struct WrapUpChips: View {
     var key: SessionKey
     @State private var busy: String?
@@ -236,12 +397,12 @@ struct WrapUpChips: View {
     }
 
     private func wrapUp(_ it: InboxItem) async {
-        guard busy == nil, let api = AppModel.shared.api?.manager(AppModel.shared.itemManager(it.manager)) else { return }
+        guard busy == nil else { return }
         busy = it.id
         error = nil
         defer { busy = nil }
         do {
-            _ = try await api.inboxHandoff(it.id, text: String(localized: "Let's wrap this up: write the final summary and reply back to this Inbox item."), clientID: UUID())
+            try await HandoffWrapUpRequest.send(it)
         } catch {
             self.error = String(localized: "Couldn't ask to wrap up: \(error.localizedDescription)")
         }

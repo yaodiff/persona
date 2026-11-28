@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { foldGoalTasks, isChildBlocker, isChildDone } from "./todo-goal-fold";
+import { foldGoalTasks, isChildBlocker, isChildDone, nestSectionHierarchy } from "./todo-goal-fold";
 import { TRIAGE_SECTIONS, type Triage, type TriageGroup, type TriageResult, type TriageSection } from "./todo-triage";
 import type { Todo } from "./todos";
 
@@ -173,5 +173,55 @@ describe("foldGoalTasks (#14661)", () => {
     expect(res.triaged.sections.working).toHaveLength(1);
     expect(res.triaged.sections.working[0].members.map((m) => m.id)).toEqual(["goal-1"]);
     expect(res.goals.get("goal-1")?.total).toBe(1);
+  });
+});
+
+describe("nestSectionHierarchy (#16939)", () => {
+  it("nests same-section children under their parent regardless of order and computes done/blocked counts", () => {
+    const parent = td("goal-1", { title: "Parent Goal" });
+    const blocker = td("c-block", {
+      part_of: "goal-1",
+      view: { phase: "needs_you", section: "needs_you", reason: "owner_decides", rank: 0 },
+    });
+    const childDone = td("c-done", { part_of: "goal-1", done_at: "2026-11-24T10:00:00.000Z" });
+    const standalone = td("solo");
+
+    // Child appears before parent in section order
+    const entries = nestSectionHierarchy(
+      [blocker, parent, childDone, standalone],
+      new Map([parent, blocker, childDone, standalone].map((x) => [x.id, x])),
+      new Map<string, TriageSection>([
+        ["c-block", "waiting"],
+        ["goal-1", "working"],
+        ["c-done", "done"],
+        ["solo", "other"],
+      ]),
+    );
+
+    expect(entries.map((e) => e.todo.id)).toEqual(["goal-1", "solo"]);
+    expect(entries[0].total).toBe(2);
+    expect(entries[0].done).toBe(1);
+    expect(entries[0].blockedCount).toBe(1);
+    expect(entries[0].children.map((c) => c.todo.id)).toEqual(["c-block", "c-done"]);
+    expect(entries[1].children).toHaveLength(0);
+  });
+
+  it("attaches parentGoalTitle for cross-section children whose parent lives outside the section and keeps cycles safe", () => {
+    const outsideParent = td("outside-goal", { title: "External Umbrella" });
+    const crossChild = td("cross-child", { part_of: "outside-goal" });
+    const root = td("root", { title: "Root" });
+    const mid = td("mid", { title: "Middle", part_of: "root" });
+    const leaf = td("leaf", { title: "Leaf", part_of: "mid" });
+    const cycA = td("cyc-a", { part_of: "cyc-b" });
+    const cycB = td("cyc-b", { part_of: "cyc-a" });
+
+    const allById = new Map([outsideParent, crossChild, root, mid, leaf, cycA, cycB].map((x) => [x.id, x]));
+    const entries = nestSectionHierarchy([crossChild, root, mid, leaf, cycA, cycB], allById);
+
+    expect(entries.map((e) => e.todo.id)).toEqual(["cross-child", "root", "cyc-a", "cyc-b"]);
+    expect(entries[0].parentGoalTitle).toBe("External Umbrella");
+    expect(entries[1].children.map((c) => c.todo.id)).toEqual(["mid", "leaf"]);
+    expect(entries[1].children[0].parentGoalTitle).toBeUndefined();
+    expect(entries[1].children[1].parentGoalTitle).toBe("Middle");
   });
 });

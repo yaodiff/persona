@@ -239,6 +239,16 @@ function DefaultNarrowBridge({ render }: { render: (narrow: boolean) => ReactNod
 }
 
 /** Pure presentational view for the right-hand side panel. */
+const NON_TEXT_INPUT = new Set(["checkbox", "radio", "button", "submit", "reset", "range", "file", "image", "color"]);
+
+function isTextField(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return false;
+  if (target instanceof HTMLInputElement) return !NON_TEXT_INPUT.has(target.type);
+  if (target.closest("textarea, select")) return true;
+  const ce = target.closest("[contenteditable]");
+  return ce ? ce.getAttribute("contenteditable") !== "false" : Boolean((target as HTMLElement).isContentEditable);
+}
+
 export function SidePanelView({
   panel,
   maximized = false,
@@ -263,8 +273,19 @@ export function SidePanelView({
   const back = canGoBack ? onBack : undefined;
   const handleKeyDown: KeyboardEventHandler<HTMLElement> = onKeyDown ?? ((e) => {
     // Esc closes the panel from inside it, unless something in it (a field, a menu) or a dialog over it took the key
-    if (e.key !== "Escape" || e.defaultPrevented || e.nativeEvent.isComposing) return;
-    if (document.querySelector("[role=menu],[role=dialog]")) return;
+    if (e.key !== "Escape" || e.defaultPrevented || e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
+    if ([...document.querySelectorAll("[role=menu],[role=dialog],[role=alertdialog]")].some((el) => !el.closest("[data-closing],[inert]"))) return;
+    if (isTextField(e.target)) {
+      // Keep the panel open while editing a text field, and stop propagation so ChatView's window Esc never interrupts a working agent.
+      e.stopPropagation();
+      return;
+    }
+    const unsaved = e.currentTarget.querySelector("[data-unsaved-edit]");
+    if (unsaved && !unsaved.dispatchEvent(new CustomEvent("persona:escape-unsaved", { cancelable: true }))) {
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
     e.preventDefault();
     // not also the conversation's Esc (it stops a running agent, ChatView)
     e.stopPropagation();
@@ -285,7 +306,7 @@ export function SidePanelView({
         "fixed inset-x-0 top-(--kb-top) z-30 flex h-(--kb-h) flex-col bg-page shadow-overlay max-lg:pr-[env(safe-area-inset-right)] max-lg:pl-[env(safe-area-inset-left)] lg:relative lg:inset-auto lg:top-auto lg:z-auto lg:h-auto lg:w-(--panel-w) lg:shrink-0 lg:border-l lg:border-line lg:shadow-none",
         maximized && "lg:hidden",
       )}
-      style={{ "--panel-w": `${width}px`, animation: `slide-in-right 260ms ${EASE} both` } as React.CSSProperties}
+      style={{ "--panel-w": `${width}px`, animation: `slide-in-right 260ms ${EASE} backwards` } as React.CSSProperties}
     >
       {/* the panel is on the right: dragging its left edge left (or ArrowLeft) widens it */}
       <ResizeHandle
@@ -299,7 +320,7 @@ export function SidePanelView({
         label={t("sidepanel.resize_label")}
         title={t("sidepanel.resize_title")}
         controls={asideId}
-        className="hidden lg:block"
+        className="hidden lg:flex"
       />
       <div className="flex min-h-0 flex-1 flex-col">
         {/* a chunk gone after a hub redeploy reloads once, else shows a retry; never a blank panel */}
@@ -669,11 +690,11 @@ function body(p: Panel, onClose: () => void) {
     case "git":
       return <GitPanel key={directoryPanelKey(p)} mid={p.mid} sid={p.sid} cwd={p.cwd} at={p.at} onClose={onClose} />;
     case "review":
-      return <ReviewPanel key={directoryPanelKey(p)} mid={p.mid} sid={p.sid} cwd={p.cwd} scope={p.scope} at={p.at} opened={p} onClose={onClose} />;
+      return <ReviewPanel key={directoryPanelKey(p)} mid={p.mid} sid={p.sid} cwd={p.cwd} scope={p.scope} base={p.base} target={p.target} live={p.live} at={p.at} opened={p} onClose={onClose} />;
     case "changes":
       return <ChangesPanel key={`${p.mid}/${p.sid}`} mid={p.mid} sid={p.sid} opened={p} onClose={onClose} />;
     case "file":
-      return <FileViewerPanel key={`${p.mid}:${p.path}:${p.line ?? ""}-${p.to ?? ""}${p.readOnly ? ":ro" : ""}`} mid={p.mid} sid={p.sid} path={p.path} cwd={p.cwd} line={p.line} to={p.to} readOnly={p.readOnly} onClose={onClose} />;
+      return <FileViewerPanel key={`${p.mid}:${p.path}:${p.line ?? ""}-${p.to ?? ""}${p.readOnly ? ":ro" : ""}:${p.navigationId ?? ""}`} mid={p.mid} sid={p.sid} path={p.path} cwd={p.cwd} line={p.line} to={p.to} readOnly={p.readOnly} onClose={onClose} />;
     case "link":
       return <LinkPanel key={`${p.manager ?? ""} ${p.url}`} url={p.url} title={p.title} manager={p.manager} onClose={onClose} />;
     case "conversation-tasks":

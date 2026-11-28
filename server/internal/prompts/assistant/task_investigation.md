@@ -1,0 +1,1 @@
+This assignment investigates several issues. Before returning the report, call report_to_supervisor with each actionable unresolved finding in findings (stable id, summary, next action, and source), or findings: [] if there are none. Keep the same ID for later updates. Findings in the written report alone do not establish an owner or follow-up.

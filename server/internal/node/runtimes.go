@@ -20,6 +20,7 @@ import (
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
+	"github.com/nwverse/persona/server/internal/transcript"
 )
 
 // RuntimeProtocol is the runtime wire's version, answered to runtime.hello; it grows only for changes old runtimes misread.
@@ -71,6 +72,7 @@ type runtimeHello struct {
 		Close        bool `json:"close"`
 		Rewind       bool `json:"rewind"`
 		Fork         bool `json:"fork"`
+		Input        bool `json:"input"` // session.input types one line into a particular waiting command
 		QueueEdit    bool `json:"queue_edit"`
 		QueueSendNow bool `json:"queue_send_now"`
 		// Assistant: its launcher may run the Persona assistant (assistant_runtime.go; docs/integrations/runtimes.md "Assistant").
@@ -142,7 +144,11 @@ type runtimeConn struct {
 	hello    runtimeHello
 	ready    bool            // runtime.hello arrived
 	sessions []proto.Session // its last runtime.sessions
-	watched  map[string]bool // sessions this connection was asked to watch, including an attempt still pending
+	// sessionsListed is true once this connection has pushed its first runtime.sessions list.
+	// Before that arrives (for example while a freshly started runtime scans disk), absence from
+	// runtimeRegistry.owner/known cannot prove a runtime session is gone.
+	sessionsListed bool
+	watched        map[string]bool // sessions this connection was asked to watch, including an attempt still pending
 	// watchTokens identifies the current attempt for each watched session. The counter is per connection and is never
 	// reset while it can have an RPC outstanding, so a late error cannot clear a newer attempt or a later hub watch.
 	watchTokens    map[string]uint64
@@ -161,6 +167,11 @@ type runtimeConn struct {
 	resume       map[string][]string
 	transcripts  map[string]string
 	codexThreads map[string]string
+	// agyPaneBackground holds running tasks projected for a live terminal when the ACP row hides them.
+	agyPaneBackground map[string][]proto.BackgroundTask
+	agyPreviews       map[string]agyPreview
+	// inputWaits is bound to this connection, guarded by runtimeRegistry.mu.
+	inputWaits map[runtimeInputKey]*runtimeInputWait
 	// workspaces are its own workspaces, as its last runtime.workspaces said (caps.workspaces, runtimeworkspaces.go);
 	// workspacesSaid: it said them on this connection (a workspace missing from them is gone).
 	workspaces     []runtimeWorkspace
@@ -177,6 +188,19 @@ type runtimeConn struct {
 	// superseded is true once a newer runtime.hello of the same runtime replaced this connection as stale (guarded by
 	// runtimeRegistry.mu).
 	superseded bool
+	// Per-connection ordered runtime.hub delivery state (guarded by h.mu).
+	// hubHolders counts in-flight runtime.hello calls gating notifications between registerRuntime
+	// and completion of the runtime.hello reply write (rpc.AfterReply), ensuring runtime.hub events
+	// never precede the hello reply on the wire even across duplicate or concurrent hellos.
+	hubHolders       int
+	hubNotifying     bool   // true while this connection's drainHubNotifications goroutine is active
+	hubStateInit     bool   // true once hello reply or a runtime.hub push recorded hubLastConnected/hubLastEpoch
+	hubLastConnected bool   // last connected state delivered to this runtime (hello reply or runtime.hub)
+	hubLastEpoch     uint64 // RuntimeHost.hubEpoch of that last delivered state
+	hubTargetSeq     uint64 // highest RuntimeHost.hubSeq applied to this connection
+	hubTargetEpoch   uint64 // RuntimeHost.hubEpoch of hubTargetSeq
+	hubTargetConn    bool   // RuntimeHost connected state of hubTargetSeq
+	hubClosed        bool   // connection closed/removed; stop delivering runtime.hub
 }
 
 // isDaemon: the node dialed it (a daemon in daemons.json), it did not connect to the socket.
@@ -201,6 +225,16 @@ func (h *runtimeConn) agent() string {
 		return h.hello.Agent
 	}
 	return h.hello.Runtime
+}
+
+// listedSessions reports whether this runtime connection has pushed at least one runtime.sessions snapshot.
+func (h *runtimeConn) listedSessions() bool {
+	if h == nil {
+		return false
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.sessionsListed
 }
 
 // assistant: the runtime runs the Persona assistant's conversations (caps.assistant).
@@ -297,18 +331,50 @@ const (
 	maxRuntimeSubagents  = 50
 	maxRuntimeBackground = 50
 	maxRuntimeTaskText   = 500
+	// maxRuntimeLastText is as much of a row's last_text as the node's own rows keep (snippet).
+	maxRuntimeLastText = 200
 )
+
+// bridgePreview shortens engine replies before they go over the local runtime connection.
+// Strip marker lines before snippet flattens them. A marker-only update stays a single
+// marker on this connection so the receiving node can keep the session's previous words.
+func bridgePreview(text string) string {
+	words := transcript.WithoutBotmuxSentinel(text)
+	if text != "" && words == "" {
+		return transcript.BotmuxSentinel
+	}
+	return snippet(words)
+}
+
+// runtimePreviews reads the previous snapshot only if a row or child reports nothing but
+// the botmux sentinel. Ordinary snapshots need no index or extra lock.
+func (h *runtimeConn) runtimePreviews() func(id, text string) string {
+	var previous map[string]string
+	return func(id, text string) string {
+		clean := transcript.WithoutBotmuxSentinel(text)
+		if clean != "" || text == "" {
+			return clean
+		}
+		if previous == nil {
+			h.mu.Lock()
+			previous = make(map[string]string, len(h.sessions))
+			for i := range h.sessions {
+				s := &h.sessions[i]
+				previous[s.SessionID] = s.LastText
+				for _, a := range s.Subagents {
+					previous[a.SessionID] = a.LastText
+				}
+			}
+			h.mu.Unlock()
+		}
+		return previous[id]
+	}
+}
 
 // runtimeWork keeps a row's subagents and background tasks to what the apps can use: subagents with a valid id, each
 // readable as "<session>@<id>" (whatever the runtime wrote there), background tasks with an id; text clipped, the
 // lists bounded. A runtime's background task has no output file of this machine's to open.
-func runtimeWork(s *proto.Session) {
-	clip := func(t string) string {
-		if r := []rune(t); len(r) > maxRuntimeTaskText {
-			return string(r[:maxRuntimeTaskText]) + "…"
-		}
-		return t
-	}
+func runtimeWork(s *proto.Session, agy bool, preview func(id, text string) string) {
 	subs := s.Subagents[:0:0]
 	seen := map[string]bool{}
 	for _, a := range s.Subagents {
@@ -317,28 +383,48 @@ func runtimeWork(s *proto.Session) {
 		}
 		seen[a.ID] = true
 		a.SessionID = s.SessionID + "@" + a.ID
-		a.Description, a.LastText, a.Type, a.Model = clip(a.Description), clip(a.LastText), clip(a.Type), clip(a.Model)
+		a.Description = clipRuntimeTaskText(a.Description)
+		a.LastText = clipRuntimeTaskText(preview(a.SessionID, a.LastText))
+		a.Type, a.Model = clipRuntimeTaskText(a.Type), clipRuntimeTaskText(a.Model)
 		subs = append(subs, a)
 	}
 	s.Subagents = subs
 	if len(s.Subagents) == 0 {
 		s.Subagents = nil
 	}
-	bg := s.Background[:0:0]
-	for _, t := range s.Background {
-		if len(bg) == maxRuntimeBackground || strings.TrimSpace(t.ID) == "" {
+	s.Background = runtimeBackground(s.Background, maxRuntimeBackground, agy)
+	if agy {
+		s.SetBackgroundEnded(runtimeBackground(s.BackgroundEnded(), agyBackgroundEndedLimit, agy))
+	}
+}
+
+func clipRuntimeTaskText(t string) string {
+	if r := []rune(t); len(r) > maxRuntimeTaskText {
+		return string(r[:maxRuntimeTaskText]) + "…"
+	}
+	return t
+}
+
+// runtimeBackground bounds and sanitizes task metadata from the runtime wire.
+func runtimeBackground(source []proto.BackgroundTask, limit int, agy bool) []proto.BackgroundTask {
+	var bg []proto.BackgroundTask
+	for _, t := range source {
+		if len(bg) == limit {
+			break
+		}
+		if strings.TrimSpace(t.ID) == "" {
 			continue
 		}
-		if t.Kind != "agent" {
+		switch {
+		case t.Kind == "agent":
+		case agy && (t.Kind == "monitor" || t.Kind == "workflow"):
+		default:
 			t.Kind = "shell"
 		}
-		t.ID, t.Description, t.Command, t.OutputFile = clip(t.ID), clip(t.Description), clip(t.Command), ""
+		t.ID, t.Description, t.Command, t.OutputFile = clipRuntimeTaskText(t.ID), clipRuntimeTaskText(t.Description), clipRuntimeTaskText(t.Command), ""
 		bg = append(bg, t)
 	}
-	s.Background = bg
-	if len(s.Background) == 0 {
-		s.Background = nil
-	}
+	return bg
 }
 
 // setResume records how the engine resumes the sessions this runtime lists (resume_argv), replacing the last list's.
@@ -359,6 +445,11 @@ func (h *runtimeConn) resumeArgv(id string) []string {
 func (h *runtimeConn) row(id string) (proto.Session, bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	return h.rowLocked(id)
+}
+
+// rowLocked looks up a session while the caller holds h.mu.
+func (h *runtimeConn) rowLocked(id string) (proto.Session, bool) {
 	for _, s := range h.sessions {
 		if s.SessionID == id {
 			return s, true

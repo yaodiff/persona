@@ -2,12 +2,12 @@
   "title": "History",
   "search": "Search titles and conversations",
   "computer": "Computer",
-  "agent": "Agent",
+  "agent": "Agent type",
   "all_computers": "All computers",
-  "all_agents": "All Agents",
+  "all_agents": "All agent types",
   "earlier": "Earlier",
-  "empty": "No non-running sessions yet.",
+  "empty": "No ended sessions yet.",
   "older_search": "This hub searches titles and previews only. Update it to search conversations.",
-  "open_terminals": "Open terminals",
+  "open_terminals": "Browse tabs",
   "resume_named": "Resume {title}"
 }

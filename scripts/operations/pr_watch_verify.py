@@ -339,7 +339,8 @@ def semantic_only_checks(worktree, pr, repository):
     guard = str(Path(__file__).resolve().parent / "pr_watch_test_guards.py")
     return [("Privacy and documentation guards", ["python3", "-I", guard,
                                                    "--base", base, "--head", head,
-                                                   "--worktree", worktree, "--repository-guards"])]
+                                                   "--worktree", worktree, "--repository-guards",
+                                                   "--repository", repository])]
 
 
 def verify(repo, pr, worktree, config, environ=None):

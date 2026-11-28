@@ -602,6 +602,12 @@ func localizeHeldReason(lang i18n.Lang, reason string) string {
 	case i18n.T(i18n.Default, "rpc-errors.not_delivered_finished"):
 		return i18n.T(lang, "rpc-errors.not_delivered_finished")
 	}
+	for _, key := range []string{"rpc-errors.not_delivered_botmux_owner_unresolved", "rpc-errors.not_delivered_botmux_owner_mismatch",
+		"rpc-errors.not_delivered_botmux_owner_refused"} {
+		if reason == i18n.T(i18n.Default, key) {
+			return i18n.T(lang, key)
+		}
+	}
 	if lang == i18n.ZhHans {
 		return reason
 	}

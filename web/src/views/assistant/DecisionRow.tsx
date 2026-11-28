@@ -10,15 +10,14 @@ import { openTask } from "../../lib/handoff";
 import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { t } from "../../i18n";
 import { ApiError, errorText } from "../../lib/api";
-import { stripBase } from "../../lib/base";
+import { EvidenceLink } from "./EvidenceLink";
 import { acceptBrief, setRoute, type AskAnswer } from "../../lib/feed";
 import { clock } from "../../lib/format";
 import { conversationPage } from "../../lib/conversation-page";
-import { navigate, parse, type Route } from "../../lib/router";
+import { navigate } from "../../lib/router";
 import { refreshTodos } from "../../lib/store";
 import { askOptions, type AskOption, type AskResponse, type Todo, type TodoAsk } from "../../lib/todos";
 import { Button, IconButton, Menu, toast, useMenu } from "../../ui/atoms";
-import { Icon, type IconName } from "../../ui/icons";
 import type { MenuItem } from "../../ui/menu-model";
 import { RecommendedTag } from "../../ui/RecommendedTag";
 import { BriefingMark } from "./BriefingMark";
@@ -61,62 +60,6 @@ export function defaultLine(ask: Pick<TodoAsk, "default" | "deadline">): string 
   if (ask.default === "never") return t("assistant-decisionrow.default_never");
   const at = ask.default === "taken" ? clock(ask.deadline) : "";
   return at ? t("assistant-decisionrow.default_at", { time: at }) : "";
-}
-
-/** A validated, display-ready evidence link for a decision card (#14659). */
-export interface DecisionEvidenceLink {
-  href: string;
-  label: string;
-  icon: IconName;
-  external: boolean;
-  route?: Route;
-}
-
-/** Validates and formats a decision ask's evidence URL: accepts only http(s) URLs, filters redundant self-links to
- *  the to-do's own /todos/<id> page, formats PR/MR/Issue references concisely, uses in-app navigation for same-origin
- *  Persona routes, and opens external URLs safely in a new tab. */
-export function evidenceLink(raw: string | undefined, todoId: string): DecisionEvidenceLink | undefined {
-  const trimmed = raw?.trim();
-  if (!trimmed) return undefined;
-  let parsed: URL;
-  try {
-    parsed = new URL(trimmed);
-  } catch {
-    return undefined;
-  }
-  if ((parsed.protocol !== "http:" && parsed.protocol !== "https:") || !parsed.hostname) return undefined;
-  const cleanPath = parsed.pathname.replace(/\/+$/, "");
-  const stripped = stripBase(cleanPath).replace(/\/+$/, "");
-  const selfEncoded = `/todos/${encodeURIComponent(todoId)}`;
-  const selfRaw = `/todos/${todoId}`;
-  if (!parsed.search && !parsed.hash && (cleanPath === selfEncoded || cleanPath === selfRaw || stripped === selfEncoded || stripped === selfRaw)) {
-    return undefined;
-  }
-  const sameOrigin = typeof location !== "undefined" && Boolean(location.origin) && location.origin !== "null" && parsed.origin === location.origin;
-  const inApp = sameOrigin ? parse(stripped || "/", parsed.search) : undefined;
-  const route = inApp && inApp.name !== "not-found" ? inApp : undefined;
-  const external = !route;
-
-  let label: string;
-  let icon: IconName = "link";
-  const pr = /\/pull\/(\d+)(?:\/|$)/.exec(parsed.pathname);
-  const mr = /\/(?:-\/)?merge_requests\/(\d+)(?:\/|$)/.exec(parsed.pathname);
-  const issue = /\/(?:-\/)?issues\/(\d+)(?:\/|$)/.exec(parsed.pathname);
-  if (pr) {
-    label = `PR #${pr[1]}`;
-    icon = "pullRequest";
-  } else if (mr) {
-    label = `MR !${mr[1]}`;
-    icon = "pullRequest";
-  } else if (issue) {
-    label = `Issue #${issue[1]}`;
-  } else if (external) {
-    const host = parsed.hostname.replace(/^www\./, "");
-    label = host ? t("assistant-decisionrow.open_link_host", { host }) : t("assistant-decisionrow.open_link");
-  } else {
-    label = t("assistant-decisionrow.open_link");
-  }
-  return { href: parsed.href, label, icon, external, route };
 }
 
 /** How many of the option buttons fit beside the row's fixed controls, the first always: each button's width is read
@@ -230,7 +173,6 @@ export function DecisionRow({ todo, ask, rowKey, admission, onBusyChange, blocke
   ];
   const fallback = defaultLine(ask);
   const question = ask.question || ask.verdict;
-  const evidence = evidenceLink(ask.link, todo.id);
 
   return (
     <div data-needs-row={rowKey} data-decision-row={ask.why_owner || ""} className="flex min-w-0 flex-col gap-1.5 rounded-control bg-field px-3 py-2.5">
@@ -245,28 +187,7 @@ export function DecisionRow({ todo, ask, rowKey, admission, onBusyChange, blocke
       <p data-decision-question className="text-[13.5px] font-medium select-text [overflow-wrap:anywhere]">
         {question}
       </p>
-      {evidence && (
-        <div className="flex min-w-0 items-center">
-          <a
-            data-decision-link={evidence.external ? "external" : "internal"}
-            href={evidence.href}
-            target={evidence.external ? "_blank" : undefined}
-            rel={evidence.external ? "noopener noreferrer" : undefined}
-            onClick={evidence.route ? (e) => {
-              if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
-              e.preventDefault();
-              navigate(evidence.route!);
-            } : undefined}
-            title={evidence.href}
-            aria-label={t("assistant-decisionrow.open_link_aria", { label: evidence.label })}
-            className="touch-hit inline-flex min-w-0 max-w-full items-center gap-1.5 rounded-control text-label font-medium text-accent-ink hover:underline"
-          >
-            <Icon name={evidence.icon} size={12} className="shrink-0" />
-            <span className="truncate">{evidence.label}</span>
-            {evidence.external && <Icon name="external" size={11} className="shrink-0" />}
-          </a>
-        </div>
-      )}
+      <EvidenceLink link={ask.link} todoId={todo.id} />
       {ask.background && (
         <p data-decision-background className="line-clamp-2 text-[12px] text-ink-2 [overflow-wrap:anywhere]" title={ask.background}>
           {ask.background}

@@ -42,9 +42,10 @@ both built on `integrations/runtime-sdk/`. pi follows the route of whichever hos
 At session start, the extension records where it runs using `pi.appendEntry("persona-host", {host})` (`herdr`, `terminal`, `pi-web`; only when it changes, excluded from model context;
 not recorded for sessions launched by other programs, such as `pi --mode rpc` or `pi -p`). After a session stops, the companion lists it from disk and uses the last record to decide:
 
-- Previously run in herdr or a terminal: the row carries `resume_argv: ["pi", "--approve", "--session", <file>]` (`--approve`: "Project trust" below). When the phone sends a message, node opens a new tab in the herdr space for that directory,
+- Previously run in herdr or a terminal: the row carries `resume_argv: ["pi", "--approve", "--session", <file>]` (`--approve`: "Project trust" below). When the phone sends a message, node opens a new tab in the herdr space for that directory
+  (with Orca the computer's engine, a new terminal in the Orca worktree holding that directory, which `cd`s there, #17044),
   runs it through `personad tab-start <0600 file>` (commands and paths do not pass through a shell or appear on screen), waits for the new pi extension to list the session, then sends the message.
-  If herdr is unavailable, it rejects the request (`engine_missing`); it does **not** open it in pi-web instead. If node is too old to recognize `resume_argv`, the companion also rejects the request rather than waking pi-web.
+  If the engine is unavailable, it rejects the request (`engine_missing`); it does **not** open it in pi-web instead. If node is too old to recognize `resume_argv`, the companion also rejects the request rather than waking pi-web.
 - Previously run in pi-web, or no record (sessions from before the extension was installed): pi-web wakes it, as before.
 
 ## Installation

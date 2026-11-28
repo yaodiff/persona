@@ -24,6 +24,7 @@ func TestCancelledTaskStaysClosed(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			todoStores(t, func(t *testing.T, e *todoEnv, database *db.DB) {
 				ctx := context.Background()
+				sid := "s1" + randomHex(6) // Durable activity must not leak between synthetic sessions.
 				s, f := e.s, e.f
 				setSettings(t, s, func(v *Settings) { v.Main = "conv1" })
 				if !tc.supervised {
@@ -33,7 +34,7 @@ func TestCancelledTaskStaysClosed(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if err := s.linkTodoAgent(ctx, todo.ID, "box", "s1000000", "Update the report", "/code/app", "claude"); err != nil {
+				if err := s.linkTodoAgent(ctx, todo.ID, "box", sid, "Update the report", "/code/app", "claude"); err != nil {
 					t.Fatal(err)
 				}
 				wantState := ""
@@ -41,8 +42,8 @@ func TestCancelledTaskStaysClosed(t *testing.T) {
 					s.superviseTodo(ctx, todo.ID, "conv1", []string{"Report checked"}, 10)
 					wantState = reviewCancelled
 				}
-				f.setSessions("box", proto.Session{MachineID: "box", SessionID: "s1000000", Status: proto.StatusWorking, State: proto.StateWorking})
-				s.TurnStarted(ctx, SessionRef{MachineID: "box", SessionID: "s1000000"})
+				f.setSessions("box", proto.Session{MachineID: "box", SessionID: sid, Status: proto.StatusWorking, State: proto.StateWorking})
+				s.TurnStarted(ctx, SessionRef{MachineID: "box", SessionID: sid})
 				if _, err := runJSON(t, s, s.settings(ctx).Main, "task_review", map[string]any{
 					"todo_id": todo.ID, "verdict": reviewCancelled, "note": "The report is no longer needed.",
 				}); err != nil {
@@ -63,39 +64,39 @@ func TestCancelledTaskStaysClosed(t *testing.T) {
 					t.Fatalf("rendering changed the internal completion marker to %q", got)
 				}
 				beforeFeed, beforeNotices := feedKinds(s, "conv1"), len(f.notices())
-				ref := SessionRef{MachineID: "box", SessionID: "s1000000"}
+				ref := SessionRef{MachineID: "box", SessionID: sid}
 				switch tc.trigger {
 				case "user":
 					s.UserSpoke(ctx, ref)
-					if err := s.sendToSession(ctx, "box", "s1000000", "Revert the changes."); err != nil {
+					if err := s.sendToSession(ctx, "box", sid, "Revert the changes."); err != nil {
 						t.Fatal(err)
 					}
 				case "agent_send":
 					// The owner has resumed the agent; a follow-up still must not reopen the cancelled task.
-					f.setSessions("box", boxAgent("s1000000"))
+					f.setSessions("box", boxAgent(sid))
 					if _, err := runJSON(t, s, "conv1", "agent_send", map[string]any{
-						"machine": "box", "session_id": "s1000000", "text": "Revert the changes.",
+						"machine": "box", "session_id": sid, "text": "Revert the changes.",
 					}); err != nil {
 						t.Fatal(err)
 					}
 				}
 				if tc.trigger != "background" {
-					if sent := f.sentToAgents(); len(sent) != 1 || sent[0] != "s1000000: Revert the changes." {
+					if sent := f.sentToAgents(); len(sent) != 1 || sent[0] != sid+": Revert the changes." {
 						t.Fatalf("follow-up input did not reach the agent: %v", sent)
 					}
 				}
-				f.setSessions("box", proto.Session{MachineID: "box", SessionID: "s1000000", Status: proto.StatusWorking, State: proto.StateWorking})
+				f.setSessions("box", proto.Session{MachineID: "box", SessionID: sid, Status: proto.StatusWorking, State: proto.StateWorking})
 				s.TurnStarted(ctx, ref)
-				f.setSessions("box", proto.Session{MachineID: "box", SessionID: "s1000000", Status: proto.StatusDone, State: proto.StateUnread,
+				f.setSessions("box", proto.Session{MachineID: "box", SessionID: sid, Status: proto.StatusDone, State: proto.StateUnread,
 					LastText: "The changes were reverted.", UpdatedAt: time.Now()})
-				s.taskTurnEnded(ctx, "box", "s1000000")
+				s.taskTurnEnded(ctx, "box", sid)
 				s.superviseWatch(ctx, time.Now().Add(time.Hour))
 				after := todoNow(s, todo.ID)
 				if after.DoneAt == nil || !after.DoneAt.Equal(*closed.DoneAt) || after.ReopenedAt != nil ||
 					after.DoneBy != closed.DoneBy || after.DoneReason != closed.DoneReason || after.Supervision.state(after) != wantState {
 					t.Fatalf("later work changed the cancellation: %+v", after)
 				}
-				if done, err := s.completedTodo(ctx, "box", "s1000000"); err != nil || !done {
+				if done, err := s.completedTodo(ctx, "box", sid); err != nil || !done {
 					t.Fatalf("automatic follow-ups are not suppressed: done %v, error %v", done, err)
 				}
 				if got := feedKinds(s, "conv1"); got != beforeFeed || len(f.notices()) != beforeNotices {
@@ -120,7 +121,7 @@ func TestCancelledTaskStaysClosed(t *testing.T) {
 				if reopened.DoneAt != nil || reopened.ReopenedAt == nil || reopened.DoneBy != "" || reopened.Supervision.state(reopened) != "" {
 					t.Fatalf("explicit reopen did not restore the task: %+v", reopened)
 				}
-				if active, ok := s.taskOf(ctx, "box", "s1000000"); !ok || active.ID != todo.ID {
+				if active, ok := s.taskOf(ctx, "box", sid); !ok || active.ID != todo.ID {
 					t.Fatalf("explicit reopen did not restore the agent link: %+v", active)
 				}
 			})

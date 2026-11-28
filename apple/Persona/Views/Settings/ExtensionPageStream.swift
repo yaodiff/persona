@@ -24,7 +24,7 @@ import PersonaWire
     @ObservationIgnored var onView: ((ExtensionView) -> Void)?
     @ObservationIgnored var onFailure: ((String) -> Void)?
     @ObservationIgnored var onLegacy: (() -> Void)?
-    @ObservationIgnored var resolveHostConfirmation: ((String) async throws -> Void)?
+    @ObservationIgnored var resolveHostConfirmation: ((Interaction) async throws -> Void)?
     @ObservationIgnored private var answeredHostConfirmations: [String: Date] = [:]
     @ObservationIgnored private var legacyPage = false
     @ObservationIgnored private let connection: LiveConnection
@@ -158,7 +158,7 @@ import PersonaWire
         answeredHostConfirmations[interaction.id] = interaction.expiresAt ?? Date().addingTimeInterval(30)
         Task { [weak self] in
             guard let self, self.events[frozen.interaction.eventId] != nil, self.isCurrent(frozen) else { return }
-            do { try await resolve(interaction.id) }
+            do { try await resolve(interaction) }
             catch { if self.canPresent(frozen) { self.onFailure?("confirmation") } }
         }
     }

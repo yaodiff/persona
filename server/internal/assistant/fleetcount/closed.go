@@ -221,10 +221,14 @@ func CardStandingStands() CardStanding { return CardStanding{cardStanding: 1} }
 // draw it.
 func CardStandingForm() CardStanding { return CardStanding{cardStanding: 2} }
 
+// CardStandingDisplayCopy is a display mirror of another card. It contributes no pending action of its own.
+func CardStandingDisplayCopy() CardStanding { return CardStanding{cardStanding: 3} }
+
 // CardStandingVisitor is told whether the card can stand for its agent.
 type CardStandingVisitor interface {
 	VisitStands()
 	VisitForm()
+	VisitDisplayCopy()
 }
 
 // Accept tells v whether the card can stand for its agent; the zero CardStanding is a defect.
@@ -234,6 +238,8 @@ func (c CardStanding) Accept(v CardStandingVisitor) {
 		v.VisitStands()
 	case CardStandingForm():
 		v.VisitForm()
+	case CardStandingDisplayCopy():
+		v.VisitDisplayCopy()
 	default:
 		defect.Raise("fleetcount.CardStanding.Accept", "the zero CardStanding")
 	}
@@ -317,11 +323,15 @@ func SurfaceLiveActivity() Surface { return Surface{surface: 2} }
 // SurfaceLink is Persona Link's Needs you summary on the owner's computers, which counts as the web app's badge does.
 func SurfaceLink() Surface { return Surface{surface: 3} }
 
+// SurfacePersonaCards counts the pending cards the Persona conversation shows the owner.
+func SurfacePersonaCards() Surface { return Surface{surface: 4} }
+
 // SurfaceVisitor is told which surface it is.
 type SurfaceVisitor interface {
 	VisitBadge()
 	VisitLiveActivity()
 	VisitLink()
+	VisitPersonaCards()
 }
 
 // Accept tells v which surface it is; the zero Surface is a defect.
@@ -333,6 +343,8 @@ func (s Surface) Accept(v SurfaceVisitor) {
 		v.VisitLiveActivity()
 	case SurfaceLink():
 		v.VisitLink()
+	case SurfacePersonaCards():
+		v.VisitPersonaCards()
 	default:
 		defect.Raise("fleetcount.Surface.Accept", "the zero Surface")
 	}

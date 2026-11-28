@@ -48,3 +48,32 @@ func TestWorkspaceNamingSharedFixture(t *testing.T) {
 		t.Fatal("shared naming contract changed", got)
 	}
 }
+
+func TestWorkspaceNamingPreviewMetadataFixture(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "spec", "fixtures", "workspace-naming", "preview-metadata.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var want Preview
+	if err := json.Unmarshal(raw, &want); err != nil {
+		t.Fatal(err)
+	}
+	s := source()
+	s.Rules.BranchTemplate = "work/{base-branch}/{task-id}"
+	s.Repositories.Repositories[0].RequestedRef = repository.RequestedRef{Kind: "branch", Value: "release/next"}
+	api := s.Repositories.Repositories[0]
+	api.RepoID, api.DirectoryAlias, api.RequestedRef = "api", "api", repository.RequestedRef{Kind: "default"}
+	s.Repositories.Repositories = append(s.Repositories.Repositories, api)
+	got := Resolve(s, NodeContext{Home: "/home/example"})
+	if got.Status != "incomplete" || got.Plan != nil || !reflect.DeepEqual(got.SystemDefaults, want.SystemDefaults) || !reflect.DeepEqual(got.BranchSources, want.BranchSources) {
+		t.Fatalf("preview metadata = %+v", got)
+	}
+	oldJSON, err := json.Marshal(Preview{Status: "complete"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var old map[string]json.RawMessage
+	if err := json.Unmarshal(oldJSON, &old); err != nil || old["system_defaults"] != nil || old["branch_sources"] != nil {
+		t.Fatalf("optional fields were emitted without metadata: %s", oldJSON)
+	}
+}

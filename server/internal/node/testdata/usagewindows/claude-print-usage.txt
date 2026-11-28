@@ -1,0 +1,7 @@
+You are currently using your subscription to power your Claude Code usage
+
+Current session: 78% used · resets Nov 21 at 6:30pm (UTC)
+Current week (all models): 87% used · resets Nov 23 at 9am (UTC)
+Current week (Sonnet only): 14% used · resets Nov 23 at 9am (UTC)
+
+Last 7d · 403 requests · 18 sessions

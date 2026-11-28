@@ -4,9 +4,88 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 )
+
+func TestReviewTodoCommitsLedgerAndClosureTogether(t *testing.T) {
+	for _, accepted := range []bool{true, false} {
+		for _, ledger := range []bool{true, false} {
+			name := "cancelled"
+			if accepted {
+				name = "accepted"
+			}
+			if ledger {
+				name += "/supervised"
+			} else {
+				name += "/no ledger"
+			}
+			t.Run(name, func(t *testing.T) {
+				d, ctx := open(t), context.Background()
+				at := time.Now().UTC().Truncate(time.Microsecond)
+				before := TodoRow{ID: "review", Title: "Check the change", Origin: "main", CreatedAt: at, UpdatedAt: at}
+				if err := d.CreateTodo(ctx, before); err != nil {
+					t.Fatal(err)
+				}
+				var next *TodoSupervisionRow
+				if ledger {
+					current := TodoSupervisionRow{
+						TodoID: before.ID, Supervisor: "main", SupervisorSource: "explicit",
+						State: "pending_review", UpdatedAt: at, CardlessToldAt: &at,
+					}
+					if err := d.PutTodoSupervision(ctx, current); err != nil {
+						t.Fatal(err)
+					}
+					current.State, current.Reviews = "accepted", json.RawMessage(`[{"verdict":"accepted"}]`)
+					if !accepted {
+						current.State, current.Reviews = "cancelled", json.RawMessage(`[{"verdict":"cancelled"}]`)
+					}
+					current.CardlessToldAt = nil // a terminal review clears the pending round's hand-back receipt
+					next = &current
+				}
+				ledgerBefore, err := d.ListTodoSupervision(ctx)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if ledger && (len(ledgerBefore) != 1 || ledgerBefore[0].SupervisorSource != "explicit" || ledgerBefore[0].CardlessToldAt == nil || !ledgerBefore[0].CardlessToldAt.Equal(at)) {
+					t.Fatalf("pending review lost its supervisor source or hand-back receipt: %+v", ledgerBefore)
+				}
+				refused := errors.New("owner became active before commit")
+				checked := false
+				row, closed, err := d.ReviewTodo(ctx, before.ID, "Reviewed", accepted, at.Add(time.Second), next, func() error {
+					checked = true
+					return refused
+				})
+				if !checked || !errors.Is(err, refused) || closed || row != nil {
+					t.Fatalf("refused commit = %+v %v %v, checked=%v", row, closed, err, checked)
+				}
+				stored, err := d.GetTodo(ctx, before.ID)
+				if err != nil || stored.DoneAt != nil || stored.DoneBy != "" {
+					t.Fatalf("closure escaped rollback: %+v %v", stored, err)
+				}
+				ledgerAfter, err := d.ListTodoSupervision(ctx)
+				if err != nil || !reflect.DeepEqual(ledgerBefore, ledgerAfter) {
+					t.Fatalf("ledger escaped rollback: before=%+v after=%+v err=%v", ledgerBefore, ledgerAfter, err)
+				}
+				row, closed, err = d.ReviewTodo(ctx, before.ID, "Reviewed", accepted, at.Add(2*time.Second), next, func() error { return nil })
+				want := DoneByCancelled
+				if accepted {
+					want = DoneByReview
+				}
+				if err != nil || !closed || row == nil || row.DoneAt == nil || row.DoneBy != want {
+					t.Fatalf("successful commit = %+v %v %v", row, closed, err)
+				}
+				ledgerAfter, err = d.ListTodoSupervision(ctx)
+				if err != nil || ledger && (len(ledgerAfter) != 1 || ledgerAfter[0].State != next.State ||
+					ledgerAfter[0].SupervisorSource != next.SupervisorSource || ledgerAfter[0].CardlessToldAt != nil) ||
+					!ledger && len(ledgerAfter) != 0 {
+					t.Fatalf("successful commit lost the ledger: %+v %v", ledgerAfter, err)
+				}
+			})
+		}
+	}
+}
 
 // A supervised task's ledger is written whole, read back, and goes with its todo.
 func TestTodoSupervision(t *testing.T) {

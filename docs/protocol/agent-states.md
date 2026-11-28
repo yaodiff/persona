@@ -9,7 +9,7 @@ whether there's a pending interaction, and whether the user has looked at it in 
 | --- | --- | --- | --- | --- |
 | `needs_you` Needs you | Stuck somewhere a person must step in | `blocked` (a question / confirm box in the TUI) | A pending question, plan, permission or terminal interaction (herdr still shows working while a hook holds it) | Blue, breathing |
 | `working` Working | Running | `working` | Claude: herdr reports `done` / `idle` / `unknown`, but the session has hooks (Persona's, or the global report-only ones) and the hook turn count says the turn isn't over (see "Hook turn signals" below); for sessions without hooks, the terminal title shows Claude Code's working spinner glyph (◐◓◑◒; older versions used braille dots), or the transcript shows this turn has started and not ended (no `turn_duration`, not interrupted) and was written within 45 seconds (#2069; if the transcript shows the turn ended, herdr's state is used). "Written" is its newest timestamped line, not the file's mtime: Claude Code rewrites its trailing metadata in place while idle (#5967); or the turn has stopped but its background commands / sub-Agents / Monitor / workflow are still running (#2228, #2935: when they finish they hand it the result and it carries on; assistant chats excluded). Codex: herdr reports `done` / `idle` / `unknown`, but its app-server runs a turn in its thread or its title shows Codex's spinner ("Codex" below, #4865) | Amber, breathing |
-| Waiting in the background (a kind of `working`) | The turn is over and all the agent still runs only waits: background commands that sleep, loop on a check (`until … sleep`), `gh … --watch`, `tail -f` (#6045, `Session.background_waiting`) | — | The node looks at the processes under the session's `claude`: every background command is a shell Claude Code starts there (it sources its shell snapshot). One `ps` at most every 20 s, and only while an agent with background commands has ended its turn; CPU is what they used between two looks (Linux `ps` counts whole seconds). Waiting: only waiters, shells and filters in their pipes, near-zero CPU, a loop's short probes (younger than 10 s) left out. Working: a compiler, build tool, test runner or download runs, or CPU is used, or a process nothing here knows runs while their output grew in the last 2 minutes. No look to compare with yet, or no shell found: Working, as before. Subagents and workflows are work. `state` stays `working` (older apps show Working); new clients leave it out of the Working count. A known worker that used no CPU at any look and wrote no output for 10 minutes (a test hung on a lock, an esbuild service nobody talks to) is still Working, since a running tool is work, but the session carries `background_stalled_since` (#13744) and clients add a muted "background commands quiet for 3 hr" line; CPU or output clears it. iOS and Android do not show it yet | Amber, faded, still |
+| Waiting in the background (a kind of `working`) | The turn is over and all the agent still runs only waits: background commands that sleep, loop on a check (`until … sleep`), `gh … --watch`, `tail -f` (#6045, `Session.background_waiting`) | — | The node looks at the processes under the session's `claude`: every background command is a shell Claude Code starts there (it sources its shell snapshot). One `ps` at most every 20 s, and only while an agent with background commands has ended its turn; CPU is what they used between two looks (Linux `ps` counts whole seconds). Waiting: only waiters, shells and filters in their pipes, near-zero CPU, a loop's short probes (younger than 10 s) left out. Working: a compiler, build tool, test runner or download runs, or CPU is used, or a process nothing here knows runs while their output grew in the last 2 minutes. No look to compare with yet, or no shell found: Working, as before. Subagents and workflows are work. `state` stays `working` (older apps show Working); new clients leave it out of the Working count. Stalled background commands carry `background_stalled_since` (#13744, #16418): a known worker that used no CPU at any look and wrote no output for 10 minutes (a test hung on a lock, an esbuild service nobody talks to); after 3 minutes, a process nothing here knows or a command Claude Code's timeout moved to the background (`moved_from_foreground`) with no waiter under it (a `cmp` reading a stdin nobody writes to); after 2 minutes of looks in a row, background commands alone whose shells are gone from under the live `claude` with no output (one that ended without a notification). A waiter the agent started is never stalled, and CPU or output clears it. Beside a subagent, a workflow or a Monitor the Agent stays Working and clients add a muted "background commands quiet for 3 hr" line. Stalled background commands that are all that is left no longer make a finished turn Working (#16418): `state` is the turn's own (Unread, Idle), `background_working` is false, and `background` and `background_stalled_since` stay on the row, so the task's turn settles and its supervisor hears of it as usual. A task's lone Agent that reported the task done (`report_to_supervisor`) in the round under way settles at once with background commands left that only wait, were moved from the foreground or stalled. iOS and Android do not show the stall yet; the web shows it on Working rows only | Amber, faded, still |
 | `unread` Unread | A turn finished and the result hasn't been seen | `done` (never focused in herdr) | And not viewed in the App since it finished | Green |
 | `idle` Seen | Finished and seen, waiting for input | `idle` (seen in herdr) | Or herdr still says `done` but it was viewed in the App | Gray |
 | Just finished (a kind of `idle`) | The triage found the turn done before anybody looked, less than three hours ago ("Just finished" below, #9751, `work.just_finished`) | — | Session Triage on, and the turn Unread before the triage took it out | Green, a plain dot |
@@ -19,7 +19,7 @@ whether there's a pending interaction, and whether the user has looked at it in 
 
 A dispatched session with an unknown host status reads as `state unknown` in `dispatch_read`. Its last reply may be partial. A session marked `offline` on a connected computer is interrupted. When the computer itself is offline, the manager reports `computer offline` and leaves the transcript unread. A stopped session with `turn_error_code: "upstream_unavailable"` (#13372) keeps its wire `state` (`unread` or `idle`) and client badge counts unchanged, while server-side `agents_list` and the Assistant live snapshot group it under `Needs you` so stalled external `/loop` and coding Agent sessions remain visible.
 
-List order (each client's rank: web `lib/format.ts`, iOS / Mac `AgentListOrder.rank`, Android `agentRank`): Needs you → Unread → Awaiting reply → Working → Just finished → Seen → Unknown → Not running. `Session.view.rank` ("Five phases" below) replaces these as each client moves to it.
+The Web Agents list uses `Session.view.rank` ("Five phases" below). Clients using the older list order (iOS / Mac `AgentListOrder.rank`, Android `agentRank`) show Needs you → Unread → Awaiting reply → Working → Just finished → Seen → Unknown → Not running.
 
 Sort priority of a folded row or tab (which agent it speaks for and which pane it opens on; web `lib/herdr-tree.ts`, Android `tabUrgency`): Needs you → Working → Unread → Seen → Unknown → Not running, with Awaiting reply and then Just finished right after Unread on Android.
 iOS / Mac tab rows (`TabPanes.swift`) go by `AgentState.priority` instead: Needs you → Unread → Working → Seen → Unknown → Not running.
@@ -186,8 +186,9 @@ Global events carry `report_only`, and the hub doesn't take them as meaning the 
 Decisions (when herdr says `done` / `idle` / `unknown`; `blocked` and `working` follow herdr):
 
 - **A dialog is open in the terminal** (#2553, `node/dialogstatus.go`): for a Claude still `done` / `idle` / `unknown` after the checks above (excluding botmux, those in Claude's agents list, and ones where Persona itself is operating a picker)
-  in a herdr, Tern or Rex pane, node reads its screen in the background every 5 seconds (the list doesn't wait for the read). If the bottom is a dialog (`screen.Choosing`) it's recorded as `blocked`, `attention_reason` is the dialog's first line, and the "last said" in the App list and the assistant's `agents_list` shows that line.
+  in a herdr, Tern, Rex or Orca pane, node reads its screen in the background every 5 seconds (the list doesn't wait for the read). If the bottom is a dialog (`screen.Choosing`) it's recorded as `blocked`, `attention_reason` is the dialog's first line, and the "last said" in the App list and the assistant's `agents_list` shows that line.
   Why: Claude Code 2.1.309's auto mode billing notice blocked 3 Agents for several minutes; herdr reported done and Persona showed Unread.
+  Orca reports permission dialogs and the ones it recognizes (`blocked`, "dialog open") itself; any other dialog it calls the turn being over, so its panes are read too, the plain text being enough (#17042).
 - **An allow Claude did not take** (#3752, `node/allowwatch.go`): whatever herdr says, `working` included. Once node hands a PermissionRequest
   hook an allow (a terminal Agent's, not the assistant's), it reads the pane 1.5 s later; a dialog still at the bottom (`screen.DialogHead`) lists
   the session as `blocked` with the dialog's first line as `attention_reason`, so the manager makes its screen card. The pane is read again every
@@ -328,8 +329,8 @@ Needs you; **D-B** `unknown` (and a state this hub does not know) is `idle`, rea
   running; anything else is `host_unknown`.
 - **Per computer.** Each machine's list is told on its own, so a row is decided with its own computer's rows and every
   pending card: a child folded under a parent on another computer is decided as a row of its own (`counted` on the
-  child, not on the parent), where the Agents list counts it under the parent. Cross-computer folds are rare (A2A
-  subagents); deciding the whole fleet at once is a follow-up.
+  child, not on the parent). The Web Agents list keeps that counted child visible. Clients using the older hierarchy
+  can fold it under the parent. Cross-computer folds are rare (A2A subagents). Deciding the whole fleet at once is a follow-up.
 
 ### Rank
 
@@ -381,22 +382,23 @@ fallback, inferring a view from `state`, `status` and the fields above, is writt
 | `pane_index` (optional, #2320) | The pane's positional index within the tab (from 0, top-left is 0) | Which position within the slot |
 | `parent_space_id` (optional, #2073) | Not set | Which space this space sits under (same machine, same `space_kind`): an Orca child workspace sets the parent workspace's `worktreeId` (`worktree.ps`'s `parentWorktreeId`) |
 
-DSH (`docs/integrations/dsh.md`): `space_kind` is `dsh`, the space is the session's directory (`space_id` = directory, `space_name` = directory name), no slots;
+DSH (`docs/integrations/dsh.md`): `space_kind` is `dsh`, the space is the session's directory (`space_id` = directory, `space_name` = directory name; the folder's space, "One folder, one space" below), no slots;
 state comes from the plugin: running → working, a permission / question waiting → blocked, otherwise done (the hub splits it into Unread / Seen by whether it's been seen, as usual).
 
 Codex App (`docs/integrations/codex.md` ("Sessions in the Codex desktop App (App-local IPC)")): `space_kind` is `codex_app`, the space is a project of the App's sidebar
 (`space_id` = `codex-project:<repository root>`, `space_name` = the App's name for it) or its chats in no project (`codex-chats:<CODEX_HOME>`);
 `space_index` is the project's place in the App's sidebar, from 1 (its `project-order`), absent for a project the App does not order and for chats in no project.
+A project's chats are in the terminal workspace rooted in its folder when there is one ("One folder, one space" below).
 
 Claude desktop app (`docs/integrations/claude-integration.md` ("The desktop app's sidebar"), #8521): `space_kind` is `claude_desktop`, the space is the repository the session works in
-(a worktree the app made is its repository's; until that is read, the folder the app started the session in), the same `space_id` as the Codex App's chats there (`codex-project:<repository root>`, `space_name` its folder name); a folder that is no repository is a space of its own, the home folder none. No slots.
+(a worktree the app made is its repository's; until that is read, the folder the app started the session in), the same `space_id` as the Codex App's chats there (`codex-project:<repository root>`, `space_name` its folder name), or the terminal workspace rooted in that folder ("One folder, one space" below); a folder that is no repository is a space of its own, the home folder none. No slots.
 
 Paseo (`docs/integrations/paseo.md` ("Which sessions appear")): `space_kind` is `paseo`, the space is a Paseo project (`space_id` = project record id, `space_name` = project name);
 a repository's main checkout and its worktrees share a space. No slots (#4493): a workspace's Agents are separate conversations, not the panes of one tab;
 `slot_name` alone carries the Paseo workspace's title, as the Agent's place label.
 
 opencode (`docs/integrations/opencode.md`): those in herdr panes are herdr sessions (`space_kind` is `herdr`); those outside herdr (web, other terminals) are runtime sessions,
-`space_kind` is `opencode`, the space is the session's directory, no slots, and state comes from the plugin (running → working, waiting on a permission → blocked, otherwise done / idle depending on whether there's an assistant message).
+`space_kind` is `opencode`, the space is the session's directory (the folder's space, "One folder, one space" below), no slots, and state comes from the plugin (running → working, waiting on a permission → blocked, otherwise done / idle depending on whether there's an assistant message).
 
 node fills these fields from herdr's `session.snapshot` (workspaces, tabs and agents in one call): once whenever herdr pushes a change via `events.subscribe`
 (the list is rebuilt at most once a second; entering / leaving blocked doesn't wait, see `docs/server/server.md` ("Card fast lane (#751)")),
@@ -409,6 +411,31 @@ The workspace catalog and terminal focus reader use the same fallback. No config
 successful smaller calls do not reset that streak. These reads are not atomic. If a required small call fails (including another oversized answer),
 the client returns an error and the node keeps its existing agent-list fallback without replacing its cached layout with a partial tree.
 The workspace catalog retains its separate `workspace.list` fallback.
+
+### One folder, one space (#13533)
+
+Each way an Agent runs names its space its own way, and the hub and every client group a computer's sessions by
+`space_id` (`docs/protocol/protocol.md` ("Projects and spaces")). A folder whose Agents ran in herdr, in a desktop app
+and on a runtime was a project for each, all with the folder's name. Some of those spaces only stand for a folder: the
+desktop apps' projects (`codex-project:<root>`) and the space a runtime that keeps no workspaces names by its directory
+(agy, DSH, opencode outside herdr: `space_id` is the directory). Once the list is built, the node
+(`server/internal/node/folderspace.go`) puts every session in such a space in the folder's space on its computer:
+
+- **The terminal workspace rooted in the folder** (a herdr workspace, a Herdr App space, an Orca worktree): its
+  `space_id`, `space_name`, `space_index` and `parent_space_id`, as the host's own sessions there have them. A host's own
+  workspace goes before a directory group (`dir:<folder>`, herdr-core's terminals outside the app's spaces, botmux's
+  topics). Of several, the one named after the folder (the one New Agent reuses for it), the default engine's first;
+  of several with none named after the folder, none, since which one is the folder's is not known.
+- **Else the folder's own space**: `codex-project:<physical folder>`, named as the Codex App names its project there and
+  numbered by its place in the App's sidebar, else by the folder's name.
+
+Folders compare by their physical paths (symbolic links resolved: a home directory is often a link to another volume),
+and a folder this computer does not have (a daemon's on another machine, one removed since) keeps the space its app
+named. A session keeps its `space_kind` (`claude_desktop`, `codex_app`, `agy`…), so one space can hold several kinds,
+and the Codex App's chats in a terminal workspace have that workspace's number as `space_index`. A space action (Git, a
+new terminal, a worktree) whose `kind` names a session's app rather than a terminal host or an engine goes to the host
+that has the workspace, as one with no `kind` does. Terminal hosts' own workspaces, engines' projects (Paseo, Cindy, T3
+Code), the assistant's conversations and sessions in no space (a terminal Agent that is not running) keep what they have.
 
 ### Several panes in one tab
 

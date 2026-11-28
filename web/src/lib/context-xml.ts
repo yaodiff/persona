@@ -39,4 +39,3 @@ export function withContexts(refs: Pick<ContextRef, "kind" | "title" | "url" | "
   const body = typed || (hasImages ? t("lib-links.see_images") : forwards > 1 ? t("lib-links.see_forwards") : forwards ? t("lib-links.see_forward") : t("lib-links.see_context"));
   return `${refs.map(contextXML).join("\n")}\n\n${body}`;
 }
-

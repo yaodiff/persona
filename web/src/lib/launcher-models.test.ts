@@ -47,12 +47,15 @@ describe("哪个启动器的列表", () => {
 
 describe("模型显示名称", () => {
   it.each([
-    ["gpt-6.1-sol", "6.1 Sol"],
-    ["gpt-6.1", "6.1"],
-    ["gpt-5.5-codex", "5.5 Codex"],
-    ["gpt-4o-mini", "4o Mini"],
-    ["gpt-4.1-2025-04-14", "4.1 2025 04 14"],
-    ["gpt-oss-120b", "oss 120b"],
+    ["gpt-6.1-sol", "GPT-6.1 Sol"],
+    ["gpt-6.2-sol", "GPT-6.2 Sol"],
+    ["gpt-5.6-terra", "GPT-5.6 Terra"],
+    ["gpt-6.2-astra", "GPT-6.2 Astra"],
+    ["gpt-6.1", "GPT-6.1"],
+    ["gpt-5.5-codex", "GPT-5.5 Codex"],
+    ["gpt-4o-mini", "GPT-4o Mini"],
+    ["gpt-4.1-2025-04-14", "GPT-4.1 2025 04 14"],
+    ["gpt-oss-120b", "GPT-oss 120b"],
     ["claude-opus-5-5", "claude-opus-5-5"],
     ["model-x", "model-x"],
     ["gpt-", "gpt-"],
@@ -67,9 +70,9 @@ describe("模型显示名称", () => {
     expect(modelName({ id: "gpt-6.1-sol", name: "我的模型" })).toBe("我的模型");
     expect(modelName({ id: "gpt-6.1-sol", name: "GPT 专用" })).toBe("GPT 专用");
     expect(modelName({ id: "gpt-6.1-sol", name: "gpt-4o-mini" })).toBe("gpt-4o-mini");
-    expect(modelName({ id: "gpt-6.1-sol", name: "GPT-6.1-Sol" })).toBe("6.1 Sol");
-    expect(modelName({ id: "gpt-6.1", name: "" })).toBe("6.1");
-    expect(modelName({ id: "gpt-6.1", name: "   " })).toBe("6.1");
+    expect(modelName({ id: "gpt-6.1-sol", name: "GPT-6.1-Sol" })).toBe("GPT-6.1 Sol");
+    expect(modelName({ id: "gpt-6.1", name: "" })).toBe("GPT-6.1");
+    expect(modelName({ id: "gpt-6.1", name: "   " })).toBe("GPT-6.1");
     expect(modelName({ id: "", name: "默认" })).toBe("默认");
     expect(modelName(claude.models[1])).toBe("Opus 5.5");
   });
@@ -77,6 +80,7 @@ describe("模型显示名称", () => {
   it("searches the displayed words and keeps picks and details as raw ids", () => {
     const model = { id: "gpt-6.1-sol", name: "gpt-6.1-sol", efforts: ["high"] };
     const list = { agent: "claude", models: [model] };
+    expect(modelRows(list.models, "GPT-6.1 Sol").rows).toEqual([model]);
     expect(modelRows(list.models, "6.1 Sol").rows).toEqual([model]);
     expect(modelDetail(model)).toBe("");
     expect(modelDetail({ ...model, name: "我的模型" })).toBe(model.id);
@@ -218,6 +222,14 @@ describe("思考强度", () => {
 });
 
 describe("启动时发什么", () => {
+  it("sends only the model and effort offered by the TRAE CLI catalog", () => {
+    const list: LauncherModels = { agent: "traex", models: [{ id: "example-fast", name: "Example Fast", efforts: ["medium", "xhigh"] }] };
+    expect(startPicks({ agent: "traex", list, model: "example-fast", effort: "xhigh" }))
+      .toEqual({ model: "example-fast", effort: "xhigh" });
+    expect(startPicks({ agent: "traex", list, model: "example-fast", effort: "max" })).toEqual({ model: "example-fast" });
+    expect(startPicks({ agent: "traex", list, model: "", effort: "" })).toEqual({});
+  });
+
   it("sends a picked model unless it is the default or the launcher fixes its own", () => {
     expect(startPicks({ agent: "claude", list: claude, model: "opus", effort: "" })).toEqual({ model: "opus" });
     expect(startPicks({ agent: "claude", list: claude, model: "default", effort: "" })).toEqual({});
@@ -241,7 +253,7 @@ describe("启动器的默认值 (#2455)", () => {
     expect(defaultLabel({ provider: "kcc", model: "kimi-k2.6", effort: "high" })).toBe("默认：kcc · kimi-k2.6");
     expect(defaultLabel({ provider: "kcc", model: "gateway/glm-5.3" })).toBe("默认：kcc · glm-5.3");
     expect(defaultLabel({ provider: "kcc", model: "" })).toBe("默认：kcc");
-    expect(defaultLabel(null, "claude")).toBe("默认：claude");
+    expect(defaultLabel(null, "claude")).toBe("默认：Claude Code");
     expect(defaultLabel(undefined)).toBe("默认");
   });
   it("titles the default's provider by its display name (#5029)", () => {
@@ -305,7 +317,10 @@ describe("手动输入的模型 ID（#1644）", () => {
     expect(typedModelOffered("omp", list)).toBe(false);
     expect(startPicks({ ...pick, list })).toEqual({ model: pick.model });
     expect(startPicks({ ...pick, list, model: "opus" })).toEqual({ model: "opus" });
+    expect(nativeOmpStart("omp", { name: "omp" }, "orca")).toBe(true);
+    expect(startPicks({ ...pick, nativeOmp: nativeOmpStart("omp", { name: "omp" }, "orca"), list })).toEqual({ model: pick.model });
     expect(nativeOmpStart("omp", { name: "alias" }, "herdr")).toBe(false);
+    expect(nativeOmpStart("omp", { name: "alias" }, "orca")).toBe(false);
     expect(nativeOmpStart("omp", { name: "omp", source: "paseo" }, "herdr")).toBe(false);
     expect(nativeOmpStart("omp", { name: "omp" }, "herdr-core")).toBe(false);
     expect(nativeOmpStart("codex", { name: "omp" }, "herdr")).toBe(false);

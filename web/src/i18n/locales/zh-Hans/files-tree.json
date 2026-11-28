@@ -1,13 +1,15 @@
 {
   "tree": "文件",
   "treeView": "树状视图",
-  "loading": "正在读取",
+  "showTree": "显示文件树",
+  "hideTree": "隐藏文件树",
+  "loading": "正在加载",
   "emptyFolder": "空文件夹",
-  "hiddenOnly": "只有隐藏文件",
+  "hiddenOnly": "仅包含隐藏文件",
   "showHidden": "显示隐藏文件",
-  "openFailed": "打不开这个文件夹",
-  "openFailedInline": "打不开：{error}",
+  "openFailed": "无法打开此文件夹",
+  "openFailedInline": "无法打开：{error}",
   "retry": "重试",
-  "tooMany": "文件太多，只列出了前 2000 个",
+  "tooMany": "文件过多，仅显示前 2000 项",
   "gitIgnored": "{path}（Git 已忽略）"
 }

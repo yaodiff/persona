@@ -1,0 +1,5 @@
+<resources>
+    <string name="settings_seen_agents">確認済みのエージェント</string>
+    <string name="settings_seen_agents_stay">更新するまで残す</string>
+    <string name="settings_seen_agents_leave">チャットを閉じたら移す</string>
+</resources>

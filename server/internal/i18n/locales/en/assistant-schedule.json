@@ -84,5 +84,6 @@
   "execution_space_directory": "Tasks in a space use the space's folder. Clear the working directory to continue.",
   "unknown_space": "That space is not available for tasks. Choose another space or none.",
   "bad_topic_policy": "Choose whether each run starts a new conversation or continues the same one.",
-  "space_owner_only": "Only you can move a task into or out of a space, from the app."
+  "space_owner_only": "Only you can move a task into or out of a space, from the app.",
+  "bad_delivery": "Delivery must name channel \"feishu\" with a valid chat_id and thread_id."
 }

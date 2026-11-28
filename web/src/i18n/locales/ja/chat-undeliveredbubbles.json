@@ -5,5 +5,18 @@
   "action_failed": "うまくいきませんでした：{error}",
   "held_waiting": "{computer} が戻ったら送信します",
   "held_failed": "未送信",
-  "held_placeholder": "{computer} はオフラインです。戻ったら送信します。"
+  "held_placeholder": "{computer} はオフラインです。戻ったら送信します。",
+  "time_left": "残り {seconds} 秒",
+  "resend": "再送",
+  "ignore": "無視",
+  "banner_awaiting": "配信が確認されていないメッセージがあります。受信確認を待っています（残り {seconds} 秒）。二重には送りません。",
+  "banner_awaiting_now": "時間内に配信確認が届かなかったメッセージがあります。送信キューから外し、後のメッセージは続けて送ります。",
+  "banner_behind_one": "後ろに {count} 件が並んでいて、自動で送られます。",
+  "banner_behind_other": "後ろに {count} 件が並んでいて、自動で送られます。",
+  "banner_queued_one": "{count} 件のメッセージが順番待ちで、自動で送られます。",
+  "banner_queued_other": "{count} 件のメッセージが順番待ちで、自動で送られます。",
+  "banner_expired_one": "{count} 件のメッセージは時間内に配信確認が届かず、送信キューから外しました。後のメッセージは通常どおり送られます。届いている可能性があるので、会話を確認してから再送するか無視してください。",
+  "banner_expired_other": "{count} 件のメッセージは時間内に配信確認が届かず、送信キューから外しました。後のメッセージは通常どおり送られます。届いている可能性があるので、会話を確認してから1件ずつ再送するか無視してください。",
+  "banner_expired_more_one": "ほかに {count} 件。上のメッセージに表示しています。",
+  "banner_expired_more_other": "ほかに {count} 件。上のメッセージに表示しています。"
 }

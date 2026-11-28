@@ -209,6 +209,8 @@ func (s *Service) registry(ctx context.Context) ([]trackEntry, []kindEntry) {
 				ID     string                        `json:"id"`
 				Title  string                        `json:"title"`
 				Config assistantwire.TrackKindConfig `json:"config"`
+				// Extension is the extension contributing the kind, as the hub knows it (extmgr/track_kinds.go).
+				Extension string `json:"extension"`
 			}
 			if err := json.Unmarshal(raw, &items); err != nil {
 				s.logf("track kinds: extensions: %v", err)
@@ -219,7 +221,7 @@ func (s *Service) registry(ctx context.Context) ([]trackEntry, []kindEntry) {
 					continue
 				}
 				cfg, err := normalKindConfig(item.Config)
-				k := kindEntry{Slug: item.ID, Title: item.Title, Config: cfg, Extension: true, Revision: 1}
+				k := kindEntry{Slug: item.ID, Title: item.Title, Config: cfg, Extension: true, Owner: item.Extension, Revision: 1}
 				if err != nil {
 					k.Disabled = kindDisabledInvalid
 					s.logf("track kinds: extension kind %q: %v", item.ID, err)

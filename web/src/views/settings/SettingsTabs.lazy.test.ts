@@ -11,9 +11,9 @@ const root = new URL("../../", import.meta.url);
 const pages: Record<string, string[]> = {
   Extensions: ["views/settings/IntegrationDetail.tsx"],
   Connectors: ["views/settings/IntegrationDetail.tsx"],
-  IntegrationDetail: ["views/settings/Integrations.tsx"],
+  IntegrationDetail: [],
   Integrations: [],
-  ExtensionMarket: ["views/settings/Extensions.tsx", "views/settings/IntegrationDetail.tsx", "views/settings/Integrations.tsx", "admin/pages/Extensions.tsx"],
+  ExtensionMarket: ["views/settings/Extensions.tsx", "views/settings/IntegrationDetail.tsx", "admin/pages/Extensions.tsx"],
   ExtensionAuth: ["views/settings/Extensions.tsx", "views/settings/IntegrationDetail.tsx"],
   ExtensionSettingsPage: ["views/settings/Extensions.tsx", "views/settings/IntegrationDetail.tsx"],
   ExtensionOperation: ["views/settings/ExtensionMarket.tsx"],

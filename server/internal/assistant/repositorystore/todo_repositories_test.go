@@ -41,6 +41,11 @@ func TestTodoRepositoriesAtomicRestartAndLegacyEdits(t *testing.T) {
 	if err != nil || len(saved.Repositories) != 1 || len(saved.Repositories[0].Links) != 2 {
 		t.Fatal(saved, err)
 	}
+	for _, link := range saved.Repositories[0].Links {
+		if link.Provenance != repository.LinkProvenanceExplicit {
+			t.Fatalf("creation did not bind delivery link %s", link.CanonicalURL)
+		}
+	}
 	title := "Renamed"
 	if _, err := d.EditTodo(ctx, row.ID, db.TodoEdit{Title: &title}, time.Now()); err != nil {
 		t.Fatal(err)
@@ -225,7 +230,7 @@ func TestTodoRepositoryImportCanonicalReceiptAfterRestart(t *testing.T) {
 	if err := d.CreateTodo(ctx, row); err != nil {
 		t.Fatal(err)
 	}
-	raw := "https://gitlab.example.com/team/api/merge_requests/7"
+	raw := "https://gitlab.com/Team/Api/merge_requests/7"
 	set, _, err := d.ImportTodoRepositoryLinks(ctx, row.ID, []string{raw}, "explicit")
 	if err != nil {
 		t.Fatal(err)

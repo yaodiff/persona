@@ -26,5 +26,6 @@
   "say_something": "Say something",
   "retry": "Try again",
   "retry_requested": "Asked AI to try again",
-  "retry_failed": "Couldn’t retry: {error}"
+  "retry_failed": "Couldn’t retry: {error}",
+  "open_kb_chat": "Knowledge page"
 }

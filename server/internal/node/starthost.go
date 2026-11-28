@@ -72,8 +72,9 @@ func (n *Node) checkStartHost(kind string) error {
 		return fmt.Errorf("unknown host %q", kind)
 	}
 	name := proto.EngineNames[kind]
-	if !n.hostEnabled(kind) {
-		return refusal(engineMissing, fmt.Sprintf("这台电脑没有启用 %s，不能在 %s 里新开会话，这次没有发送。", name, name), nil)
+	if !n.hostEnabled(kind) { // the hub words it by its engine and reason (apierr's engineMissingKeys, #17057)
+		return refusal(engineMissing, i18n.T(i18n.Default, "rpc-errors.engine_not_enabled", i18n.Args{"engine": name}),
+			map[string]any{"engine": kind, "reason": engineNotEnabled})
 	}
 	if proto.RuntimeEngine(kind) {
 		return nil // its runtime starts sessions (runtimecontrol.go)

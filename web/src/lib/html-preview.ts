@@ -1,6 +1,6 @@
 // An HTML file previewed in the file viewer (docs/web/web.md "HTML preview", #1413; iOS / Mac: #1297): the page goes into a
-// srcdoc frame that never gets allow-same-origin (it cannot reach this page or its token), with scripts and the
-// network off until the user turns them on for this file. Pure; html-preview.test.ts.
+// opaque-origin srcdoc frame with scripts and the network off until the user turns them on for this file.
+// Pure; html-preview.test.ts.
 
 import { decodeURIComponentSafe } from "./uri";
 
@@ -11,7 +11,9 @@ export interface PreviewPolicy {
 
 /** The frame's sandbox: popups for links always (they open a new tab, outside the sandbox), scripts only when asked. */
 export function sandboxFor(p: PreviewPolicy): string {
-  return ["allow-popups", "allow-popups-to-escape-sandbox", ...(p.scripts ? ["allow-scripts", "allow-forms", "allow-modals"] : [])].join(" ");
+  const flags = ["allow-popups", "allow-popups-to-escape-sandbox"];
+  if (p.scripts) flags.push("allow-scripts", "allow-forms", "allow-modals");
+  return flags.join(" ");
 }
 
 /** The Content-Security-Policy put in front of the page: without the network only what the file itself holds loads. */

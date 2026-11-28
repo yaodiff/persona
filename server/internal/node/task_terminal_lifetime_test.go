@@ -11,10 +11,11 @@ import (
 
 // Orca's stale-session cases need to reap the process while preserving its on-disk
 // session entry. The task-terminal close cases keep their process alive through cleanup.
-func idleTerminalTestProcess(t *testing.T) (int, func()) {
+func idleTerminalTestProcess(t *testing.T, env ...string) (int, func()) {
 	t.Helper()
 	cmd := exec.Command(os.Args[0])
 	cmd.Env = append(os.Environ(), "NODE_TEST_TASK_TERMINAL_IDLE=1")
+	cmd.Env = append(cmd.Env, env...)
 	cmd.SysProcAttr = osproc.SessionGroupAttr()
 	input, err := cmd.StdinPipe()
 	if err != nil {

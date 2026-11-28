@@ -9,7 +9,8 @@ const [address, artifacts] = process.argv.slice(2);
 const origin = new URL(address);
 assert.ok(["127.0.0.1", "localhost"].includes(origin.hostname));
 const output = resolve(artifacts); await mkdir(output, { recursive: true });
-const browser = await chromium.launch({ channel: "chrome" });
+const executablePath = process.env.PERSONA_TEST_CHROME_PATH;
+const browser = await chromium.launch(executablePath ? { executablePath } : { channel: "chrome" });
 const result = { status: "running", profiles: [] };
 const deadline = setTimeout(() => void browser.close(), 180000);
 const machine = { id: "example", name: "Example computer", online: true, os: "linux" };
@@ -85,7 +86,8 @@ try {
   const list=page.locator("[data-sidebar-agents]");await list.waitFor();
   await page.waitForFunction(()=>!document.querySelector('[data-sidebar-agents]')?.textContent?.includes("Review the example notes"));
   assert.equal(await list.getByRole("radio",{name:/Lark group/}).count(),0);
-  assert.equal(await list.getByRole("button",{name:/botmux/i}).count(),0);
+  const chip=list.locator("button[data-botmux-mode]");
+  await list.locator('button[data-botmux-mode="hide"]').waitFor();
   await list.scrollIntoViewIfNeeded();
   await page.screenshot({path:`${output}/${name}-sidebar-off.png`});
   // Another browser changed the value: the next actual list refresh follows it.
@@ -94,6 +96,16 @@ try {
   else{primarySocket.send(JSON.stringify({type:"sessions",machine_id:"example",sessions:rows}));}
   await page.getByRole("radio",{name:/Lark group/}).waitFor();
   assert.deepEqual(writes,[{show_botmux:false},{show_botmux:true},{show_botmux:true},{show_botmux:false}]);
+  await chip.click();
+  await list.locator('button[data-botmux-mode="all"]').waitFor();
+  await chip.click();
+  await list.locator('button[data-botmux-mode="hide"]').waitFor();
+  assert.equal(saved,false);
+  await chip.click();
+  await list.locator('button[data-botmux-mode="decode"]').waitFor();
+  await page.getByRole("radio",{name:/Lark group/}).waitFor();
+  assert.deepEqual(writes.slice(4),[{show_botmux:false},{show_botmux:true}]);
+  await page.screenshot({path:`${output}/${name}-sidebar-decoded.png`});
 
   if(paged)assert.ok(reads.some(q=>q.includes("exclude_pane_source=feishu")));
   assert.deepEqual(errors,[]);

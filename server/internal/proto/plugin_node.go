@@ -135,3 +135,46 @@ type PluginNodeEvent struct {
 	Event    string          `json:"event"`
 	Params   json.RawMessage `json:"params,omitempty"`
 }
+
+// MethodPluginNodeHubCall is a node's request plugin.node.hub_call: a program on that computer calls one of the hub's
+// methods for extensions (docs/extensions/extensions.md "Programs running on computers"). The manager answers only
+// the methods on its allowlist, with the extension's own granted scopes, as for its program on the hub; an older hub
+// answers that it does not know the method.
+const MethodPluginNodeHubCall = "plugin.node.hub_call"
+
+// PluginNodeExtensionID is the id of the extension whose program on a computer makes a call.
+type PluginNodeExtensionID string
+
+// PluginNodeHubCallParams is the opaque JSON parameters of a hub call relayed from a computer's plugin program.
+type PluginNodeHubCallParams json.RawMessage
+
+// MarshalJSON writes the params as raw JSON (null when empty).
+func (p PluginNodeHubCallParams) MarshalJSON() ([]byte, error) {
+	return json.RawMessage(p).MarshalJSON()
+}
+
+// UnmarshalJSON keeps a copy of the params as raw JSON.
+func (p *PluginNodeHubCallParams) UnmarshalJSON(data []byte) error {
+	return (*json.RawMessage)(p).UnmarshalJSON(data)
+}
+
+// PluginNodeHubCall is plugin.node.hub_call's params: which extension's program (its id and identity revision, as the
+// node started it), the method and its params. The machine is the connection the request came in on, never a field.
+type PluginNodeHubCall struct {
+	Revision int64                   `json:"identity_revision,omitempty"`
+	ID       PluginNodeExtensionID   `json:"id"`
+	Method   string                  `json:"method"`
+	Params   PluginNodeHubCallParams `json:"params,omitempty"`
+}
+
+// PluginNodeHubMethod: method is one a program on a computer may call on the hub (plugin.node.hub_call). The node
+// forwards only these and answers unknown_method for the rest itself; the manager checks again, then the extension's
+// scopes as for its program on the hub. Knowledge-base calls only: none of them reaches another computer, a secret,
+// the hub's token or an agent.
+func PluginNodeHubMethod(method string) bool {
+	switch method {
+	case "kb.list", "kb.get", "kb.day", "kb.search", "kb.recent", "kb.owner", "kb.update", "kb.put_recording":
+		return true
+	}
+	return false
+}

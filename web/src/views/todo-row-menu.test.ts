@@ -93,6 +93,16 @@ describe("todoRowMenu", () => {
     expect(act.toggleDone).toHaveBeenCalledTimes(1);
   });
 
+  it("labels an open concern's completion action Report and close", () => {
+    const items = todoRowMenu(todo({ kind: "concern" }), true, NOW, actions(), MONDAY);
+    expect(find(items, "complete").label).toBe("Report and close…");
+  });
+
+  it("labels a closed concern's action Reopen to-do", () => {
+    const items = todoRowMenu(todo({ kind: "concern", done_at: "2026-11-11T09:00:00Z" }), false, NOW, actions(), MONDAY);
+    expect(find(items, "reopen").label).toBe("Reopen to-do");
+  });
+
   it("follows the row's checkbox: a failed start waiting on the owner reads open", () => {
     const items = todoRowMenu(todo({ done_at: "2026-11-11T09:00:00Z", start_error: "no launcher" }), true, NOW, actions(), MONDAY);
     expect(items[0].key).toBe("complete");

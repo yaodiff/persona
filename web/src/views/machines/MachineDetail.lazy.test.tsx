@@ -88,7 +88,7 @@ describe("MachineDetail MachineDeploy lazy boundary", () => {
 
   it("omits MachineDeploy on a healthy machine, then renders it on demand when a version mismatch appears and unmounts when cleared", async () => {
     fake.machines = [{ id: "box", name: "Dev Box", online: true }];
-    await act(async () => root.render(<MachineDetail mid="box" onToggleSidebar={() => {}} />));
+    await act(async () => root.render(<MachineDetail mid="box" subview="management" onToggleSidebar={() => {}} />));
     await flush();
 
     expect(host.textContent).toContain("Dev Box");
@@ -96,7 +96,7 @@ describe("MachineDetail MachineDeploy lazy boundary", () => {
     expect(host.textContent).not.toContain(t("lib-machine-deploy.mismatch"));
 
     fake.machines = [{ id: "box", name: "Dev Box", online: true, node_mismatch: true, can_deploy: true }];
-    await act(async () => root.render(<MachineDetail mid="box" onToggleSidebar={() => {}} />));
+    await act(async () => root.render(<MachineDetail mid="box" subview="management" onToggleSidebar={() => {}} />));
     await waitFor(() => host.textContent?.includes(t("lib-machine-deploy.redeploy")));
 
     expect(deployRenders).toHaveBeenCalledWith("box");
@@ -111,7 +111,7 @@ describe("MachineDetail MachineDeploy lazy boundary", () => {
     expect(vi.mocked(fetch).mock.calls.some(([url, init]) => String(url) === "/api/v1/machines/box/deploy" && init?.method === "POST")).toBe(true);
 
     fake.machines = [{ id: "box", name: "Dev Box", online: true }];
-    await act(async () => root.render(<MachineDetail mid="box" onToggleSidebar={() => {}} />));
+    await act(async () => root.render(<MachineDetail mid="box" subview="management" onToggleSidebar={() => {}} />));
     await flush();
     expect(host.textContent).not.toContain(t("lib-machine-deploy.mismatch"));
   });

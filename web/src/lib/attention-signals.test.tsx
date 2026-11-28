@@ -123,7 +123,7 @@ describe("系统通知", () => {
     await show([session("long", "unread"), session("short", "unread"), session("ask", "needs_you")]);
     expect(posted).toEqual([{ title: "ask 需要你", body: "ask 的最后一句", tag: "m/ask#needs" }]);
     await act(async () => void vi.advanceTimersByTime(SETTLE_MS + BATCH_QUIET_MS + 10));
-    expect(posted.map((p) => p.title)).toEqual(["ask 需要你", "long 做完了"]);
+    expect(posted.map((p) => p.title)).toEqual(["ask 需要你", "long 已完成"]);
   });
 
   it("页面在前台时不发", async () => {
@@ -216,7 +216,7 @@ describe("一批做完的合成一条（#4945）", () => {
     vi.advanceTimersByTime(500);
     await show([session("a", "unread"), session("b", "unread"), session("c", "unread")]);
     await settle();
-    expect(posted).toEqual([{ title: "3 个任务做完了 · a、b、c", body: "点开看总览", tag: "finished#batch" }]);
+    expect(posted).toEqual([{ title: "3 个任务已完成 · a、b、c", body: "点击查看概览", tag: "finished#batch" }]);
   });
 
   it("超过三个只列三个；一直有新的做完也最多等一小段", async () => {
@@ -229,7 +229,7 @@ describe("一批做完的合成一条（#4945）", () => {
     // the first five went out BATCH_MAX_MS after the first joined; the sixth joins them in the next one
     await settle();
     expect(BATCH_MAX_MS).toBeLessThan(5 * 1200);
-    expect(posted.map((p) => p.title)).toEqual(["5 个任务做完了 · a、b、c 等", "6 个任务做完了 · a、b、c 等"]);
+    expect(posted.map((p) => p.title)).toEqual(["5 个任务已完成 · a、b、c 等", "6 个任务已完成 · a、b、c 等"]);
   });
 
   it("等的时候有几个已经看过了：剩一个就照原来的单条", async () => {
@@ -238,14 +238,14 @@ describe("一批做完的合成一条（#4945）", () => {
     vi.advanceTimersByTime(SETTLE_MS + 100);
     await show([session("a", "idle"), session("b", "unread")]);
     await settle();
-    expect(posted).toEqual([{ title: "b 做完了", body: "b 的最后一句", tag: "m/b#finished" }]);
+    expect(posted).toEqual([{ title: "b 已完成", body: "b 的最后一句", tag: "m/b#finished" }]);
   });
 
   it("需要你不合并，照样各弹一条", async () => {
     await show(working("a", "b", "c", "d"));
     await show([session("a", "needs_you"), session("b", "needs_you"), session("c", "unread"), session("d", "unread")]);
     await settle();
-    expect(posted.map((p) => p.title)).toEqual(["a 需要你", "b 需要你", "2 个任务做完了 · c、d"]);
+    expect(posted.map((p) => p.title)).toEqual(["a 需要你", "b 需要你", "2 个任务已完成 · c、d"]);
   });
 
   it("下一批替换这一条，还没看的留在里面；都看过了就收回", async () => {
@@ -256,11 +256,11 @@ describe("一批做完的合成一条（#4945）", () => {
     await settle();
     await show(at("idle", "unread", "unread", "unread"));
     await settle();
-    expect(posted.map((p) => p.title)).toEqual(["2 个任务做完了 · p、q", "3 个任务做完了 · q、r、s"]);
+    expect(posted.map((p) => p.title)).toEqual(["2 个任务已完成 · p、q", "3 个任务已完成 · q、r、s"]);
     await show(at("idle", "idle", "idle", "unread"));
     expect(closed).toEqual([]);
     await show(at("idle", "idle", "idle", "idle"));
-    expect(closed).toEqual(["3 个任务做完了 · q、r、s"]);
+    expect(closed).toEqual(["3 个任务已完成 · q、r、s"]);
   });
 
   it("收回后同一批 Agent 很快又做完：照样弹", async () => {
@@ -269,11 +269,11 @@ describe("一批做完的合成一条（#4945）", () => {
     await show(at("unread"));
     await settle();
     await show(at("idle"));
-    expect(closed).toEqual(["2 个任务做完了 · u、v"]);
+    expect(closed).toEqual(["2 个任务已完成 · u、v"]);
     await show(working("u", "v"));
     await show(at("unread"));
     await settle();
-    expect(posted.map((p) => p.title)).toEqual(["2 个任务做完了 · u、v", "2 个任务做完了 · u、v"]);
+    expect(posted.map((p) => p.title)).toEqual(["2 个任务已完成 · u、v", "2 个任务已完成 · u、v"]);
   });
 
   it("别的标签页已经发了这一批：这页不再发，自己的单条收回", async () => {
@@ -283,19 +283,19 @@ describe("一批做完的合成一条（#4945）", () => {
     localStorage.setItem("persona.notified", JSON.stringify({ "finished#batch@m/g,m/h": Date.now() }));
     await show([session("g", "unread", long), session("h", "unread", long)]);
     await settle();
-    expect(posted.map((p) => p.title)).toEqual(["g 做完了"]);
-    expect(closed).toEqual(["g 做完了"]);
+    expect(posted.map((p) => p.title)).toEqual(["g 已完成"]);
+    expect(closed).toEqual(["g 已完成"]);
   });
 
   it("先单独弹过的，并进下一批时收回单条", async () => {
     await show(working("x", "y", "z"));
     await show([session("x", "unread", long), ...working("y", "z")]);
     await settle();
-    expect(posted.map((p) => p.title)).toEqual(["x 做完了"]);
+    expect(posted.map((p) => p.title)).toEqual(["x 已完成"]);
     await show([session("x", "unread", long), session("y", "unread", long), session("z", "unread", long)]);
     await settle();
-    expect(posted.map((p) => p.title)).toEqual(["x 做完了", "3 个任务做完了 · x、y、z"]);
-    expect(closed).toEqual(["x 做完了"]);
+    expect(posted.map((p) => p.title)).toEqual(["x 已完成", "3 个任务已完成 · x、y、z"]);
+    expect(closed).toEqual(["x 已完成"]);
   });
 });
 
@@ -306,9 +306,9 @@ describe("已在需要你时又来一张卡（#4058）", () => {
   it("第二张卡也弹，写的是这张卡；同一张卡不重复弹", async () => {
     await show([session("a", "working")]);
     await show([session("a", "needs_you")], [ask]);
-    expect(posted).toEqual([{ title: "a 在问你", body: "用哪个框架？", tag: "m/a#needs" }]);
+    expect(posted).toEqual([{ title: "a 向你提问", body: "用哪个框架？", tag: "m/a#needs" }]);
     await show([session("a", "needs_you")], [ask, perm]);
-    expect(posted.at(-1)).toEqual({ title: "a 需要你授权", body: "go test ./...", tag: "m/a#needs" });
+    expect(posted.at(-1)).toEqual({ title: "a 需要你的授权", body: "go test ./...", tag: "m/a#needs" });
     await show([session("a", "needs_you")], [perm, ask]); // a snapshot again, the same cards
     await show([{ ...session("a", "needs_you"), last_text: "新的一句" }]);
     expect(posted).toHaveLength(2);
@@ -317,9 +317,9 @@ describe("已在需要你时又来一张卡（#4058）", () => {
   it("通知说的那张卡答掉了就收回，会话还在等另一张也收回", async () => {
     await show([session("a", "needs_you")], [ask]);
     await show([session("a", "needs_you")], [ask, perm]);
-    expect(posted.map((p) => p.title)).toEqual(["a 需要你授权"]);
+    expect(posted.map((p) => p.title)).toEqual(["a 需要你的授权"]);
     await show([session("a", "needs_you")], [ask]);
-    expect(closed).toEqual(["a 需要你授权"]);
+    expect(closed).toEqual(["a 需要你的授权"]);
     await show([session("a", "needs_you")], [ask]);
     expect(closed).toHaveLength(1);
   });
@@ -330,9 +330,9 @@ describe("已在需要你时又来一张卡（#4058）", () => {
     expect(posted.map((p) => p.title)).toEqual(["a 需要你"]);
     vi.setSystemTime(T0 + 10_000);
     await show([session("a", "needs_you")], [perm]);
-    expect(posted.at(-1)).toEqual({ title: "a 需要你授权", body: "go test ./...", tag: "m/a#needs" });
+    expect(posted.at(-1)).toEqual({ title: "a 需要你的授权", body: "go test ./...", tag: "m/a#needs" });
     await show([session("a", "needs_you")], [perm, { ...ask, id: "q2" }]);
-    expect(posted.at(-1)?.title).toBe("a 在问你");
+    expect(posted.at(-1)?.title).toBe("a 向你提问");
   });
 
   it("刚打开页面时已有的卡不弹", async () => {
@@ -348,21 +348,21 @@ describe("已在需要你时又来一张卡（#4058）", () => {
   });
 
   describe("授权卡的通知带「允许 / 拒绝」（#4464）", () => {
-    let shown: { title: string; ix?: string }[];
+    let shown: { title: string; ix?: string; created_at?: string }[];
     beforeEach(() => {
       shown = [];
       (FakeNotification as unknown as { maxActions: number }).maxActions = 2;
       vi.stubGlobal("matchMedia", () => ({ matches: true }));
-      const reg = { showNotification: async (title: string, o: { data?: { ix?: string } }) => void shown.push({ title, ix: o.data?.ix }), getNotifications: async () => [] };
+      const reg = { showNotification: async (title: string, o: { data?: { ix?: string; created_at?: string } }) => void shown.push({ title, ix: o.data?.ix, created_at: o.data?.created_at }), getNotifications: async () => [] };
       vi.stubGlobal("navigator", { ...navigator, serviceWorker: { controller: {}, ready: Promise.resolve(reg), getRegistration: async () => reg, addEventListener() {}, removeEventListener() {} } });
     });
     afterEach(() => delete (FakeNotification as unknown as { maxActions?: number }).maxActions);
 
-    it("能批的会话：经 service worker 弹，带卡片 id", async () => {
+    it("能批的会话：经 service worker 弹，带卡片 occurrence", async () => {
       await show([session("a", "working")]);
       await show([session("a", "needs_you")], [perm]);
       await act(async () => {});
-      expect(shown).toEqual([{ title: "a 需要你授权", ix: "p1" }]);
+      expect(shown).toEqual([{ title: "a 需要你的授权", ix: "p1", created_at: perm.created_at }]);
       expect(posted).toEqual([]);
     });
 
@@ -371,7 +371,7 @@ describe("已在需要你时又来一张卡（#4058）", () => {
       await show([session("a", "needs_you")], [{ ...perm, fields: [{ key: "pw", label: "密码", secret: true }] }]);
       await act(async () => {});
       expect(shown).toEqual([]);
-      expect(posted.map((p) => p.title)).toEqual(["a 需要你授权"]);
+      expect(posted.map((p) => p.title)).toEqual(["a 需要你的授权"]);
     });
 
     it("不能批的会话（approve=false）：不带按钮，照旧弹普通通知", async () => {
@@ -380,7 +380,7 @@ describe("已在需要你时又来一张卡（#4058）", () => {
       await show([locked], [perm]);
       await act(async () => {});
       expect(shown).toEqual([]);
-      expect(posted.map((p) => p.title)).toEqual(["a 需要你授权"]);
+      expect(posted.map((p) => p.title)).toEqual(["a 需要你的授权"]);
     });
   });
 });
@@ -448,6 +448,13 @@ describe("the hub's notify events: the assistant's conversations (#8145)", () =>
     closed.length = 0; // the click closed it
     await show([], []);
     expect(closed).toEqual(["Persona is asking you"]);
+  });
+
+  it("drops a retained notification whose occurrence was replaced", async () => {
+    const replacement: Interaction = { ...askCard, kind: "permission", created_at: "2026-01-02T03:04:05.000000002Z" };
+    await open([], [replacement]);
+    await notify({ ...askNotify, title: "Old request", body: "Answer the old request", interaction_created_at: "2026-01-02T03:04:05.000000001Z" });
+    expect(posted).toEqual([]);
   });
 
   it("a leader's card and the assistant's notify_user post too, each once for every tab", async () => {

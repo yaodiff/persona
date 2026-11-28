@@ -18,7 +18,7 @@ During first-run setup, entering an explicit pairing link (`persona://pair?…`)
 
 ## Existing web behavior
 
-- The desktop loads only the configured hub origin (including its reverse-proxy prefix). Other HTTP/HTTPS links open in the system browser. Authentication, service-worker permission actions, notification text/tags/deduplication/withdrawal, quiet hours and the Needs-you count stay in the existing web code.
+- The desktop loads only the configured hub origin (including its reverse-proxy prefix). Other HTTP/HTTPS links open in the system browser. A hub page meant for a new window (`target="_blank"`, `window.open`) loads in the same window, except Hub Admin (the hub's `/admin` pages, [admin.md](../operations/admin.md)): the Assistant window sends it, as a new window or as its own navigation, to one admin window beside it, so the Assistant keeps its page (#16992). A second admin link shows that window again, on the link's page. It has the hub's session (its sign-in, TLS pin and permissions), no preload and the system's standard title bar, and closes with the Assistant window (`src/hub-links.ts`). Authentication, service-worker permission actions, notification text/tags/deduplication/withdrawal, quiet hours and the Needs-you count stay in the existing web code.
 - Native notification clicks return to the existing SPA route. Native display failure keeps the browser fallback. Signing out clears the previous account's native notices.
 - `persona://` links open a page of the route table in the window (`docs/protocol/deep-links.md`, #9931): `persona://open<path>` (the hub's web path after `persona://open`) and the first form `persona://open?route=<path>` go through the same route as a notification click, with only the query keys a page reads (no `hub`, no token). The web app opens the path or says it is no page. A port, a user name, a fragment, or a route that does not start with a single `/` or would leave the hub is refused (`src/urls.ts` `parseDeepLink`, checked against `spec/fixtures/deep-links/cases.json`). The packaged app lists the scheme in `electron-builder.yml` `protocols`, so macOS hands it these links (its Info.plist `CFBundleURLTypes`); Windows registers it at run time. Pairing links (`persona://pair`, `persona://link`) are data as before, never automatic pairing. A route that comes before the page listens for it (the link that started the app, a notification or island click while the page reloads) waits in the main process until the page's app calls `onOpenNotification`; only the latest one waits (`src/page-routes.ts`, #10282).
 - `register_desktop` uses the existing authenticated web socket, never a token in the Electron main process. An active, unlocked, recently used desktop with notifications may register. Locking, idling or disabling notifications withdraws it. New hubs use `unregister_desktop`; older hubs use socket-close withdrawal and reconnect only when active and notifying again. Resume alone does not mean unlocked; only the actual unlock event restores presence.
@@ -52,6 +52,15 @@ The app and its tray use the Persona helper, the same art as the iPhone, Mac and
 
 `desktop/src/tray-icon.ts` picks the tray file by platform; `desktop/scripts/copy-assets.mjs` copies `src/assets` into `dist/assets`. `desktop/test/icons.test.ts` checks every file is there at its sizes and that `electron-builder.yml` names the app icons. The taskbar's Needs-you overlay stays the plain dot in `src/badge-art.ts`.
 
+## Unified macOS titlebar
+
+On macOS (`#16607`), the main window uses `titleBarStyle: "hiddenInset"` with `trafficLightPosition: { x: 14, y: 19 }` so the traffic lights sit inside the same surface rather than above a separate OS title bar strip:
+
+- **Expanded sidebar**: displays the 44 px window drag strip at the top of the sidebar column with the co-linear `MacBayTools` sidebar collapse toggle directly beside the macOS traffic lights (`left: 80, top: 11`, `#17136`), keeping the toggle pixel-locked across expanded/rail/hidden states while the main inset card keeps standard rounded corners.
+- **Collapsed rail / hidden sidebar**: the web shell activates a 44 px co-linear Apple G2 continuous-curvature control bay (`web/src/lib/mac-chrome.ts`, `web/src/views/MacChrome.tsx`) holding the sidebar expand button and quick search right beside the traffic lights, keeping the header's 45 px divider co-linear with the bay floor across Settings and list pages. Fullscreen retracts the bay and restores standard rounded corners.
+- **Hub Admin** (#16992) opens in its own window with the standard title bar (above), so nothing sits under its window controls. A desktop build from before that still loads it in this window; there the admin sidebar takes the expanded sidebar's 38 px inset and 44 px drag strip (the same rule in `web/src/styles.css`, `data-mac-chrome` from `web/src/lib/mac-chrome.ts`), so the controls clear its shield and hub name.
+- **Bridge and opt-in Frosted Glass**: `windowChrome`, `onWindowChromeChange`, `setSurfaceStyle` and `setThemeSource` are optional additive v1 methods on `DesktopBridge`. Default appearance stays opaque; on macOS, `showMain()` keeps the window opaque (`transparent: false` default) with `visualEffectState: "active"`, and when **Frosted Glass** (`liquid-glass`) is active (saved in `desktop-state.json` or toggled under Settings › Advanced › Appearance) seeds `vibrancy` (`hud` in dark mode, `popover` in light mode) alongside `#00000000` background. Paired with disabling redundant CSS `backdrop-filter` across the document (including `<main>`, the split panel `<aside>`, portals, and arbitrary `backdrop-*` utilities) under `[data-desktop-glass="1"]` (`web/src/styles.css`), this lets Chromium clear alpha frames cleanly over native vibrancy while avoiding macOS Stage Manager's ~400 ms opaque gray vibrancy dropout triggered by `transparent: true`. Switching back to **Default** clears vibrancy and restores opaque `#0b0b0c` / `#f1f1f4` backing, while `setThemeSource` keeps Electron `nativeTheme.themeSource` aligned with the web theme even when OS appearance differs (#16776, #17012, #17322). Older shells without those methods keep plain frame behavior automatically.
+
 ## Island at the MacBook notch
 
 On a Mac the desktop app can show the Agents' state at the notch (#7669), as the iPhone shows it in the Dynamic Island
@@ -63,11 +72,11 @@ On a Mac the desktop app can show the Agents' state at the notch (#7669), as the
   saves the choice before applying it: one it cannot save changes nothing, and the switch says why.
 - **What it shows**: closed, a black pill around the notch: the most urgent category with its symbol and count on the left
   (Needs you, then Working, then Unread), the next one on the right, the iPhone's preset A (`IslandCell.sides`), in the
-  iPhone island's colors. With the pointer over it, it opens downward into the agents that need you, then the working
-  ones, then the ones that finished unseen (at most five; in each state the one that entered it last first, by
-  `state_since`, so a working agent's updates do not move its row), each with its title, state and the line its
-  Agents-list row shows. A click shows the desktop window at that session through the notification-click path. With
-  nothing to count, it is hidden.
+  iPhone island's colors. With the pointer over it, it grows downward, at the pill's width, into the agents that need
+  you, then the working ones, then the ones that finished unseen (at most five; in each state the one that entered it
+  last first, by `state_since`, so a working agent's updates do not move its row), each with its title, state and the
+  line its Agents-list row shows. A click shows the desktop window at that session through the notification-click
+  path. With nothing to count, it is hidden.
 - **Data**: the web works it out from the Agents list (`web/src/lib/desktop-island.ts`, a leaf beside
   `AttentionSignals`) and sends it with `setIslandState` when it changes, words already in the user's language. The
   counts and the rows come from the same list, so the pill counts no agent its list cannot show: not the Persona
@@ -84,9 +93,12 @@ On a Mac the desktop app can show the Agents' state at the notch (#7669), as the
   hidden until a signed-in page sends its own.
 - **Shell**: `desktop/src/island.ts` draws it from a local page, in a frameless, transparent, always-on-top panel that
   takes no focus and stays on every Space and over full-screen apps, without Electron's default of making the whole app
-  a background one for that (no Dock icon or badge; the e2e checks it). The page comes from the shell's own scheme,
-  `persona-island://app/island.html` (`island-page.ts`), which serves its three files (`island.html`, `island.css`,
-  `island.cjs`, in `dist/island/`) and nothing else. It cannot come from `file://`: with
+  a background one for that (no Dock icon or badge; the e2e checks it). The panel has no title bar style
+  (`roundedCorners: false` in `ISLAND_WINDOW`, `island-model.ts`): Electron keeps every frameless window titled
+  otherwise, and macOS rounds all four corners of a titled window (16 pt on macOS 27), which pulled the island's top
+  corners off the top of the screen (#16301). Its page draws its own bottom corners. The page comes from the shell's
+  own scheme, `persona-island://app/island.html` (`island-page.ts`), which serves its three files (`island.html`,
+  `island.css`, `island.cjs`, in `dist/island/`) and nothing else. It cannot come from `file://`: with
   `grantFileProtocolExtraPrivileges` off, a packaged app's `file://` does not reach into its asar, the page fails with
   `ERR_FILE_NOT_FOUND` and the island's window shows nothing. The page's preload (`island-preload.cts`) has two fixed
   operations: the pointer over it or away, and a clicked row's route. A route is checked as a notification's
@@ -95,11 +107,15 @@ On a Mac the desktop app can show the Agents' state at the notch (#7669), as the
 - **Where**: Electron does not say where a notch is. The built-in display whose menu bar is taller than a plain one
   (32 pt or more instead of 24) is taken to have one, about 200 pt wide at the top center; the pill is the menu bar's
   height, with 64 pt on each side for a symbol and a count. On another display it is the same pill without the middle,
-  at the top center over the menu bar. Moving or adding displays places it again.
+  at the top center over the menu bar. Open, it keeps the pill's width around the notch (328 pt) and only grows
+  downward, so it covers no more of the menu bar than the pill does (it was 400 pt wide and reached the menu bar items
+  beside the pill, #16301); on another display it opens to that same width. Moving or adding displays places it again.
 - **Not yet**: the iPhone's other presets (tokens per minute, today's tokens), buttons on the island, Windows.
 
 The screenshots are on #7699, captured from the built desktop app against the synthetic hub
-(`scripts/mock/mock_hub.py`), in English; the island is always dark, as the notch is. What they show:
+(`scripts/mock/mock_hub.py`), in English; the island is always dark, as the notch is. They are captures of the page
+(`capturePage`), which show neither the window's shape nor where it sits over the menu bar; the PR for #16301 shows the
+island at its place over a notched display, before and after its open width and corners changed. What they show:
 
 - **Settings › Notifications**, light and dark: "Show at the MacBook notch" ("Counts of Agents that need you, are working
   or finished, around the notch; point at it for the list") sits between "Notify this browser" and "Alert sound", off by

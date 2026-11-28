@@ -126,6 +126,8 @@ nonisolated struct TokenCalendarLayout: Equatable, Sendable {
 
     private(set) var days: UsageDays?
     private(set) var hours: UsageHours?
+    /// Today's, the last 3 and the last 7 days' tokens by project (#16530); nil from a hub without them (no section).
+    private(set) var projects: UsageProjects?
     /// The page's read failed and it has nothing to show.
     private(set) var failed = false
     @ObservationIgnored private let api: () -> APIClient?
@@ -159,6 +161,12 @@ nonisolated struct TokenCalendarLayout: Equatable, Sendable {
             if hours == nil { failed = true }
         }
     }
+
+    /// The projects; a failed read keeps what was there, and an older hub's 404 leaves none (the section is not shown).
+    func loadProjects() async {
+        guard let api = api() else { return }
+        if let fresh = try? await api.usageProjects(), !fresh.ranges.isEmpty, fresh != projects { projects = fresh }
+    }
 }
 
 // MARK: - Words
@@ -169,6 +177,14 @@ nonisolated enum TokenCalendarText {
         let cal = TokenCalendarLayout.calendar(locale: locale)
         guard let d = TokenCalendarLayout.date(date, cal) else { return date }
         return d.formatted(Date.FormatStyle(locale: locale, calendar: cal, timeZone: .gmt).month(.abbreviated).day().weekday(.abbreviated))
+    }
+
+    /// A day said briefly, for a chart's axis: its month and day in numbers ("11/23" in English; in Chinese the same
+    /// numbers, each followed by its month or day sign).
+    static func shortDay(_ date: String, locale: Locale = .autoupdatingCurrent) -> String {
+        let cal = TokenCalendarLayout.calendar(locale: locale)
+        guard let d = TokenCalendarLayout.date(date, cal) else { return date }
+        return d.formatted(Date.FormatStyle(locale: locale, calendar: cal, timeZone: .gmt).month(.defaultDigits).day())
     }
 
     /// An hour on the clock in the language's way (12 AM in English; the hour and its sign in Chinese and Japanese).
@@ -341,10 +357,13 @@ struct TokenDayLine: View {
 
 // MARK: - Page
 
-/// The card's page: today, the last 7 and 30 days; the calendar with its key; the last 7 days by the hour; by computer,
-/// by agent (an older hub sends no agents: no section) and by kind.
+/// The card's page: today, the last 7 and 30 days; by project (#16530, TokenProjects.swift; none from an older hub);
+/// the calendar with its key; the last 7 days by the hour; by computer, by agent (an older hub sends no agents: no
+/// section) and by kind.
 struct TokenUsagePage: View {
     @State private var usage = TokenUsageModel()
+    /// By project's range: the last 7 days, as the page's other sections; a project's page shares it.
+    @State private var projectRange = 2
     @State private var pickedDay: String?
     @State private var pickedHour: HeatGrid.Cell?
 
@@ -353,6 +372,9 @@ struct TokenUsagePage: View {
             VStack(alignment: .leading, spacing: Theme.Space.l) {
                 if let days = usage.days {
                     totals(days)
+                    if let projects = usage.projects {
+                        UsageProjectsSection(projects: projects, range: $projectRange)
+                    }
                     section(String(localized: "Each Day", comment: "Token usage page: the calendar's heading")) {
                         VStack(alignment: .leading, spacing: Theme.Space.m) {
                             // Today's and the 30 days' totals are the page's first row: here only a picked day's own.
@@ -400,7 +422,8 @@ struct TokenUsagePage: View {
         .tabActiveTask {
             async let d: Void = usage.loadDays(TokenUsageModel.yearDays)
             async let h: Void = usage.loadHours()
-            _ = await (d, h)
+            async let p: Void = usage.loadProjects()
+            _ = await (d, h, p)
         }
     }
 

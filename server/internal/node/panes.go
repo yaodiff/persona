@@ -73,6 +73,24 @@ func (n *Node) hasPane(pane string) bool {
 	return false
 }
 
+// canSplit and canCloseTab: the host splits a pane (host.Splitter) / closes a whole tab (host.SlotCloser) now, as far
+// as it knows without asking: an Orca that answered method_not_found to the call no longer offers it (#17043).
+func canSplit(h host.Host) bool {
+	if o, ok := h.(*orcaHost); ok {
+		return o.CanSplit()
+	}
+	_, ok := h.(host.Splitter)
+	return ok
+}
+
+func canCloseTab(h host.Host) bool {
+	if o, ok := h.(*orcaHost); ok {
+		return o.CanCloseSlot()
+	}
+	_, ok := h.(host.SlotCloser)
+	return ok
+}
+
 // listPanes is the terminal browser's tree: from the layouts the node keeps, refreshed first when they are older
 // than paneListMaxAge (or a host has none yet).
 func (n *Node) listPanes(ctx context.Context) (proto.PanesResponse, error) {
@@ -105,6 +123,7 @@ func (n *Node) listPanes(ctx context.Context) (proto.PanesResponse, error) {
 		}
 		_, c.NewTab = h.(host.Launcher)
 		c.Worktree = canWorktree(h)
+		c.Abilities = n.paneAbilities(h)
 		caps[h.Kind()] = c
 	}
 	n.mu.Lock()
@@ -146,7 +165,7 @@ func (n *Node) listPanes(ctx context.Context) (proto.PanesResponse, error) {
 			item := proto.PaneItem{Pane: p.PaneID, Terminal: panePrefix + p.PaneID, TabID: p.TabID,
 				WorkspaceID: p.WorkspaceID, Agent: p.Agent, Status: p.AgentStatus, Title: p.Title, Cwd: p.Cwd,
 				SessionID: sessionOf[p.PaneID]}
-			if id := p.Tokens[personaTabToken]; validID(id) && p.Agent == "" && item.SessionID == "" {
+			if id := n.personaTabLocked(p); validID(id) && p.Agent == "" && item.SessionID == "" {
 				item.AgentSession = id // the terminal a stopped agent left (stopped.go)
 			}
 			ph.Panes = append(ph.Panes, item)
@@ -154,6 +173,32 @@ func (n *Node) listPanes(ctx context.Context) (proto.PanesResponse, error) {
 		out.Hosts = append(out.Hosts, ph)
 	}
 	return out, nil
+}
+
+// paneAbilities is what the menu methods (panes_actions.go, rename.go) can do on h, from what h implements: the
+// clients gate their items on it, not on the host's name (#17053), so a host that gains Splitter or SlotCloser gets its
+// items without a client change. Split and close tab go through canSplit / canCloseTab: an older Orca without the call
+// reports false (#17043).
+func (n *Node) paneAbilities(h host.Host) *proto.PaneAbilities {
+	_, organizes := h.(host.Organizer)
+	return &proto.PaneAbilities{Rename: organizes, ClosePane: organizes, Split: canSplit(h), CloseTab: canCloseTab(h),
+		Git: drivesScreen(h), RunHere: n.runsHere(h)}
+}
+
+// runsHere is what runAgentInPane asks of the host before it looks at the pane: a start goes through the default
+// engine's launcher, so only in that host's panes, and the host must name a pane's foreground programs to tell a shell
+// prompt.
+func (n *Node) runsHere(h host.Host) bool {
+	launch, err := n.launcherFor(n.defaultKind())
+	if err != nil {
+		return false
+	}
+	lh, ok := launch.(host.Host)
+	if !ok || lh.Kind() != h.Kind() {
+		return false
+	}
+	_, names := h.(host.ForegroundNamer)
+	return names
 }
 
 func (n *Node) hasLayout() bool {
@@ -165,10 +210,12 @@ func (n *Node) hasLayout() bool {
 // newShell opens a plain shell: a new tab in workspace ws of the host kind (herdr tab create --no-focus, so the
 // computer's own view does not jump). It starts in the workspace's directory as the host reported it, or in dir when the
 // file page asks for its folder (#5832: a folder the read guard lets the page see, given to the host as the tab's
-// starting directory, never typed into the shell), and is named shell, shell-2…. With dir and no ws, the first workspace
+// starting directory, never typed into the shell; Orca, whose terminals take none, gets it with the request that makes
+// the terminal: openShell), and is named shell, shell-2…. With dir and no ws, the first workspace
 // of a host that opens tabs; when that host has none yet, a new workspace in dir (newShellSpace). Only a user's explicit
 // action calls this.
 func (n *Node) newShell(ctx context.Context, kind, ws, dir string) (proto.NewShellResult, error) {
+	kind = spaceHostKind(kind)
 	start := ""
 	if strings.TrimSpace(dir) != "" {
 		_, real, err := n.resolveDir(dir, "")
@@ -187,10 +234,12 @@ func (n *Node) newShell(ctx context.Context, kind, ws, dir string) (proto.NewShe
 			return n.newShellSpace(ctx, "", start)
 		}
 	}
+	picked := false // ws is not the user's choice but the first workspace (firstLaunchSpace)
 	if ws == "" && start != "" {
 		if ws = n.firstLaunchSpace(kind); ws == "" {
 			return n.newShellSpace(ctx, kind, start)
 		}
+		picked = true
 	}
 	if ws == "" {
 		return proto.NewShellResult{}, errors.New("no workspace")
@@ -212,23 +261,45 @@ func (n *Node) newShell(ctx context.Context, kind, ws, dir string) (proto.NewShe
 	if cwd == "" { // a workspace the host reports no directory for: the home directory, like a new terminal window
 		cwd, _ = os.UserHomeDir()
 	}
-	created, err := launch.CreateSlot(ctx, ws, cwd, tabLabel("shell", n.tabLabels(ctx, launch, ws)))
+	target := ws
+	if _, places := launch.(shellOpener); places && picked {
+		target = "" // a host that places the user's shell itself (Orca) takes the workspace holding the folder
+	}
+	created, err := openShell(ctx, launch, target, cwd, tabLabel("shell", n.tabLabels(ctx, launch, ws)))
 	if err != nil {
-		return proto.NewShellResult{}, fmt.Errorf("创建终端标签页失败：%w", err)
+		return proto.NewShellResult{}, hostFailure(ctx, "terminal_open_failed", err)
 	}
 	return n.shellCreated(ctx, launch, created)
+}
+
+// shellOpener is a host that opens the user's own shell (New Terminal, Open Terminal Here) differently from a tab it
+// types a command into: Orca, whose terminals do not take a starting directory, has the new shell put in its folder
+// and gives it no launch grant (orcaHost.OpenShell). space "" is a new space for cwd, as CreateSpace.
+type shellOpener interface {
+	OpenShell(ctx context.Context, space, cwd, label string) (*host.Created, error)
+}
+
+// openShell opens the user's shell in cwd: in space, else in a new space (CreateSpace), on launch.
+func openShell(ctx context.Context, launch host.Launcher, space, cwd, label string) (*host.Created, error) {
+	if o, ok := launch.(shellOpener); ok {
+		return o.OpenShell(ctx, space, cwd, label)
+	}
+	if space == "" {
+		return launch.CreateSpace(ctx, cwd, label)
+	}
+	return launch.CreateSlot(ctx, space, cwd, label)
 }
 
 // newShellSpace opens the shell as the first tab of a new workspace in dir, named after it, on the first host (of kind,
 // when given) that opens tabs: a computer whose engine is running with no workspace yet still gets a terminal, the way
 // an Agent start does (newTab).
 func (n *Node) newShellSpace(ctx context.Context, kind, dir string) (proto.NewShellResult, error) {
-	launch, created, err := n.launchSpace(ctx, kind, dir, "shell")
+	launch, created, err := n.openSpace(ctx, kind, dir, "shell", true)
 	if errors.Is(err, errNoLauncher) {
 		return proto.NewShellResult{}, errors.New("no workspace")
 	}
 	if err != nil {
-		return proto.NewShellResult{}, fmt.Errorf("创建终端标签页失败：%w", err)
+		return proto.NewShellResult{}, hostFailure(ctx, "terminal_open_failed", err)
 	}
 	return n.shellCreated(ctx, launch, created)
 }
@@ -239,12 +310,23 @@ var errNoLauncher = errors.New("no host that opens tabs")
 // launchSpace makes a new workspace in dir, named after it, on the first host (of kind, when given) that opens tabs,
 // its first tab named after label (label, label-2… as the workspace's tabs leave free).
 func (n *Node) launchSpace(ctx context.Context, kind, dir, label string) (host.Launcher, *host.Created, error) {
+	return n.openSpace(ctx, kind, dir, label, false)
+}
+
+// openSpace is launchSpace; userShell: its tab is the user's own shell (openShell), not one a command is typed into.
+func (n *Node) openSpace(ctx context.Context, kind, dir, label string, userShell bool) (host.Launcher, *host.Created, error) {
 	for _, h := range n.hosts.All() {
 		launch, ok := h.(host.Launcher)
 		if !ok || (kind != "" && h.Kind() != kind) {
 			continue
 		}
-		created, err := launch.CreateSpace(ctx, dir, filepath.Base(dir))
+		var created *host.Created
+		var err error
+		if userShell {
+			created, err = openShell(ctx, launch, "", dir, filepath.Base(dir))
+		} else {
+			created, err = launch.CreateSpace(ctx, dir, filepath.Base(dir))
+		}
 		if err != nil {
 			return launch, nil, err
 		}
@@ -281,10 +363,13 @@ func (n *Node) launchSpaceHolding(ctx context.Context, dir string) (kind, ws str
 	return kind, ws
 }
 
+// errNoPaneCreated: the engine said a new tab was made but named no pane in it.
+var errNoPaneCreated = errors.New("the engine answered with no pane")
+
 // shellCreated answers with the new shell's pane once it is in the layout the terminal call checks.
 func (n *Node) shellCreated(ctx context.Context, launch host.Launcher, created *host.Created) (proto.NewShellResult, error) {
 	if created == nil || created.Pane.ID == "" {
-		return proto.NewShellResult{}, errors.New("创建终端标签页失败：宿主没有返回窗格")
+		return proto.NewShellResult{}, hostFailure(ctx, "terminal_open_failed", errNoPaneCreated)
 	}
 	pane := created.Pane.String()
 	_ = n.refreshHosts(ctx, launch.(host.Host))

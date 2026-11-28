@@ -17,6 +17,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/nodeproto"
 )
 
 // VerifyRelease is a publisher's last check before uploading a release (docs/operations/hub-update.md "Version manifest"):
@@ -30,6 +32,10 @@ func VerifyRelease(ctx context.Context, dir string, m *Manifest) error {
 	}
 	if _, err := ParseNumber(strconv.FormatInt(m.Build, 10)); err != nil {
 		return err
+	}
+	edition, ok := nodeproto.ParseEdition(m.Edition)
+	if !ok {
+		return fmt.Errorf("the manifest names an unknown edition %q", m.Edition)
 	}
 	type entry struct {
 		program, platform string
@@ -68,6 +74,11 @@ func VerifyRelease(ctx context.Context, dir string, m *Manifest) error {
 			return fmt.Errorf("%s for %s does not run here: %w", e.program, e.platform, err)
 		} else if want := releaseLine(m); got != want {
 			return fmt.Errorf("%s says %q, not %q: the manifest was written for another build than this binary", e.file.Name, got, want)
+		}
+		// A release is of one edition: a full build listed in the core's manifest (or the reverse) would be installed
+		// by every hub that trusts it. Read from the build info; a file without any says nothing here.
+		if got, ok := EditionOf(run); ok && got != edition {
+			return fmt.Errorf("%s is the %s edition, in a manifest of the %s edition", e.file.Name, got, edition)
 		}
 	}
 	// Helpers carry their own version, not the release's build number: their bytes are checked, and the one for this
@@ -143,6 +154,7 @@ func verifyDownload(dir string, f File, build int64, run string) error {
 	if err != nil {
 		return fmt.Errorf("%s: %w", f.Name, err)
 	}
+	defer zr.Close()
 	inner := sha256.New()
 	stamp := newStampScan(build)
 	sinks := []io.Writer{inner, stamp}
@@ -154,7 +166,15 @@ func verifyDownload(dir string, f File, build int64, run string) error {
 		defer out.Close()
 		sinks = append(sinks, out)
 	}
-	if _, err := io.Copy(io.MultiWriter(sinks...), zr); err != nil {
+	limit := unpackedBinaryLimit()
+	unpacked, err := io.Copy(io.MultiWriter(sinks...), io.LimitReader(zr, limit+1))
+	if err != nil {
+		return fmt.Errorf("%s: %w", f.Name, err)
+	}
+	if unpacked > limit {
+		return fmt.Errorf("%s: unpacked binary exceeds %d bytes", f.Name, limit)
+	}
+	if err := zr.Close(); err != nil {
 		return fmt.Errorf("%s: %w", f.Name, err)
 	}
 	if out != nil {

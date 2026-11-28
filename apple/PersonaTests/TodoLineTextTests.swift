@@ -72,6 +72,10 @@ struct TodoLineTextTests {
         #expect(decision == TodoLineText.Said(lead: "Which ryokan?", rest: "Ryokan Hanami recommended", tone: .needs))
         #expect(say("failed_start", ["error": "Desk Mac is offline"])?.tone == .danger)
         #expect(say("finished", [:])?.tone == .ready)
+        #expect(say("stopped_unfinished", ["run": "Widget", "text": "the migration test"])
+                    == TodoLineText.Said(lead: "Widget stopped before it finished", rest: "the migration test", tone: .needs),
+                "said as an interrupted run, then what its closeout says")
+        #expect(say("stopped_unfinished", ["run": "Widget"]) == say("interrupted", ["run": "Widget"]))
         #expect(say("persona_working", ["text": "writing part 2 of 3"]) == TodoLineText.Said(lead: "Persona", rest: "writing part 2 of 3"))
         #expect(say("decision", ["text": "Which of 3?", "step": "Ryokan"])?.lead == "Ryokan" + TodoTimeWords.separator + "Which of 3?",
                 "a step's line names it")

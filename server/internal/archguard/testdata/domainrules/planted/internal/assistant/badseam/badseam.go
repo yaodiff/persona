@@ -28,3 +28,24 @@ type Embedded interface {
 		Send(any) // seam-any
 	}
 }
+
+type LoopName struct{ name string }
+
+func (n LoopName) Text() string { return n.name } // core-accessor
+
+type Registry struct{ loops []LoopName }
+
+func (r *Registry) Loops() []LoopName { return r.loops } // core-accessor
+
+type ModuleName LoopName
+type moduleAlias = ModuleName
+
+func (n ModuleName) Text() string   { return n.name }    // core-accessor
+func (n moduleAlias) Label() string { return n.name }    // core-accessor
+func (n LoopName) Label() string    { return (&n).name } // core-accessor
+
+func (n moduleAlias) Matches(name string) bool { return n.name == name }
+
+type privateName ModuleName
+
+func (n privateName) Text() string { return n.name }

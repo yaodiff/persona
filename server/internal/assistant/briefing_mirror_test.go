@@ -54,7 +54,7 @@ func TestFeishuMirrorStatusRetryBoundary(t *testing.T) {
 					t.Fatal("the first mirrored post did not reach the failing fake transport")
 				}
 				unavailable.Store(true)
-				time.Sleep(time.Duration(feishuMirrorRetries+1)*feishuMirrorRetry + time.Nanosecond) // sleep-ok: advance only synctest fake time beyond the finite retry budget
+				time.Sleep(time.Duration(feishuMirrorRetries+1)*quickMirrorRetry + time.Nanosecond) // sleep-ok: advance only synctest fake time beyond the finite retry budget
 				synctest.Wait()
 				if got := failedReads.Load(); got != tc.wantReads {
 					t.Errorf("failed status reads = %d, want %d", got, tc.wantReads)

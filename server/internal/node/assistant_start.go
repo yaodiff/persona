@@ -214,8 +214,8 @@ func (n *Node) spawnAssistantWith(id, cwd, launcher string, resume, spare bool, 
 		// this; a compaction (assistant_compact.go) resumes a process that is not running through here alone.
 		return nil, errGuestAgent
 	}
-	if agent == "codex" {
-		return n.spawnCodex(id, cwd, launcher, resume, spare, options...)
+	if agent == "codex" || agent == traexAgent {
+		return n.spawnAssistantAppServer(agent, id, cwd, launcher, resume, spare, "", options...)
 	}
 	if id == "" {
 		id = newUUID()
@@ -295,7 +295,7 @@ func (n *Node) assistantCLICommand(shell, launcher, cwd string, itself bool, arg
 	if itself {
 		command = commandInProfile("command claude", envValue(env, "CLAUDE_CONFIG_DIR"), scriptPath)
 	}
-	argv := append([]string{shell, "-ic", `echo ` + assistantShellReady + `; ` + command + ` "$@"`, "persona"}, args...)
+	argv := append([]string{shell, shellFlag(shell), `echo ` + assistantShellReady + `; ` + command + ` "$@"`, "persona"}, args...)
 	if _, managed := n.managedLauncher(launcher); !managed {
 		base := env
 		argv, env, _ = wrapAgent("assistant", n.home, n.dir, cwd, settingsArgs(args),

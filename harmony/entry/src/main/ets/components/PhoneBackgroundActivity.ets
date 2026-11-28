@@ -17,6 +17,9 @@ import { ClientModel } from '../models/ClientModel';
 import { TodoWorkspaceAgent, TodoWorkspaceItem, todoWorkspaceStatus } from '../models/TodoWorkspace';
 import { TranscriptModel } from '../models/TranscriptModel';
 import { ResourceRow, Wire } from '../models/Wire';
+import { Motion } from '../design/Motion';
+import { Haptics } from '../platform/Haptics';
+import { WorkingArcSpinner } from './StatusMotionMarks';
 
 @ComponentV2
 export struct PhoneBackgroundActivity {
@@ -115,8 +118,11 @@ export struct PhoneBackgroundActivity {
   }
 
   private toggle(key: string): void {
+    Haptics.tap();
     const opening = !this.opened.includes(key);
-    this.opened = opening ? this.opened.concat([key]) : this.opened.filter((id: string) => id !== key);
+    Motion.run(this.getUIContext(), Motion.layout(nativeEnvironment.reduceMotion), () => {
+      this.opened = opening ? this.opened.concat([key]) : this.opened.filter((id: string) => id !== key);
+    });
     if (opening && key.startsWith('work:')) {
       const round = this.rounds.find((binding: BoundRow<BackgroundRound>) => 'work:' + binding.value.id === key);
       if (round) this.readFoldedWork(round.value, key, this.ticket);
@@ -230,7 +236,9 @@ export struct PhoneBackgroundActivity {
   @Builder disclosure(label: string, key: string, identity: string) {
     Button({ type: ButtonType.Normal }) {
       Row({ space: 8 }) {
-        SymbolGlyph(this.opened.includes(key) ? Symbols.down : Symbols.expand).fontSize(11).fontColor([Colors.secondary])
+        SymbolGlyph(Symbols.down).fontSize(11).fontColor([Colors.secondary])
+          .rotate({ angle: this.opened.includes(key) ? 0 : -90 })
+          .animation(Motion.state(nativeEnvironment.reduceMotion))
         Text(label).fontSize(13).maxFontScale(Tokens.interfaceScaleFor(13)).fontColor(Colors.secondary).textAlign(TextAlign.Start)
       }.width('100%').padding({ top: 5, bottom: 5 }).constraintSize({ minHeight: 28 })
     }.width('100%').padding(0).backgroundColor(Color.Transparent)
@@ -255,7 +263,7 @@ export struct PhoneBackgroundActivity {
           Row({ space: 4 }) {
             if (agent) {
               Text(this.activityTime(agent) + ' ·').fontSize(13).maxFontScale(Tokens.interfaceScaleFor(13)).fontColor(Colors.tertiary).maxLines(1)
-              Circle().width(10).height(10).fill(Color.Transparent).stroke(Colors.workingMark).strokeWidth(2)
+              WorkingArcSpinner({ diameter: 12, tint: Colors.workingMark, surface: Color.Transparent, showCoreDot: false })
             }
             Text(this.status(item, agent)).fontSize(13).maxFontScale(Tokens.interfaceScaleFor(13)).fontColor(Colors.secondary).maxLines(2)
           }

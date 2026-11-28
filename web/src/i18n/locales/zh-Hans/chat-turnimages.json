@@ -3,7 +3,7 @@
   "source_screenshot": "截图",
   "source_browser": "网页截图",
   "source_mcp": "MCP 工具",
-  "source_tool": "工具返回",
+  "source_tool": "工具结果",
   "copy_path": "复制路径",
-  "open_in_files": "在文件页打开"
+  "open_in_files": "在「文件」中打开"
 }

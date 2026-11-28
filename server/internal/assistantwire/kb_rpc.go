@@ -3,7 +3,10 @@ package assistantwire
 import (
 	"encoding/json"
 
+	"github.com/nwverse/persona/sdk/go/wire"
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/kbwire"
+	"github.com/nwverse/persona/server/internal/wireids"
 )
 
 // Extension-facing knowledge-base calls. The hub checks the extension's granted scope before forwarding these.
@@ -19,11 +22,45 @@ const (
 	// id, which the extension cannot set (KBExtensionUpdate). Not on the extensions' allowlist.
 	MethodKBExtensionUpdate = "kb.extension_update"
 	// MethodKBExtensionDay adds sent provenance after the extension manager checks sent.read.
-	MethodKBExtensionDay = "kb.extension_day"
+	MethodKBExtensionDay        = "kb.extension_day"
+	MethodKBProviderCheckpoint  = "kb.provider_import_checkpoint"
+	MethodKBProviderSentMarkers = "kb.provider_sent_markers"
 	// CodeKBConflict: an extension's kb.update touches fields the user or another extension holds; data is
 	// KBConflict.
 	CodeKBConflict = "conflict"
 )
+
+var (
+	KBListMethod            = buswire.Method[KBListParams, KBListResult]{Name: MethodKBList}
+	KBRecentMethod          = buswire.Method[KBRecentParams, KBRecentResult]{Name: MethodKBRecent}
+	KBGetMethod             = buswire.Method[KBGetParams, KBGetResult]{Name: MethodKBGet}
+	KBDayMethod             = buswire.Method[KBDayParams, KBDayResult]{Name: MethodKBDay}
+	KBExtensionDayMethod    = buswire.Method[KBDayParams, KBDayResult]{Name: MethodKBExtensionDay}
+	KBSearchMethod          = buswire.Method[KBSearchParams, KBSearchResult]{Name: MethodKBSearch}
+	KBUpdateMethod          = buswire.Method[KBUpdateParams, KBUpdateResult]{Name: MethodKBUpdate}
+	KBExtensionUpdateMethod = buswire.Method[KBExtensionUpdate, KBUpdateResult]{Name: MethodKBExtensionUpdate}
+
+	KBProviderCheckpointMethod  = buswire.Method[KBProviderRequest, wire.KBImportCheckpointResult]{Name: MethodKBProviderCheckpoint}
+	KBProviderSentMarkersMethod = buswire.Method[KBProviderRequest, wire.KBSentMarkersResult]{Name: MethodKBProviderSentMarkers}
+)
+
+// KBProviderRequest is the manager's authenticated installation and its bounded query.
+// InstalledAt identifies the installation across process restarts and upgrades.
+type KBProviderRequest struct {
+	Extension   wireids.ExtensionID `json:"extension"`
+	StorageID   wireids.ExtensionID `json:"storage_id"`
+	InstalledAt string              `json:"installed_at"`
+	Params      KBImportQuery       `json:"params"`
+}
+
+// KBImportQuery holds the only selectors forwarded from the SDK: kb.sent_markers' params as the schema has them
+// (KBSentMarkersParams: day and approval always there). A checkpoint takes an empty object and forwards the zero query;
+// a marker page must supply a day and its approval.
+type KBImportQuery struct {
+	Day      string `json:"day"`
+	Approval string `json:"approval"`
+	After    int    `json:"after,omitempty"`
+}
 
 // KBExtensionUpdate is an extension's kb.update params as it sent them, and who it is.
 type KBExtensionUpdate struct {

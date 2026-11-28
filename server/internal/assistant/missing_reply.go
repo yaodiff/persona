@@ -26,9 +26,13 @@ const firstReplySendID = assistantwire.FirstMessageIDPrefix + "answer-again"
 // input provenance instead. Missing or ambiguous evidence costs us a recovery, never a replay.
 func (s *Service) recoverMissingReply(ctx context.Context, machine string, sess proto.Session) {
 	sid := sess.SessionID
-	if sid == "" ||
-		(sess.Status != proto.StatusDone && sess.Status != proto.StatusIdle) ||
+	if sid == "" || missingReplyStopped(sess) ||
 		len(sess.Queued) > 0 || backgroundRunning(sess) || s.queuedFor(sid) > 0 {
+		return
+	}
+	switch sess.Status {
+	case proto.StatusDone, proto.StatusIdle, proto.StatusOffline, proto.StatusInterrupted:
+	default:
 		return
 	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -38,7 +42,7 @@ func (s *Service) recoverMissingReply(ctx context.Context, machine string, sess 
 		Items   []proto.Item `json:"items"`
 		HasMore *bool        `json:"has_more"`
 	}
-	if err := s.call(ctx, machine, DeviceSessionItems, map[string]any{
+	if err := s.historySource(ctx, machine, DeviceSessionItems, map[string]any{
 		"session_id": sid, "turns": 1, "lazy_images": true,
 	}, &page); err != nil {
 		return
@@ -57,9 +61,8 @@ func (s *Service) recoverMissingReply(ctx context.Context, machine string, sess 
 	id := fmt.Sprintf("assistant-reply-%x", sha256.Sum256([]byte(machine+"\x00"+sid+"\x00"+owner.ID)))
 	lang := s.lang(ctx)
 	if !retried {
-		// A second completion event can arrive before the follow-up reaches the transcript. The
-		// hub's send ledger also deduplicates this ID across delivery attempts and reconnects.
-		if !s.humanSent.claimReply(sid, owner) {
+		// A second completion event can arrive before the follow-up reaches the transcript.
+		if !s.claimMissingReply(ctx, machine, sid, owner) {
 			return
 		}
 		params, err := s.sendParams(ctx, SendParams{MachineID: machine, SessionID: sid, Params: map[string]any{
@@ -67,6 +70,9 @@ func (s *Service) recoverMissingReply(ctx context.Context, machine string, sess 
 			"text":       prompts.RenderAssistantAnswerAgain(prompts.AssistantAnswerAgain{Language: lang.Name()}),
 		}})
 		if err == nil {
+			if !s.replyInputCurrent(ctx, machine, sid, owner) {
+				return
+			}
 			params["client_msg_id"] = id
 			params["answer_again_after"] = page.Items[len(page.Items)-1].ID
 			err = s.call(ctx, machine, assistantwire.DeviceAssistantAnswerAgain, params, nil)
@@ -86,6 +92,9 @@ func (s *Service) recoverMissingReply(ctx context.Context, machine string, sess 
 	text := i18n.T(lang, "injected.answer_again_failed")
 	writeCtx, writeCancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	defer writeCancel()
+	if !s.replyInputCurrent(writeCtx, machine, sid, owner) {
+		return
+	}
 	if _, err := s.appendFeedOnce(writeCtx, id, sid, feedNotice, "", noticeBody{Text: text}); err != nil {
 		s.logf("assistant %s: could not record the missing reply notice", short(sid))
 	}

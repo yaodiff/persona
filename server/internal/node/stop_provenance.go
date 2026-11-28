@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"sync"
 	"time"
 
@@ -17,6 +18,19 @@ func (s *stateFile) stopped(id string, cause proto.StopCause) {
 	s.update(id, func(v *sessionState) bool {
 		v.StopCause = cause
 		v.StopCauseAt = max(time.Now().UnixNano(), v.StopCauseAt+1)
+		return true
+	})
+}
+
+// clearStopAfterAssistantInput retires the Stop or Exit from before an accepted input.
+// An interrupt can be recorded before it takes the typing lock, so keep any newer mark.
+func (s *stateFile) clearStopAfterAssistantInput(id string, previousStopAt int64) {
+	s.update(id, func(st *sessionState) bool {
+		if st.StopCauseAt != previousStopAt || (st.StopCause != proto.StopUser && st.StopCause != proto.StopExit) {
+			return false
+		}
+		st.StopCause = proto.StopUnknown
+		st.StopCauseAt = max(time.Now().UnixNano(), st.StopCauseAt+1)
 		return true
 	})
 }
@@ -86,6 +100,37 @@ func (n *Node) stopCause(id string) proto.StopCause {
 	return st.StopCause
 }
 
+// codexHistoryStopCause reports the stop provenance for a resumable Codex history row. Any saved state (including an
+// explicit user stop or a previously consumed resume) is authoritative; only an idle, unowned Codex App thread Persona
+// never owned before whose rollout ended its turn cleanly is eligible for supervised resume (#13772).
+func (n *Node) codexHistoryStopCause(id string, src codexSource, m quickMeta, resumable bool) proto.StopCause {
+	if st, ok := n.state.get(id); ok {
+		return st.StopCause
+	}
+	if resumable && codexAppOrigin(src) && src.path != "" && m.turnClosed && !m.turnOpen {
+		return proto.StopTaskCompleted
+	}
+	return proto.StopUnknown
+}
+
+// effectiveStopCause returns stopCause, or StopTaskCompleted for an idle, unowned Codex App thread that Persona has
+// never owned before and that is eligible for terminal recovery right now.
+func (n *Node) effectiveStopCause(id string) proto.StopCause {
+	if st, ok := n.state.get(id); ok {
+		return st.StopCause
+	}
+	src, ok := n.codexSource(id)
+	if !ok || src.path == "" || !codexAppOrigin(src) {
+		return proto.StopUnknown
+	}
+	st, err := os.Stat(src.path)
+	if err != nil {
+		return proto.StopUnknown
+	}
+	m := n.meta(src.path, st)
+	return n.codexHistoryStopCause(id, src, m, n.codexResumable(context.Background(), id))
+}
+
 // noteGatewayRunning keeps a live observation after a gateway error even inside recordRunning's five-minute
 // write interval. A transcript found only after its terminal disappeared is not evidence of a non-user stop.
 func (n *Node) noteGatewayRunning(s *proto.Session) {
@@ -149,7 +194,7 @@ func (n *Node) noteGatewayStop(s *proto.Session) {
 // Called again under the session's recovery lock: a cached assistant row must not
 // undo a user close that happened after that row was listed.
 func (n *Node) supervisorResumeAllowed(id, mode, launcher string) error {
-	cause := n.stopCause(id)
+	cause := n.effectiveStopCause(id)
 	if !validID(id) || !cause.SupervisorMayResume() {
 		return refusal("resume_not_allowed", fmt.Sprintf("Supervisor resume is refused: stop cause is %s. Use the owner's Resume.", cause), nil)
 	}

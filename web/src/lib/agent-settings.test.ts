@@ -4,16 +4,7 @@ import {
   AGENT_TEXT,
   applySummary,
   effective,
-  EMPTY_MAIL_FORM,
   isUnset,
-  mailAccountLine,
-  mailCodeGuide,
-  mailErrors,
-  mailProviderBadge,
-  clientIDError,
-  MAIL_KINDS,
-  mailRequest,
-  mailSummary,
   optionText,
   pickMachine,
   settingDetail,
@@ -97,11 +88,11 @@ describe("agent settings", () => {
     expect(applySummary([{ id: "a", name: "A" }])).toEqual({ ok: true, text: "已保存" });
     expect(applySummary([{ id: "a", name: "A" }, { id: "b", name: "B" }, { id: "c", name: "C" }])).toEqual({ ok: true, text: "已应用到 3 台机器" });
     expect(applySummary([{ id: "a", name: "A" }, { id: "b", name: "NAS", error: "machine is offline" }])).toEqual({ ok: false, text: "1 台已应用，1 台失败（NAS：machine is offline）" });
-    expect(applySummary([{ id: "b", name: "NAS", error: "x" }]).text).toBe("没有改成（NAS：x）");
+    expect(applySummary([{ id: "b", name: "NAS", error: "x" }]).text).toBe("未能应用更改（NAS：x）");
   });
 
   it("name Claude Code's options in plain words, without the settings-file key (#3599)", () => {
-    expect(settingTitle(recap)).toBe("回来时先说进展");
+    expect(settingTitle(recap)).toBe("返回时总结进展");
     expect(settingDetail(recap)).toContain("离开 5 分钟");
     expect(optionText("effortLevel", "xhigh")).toBe("XHigh");
     expect(optionText("model_reasoning_effort", "ultra")).toBe("Ultra");
@@ -127,8 +118,8 @@ describe("agent settings", () => {
     for (const [key, list] of Object.entries(options)) {
       for (const o of list) expect(optionText(key, o), `${key}=${o}`).not.toBe(o);
     }
-    expect(optionText("approval_policy", "never")).toBe("一律不问");
-    expect(optionText("sandbox_mode", "danger-full-access")).toBe("不设限（危险）");
+    expect(optionText("approval_policy", "never")).toBe("从不询问");
+    expect(optionText("sandbox_mode", "danger-full-access")).toBe("无限制（高风险）");
     const sandbox: AgentSetting = { key: "sandbox_mode", title: "沙箱", detail: "danger-full-access 不设限", type: "enum" };
     expect(settingDetail(sandbox)).not.toMatch(/[a-z]-[a-z]/);
   });
@@ -156,114 +147,8 @@ describe("agent settings", () => {
     }
     expect(settingTitle(row("ui.permission_mode"))).toBe("权限模式");
     expect(settingDetail(row("ui.permission_mode"))).toContain("always-approve");
-    expect(settingDetail(row("ui.permission_mode"))).toContain("批准每一次工具调用");
-    expect(settingDetail(row("ui.yolo"))).toContain("一律批准工具调用");
-  });
-});
-
-describe("mail account form", () => {
-  it("needs an address and a password; Gmail is for the phone", () => {
-    expect(mailErrors({ ...EMPTY_MAIL_FORM })).toEqual({ email: "填邮箱地址", password: "填密码或授权码" });
-    expect(mailErrors({ ...EMPTY_MAIL_FORM, email: "me@", password: "x" }).email).toBe("邮箱地址的格式不对");
-    expect(mailErrors({ ...EMPTY_MAIL_FORM, email: "me@example.com", password: "x" })).toEqual({});
-    expect(mailErrors({ ...EMPTY_MAIL_FORM, kind: "gmail" }).kind).toContain("手机");
-    expect(mailErrors({ ...EMPTY_MAIL_FORM, kind: "outlook" }).kind).toBe("Outlook 要用 Microsoft 账号登录，只能在手机上添加");
-    expect(MAIL_KINDS.map((k) => k.k)).toEqual(["gmail", "outlook", "feishu", "imap"]);
-    expect(mailErrors({ ...EMPTY_MAIL_FORM, kind: "feishu", email: "me@example.com" }).password).toContain("飞书");
-    expect(mailErrors({ ...EMPTY_MAIL_FORM, email: "me@example.com", password: "x", imapHost: "imap.example.com", imapPort: "abc" }).imapPort).toBeTruthy();
-  });
-
-  it("tells QQ and NetEase addresses where to make the authorization code (#5123)", () => {
-    expect(mailCodeGuide({ ...EMPTY_MAIL_FORM, kind: "imap", email: "me@QQ.com " })).toEqual({ provider: "qq", webMail: "https://mail.qq.com" });
-    expect(mailCodeGuide({ ...EMPTY_MAIL_FORM, kind: "imap", email: "me@foxmail.com" })?.provider).toBe("qq");
-    expect(mailCodeGuide({ ...EMPTY_MAIL_FORM, kind: "imap", email: "me@126.com" })).toEqual({ provider: "netease", webMail: "https://mail.126.com" });
-    expect(mailCodeGuide({ ...EMPTY_MAIL_FORM, kind: "imap", email: "me@vip.163.com" })?.webMail).toBe("https://vip.163.com");
-    expect(mailCodeGuide({ ...EMPTY_MAIL_FORM, kind: "imap", email: "me@188.com" })?.webMail).toBe("https://www.188.com");
-    expect(mailCodeGuide({ ...EMPTY_MAIL_FORM, kind: "imap", email: "me@example.com" })).toBeNull();
-    expect(mailCodeGuide({ ...EMPTY_MAIL_FORM, kind: "imap", email: "me" })).toBeNull();
-    expect(mailCodeGuide({ ...EMPTY_MAIL_FORM, kind: "feishu", email: "me@qq.com" })).toBeNull();
-    expect(mailCodeGuide({ ...EMPTY_MAIL_FORM, email: "me@qq.com", imapHost: "imap.example.com" })).toBeNull();
-  });
-
-  it("chooses SMTP security from the parsed port (#4879)", () => {
-    const form = { ...EMPTY_MAIL_FORM, email: "me@example.com", password: "pw", smtpHost: "smtp.example.com" };
-    for (const smtpPort of ["0587", "587", " 0587 ", "587.0", "5.87e2"]) {
-      expect(mailErrors({ ...form, smtpPort })).toEqual({});
-      expect(mailRequest({ ...form, smtpPort })).toMatchObject({ smtp_port: 587, smtp_security: "starttls" });
-    }
-    for (const smtpPort of ["465", "0465", "2525"]) {
-      expect(mailErrors({ ...form, smtpPort })).toEqual({});
-      expect(mailRequest({ ...form, smtpPort })).toMatchObject({ smtp_port: Number(smtpPort), smtp_security: "tls" });
-    }
-    for (const smtpPort of ["abc", "", "0", "65536", "587.5"]) expect(mailErrors({ ...form, smtpPort }).smtpPort).toBeTruthy();
-    const omitted = { ...form, smtpHost: " ", smtpPort: "abc" };
-    expect(mailErrors(omitted)).toEqual({});
-    expect(mailRequest(omitted)).toEqual({ name: "me@example.com", email: "me@example.com", provider: "imap", auth: "password", password: "pw" });
-  });
-
-  it("builds the hub's request", () => {
-    expect(mailRequest({ ...EMPTY_MAIL_FORM, kind: "gmail" })).toBeNull();
-    expect(mailRequest({ ...EMPTY_MAIL_FORM, kind: "outlook", email: "me@example.com", password: "pw" })).toBeNull();
-    expect(mailRequest({ ...EMPTY_MAIL_FORM, kind: "feishu", email: " me@example.com ", password: "pw", imapHost: "ignored" })).toEqual({
-      name: "me@example.com",
-      email: "me@example.com",
-      provider: "feishu",
-      auth: "password",
-      password: "pw",
-    });
-    // servers left empty: the hub guesses them from the domain
-    expect(mailRequest({ ...EMPTY_MAIL_FORM, email: "me@example.com", password: "pw" })).toEqual({ name: "me@example.com", email: "me@example.com", provider: "imap", auth: "password", password: "pw" });
-    expect(mailRequest({ ...EMPTY_MAIL_FORM, email: "me@example.com", password: "pw", imapHost: "imap.example.com", imapPort: "993", smtpHost: "smtp.example.com", smtpPort: "587" })).toMatchObject({
-      imap_host: "imap.example.com",
-      imap_port: 993,
-      smtp_host: "smtp.example.com",
-      smtp_port: 587,
-      smtp_security: "starttls",
-    });
-    expect(mailRequest({ ...EMPTY_MAIL_FORM, email: "me@example.com", password: "pw", smtpHost: "smtp.example.com", smtpPort: "465" })?.smtp_security).toBe("tls");
-  });
-
-  // #2442: a hub without google.client_id cannot sign in with Google, so Gmail is added here with an app password.
-  it("adds Gmail with an app password on a hub without Google sign-in", () => {
-    const gmail = { ...EMPTY_MAIL_FORM, kind: "gmail" as const };
-    expect(mailErrors(gmail, true)).toEqual({ email: "填邮箱地址", password: "填 Gmail 的应用专用密码" });
-    expect(mailErrors({ ...gmail, email: "me@mail.test", password: "abcd efgh ijkl mnop" }, true)).toEqual({});
-    expect(mailRequest({ ...gmail, email: " me@mail.test ", password: "abcd efgh ijkl mnop" }, true)).toEqual({
-      name: "me@mail.test",
-      email: "me@mail.test",
-      provider: "gmail",
-      auth: "password",
-      password: "abcd efgh ijkl mnop",
-      imap_host: "imap.gmail.com",
-      imap_port: 993,
-      smtp_host: "smtp.gmail.com",
-      smtp_port: 465,
-      smtp_security: "tls",
-    });
-  });
-
-  it("describe accounts", () => {
-    expect(mailAccountLine({ id: "a", email: "me@example.com", status: "error", error: "auth failed" })).toBe("auth failed");
-    expect(mailAccountLine({ id: "a", email: "me@example.com", auth: "oauth2", provider: "gmail" })).toBe("Gmail · Google 账号登录");
-    expect(mailAccountLine({ id: "a", email: "me@example.com", auth: "oauth2", provider: "outlook" })).toBe("Outlook · Microsoft 账号登录");
-    expect(mailAccountLine({ id: "a", email: "me@example.com", provider: "feishu" })).toBe("飞书邮箱");
-    expect(mailProviderBadge({ id: "a", email: "x", provider: "outlook" })).toBe("Outlook");
-    expect(mailProviderBadge({ id: "a", email: "x", provider: "gmail" })).toBe("Gmail");
-    expect(mailProviderBadge({ id: "a", email: "x", provider: "feishu" })).toBe("飞书");
-    expect(mailProviderBadge({ id: "a", email: "x", provider: "imap" })).toBeNull();
-    expect(mailAccountLine({ id: "a", email: "me@example.com", provider: "imap", imap_host: "imap.example.com" })).toBe("IMAP · imap.example.com");
-    expect(mailSummary(null)).toBe("");
-    expect(mailSummary([])).toBe("未添加");
-    expect(mailSummary([{ id: "a", email: "x", status: "error" }, { id: "b", email: "y" }])).toBe("2 个 · 有错误");
-    expect(mailSummary([{ id: "a", email: "x" }])).toBe("1 个账户");
-  });
-});
-
-describe("Outlook client ID", () => {
-  it("checks the shape the hub does", () => {
-    expect(clientIDError("")).toContain("应用程序(客户端) ID");
-    expect(clientIDError("not-an-id")).toContain("不像 client ID");
-    expect(clientIDError(" 00000000-0000-0000-0000-000000000000 ")).toBe("");
+    expect(settingDetail(row("ui.permission_mode"))).toContain("直接批准所有工具调用");
+    expect(settingDetail(row("ui.yolo"))).toContain("始终自动批准工具调用");
   });
 });
 
@@ -281,9 +166,9 @@ describe("blocked claude dirs", () => {
   it("reads paths and rows", () => {
     expect(shortPath("/home/me/.automation/a", "/home/me")).toBe("~/.automation/a");
     expect(shortPath("/home/user/x", "/home/me")).toBe("/home/user/x");
-    expect(dirMeta(state.dirs[0])).toBe("默认目录，不能屏蔽 · 40 个会话");
+    expect(dirMeta(state.dirs[0])).toBe("默认目录，无法屏蔽 · 40 个会话");
     expect(dirMeta(state.dirs[1])).toBe("自动发现 · 120 个会话 · 1 个正在运行 · 由规则 ~/.automation/* 屏蔽");
-    expect(dirMeta(state.dirs[2])).toBe("hub.json 里配的");
+    expect(dirMeta(state.dirs[2])).toBe("在 hub.json 中配置");
   });
   it("blocks a directory by its path and lifts the rule that blocks one", () => {
     expect(toggledPatterns(state, state.dirs[2])).toEqual(["~/.automation/*", "/opt/x", "~/.config/cc/work"]);
@@ -299,7 +184,7 @@ describe("blocked claude dirs", () => {
     expect(patternError("", [])).not.toBe("");
     expect(patternError("relative", [])).toContain("开头");
     expect(patternError("~", [])).not.toBe("");
-    expect(patternError("/opt/x/", ["/opt/x"])).toBe("已经屏蔽了");
+    expect(patternError("/opt/x/", ["/opt/x"])).toBe("已屏蔽");
     expect(patternError(" ~/.bots/* ", [])).toBe("");
     expect(withPattern(["/a"], " ~/.bots/ ")).toEqual(["/a", "~/.bots"]);
   });

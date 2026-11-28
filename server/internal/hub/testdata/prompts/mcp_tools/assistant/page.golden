@@ -1,6 +1,6 @@
 {
   "name": "page",
-  "description": "Dashboards: sidebar pages the owner returns to; one-offs stay cards. create drafts a preview card (with watch, view optional; bind recurring refresh via schedule_routine.page_id before ending turn); appears after Keep. update replaces view/watch (conflict: get first; kept watch.display fixed; alert change disables alerts). patch writes reading/items (\u003c=50 existing keys, same type, page floor) to kept unpaused pages. get returns page/watch/readings/taps; list yours (main reads all kept); remove needs reason. Paused/restored: ask first.",
+  "description": "Draft a reusable dashboard with view, from_view (own live card at the displayed version), or watch alone. The owner chooses Keep. Bind recurring refresh via schedule_routine.page_id this turn. Update replaces view/watch. On conflict, get first. Kept display is fixed. Changing alert disables alerts. Patch readings/items on kept pages. Ask before resuming paused/restored pages. Get includes readings/taps. Main lists all kept pages. Remove requires reason.",
   "input_schema": {
     "type": "object",
     "required": [
@@ -20,8 +20,7 @@
         ]
       },
       "id": {
-        "type": "string",
-        "description": "pg_ id"
+        "type": "string"
       },
       "title": {
         "type": "string",
@@ -34,12 +33,29 @@
       },
       "why": {
         "type": "string",
-        "maxLength": 200,
-        "description": "one-sentence why"
+        "maxLength": 200
       },
       "view": {
         "type": "object",
-        "description": "View (optional w/ watch); reply/open(https)/push.page/pop; no html/image"
+        "description": "reply/open(https)/push.page/pop. No html/image."
+      },
+      "from_view": {
+        "type": "object",
+        "required": [
+          "id",
+          "version"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "view_show ID"
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
       },
       "watch": {
         "type": [
@@ -61,12 +77,10 @@
       },
       "alert_text": {
         "type": "string",
-        "maxLength": 120,
-        "description": "alert note"
+        "maxLength": 120
       },
       "version": {
-        "type": "integer",
-        "description": "read version"
+        "type": "integer"
       },
       "note": {
         "type": "string",
@@ -75,8 +89,7 @@
       },
       "reason": {
         "type": "string",
-        "maxLength": 200,
-        "description": "removal reason"
+        "maxLength": 200
       }
     }
   }

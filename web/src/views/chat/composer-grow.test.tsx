@@ -93,6 +93,8 @@ describe("the phone composer", () => {
 
     box().setSelectionRange(5, 9);
     act(() => expandButton()!.click());
+    expect(editor()!.parentElement).toBe(document.body);
+    expect(host.contains(editor())).toBe(false);
     const big = editor()!.querySelector("textarea")!;
     expect(big.value).toBe(lines(9));
     expect([big.selectionStart, big.selectionEnd]).toEqual([5, 9]);

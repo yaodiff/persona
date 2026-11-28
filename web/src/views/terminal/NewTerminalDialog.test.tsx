@@ -26,7 +26,7 @@ describe("Agents + New terminal", () => {
     vi.mocked(api).mockResolvedValue({ terminal: "pane:new" }); await render();
     await act(async () => button(t("terminal-terminalpage.new_in_space", { name: "Example" })).click());
     expect(api).toHaveBeenCalledWith("/machines/one/panes", { method: "POST", json: { kind: "herdr", workspace_id: "workspace" } });
-    expect(navigate).toHaveBeenCalledWith({ name: "terminal", mid: "one", id: "pane:new", view: "terminals" }); expect(close).toHaveBeenCalledOnce();
+    expect(navigate).toHaveBeenCalledWith({ name: "terminal", mid: "one", id: "pane:new" }); expect(close).toHaveBeenCalledOnce();
   });
   it("keeps the picker and error after failure, and can retry the same choice", async () => {
     vi.mocked(api).mockRejectedValueOnce(new Error("Not connected")).mockResolvedValueOnce({ terminal: "pane:retry" }); await render();

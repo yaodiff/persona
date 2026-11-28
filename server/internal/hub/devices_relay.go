@@ -14,6 +14,7 @@ import (
 
 	"github.com/coder/websocket"
 
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/link"
 )
@@ -38,11 +39,12 @@ const linkManagerWait = 5 * time.Second
 // relayState is the connections waiting for the manager, the Persona Links relayed now, and every relay a manager
 // has taken (cutRelays ends them when the machine moves or the manager goes).
 type relayState struct {
-	mu      sync.Mutex
-	pending map[string]chan *relayTaken
-	owner   map[string]relayFor // pending id → what it is for (only its manager may take it)
-	links   map[*relayLink]struct{}
-	taken   map[*relayTaken]struct{}
+	mu       sync.Mutex
+	stopping bool // set by stopLinks under mu; prevents new links registering after shutdown snapshot
+	pending  map[string]chan *relayTaken
+	owner    map[string]relayFor // pending id → what it is for (only its manager may take it)
+	links    map[*relayLink]struct{}
+	taken    map[*relayTaken]struct{}
 }
 
 // relayFor is who a relay was handed to, and the machine it is for ("": an extension's request).
@@ -194,9 +196,14 @@ func (h *Hub) relayLinkConn(w http.ResponseWriter, r *http.Request, a devicewire
 	l := &relayLink{conn: conn, tokenID: a.TokenID, stream: a.Kind == devicewire.AcceptLinkStream}
 	rs := &h.relay
 	rs.mu.Lock()
-	if h.wsStopping {
+	if rs.stopping {
 		rs.mu.Unlock()
 		_ = conn.Close(websocket.StatusGoingAway, "hub stopping")
+		return
+	}
+	if h.isDeviceRevoked(a.TokenID) {
+		rs.mu.Unlock()
+		_ = conn.Close(link.CloseRevoked, "credential revoked")
 		return
 	}
 	if rs.links == nil {
@@ -261,25 +268,20 @@ func (h *Hub) relayLinkConn(w http.ResponseWriter, r *http.Request, a devicewire
 // handToManager has the manager take a connection the hub holds: it dials the relay with the id and the hub waits
 // for it.
 func (h *Hub) handToManager(ctx context.Context, a devicewire.Accept) (*relayTaken, error) {
-	return h.handToManagerVia(ctx, h.machineOwner(a.MachineID), devicewire.MethodAccept, &a) // its manager (ownership.go)
+	to := h.machineOwner(a.MachineID)
+	return h.handToManagerVia(ctx, relayFor{manager: to, machine: a.MachineID}, func(ctx context.Context, id string) error {
+		a.ID = id
+		_, err := buswire.Call(ctx, h.managerCaller(to), devicewire.AcceptMethod, a)
+		return err
+	})
 }
 
-// handToManagerVia is handToManager with the manager's method that takes it: the devices' (devices.accept, a) or the
-// extensions' relayed requests (extensions.accept, a nil: only the id), handed to manager to.
-func (h *Hub) handToManagerVia(ctx context.Context, to, method string, a *devicewire.Accept) (*relayTaken, error) {
-	f := relayFor{manager: to}
-	if a != nil {
-		f.machine = a.MachineID
-	}
+// handToManagerVia offers a relay and waits for the manager to take it after accept asks.
+func (h *Hub) handToManagerVia(ctx context.Context, f relayFor, accept func(context.Context, string) error) (*relayTaken, error) {
 	id, ch, drop := h.offerRelay(f)
 	cctx, cancel := context.WithTimeout(ctx, relayWait)
 	defer cancel()
-	var params any = map[string]string{"id": id}
-	if a != nil {
-		a.ID = id
-		params = *a
-	}
-	err := h.callBus(cctx, to, method, params, nil)
+	err := accept(cctx, id)
 	if err == nil {
 		select {
 		case t := <-ch:
@@ -551,11 +553,13 @@ func (h *Hub) closeLinks(tokenID string) int {
 	return n
 }
 
-// stopLinks is part of the shutdown: every link gets a 1001 so Persona Link comes back to the next hub quickly.
+// stopLinks refuses new links and returns the open ones, for the shutdown to close (stopWebSockets):
+// every link gets a 1001 so Persona Link comes back to the next hub quickly.
 func (h *Hub) stopLinks() []*relayLink {
 	rs := &h.relay
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
+	rs.stopping = true
 	out := make([]*relayLink, 0, len(rs.links))
 	for l := range rs.links {
 		out = append(out, l)
@@ -567,7 +571,7 @@ func (h *Hub) stopLinks() []*relayLink {
 // bar shows both, docs/operations/link.md); the manager tells Persona Link.
 func (h *Hub) linkEndpoints() link.Message {
 	msg := link.Message{Type: "endpoints", HubName: h.hubName(), MeshHubs: h.meshHubCount()}
-	for _, e := range h.endpointList() {
+	for _, e := range h.linkEndpointList() {
 		if e.Scheme == "https" {
 			msg.Endpoints = append(msg.Endpoints, link.Endpoint{URL: e.URL, Kind: e.Kind})
 		}

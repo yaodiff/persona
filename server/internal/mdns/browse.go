@@ -73,16 +73,26 @@ func clampTTL(ttl uint32) time.Duration {
 
 // instance is what the browser knows about one instance, gathered over several messages.
 type instance struct {
-	label    string
-	ttl      time.Duration
-	expire   time.Time // the instance is dropped (and reported gone) after this
-	host     name      // nil until an SRV arrives
-	port     uint16
-	txt      map[string]string
-	addrs    map[netip.Addr]time.Time // address -> expiry
-	seen     time.Time
-	asked    time.Time // last follow-up query for missing records
-	reported *Entry    // what Found last got; nil if never reported
+	label       string
+	ttl         time.Duration
+	expire      time.Time // the instance is dropped (and reported gone) after this
+	hasLiveness bool      // true once PTR or SRV has set the authoritative instance lifetime
+	host        name      // nil until an SRV arrives
+	port        uint16
+	txt         map[string]string
+	addrs       map[netip.Addr]time.Time // address -> expiry
+	seen        time.Time
+	asked       time.Time // last follow-up query for missing records
+	reported    *Entry    // what Found last got; nil if never reported
+}
+
+func (in *instance) setLiveness(exp time.Time) {
+	if !in.hasLiveness {
+		in.expire = exp
+		in.hasLiveness = true
+	} else {
+		in.expire = later(in.expire, exp)
+	}
 }
 
 func (in *instance) entry() Entry {
@@ -148,6 +158,12 @@ func (b *browser) apply(m *message, zone string, now time.Time) (found []Entry, 
 			}
 			continue
 		}
+		if g.ptr == nil && g.srv == nil && g.txt != nil && g.txt.ttl == 0 && (in == nil || !in.hasLiveness) {
+			if in != nil {
+				delete(b.insts, key)
+			}
+			continue
+		}
 		if in == nil {
 			if len(b.insts) >= maxInstances {
 				continue
@@ -159,7 +175,7 @@ func (b *browser) apply(m *message, zone string, now time.Time) (found []Entry, 
 		in.seen = now
 		if g.ptr != nil {
 			in.ttl = clampTTL(g.ptr.ttl)
-			in.expire = later(in.expire, now.Add(in.ttl))
+			in.setLiveness(now.Add(in.ttl))
 		}
 		if g.srv != nil {
 			if in.host != nil && !in.host.equal(g.srv.target) {
@@ -171,13 +187,16 @@ func (b *browser) apply(m *message, zone string, now time.Time) (found []Entry, 
 			if g.ptr == nil {
 				in.ttl = ttl
 			}
-			in.expire = later(in.expire, now.Add(ttl))
+			in.setLiveness(now.Add(ttl))
 		}
 		if g.txt != nil {
 			if g.txt.ttl == 0 {
 				in.txt = nil
 			} else {
 				in.txt = decodeTXT(g.txt.txt)
+				if !in.hasLiveness {
+					in.expire = later(in.expire, now.Add(clampTTL(g.txt.ttl)))
+				}
 			}
 		}
 		touched[in] = true

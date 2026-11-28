@@ -139,7 +139,7 @@ final class AgentPresetUITests: XCTestCase {
         let review = see(app.buttons["newChat.preset.review"], "review preset")
         XCTAssertTrue(review.label.contains("Code review and design"), review.label)
         review.tap()
-        wait("preset launcher") { says(app.buttons["newChat.launcher"]).contains("claude") }
+        wait("preset launcher") { says(app.buttons["newChat.launcher"]).contains("Claude Code") }
         wait("preset model") { says(app.buttons["newChat.model"]).contains("Opus") }
         _ = reveal(button(beginning: "Thinking Effort"), "Thinking Effort")
         see(text(containing: "High"), "preset effort")
@@ -164,7 +164,7 @@ final class AgentPresetUITests: XCTestCase {
         reselectReviewAfterManualEdit()
         wait("preset launcher restored") {
             let value = says(app.buttons["newChat.launcher"])
-            return value.contains("claude") && !value.contains("sonnetcc")
+            return value.contains("Claude Code") && !value.contains("sonnetcc")
         }
 
         let body = start()
@@ -199,7 +199,7 @@ final class AgentPresetUITests: XCTestCase {
             try use("omp")
             launchNewAgent(look, largest: largest, arguments: ["-mode.macbook", "plan"])
             app.buttons["newChat.launcher"].tap()
-            reveal(button(beginning: "omp"), "the native omp launcher").tap()
+            reveal(button(beginning: "Oh My Pi"), "the native omp launcher").tap()
             let row = reveal(app.buttons["newChat.model"], "the omp model row")
             row.tap()
             let enter = reveal(app.buttons["newChat.model.other"], "Enter Model ID for the empty catalog")
@@ -237,7 +237,7 @@ final class AgentPresetUITests: XCTestCase {
         app.launchPinned()
         see(app.buttons["Open a new tab in this space"], "the existing herdr space", timeout: 30).tap()
         reveal(app.buttons["newChat.launcher"], "the workspace launcher").tap()
-        see(button(beginning: "omp"), "the native omp launcher").tap()
+        see(button(beginning: "Oh My Pi"), "the native omp launcher").tap()
         reveal(app.buttons["newChat.model"], "model override in the explicit herdr workspace").tap()
         see(app.buttons["newChat.model.other"], "enter a model for this host").tap()
         let field = see(app.textFields["typedModel.field"], "the model field")

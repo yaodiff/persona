@@ -184,7 +184,7 @@ internal fun rememberExtensionView(model: ExtensionViewModel, appLink: (String) 
  * cards, a row of them at a time; with one (a phone, and anywhere a page is not measured) it is the stack.
  */
 internal fun LazyListScope.extensionViewItems(key: String, state: ExtensionViewState, handle: ExtensionViewHandle, showTitles: Boolean = true,
-                                             streamSectionKeys: List<String>? = null, columns: Int = 1, compactGraph: Boolean = false) {
+                                             streamSectionKeys: List<String>? = null, columns: Int = 1, compactPreview: Boolean = false) {
     val view = state.view ?: return
     view.tabs?.takeIf { it.items.size >= 2 && it.name.isNotEmpty() }?.let { tabs ->
         item("$key-tabs") { ExtensionTabs(tabs, state.values[tabs.name] ?: tabs.value, state, handle, Modifier.padding(bottom = Tokens.Space.s)) }
@@ -251,7 +251,7 @@ internal fun LazyListScope.extensionViewItems(key: String, state: ExtensionViewS
                             GroupedItem(item, state, itemHandle)
                         }
                     } else Box(moving) {
-                        CompositionLocalProvider(LocalExtensionGraphCompact provides compactGraph) {
+                        CompositionLocalProvider(LocalExtensionPreviewCompact provides compactPreview) {
                             StandaloneItem(item, state, itemHandle, first = start == 0)
                         }
                     }
@@ -459,7 +459,9 @@ internal fun StandaloneItem(item: ExtensionViewItem, state: ExtensionViewState, 
         "grid" -> ExtensionGrid(item, state, handle, top)
         "carousel" -> ExtensionCarousel(item, state, handle, top)
         // UI version 10: a card or an in-place reply block shows the same still preview as an overview card.
-        "graph" -> ExtensionGraph(item, state, handle, top, compact = LocalExtensionCard.current || LocalExtensionGraphCompact.current)
+        "graph" -> ExtensionGraph(item, state, handle, top, compact = LocalExtensionCard.current || LocalExtensionPreviewCompact.current)
+        "map" -> ExtensionMap(item, state, handle, top, compact = LocalExtensionCard.current || LocalExtensionPreviewCompact.current)
+        "scene" -> ExtensionScene(item, state, handle, top, compact = LocalExtensionCard.current || LocalExtensionPreviewCompact.current)
     }
 }
 
@@ -469,8 +471,8 @@ internal fun StandaloneItem(item: ExtensionViewItem, state: ExtensionViewState, 
  */
 internal val LocalViewHtml = staticCompositionLocalOf<(@Composable (ExtensionViewItem, Modifier) -> Unit)?> { null }
 
-/** Only the graph changes presentation inside an in-place card; existing panels keep their original chrome. */
-private val LocalExtensionGraphCompact = staticCompositionLocalOf { false }
+/** Graphs, maps and scenes show previews in embedded cards and replies. */
+private val LocalExtensionPreviewCompact = staticCompositionLocalOf { false }
 
 /**
  * A view drawn in place, not in a lazy list (an assistant's ```persona-view in a reply): the same items in the same
@@ -481,7 +483,7 @@ internal fun ExtensionViewColumn(state: ExtensionViewState, handle: ExtensionVie
     val view = state.view ?: return
     val palette = PersonaTheme.palette
     val type = PersonaTheme.type
-    CompositionLocalProvider(LocalExtensionGraphCompact provides true) {
+    CompositionLocalProvider(LocalExtensionPreviewCompact provides true) {
         Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
             view.title?.takeIf { it.isNotBlank() }?.let { Text(it, style = type.headline, color = palette.ink) }
             view.sections.forEach { section ->
@@ -603,6 +605,8 @@ private fun CardItem(item: ExtensionViewItem, state: ExtensionViewState, handle:
         "carousel" -> ExtensionCarousel(item, state, handle, limit = 6, compact = true)
         // UI version 10: a still preview; only its whole surface opens the full-screen canvas.
         "graph" -> ExtensionGraph(item, state, handle, compact = true)
+        "map" -> ExtensionMap(item, state, handle, compact = true)
+        "scene" -> ExtensionScene(item, state, handle, compact = true)
     }
 }
 

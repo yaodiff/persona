@@ -86,7 +86,7 @@ const wait = (ms: number) => act(() => void vi.advanceTimersByTime(ms));
 describe("the reply bar", () => {
   it("shows Copy, Start a new session, Translate, More and the time at rest on the latest reply", async () => {
     await draw({ pinned: true });
-    expect(labels()).toEqual(["复制消息", "开启一个新会话", "翻译", "更多消息操作"]);
+    expect(labels()).toEqual(["复制消息", "开启新会话", "翻译", "更多消息操作"]);
     expect(bar().lastElementChild?.tagName).toBe("TIME");
     expect(bar().querySelector("time")?.textContent).toBe("刚刚");
     for (const control of bar().querySelectorAll("button, time")) {
@@ -96,7 +96,7 @@ describe("the reply bar", () => {
 
   it("says chat, not session, in a Persona conversation", async () => {
     await draw({ actions: { ...chat, assistant: true } });
-    expect(labels()).toEqual(["复制消息", "开启一个新对话", "翻译", "更多消息操作"]);
+    expect(labels()).toEqual(["复制消息", "开启新对话", "翻译", "更多消息操作"]);
   });
 
   it("has no Start a new session where the session cannot branch, or for words that are not a line of their own", async () => {
@@ -288,7 +288,7 @@ describe("what the exchange cost, after the time", () => {
     wait(10);
     expect(card()?.getAttribute("role")).toBe("tooltip");
     expect(usageText()?.getAttribute("aria-describedby")).toBe(card()?.id);
-    expect(cardLines()).toEqual(["Tokens：共 23.4k · 输入 100 · 输出 23.3k", "缓存拆分：读取 0 · 写入 0 · 命中率 0%", "模型：2 个模型", "本轮费用暂不可用，仅显示用量"]);
+    expect(cardLines()).toEqual(["Tokens：共 23.4k · 输入 100 · 输出 23.3k", "缓存拆分：读取 0 · 写入 0 · 命中率 0%", "模型：2 个模型", "本轮暂无法计算费用，仅显示用量。"]);
     pointer("pointerout", usageText()!);
     expect(card()).toBeNull();
     // a click closes a tooltip rather than pinning it
@@ -310,8 +310,8 @@ describe("what the exchange cost, after the time", () => {
     await draw({ actions: { ...chat, assistant: true }, usage: OPUS_TURN, usageMs: 65_000 });
     expect(usageText()?.textContent).toBe("约 $0.35");
     act(() => usageText()!.click());
-    expect(card()?.getAttribute("aria-label")).toBe("这条回复的估算费用");
-    expect(cardLines()).toEqual(["这条回复约 $0.35，按公开价格估算"]);
+    expect(card()?.getAttribute("aria-label")).toBe("本条回复的估算费用");
+    expect(cardLines()).toEqual(["本条回复费用约 $0.35（按公开价格估算）"]);
     await draw({ actions: { ...chat, assistant: true }, usage: usageKey({ entries: [tokens({ model: "claude-haiku-5-5", out: 10 })] }) });
     expect(usageText()).toBeNull();
   });
@@ -324,7 +324,7 @@ describe("what the exchange cost, after the time", () => {
 
     await draw({ actions: { ...chat, assistant: true }, usage: OPUS_TURN, usageMs: 65_000, ttftMs: 420 });
     act(() => usageText()!.click());
-    expect(cardLines()).toEqual(["这条回复约 $0.35，按公开价格估算"]);
+    expect(cardLines()).toEqual(["本条回复费用约 $0.35（按公开价格估算）"]);
   });
 });
 

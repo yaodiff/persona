@@ -350,6 +350,18 @@ class RealAssistantRepository(
 
     override suspend fun startConversation(pick: persona.core.contracts.ModelPick): SessionKey = start(pick)
 
+    override suspend fun mainConversationOrNull(manager: String): SessionKey? {
+        val held = current.value
+        if (held.managerId == manager) return held.mainSession
+        val captured = request()
+        val named = captured.copy(choice = captured.choice.copy(
+            manager = manager.takeUnless { it == captured.choice.defaultId },
+        ))
+        val config = named.transport.assistantOf(named.manager)
+        check(connection.current.value === named.transport) { CoreText.of(Key.ConnectionSwitched).shown }
+        return mainSessionOf(config)?.also { noteConversation(it.sessionId, named) }
+    }
+
     override suspend fun mainConversationOf(manager: String): SessionKey {
         val captured = request()
         val request = captured.copy(choice = captured.choice.copy(
@@ -358,11 +370,9 @@ class RealAssistantRepository(
         return creationLock.withLock {
             val config = request.transport.assistantOf(manager)
             check(connection.current.value === request.transport) { CoreText.of(Key.ConnectionSwitched).shown }
-            val machine = config.string("machine_id")
-            val main = config.string("main")
-            if (machine.isNotEmpty() && main.isNotEmpty()) {
-                noteConversation(main, request)
-                return@withLock SessionKey(machine, main)
+            mainSessionOf(config)?.let { main ->
+                noteConversation(main.sessionId, request)
+                return@withLock main
             }
             create(request, true, null, config)
         }
@@ -421,6 +431,12 @@ class RealAssistantRepository(
         return session.key
     }
 
+}
+
+private fun mainSessionOf(data: JsonObject): SessionKey? {
+    val machine = data.string("machine_id")
+    val main = data.string("main")
+    return if (machine.isNotEmpty() && main.isNotEmpty()) SessionKey(machine, main) else null
 }
 
 /**

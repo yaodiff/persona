@@ -177,7 +177,7 @@ func (s *Service) modelProfileTrialSummaries(ctx context.Context, now time.Time)
 // current pace-based headroom and 14-day measured efficiency. Returns errModelProfileNotFound for an unknown id.
 func (s *Service) modelProfileCandidates(ctx context.Context, id string) (ModelProfileCandidatesView, error) {
 	s.models.mu.Lock()
-	ps, _, err := s.modelProfilesLocked(ctx)
+	ps, err := s.modelProfilesLocked(ctx)
 	s.models.mu.Unlock()
 	if err != nil {
 		return ModelProfileCandidatesView{}, err

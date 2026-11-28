@@ -238,7 +238,7 @@ func TestFleetClientsSaysWhenAPhoneTakesThemByPush(t *testing.T) {
 		for {
 			select {
 			case c := <-got:
-				if c == want {
+				if c.Elicitation == want.Elicitation && c.ElicitationPush == want.ElicitationPush {
 					return
 				}
 			case <-time.After(10 * time.Second):

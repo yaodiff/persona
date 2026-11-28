@@ -26,7 +26,7 @@ describe("mesh labels", () => {
     expect(hubCount(two)).toBe(2);
     expect(hubLabel(two[1], two)).toBe("公司");
     expect(machineWithHub("b", two)).toBe("公司 · B");
-    expect(routeText(two[1], two)).toBe("经互联 · 1 跳 · 24 ms");
+    expect(routeText(two[1], two)).toBe("经互联 hub · 1 跳 · 24 ms");
   });
 
   it("fall back to the hub id when a hub has no name", () => {

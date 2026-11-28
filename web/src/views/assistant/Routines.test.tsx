@@ -21,7 +21,7 @@ const run: Run = { id: "run-1", kind: "task", ref_id: task.id, title: "Completed
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 const failure = () => json({ error: "run history unavailable" }, 500);
 // errorText explains a 5xx and keeps the hub's own text after it (#3728)
-const failedText = /读不到运行记录：.*run history unavailable/;
+const failedText = /无法加载运行记录：.*run history unavailable/;
 
 let runsReply: () => Response | Promise<Response>;
 let tasksReply: () => Response;
@@ -122,7 +122,7 @@ describe("routine run history loading", () => {
     expect(host.textContent).toContain(task.title);
     expect(history().textContent).toMatch(failedText);
     expect(history().textContent).not.toContain("加载中");
-    expect(history().textContent).not.toContain("还没有运行过");
+    expect(history().textContent).not.toContain("暂无运行记录");
     expect(retry()).toBeDefined();
   });
 
@@ -131,16 +131,16 @@ describe("routine run history loading", () => {
     runsReply = () => json({ runs: [run] });
     await render();
 
-    expect(host.textContent).toContain("读不到定时任务");
+    expect(host.textContent).toContain("无法加载定时任务");
     expect(host.textContent).toContain("tasks unavailable");
     expect(history().textContent).toContain(run.title);
-    expect(history().textContent).not.toContain("读不到运行记录");
+    expect(history().textContent).not.toContain("无法加载运行记录");
     expect(retry()).toBeUndefined();
   });
 
   it.each([
     { name: "nonempty", runs: [run], expected: run.title },
-    { name: "empty", runs: [] as Run[], expected: "还没有运行过" },
+    { name: "empty", runs: [] as Run[], expected: "暂无运行记录" },
   ])("retries both requests and recovers to $name history", async ({ runs, expected }) => {
     await render();
     expect(retry()).toBeDefined();
@@ -167,7 +167,7 @@ describe("routine run history loading", () => {
 
     expect(host.textContent).toContain(task.title);
     expect(history().textContent).toMatch(failedText);
-    expect(history().textContent).not.toContain(run.title);
+    expect(history().textContent).toContain(run.title);
     expect(history().textContent).not.toContain("加载中");
     expect(retry()).toBeDefined();
 
@@ -186,6 +186,7 @@ describe("routine run history loading", () => {
     runsReply = () => pending;
     await render();
     expect(history().textContent).toContain("加载中");
+    expect(rowOf(task.title!)).toBeDefined();
 
     runsReply = () => json({ runs: [run] });
     await refresh();
@@ -240,6 +241,12 @@ it("pauses a routine without changing its saved selections or execution settings
     time: task.time, weekdays: [], enabled: false, every_minutes: 0, permission_mode: "",
   });
   expect(toggle.getAttribute("aria-checked")).toBe("false");
+
+  await act(async () => root.render(null));
+  down = true;
+  await render();
+  expect(host.querySelector('[role="switch"]')?.getAttribute("aria-checked")).toBe("false");
+  expect(host.textContent).toContain("hub unreachable");
 });
 
 describe("a change the hub refuses while the list cannot be read again", () => {
@@ -261,7 +268,7 @@ describe("a change the hub refuses while the list cannot be read again", () => {
     expect(calls).toContain(`/api/v1/assistant/tasks/${task.id}`);
     // the reload after the failure ran and failed too
     expect(calls.filter((path) => path === "/api/v1/assistant/tasks")).toHaveLength(2);
-    expect(history().textContent).toContain("读不到运行记录");
+    expect(history().textContent).toContain("无法加载运行记录");
     expect(switchOf().getAttribute("aria-checked")).toBe(String(enabled));
   });
 
@@ -282,7 +289,7 @@ describe("a change the hub refuses while the list cannot be read again", () => {
 
     expect(calls).toContain(`/api/v1/assistant/tasks/${once.id}/run`);
     expect(calls.filter((path) => path === "/api/v1/assistant/tasks")).toHaveLength(2);
-    expect(history().textContent).toContain("读不到运行记录");
+    expect(history().textContent).toContain("无法加载运行记录");
     expect(rowOf(once.title)).toBeDefined();
   });
 });

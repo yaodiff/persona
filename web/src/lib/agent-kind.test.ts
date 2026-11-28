@@ -87,6 +87,9 @@ describe("markId", () => {
     // an agent with a mark of its own keeps it, whatever its label says
     expect(markId("codex", "Cursor")).toBe("codex");
     expect(markId("dsh", "DSH")).toBe("dsh");
+    // built-in traex keeps its traex agentId while drawing the TRAE brand mark
+    expect(agentId("traex")).toBe("traex");
+    expect(markId("traex")).toBe("trae");
   });
 });
 

@@ -106,7 +106,7 @@ describe("todo rows on a sessions push", () => {
     } }));
     api.mockImplementation(async (path) => path === "/todos" ? { todos: list } : {});
     await act(async () => { await refreshTodos(); });
-    const row = () => [...host.querySelectorAll<HTMLElement>("[role=button]")].find((el) => el.textContent?.includes("修登录页"))!;
+    const row = () => [...host.querySelectorAll<HTMLElement>("[data-todo]")].find((el) => el.textContent?.includes("修登录页"))!;
     expect(row().querySelector('[data-testid="review-badge"]')?.textContent).toContain("0/2");
     const updated = list.map((td) => td.id !== "tb" ? td : { ...td, supervision: { ...td.supervision, criteria: [
       { criterion: "Tests pass", state: "met" as const, evidence: "go test: PASS", at: now, by: "agent:m1/s2" },
@@ -213,7 +213,7 @@ describe("todo rows on a sessions push", () => {
     await act(async () => upsertSession(session("s2", { state: "needs_you", status: "blocked" })));
     expect(renders.get("tb")).toBe(1);
     expect(renders.get("ta")).toBeUndefined();
-    const titles = [...host.querySelectorAll("[role=button] .truncate.font-semibold")].map((el) => el.textContent);
+    const titles = [...host.querySelectorAll("[data-todo] .truncate.font-semibold")].map((el) => el.textContent);
     expect(titles).toEqual(["修登录页", "整理发布清单"]);
   });
 
@@ -231,6 +231,9 @@ describe("todo rows on a sessions push", () => {
     expect(tag("tc")?.textContent).toBe(t("todos.concern"));
     expect(tag("td")?.textContent).toBe(t("todos.concern"));
     expect(tag("tb")).toBeNull();
+    const openConcernLine = host.querySelector('[data-todo="td"] [data-testid="todo-status-line"]')?.textContent ?? "";
+    expect(openConcernLine).toContain(t("todos.status_tracking"));
+    expect(openConcernLine).not.toContain(t("todos.not_handed"));
   });
 
   it("keeps a fresh reported concern in Just finished and reserves awaiting review for live delivery", async () => {
@@ -246,7 +249,7 @@ describe("todo rows on a sessions push", () => {
     await load([reported]);
     expect(title()).toContain("刚做完");
     await load([live]);
-    expect(title()).toContain("已交付·待看");
+    expect(title()).toContain("已交付 · 待看");
     await load([reported, live]);
     expect(title()).toContain("刚做完");
   });

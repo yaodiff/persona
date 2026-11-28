@@ -371,6 +371,44 @@ func TestBuiltinPresetsMatchLaunchersOnlyByID(t *testing.T) {
 	}
 }
 
+func TestManagedCodexPresetModels(t *testing.T) {
+	s, f, _ := modelService(t)
+	const name, gateway = "codex-relay", "https://gw.example.com"
+	f.presets = []LauncherPreset{{
+		ID: "team/gw", Extension: "team", Kind: "launcher", BaseURL: gateway,
+		Models: []extension.ProviderModel{{ID: "claude-preset-model"}},
+	}}
+	putLaunchers(t, s, storedLauncher{
+		Preset: "team/gw", DisplayName: "Relay",
+		ManagedLauncher: proto.ManagedLauncher{
+			Name: name, Agent: "codex", BaseURL: gateway,
+			Models: []proto.ProviderModel{
+				{ID: "cli-model"},
+				{ID: "hub-model", Name: "Hub model", Efforts: []string{"low", "high"}, DefaultEffort: "high"},
+			},
+		},
+	})
+	f.agentModels = map[string][]proto.AgentModel{name: {{ID: "cli-model", Name: "CLI model"}}}
+
+	res, err := s.askLauncherModels(t.Context(), "server", name, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids []string
+	for _, m := range res.Models {
+		ids = append(ids, m.ID)
+	}
+	if res.Agent != "codex" || !slices.Equal(ids, []string{"cli-model", "hub-model"}) {
+		t.Fatalf("%s models = %v, want the CLI and Hub models in order", res.Agent, ids)
+	}
+	if m := res.Models[0]; m.Name != "CLI model" {
+		t.Fatalf("CLI model metadata = %+v", m)
+	}
+	if m := res.Models[1]; m.Name != "Hub model" || m.Description != "Relay" || m.DefaultEffort != "high" || !slices.Equal(m.Efforts, []string{"low", "high"}) {
+		t.Fatalf("Hub model metadata = %+v", m)
+	}
+}
+
 func keptOf(t *testing.T, out map[string]json.RawMessage) ([]string, []keptPurpose) {
 	t.Helper()
 	var assigned []string

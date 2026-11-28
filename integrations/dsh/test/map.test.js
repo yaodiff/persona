@@ -23,6 +23,20 @@ test('a human prompt becomes user text and image items; injected context does no
   assert.match(settled[0].text, /review done/)
 })
 
+test('row preview finds the latest visible assistant text across blocks and events', () => {
+  const marker = 'BOTMUX_NOTHING_TO_SEND'
+  const message = (seq, ...texts) => ({
+    type: 'assistant/message', seq,
+    data: { message: { role: 'assistant', content: texts.map(text => ({ type: 'text', text })) } },
+  })
+  const mention = `The guide mentions ${marker}.`
+  const mixed = `${mention}\n${marker}`
+  const answer = message(2, mixed, marker)
+  assert.equal(lastText([message(1, 'older answer'), answer, message(3, marker)]), mention)
+  assert.equal(lastText([message(1, marker)]), '')
+  assert.deepEqual(eventItems(answer).map(item => item.text), [mixed, marker])
+})
+
 test('assistant blocks become thinking, text and tool calls under the apps\' tool names', () => {
   const items = eventItems({ type: 'assistant/message', seq: 39, time: 0, surfaceOp: 'append', data: { message: { role: 'assistant', content: [
     { type: 'reasoning', text: 'look at the file' },

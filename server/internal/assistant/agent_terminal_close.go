@@ -13,12 +13,11 @@ import (
 // transcript stays, so a message or the owner's Resume brings it back in a new tab.
 //
 // What counts as an end, from the session's states:
-//   - its task is done (tasks_close.go): the idle Agent the done-task pass would stop is closed instead;
-//   - its task is cancelled (supervise_leader.go): an idle Agent is closed instead of stopped (a busy one is still
-//     only stopped, and keeps its terminal);
+//   - its task is done or cancelled (tasks_close.go): after the Agent and owner inactivity grace, the guarded
+//     request also closes its idle terminal; working Agents and active viewers are left alone;
 //   - it quit: told to (/exit, /quit through Persona: stop cause exit) or by itself (its process exited: no cause),
 //     seen by this pass as running in a pane and then stopped. The node closes the marked, idle shell it left
-//     (after_exit, close_after_exit.go; Herdr only).
+//     (after_exit, close_after_exit.go; Herdr and Orca).
 //
 // Not an end, so the terminal stays: the user's Stop (stop cause user), a stop for being idle (idle), a restart that
 // cut it off (restart, interrupted). Never closed: a busy Agent (agentCloseBusy: working, waiting for an answer,

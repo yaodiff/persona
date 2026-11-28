@@ -93,7 +93,7 @@ const eventBody = () => host.querySelector("[data-event-body]");
 const extensionPage = () => host.querySelector("[data-extension-page]");
 /** A close from the page takes its entry off a tick later (back-close's 0 ms timer, then the Back it causes). */
 const settleTimers = async () => {
-  await act(async () => { await new Promise((r) => setTimeout(r, 30)); });
+  await act(async () => { await vi.waitFor(() => expect(onOverlayEntry(history.state)).toBe(false), { timeout: 1000, interval: 10 }); });
   await flush();
 };
 /** Runs `go`, then waits for the Back it causes (history.go() / history.back() are asynchronous). */

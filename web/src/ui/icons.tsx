@@ -129,6 +129,7 @@ const P: Record<string, React.ReactNode> = {
   // the terminal's key bar and options
   keyboard: <g><rect x="2" y="5" width="20" height="14" rx="2.5" /><path d="M6 9h.01M10 9h.01M14 9h.01M18 9h.01M6 12.5h.01M18 12.5h.01M8 15.5h8" /></g>,
   bolt: <path d="M13 2 4 14h7l-1 8 9-12h-7z" />,
+  "bolt-double": <g><path d="M8 2 2.5 13.5h4L6 21l5.5-11.5h-4z" /><path d="M17.5 3 12 14.5h4l-.5 7.5L21 10.5h-4z" /></g>,
   paste: <g><rect x="8" y="2" width="8" height="4" rx="1" /><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" /></g>,
   enter: <path d="M9 10l-5 5 5 5M20 4v7a4 4 0 0 1-4 4H4" />,
   wrap: <g><path d="M3 6h18M3 12h15a3 3 0 1 1 0 6h-4M3 18h7" /><path d="m16 16-2 2 2 2" /></g>,

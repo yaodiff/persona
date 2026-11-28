@@ -119,13 +119,13 @@ func TestRegistrySnapshotKeepsProcessState(t *testing.T) {
 // push.grading, assistant.start_defaults, decisions.raise, dispatch.guard and market.refresh_own); the install screen still lists each.
 func TestEveryScopeLeavesOutThePermissionMode(t *testing.T) {
 	every := EveryScope()
-	excluded := []string{ScopeAgentsArchiveIdle, ScopeAgentsPermissionMode, ScopePushGrading, ScopeAssistantStartDefaults, ScopeDecisionsRaise, ScopeDispatchGuard, ScopeMachinesPair, ScopeBrowserRun, ScopeMarketRefreshOwn, ScopeSpaces, ScopeTasksSchedule}
+	excluded := []string{ScopeKBImportStatus, ScopeAgentsArchiveIdle, ScopeAgentsPermissionMode, ScopePushGrading, ScopeAssistantStartDefaults, ScopeDecisionsRaise, ScopeDispatchGuard, ScopeMachinesPair, ScopeBrowserRun, ScopeMarketRefreshOwn, ScopeSpaces, ScopeTasksSchedule, ScopeLarkMessagesRead, ScopeBotsFeishuHandoff}
 	for _, named := range excluded {
 		if slices.Contains(every, named) || !slices.Contains(HubScopes, named) || InEveryScope(named) {
 			t.Fatalf("every scope has %s: %v", named, every)
 		}
 	}
-	if len(every) != len(HubScopes)-len(excluded) || !InEveryScope(ScopeAgentsControl) || !InEveryScope(ScopeAssistantDispatchPolicy) {
+	if len(every) != len(HubScopes)-len(excluded) || !InEveryScope(ScopeAgentsControl) || !InEveryScope(ScopeAssistantDispatchPolicy) || !InEveryScope(ScopeBotsFeishuIdentity) {
 		t.Fatalf("every scope: %v", every)
 	}
 	every[0] = "x"

@@ -717,6 +717,7 @@ func (f *File) fullMeta() Meta {
 			return f.meta
 		}
 	}
+	m.tree = treeLine{} // The last line was parser scratch, including its read buffer.
 	f.meta, f.partialMeta = m, false
 	if f.base == 0 {
 		f.win = nil

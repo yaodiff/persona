@@ -10,8 +10,8 @@
   "close_agent": "Close agent",
   "close_agent_detail": "This quits Claude in “{where}” on {machine} and closes the tab. Its conversation stays here, and you can resume it later from its terminal page.",
   "close_runtime_detail": "This ends “{title}” on {machine}. The conversation history stays available.",
-  "archive_close_detail": "Persona archives “{title}” and closes its tab and process on {machine}. Its conversation stays: restore it from Archived agents, then resume it from its terminal page.",
-  "archive_close_agy_detail": "Persona closes the conversation “{title}” on {machine} and moves it to Archived agents. Send it a message to bring it back.",
-  "archive_close_agy_pane_detail": "Persona closes the pane on {machine} where “{title}” runs and moves the conversation to Archived agents. Send it a message to bring it back.",
+  "archive_close_detail": "Persona archives “{title}” and closes its tab and process on {machine}. Its conversation stays. Restore it from Archived sessions, then resume it from its terminal page.",
+  "archive_close_agy_detail": "Persona closes “{title}” on {machine} and moves the conversation to Archived sessions. Send it a message to bring it back.",
+  "archive_close_agy_pane_detail": "Persona closes the terminal running “{title}” on {machine} and moves the conversation to Archived sessions. Send it a message to bring it back.",
   "archive_close": "Archive and close"
 }

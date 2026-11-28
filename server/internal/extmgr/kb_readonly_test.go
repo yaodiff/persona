@@ -21,11 +21,22 @@ func TestKBReadOnlyBlocksExternalSourcesAndPluginWork(t *testing.T) {
 			t.Fatalf("%s: handled=%v err=%v", method, handled, err)
 		}
 	}
-	for _, method := range []string{assistantwire.MethodKBPostsPut, assistantwire.MethodKBPostsComments,
-		assistantwire.MethodKBPostsPending, assistantwire.MethodKBArchivedChats} {
-		err := (kbPosts{h: h, id: "feed"}).call(ctx, method, assistantwire.KBPosts{}, nil)
-		if !errors.Is(err, kb.ErrReadOnly) {
-			t.Fatalf("%s: %v", method, err)
+	posts := h.kbFor("feed")
+	_, putErr := posts.PutPosts(ctx, nil)
+	commentsErr := posts.PutComments(ctx, "p1", 1, nil)
+	_, pendingErr := posts.PendingPosts(ctx, 1)
+	_, chatsErr := posts.ArchivedChats(ctx, "feed")
+	for _, result := range []struct {
+		method string
+		err    error
+	}{
+		{assistantwire.MethodKBPostsPut, putErr},
+		{assistantwire.MethodKBPostsComments, commentsErr},
+		{assistantwire.MethodKBPostsPending, pendingErr},
+		{assistantwire.MethodKBArchivedChats, chatsErr},
+	} {
+		if !errors.Is(result.err, kb.ErrReadOnly) {
+			t.Errorf("%s: %v", result.method, result.err)
 		}
 	}
 }

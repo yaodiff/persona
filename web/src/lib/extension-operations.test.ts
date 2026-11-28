@@ -54,7 +54,7 @@ describe("extension operations", () => {
     const d = op().steps[0];
     expect(stepDetail(d)).toBe("4.0 MB / 16.0 MB");
     expect(stepFraction(d)).toBe(0.25);
-    expect(stepDetail({ id: "download", state: "done", bytes: 1 << 20, cached: true })).toBe("用本机缓存");
+    expect(stepDetail({ id: "download", state: "done", bytes: 1 << 20, cached: true })).toBe("使用本地缓存");
     expect(stepFraction({ id: "download", state: "running" })).toBeUndefined(); // size unknown: no bar
     expect(stepDetail({ id: "nodes", state: "running", machines: { done: 1, total: 2 } })).toBe("1 / 2 台");
   });
@@ -73,8 +73,8 @@ describe("extension operations", () => {
 
   it("says how it ended or where it is", () => {
     expect(opLine(op())).toBe("下载…");
-    expect(opLine(op({ state: "failed", step: "download" }))).toBe("卡在「下载」");
-    expect(opLine(op({ state: "needs_consent" }))).toBe("等你确认权限");
+    expect(opLine(op({ state: "failed", step: "download" }))).toBe("在「下载」步骤中断");
+    expect(opLine(op({ state: "needs_consent" }))).toBe("等待你确认权限");
     expect(opLine(op({ state: "succeeded", kind: "uninstall" }))).toBe("已卸载");
   });
 
@@ -90,7 +90,7 @@ describe("extension operations", () => {
   });
 
   it("installs the command-line tools as a step, one line per program (#4507)", () => {
-    expect(stepLabel("tools")).toBe("安装命令行");
+    expect(stepLabel("tools")).toBe("安装命令行工具");
     const s = {
       id: "tools", state: "running" as const, bytes: 4 << 20, total: 16 << 20,
       tools: [{ name: "node", state: "done", reused: true }, { name: "example-cli", state: "running" }, { name: "jq", state: "pending" }],
@@ -98,7 +98,7 @@ describe("extension operations", () => {
     expect(stepDetail(s)).toBe("1 / 3 个");
     expect(stepFraction(s)).toBeUndefined(); // the bar is the downloading program's
     expect(toolLines(s)).toEqual([
-      { name: "node", state: "done", detail: "用这台机器上的", fraction: undefined },
+      { name: "node", state: "done", detail: "使用本机已有版本", fraction: undefined },
       { name: "example-cli", state: "running", detail: "4.0 MB / 16.0 MB", fraction: 0.25 },
       { name: "jq", state: "pending", detail: "", fraction: undefined },
     ]);
@@ -107,7 +107,7 @@ describe("extension operations", () => {
   });
 
   it("says why the tools did not install, and when to sign in next", () => {
-    expect(opError(op({ state: "failed", error: "sha256 不对", error_code: "tools_failed" }))).toBe("命令行程序没装上：sha256 不对");
+    expect(opError(op({ state: "failed", error: "sha256 不对", error_code: "tools_failed" }))).toBe("命令行工具安装失败：sha256 不对");
     expect(opError(op({ state: "failed", error: "下载卡住了", error_code: "download_stalled" }))).toBe("原因：下载卡住了");
     expect(opError(op({ state: "failed" }))).toBe("");
     expect(wantsSignIn(op({ state: "succeeded", next: "auth" }))).toBe(true);

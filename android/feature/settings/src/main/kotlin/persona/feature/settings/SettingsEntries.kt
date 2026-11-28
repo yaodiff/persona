@@ -76,6 +76,8 @@ data class SettingsServices(
     /** Settings › Session triage on the paired hub (docs/assistant/agent-work.md "Switches"); null in demo mode. */
     val triage: AgentTriage? = null,
     val capsule: FloatingCapsuleSettings? = null,
+    /** Local model choice for Android's Default Digital Assistant floating overlay; null where unavailable. */
+    val digitalAssistantModel: DigitalAssistantModelSettings? = null,
     /** The last pairing attempt (recorded by the pairing page, shown in "Connection diagnostics"); null in demo mode. */
     val pairingAttempts: PairingAttempts? = null,
     /** The main conversation's steps on "Checklist" (docs/assistant/onboarding.md 4.5); null or unavailable: the phone's items only. */

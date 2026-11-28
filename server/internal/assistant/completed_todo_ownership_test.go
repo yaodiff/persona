@@ -29,8 +29,11 @@ func TestCompletedTodoOwnershipDoesNotBecomeActiveWork(t *testing.T) {
 	if len(report.Links) != 1 || report.Links[0].TodoID != "open" {
 		t.Fatalf("completed work entered active links: %+v", report.Links)
 	}
-	if len(report.Completed) != 1 || report.Completed[0].TodoID != "done" ||
-		report.Completed[0].SessionID != "history" || report.Completed[0].Task {
+	if len(report.Completed) != 2 ||
+		report.Completed[0].TodoID != "cancelled" || report.Completed[0].SessionID != "cancelled-history" ||
+		!report.Completed[0].Cancelled || report.Completed[0].Task ||
+		report.Completed[1].TodoID != "done" || report.Completed[1].SessionID != "history" ||
+		report.Completed[1].Cancelled || report.Completed[1].Task {
 		t.Fatalf("completed ownership: %+v", report.Completed)
 	}
 	if _, ok := e.s.openTodoOfAgent("box", "history"); ok {

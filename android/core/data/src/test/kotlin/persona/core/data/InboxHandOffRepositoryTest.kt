@@ -131,7 +131,7 @@ class InboxHandOffRepositoryTest {
             val instructions = mutableListOf<Pair<String, String>>()
             val actions = object : InboxActionsTransport {
                 override suspend fun collectNow() = Unit
-                override suspend fun context(itemId: String) = "上下文"
+                override suspend fun context(itemId: String) = InboxItemContext("上下文")
                 override suspend fun draft(itemId: String, instruction: String): String {
                     instructions += itemId to instruction
                     return "能赶上，周五前给你。"

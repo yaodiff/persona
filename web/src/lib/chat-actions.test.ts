@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { applyDraft, onDraftEvent, parseQuote, replaceNeedsConfirm, sendDraft, splitQuote, storedQuotes, withAppended, withQuote, withQuoteBlock, withUnsent } from "./drafts";
-import { browseTarget, byPrefix, chatFiles, displayTitle, mentionAt, nameMatches, otherSessions, pageSessions, relPath, replaceToken, sessionDetail, sessionQuote, workspaceContext, workspaceMatches, workspaceTitle } from "./mentions";
+import { chatFiles, displayTitle, mentionAt, replaceToken } from "./mentions";
+import { browseTarget, byPrefix, nameMatches, otherSessions, pageSessions, relPath, sessionDetail, sessionQuote, workspaceContext, workspaceMatches, workspaceTitle } from "./mentions-panel";
 import { contextXML } from "./links";
 import type { Workspace } from "./workspace-board";
 import { keepAllBut, moved, movedTo } from "./queue";
@@ -212,7 +213,7 @@ describe("@ mentions", () => {
     const q = sessionQuote(sess("a", { title: "修登录", cwd: "/code/app", last_text: "  改好了  " }));
     expect(q.url).toBe("persona://session/m/a");
     expect(q.title).toBe("修登录");
-    expect(q.text).toBe("另一个会话：修登录（Claude）\n目录：/code/app\n它最近说：改好了");
+    expect(q.text).toBe("另一个会话：修登录（Claude）\n目录：/code/app\n最近回复：改好了");
   });
 
   it("keeps a TRAE CLI session's custom label in the mention menu and quote", () => {

@@ -56,6 +56,7 @@ class AgentsCurrentAssistantTest {
         Interaction("c5", "far~g0123abcd", "s3", kind = "question", manager = "assistant"), // another group's: everyone's
         // Work's, on a session whose source does not let the phone answer
         Interaction("c6", "laptop", "s5", kind = "permission", manager = "m-2", sessionTitle = "Work source task"),
+        Interaction("display-c1", "box", "main", kind = "permission", mirrorOf = "c1"), // another view of c1, not another request
     ))
 
     private fun model(tasks: persona.core.domain.tasks.TasksStore? = null, only: (Session) -> Boolean = { true },
@@ -119,6 +120,7 @@ class AgentsCurrentAssistantTest {
         rule.waitUntil(5_000) { model.page.value.loaded && ids() == listOf("s1", "s3", "s4") }
         assertEquals(listOf("box", "far~g0123abcd", "old"), model.page.value.machines.map { it.id }.sorted())
         // Its cards: its session's, the removed manager's, the unstamped one on no listed session, another group's.
+        assertTrue(requests.value.any { it.isDisplayMirror })
         assertEquals(listOf("c1", "c3", "c4", "c5"), cards())
         rule.waitForIdle()
         // the list draws its computers (their sessions fold under them)
@@ -139,6 +141,15 @@ class AgentsCurrentAssistantTest {
         rule.runOnIdle { AssistantManagerChoice.pick(null) }
         rule.waitUntil(5_000) { ids() == listOf("s1", "s3", "s4") }
         assertEquals(listOf("c1", "c3", "c4", "c5"), cards())
+    }
+
+    @Test fun resolvedDisplayCopiesDoNotEnterRequestHistory() {
+        val model = model()
+        rule.waitForIdle() // let the pending collector see the original/copy pair
+        requests.value = emptyList()
+        rule.waitUntil(5_000) { model.requestHistory.value.isNotEmpty() }
+        assertEquals(6, model.requestHistory.value.size)
+        assertFalse(model.requestHistory.value.any { it.isDisplayMirror })
     }
 
     /**

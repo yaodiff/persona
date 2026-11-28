@@ -340,12 +340,15 @@ type queuedSwitch struct {
 	From     string    `json:"from"` // the launcher it ran on when queued: one moved meanwhile is left alone
 	At       time.Time `json:"at"`
 	By       string    `json:"by,omitempty"` // the conversation that asked
+	seq      uint64    // monotonic local generation to distinguish replacement entries even within the same tick
 }
 
 // switchQueue is the manager's queued switches by machine/session, read from the store once.
 type switchQueue struct {
 	mu      sync.Mutex
+	saveMu  sync.Mutex // serializes snapshot+PutSetting in saveSwitchQueue (lock order: saveMu -> mu)
 	loaded  bool
+	seq     uint64
 	items   map[string]queuedSwitch
 	running map[string]bool      // being carried out now
 	retry   map[string]time.Time // not tried again before (the node found it busy)
@@ -378,7 +381,13 @@ func (s *Service) loadSwitchQueue(ctx context.Context) {
 		items = map[string]queuedSwitch{}
 	}
 	maps.Copy(items, q.items) // queued while it was read
-	q.items, q.running, q.retry, q.loaded = items, map[string]bool{}, map[string]time.Time{}, true
+	if q.running == nil {
+		q.running = map[string]bool{}
+	}
+	if q.retry == nil {
+		q.retry = map[string]time.Time{}
+	}
+	q.items, q.loaded = items, true
 }
 
 // saveSwitchQueue writes the queue as it is now.
@@ -388,6 +397,8 @@ func (s *Service) saveSwitchQueue(ctx context.Context) {
 		return
 	}
 	q := &s.switchQ
+	q.saveMu.Lock()
+	defer q.saveMu.Unlock()
 	q.mu.Lock()
 	items := maps.Clone(q.items)
 	q.mu.Unlock()
@@ -400,12 +411,15 @@ func (s *Service) saveSwitchQueue(ctx context.Context) {
 func (s *Service) queueSwitch(ctx context.Context, it *switchItem, t switchTarget, self string) string {
 	s.loadSwitchQueue(ctx)
 	q := &s.switchQ
+	k := switchKey(it.m.ID, it.c.SessionID)
 	q.mu.Lock()
 	if q.items == nil {
 		q.items = map[string]queuedSwitch{}
 	}
-	q.items[switchKey(it.m.ID, it.c.SessionID)] = queuedSwitch{Machine: it.m.ID, Session: it.c.SessionID, Launcher: t.Launcher,
-		Model: t.Model, Effort: t.Effort, From: cmp.Or(it.c.Launcher, "claude"), At: time.Now().UTC(), By: self}
+	q.seq++
+	q.items[k] = queuedSwitch{Machine: it.m.ID, Session: it.c.SessionID, Launcher: t.Launcher,
+		Model: t.Model, Effort: t.Effort, From: cmp.Or(it.c.Launcher, "claude"), At: time.Now().UTC(), By: self, seq: q.seq}
+	delete(q.retry, k)
 	q.mu.Unlock()
 	s.saveSwitchQueue(ctx)
 	s.logf("agents_switch %s on %s: queued → %s for the end of its turn", short(it.c.SessionID), it.m.ID, t.Launcher)
@@ -475,12 +489,10 @@ func (s *Service) runSwitchQueue(ctx context.Context, machine string) {
 		}
 		k := switchKey(w.Machine, w.Session)
 		q.mu.Lock()
-		later := now.Before(q.retry[k])
-		q.mu.Unlock()
-		if drop == "" && later { // the node found it busy a moment ago
+		if drop == "" && now.Before(q.retry[k]) { // the node found it busy a moment ago
+			q.mu.Unlock()
 			continue
 		}
-		q.mu.Lock()
 		cur, still := q.items[k]
 		if !still || cur != w || q.running[k] { // changed meanwhile: the next look takes it
 			q.mu.Unlock()
@@ -488,8 +500,12 @@ func (s *Service) runSwitchQueue(ctx context.Context, machine string) {
 		}
 		if drop != "" {
 			delete(q.items, k)
+			delete(q.retry, k)
 			changed = true
 		} else {
+			if q.running == nil {
+				q.running = map[string]bool{}
+			}
 			q.running[k] = true
 			run = append(run, due{w, c})
 		}
@@ -530,22 +546,36 @@ func (s *Service) runQueuedSwitch(ctx context.Context, w queuedSwitch, c proto.S
 	}
 	q.mu.Lock()
 	delete(q.running, k)
+	cur, still := q.items[k]
+	same := still && cur == w
 	keep := switchBusy(err)
-	if keep {
+	removed := false
+	if same && keep {
+		if q.retry == nil {
+			q.retry = map[string]time.Time{}
+		}
 		q.retry[k] = time.Now().Add(switchRetryAfter)
-	} else {
+	} else if same {
 		delete(q.items, k)
+		delete(q.retry, k)
+		removed = true
+	} else if !still {
 		delete(q.retry, k)
 	}
 	q.mu.Unlock()
 	switch {
-	case keep:
+	case keep && same:
 		s.logf("agents_switch %s on %s: queued switch to %s waits: busy again", short(w.Session), w.Machine, w.Launcher)
+		return
+	case keep:
+		s.logf("agents_switch %s on %s: queued switch to %s was superseded while busy", short(w.Session), w.Machine, w.Launcher)
 		return
 	case err != nil:
 		s.logf("agents_switch %s on %s: queued switch to %s refused, dropped: %v", short(w.Session), w.Machine, w.Launcher, err)
 	default:
 		s.logf("agents_switch %s on %s: queued switch %s → %s carried out (continued: %v)", short(w.Session), w.Machine, w.From, w.Launcher, text != "")
 	}
-	s.saveSwitchQueue(ctx)
+	if removed {
+		s.saveSwitchQueue(ctx)
+	}
 }

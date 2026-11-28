@@ -91,12 +91,14 @@ func (r *Registry) setEnabled(ctx context.Context, id string, on bool, packOff [
 	r.mu.Unlock()
 	mutation := r.settingsWrite(id)
 	defer mutation.finish()
-	if err := r.write(ctx, row); err != nil { // the owner's choice, held off or not
+	revision, err := r.write(ctx, row) // the owner's choice, held off or not
+	if err != nil {
 		return err
 	}
 	r.mu.Lock()
 	p.Record.Enabled = on
 	p.Record.PackOff = row.PackOff
+	p.Record.UpdatedAt = revision
 	if held != nil {
 		held.row = on
 	}
@@ -141,12 +143,14 @@ func (r *Registry) ForgetPackOff(ctx context.Context, member string) error {
 	}()
 	for i, row := range rows {
 		mutation := r.settingsWrite(row.ID)
-		if err := r.put(ctx, row); err != nil {
+		revision, err := r.put(ctx, row)
+		if err != nil {
 			mutation.finish()
 			return err
 		}
 		r.mu.Lock()
 		packs[i].Record.PackOff = row.PackOff
+		packs[i].Record.UpdatedAt = revision
 		r.mu.Unlock()
 		changed = append(changed, mutation)
 	}
@@ -242,7 +246,7 @@ func (r *Registry) setConfigClearing(ctx context.Context, id string, raw json.Ra
 		row.ExpectedConfig = slices.Clone(prepared.base)
 	}
 	r.mu.Unlock()
-	err = r.put(ctx, row)
+	revision, err := r.put(ctx, row)
 	if err != nil {
 		var unknown *CommitUnknownError
 		if errors.As(err, &unknown) {
@@ -257,6 +261,7 @@ func (r *Registry) setConfigClearing(ctx context.Context, id string, raw json.Ra
 	}
 	r.mu.Lock()
 	p.Record.Config = prepared.raw
+	p.Record.UpdatedAt = revision
 	r.mu.Unlock()
 	return finish(nil)
 }
@@ -442,7 +447,14 @@ func (r *Registry) ensureRow(ctx context.Context, p *Extension) error {
 	r.mu.Lock()
 	row := p.Record
 	r.mu.Unlock()
-	return r.put(ctx, row)
+	revision, err := r.put(ctx, row)
+	if err != nil {
+		return err
+	}
+	r.mu.Lock()
+	p.Record.UpdatedAt = revision
+	r.mu.Unlock()
+	return nil
 }
 
 // Secrets are a plugin's declared fixed and currently live entry secrets in plain text, for handing to it only.

@@ -493,21 +493,24 @@ func TestOwnerSendRetryIdempotentAndPreservesNewQuietRelays(t *testing.T) {
 	})
 }
 
-// Unnamed owner sends (no client_msg_id) pair FIFO with session.assistant_sent, and non-assistant Agent sessions
-// never attach or consume quiet relays even if SendParams is invoked.
+// Unnamed owner sends (no client_msg_id) lack a durable settlement key so they leave relayState.Later untouched
+// instead of risking non-idempotent duplicate carry, and non-assistant Agent sessions never attach or consume quiet
+// relays even if SendParams is invoked.
 func TestOwnerSendWithoutClientMsgIDAndNonAssistantGuard(t *testing.T) {
-	s, f := newQuietService(t)
+	st := newCountingRelayStore()
+	s, f := newQuietServiceOn(t, st)
 	f.setSessions("server",
 		proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle},
 		proto.Session{SessionID: "agent1", MachineID: "server", Assistant: false, PaneID: "%1", Status: proto.StatusIdle},
 	)
 	ctx := context.Background()
-	if _, ok := s.keepRelayLater("conv1", relayMsg{From: "conv2", FromTitle: "Lead", Text: "Unnamed delivery note.", At: time.Now().UTC()}); !ok {
+	if _, ok := s.keepRelayLater("conv1", relayMsg{From: "conv2", FromTitle: "Lead", Text: "Needs named delivery.", At: time.Now().UTC()}); !ok {
 		t.Fatal("could not keep conv1 note")
 	}
 	if _, ok := s.keepRelayLater("agent1", relayMsg{From: "conv2", FromTitle: "Lead", Text: "Must stay untouched.", At: time.Now().UTC()}); !ok {
 		t.Fatal("could not keep agent1 note")
 	}
+	writesBefore := st.relayWrites()
 
 	// Non-assistant Agent session is unaffected.
 	agentParams, err := requestSendParams(t, s, "server", "agent1", map[string]any{"text": "Run tests", "client_msg_id": "agent-1"})
@@ -522,23 +525,182 @@ func TestOwnerSendWithoutClientMsgIDAndNonAssistantGuard(t *testing.T) {
 		t.Fatal("non-assistant session modified relayState.Later")
 	}
 
-	// Unnamed slash command followed by unnamed real message: command completion must not pop the real message's carry.
-	cmd, err := requestSendParams(t, s, "server", "conv1", map[string]any{"text": "/status"})
-	if err != nil || cmd["text"] != "/status" {
-		t.Fatalf("unnamed command: %+v, %v", cmd, err)
+	// Repeated unnamed owner sends (no client_msg_id) neither attach quiet context nor mutate Later/LaterSends.
+	for i := range 12 {
+		out, err := requestSendParams(t, s, "server", "conv1", map[string]any{"text": fmt.Sprintf("Hello without id %d", i)})
+		if err != nil {
+			t.Fatalf("unnamed send %d: %v", i, err)
+		}
+		if out["text"] != fmt.Sprintf("Hello without id %d", i) {
+			t.Fatalf("unnamed send %d carried quiet relay: %q", i, out["text"])
+		}
+		s.ConversationSent(ctx, ConversationSent{MachineID: "server", SessionID: "conv1", Outcome: assistantwire.ConversationDelivered})
 	}
-	real, err := requestSendParams(t, s, "server", "conv1", map[string]any{"text": "Hello without id"})
-	if err != nil || !strings.Contains(real["text"].(string), "Unnamed delivery note.") {
-		t.Fatalf("unnamed real send: %+v, %v", real, err)
+	if len(laterFor(s, "conv1")) != 1 || laterSendsCount(s) != 0 || st.relayWrites() != writesBefore {
+		t.Fatalf("unnamed sends disturbed relay state: Later=%d LaterSends=%d extraWrites=%d",
+			len(laterFor(s, "conv1")), laterSendsCount(s), st.relayWrites()-writesBefore)
 	}
-	s.ConversationSent(ctx, ConversationSent{MachineID: "server", SessionID: "conv1", Outcome: assistantwire.ConversationDelivered})
-	if len(laterFor(s, "conv1")) != 1 {
-		t.Fatal("unnamed command completion consumed the next unnamed message's quiet relay")
+
+	// Next named owner send carries and drains the quiet relay cleanly.
+	named, err := requestSendParams(t, s, "server", "conv1", map[string]any{"text": "Named follow-up", "client_msg_id": "named-1"})
+	if err != nil || !strings.Contains(named["text"].(string), "Needs named delivery.") {
+		t.Fatalf("named send after unnamed sends: %+v, %v", named, err)
 	}
-	s.ConversationSent(ctx, ConversationSent{MachineID: "server", SessionID: "conv1", Outcome: assistantwire.ConversationDelivered})
-	if len(laterFor(s, "conv1")) != 0 {
-		t.Fatal("unnamed real send completion did not drain quiet relay")
+	s.ConversationSent(ctx, ConversationSent{MachineID: "server", SessionID: "conv1", ClientMsgID: "named-1", Outcome: assistantwire.ConversationDelivered})
+	if len(laterFor(s, "conv1")) != 0 || laterSendsCount(s) != 0 {
+		t.Fatalf("named send did not clear Later/LaterSends: Later=%d LaterSends=%d", len(laterFor(s, "conv1")), laterSendsCount(s))
 	}
+}
+
+// Reusing a previously failed client_msg_id for a non-carrying send (slash command, public turn) or delivering a send
+// that degraded during a relay read outage must never drop quiet messages that were not actually carried.
+func TestOwnerSendReusedClientMsgIDNonCarryingDoesNotDropQuietRelay(t *testing.T) {
+	t.Run("slash_command_reuses_failed_id", func(t *testing.T) {
+		st := newCountingRelayStore()
+		s, f := newQuietServiceOn(t, st)
+		f.setSessions("server", proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle})
+		ctx := context.Background()
+		if _, ok := s.keepRelayLater("conv1", relayMsg{From: "conv2", FromTitle: "Lead", Text: "Do not drop on /compact.", At: time.Now().UTC()}); !ok {
+			t.Fatal("keep")
+		}
+
+		// Attempt 1 reserves Q1, then fails before typing.
+		if _, err := requestSendParams(t, s, "server", "conv1", map[string]any{"text": "First try", "client_msg_id": "reuse-1"}); err != nil {
+			t.Fatal(err)
+		}
+		s.ConversationSent(ctx, ConversationSent{MachineID: "server", SessionID: "conv1", ClientMsgID: "reuse-1", Outcome: assistantwire.ConversationFailed})
+		if laterSendsCount(s) != 1 {
+			t.Fatalf("expected 1 reservation after failed send, got %d", laterSendsCount(s))
+		}
+
+		// Client reuses reuse-1 for a slash command: carries nothing, clears stale reservation without touching Later.
+		cmd, err := requestSendParams(t, s, "server", "conv1", map[string]any{"text": "/compact", "client_msg_id": "reuse-1"})
+		if err != nil || cmd["text"] != "/compact" {
+			t.Fatalf("reused slash command = %+v, %v", cmd, err)
+		}
+		if laterSendsCount(s) != 0 {
+			t.Fatalf("stale reservation survived non-carrying reuse: %d", laterSendsCount(s))
+		}
+		s.ConversationSent(ctx, ConversationSent{MachineID: "server", SessionID: "conv1", ClientMsgID: "reuse-1", Outcome: assistantwire.ConversationDelivered})
+		if left := laterFor(s, "conv1"); len(left) != 1 || left[0].Text != "Do not drop on /compact." {
+			t.Fatalf("slash command delivery dropped uncarried quiet relay: %+v", left)
+		}
+
+		// Next real send still carries and drains Q1.
+		next, err := requestSendParams(t, s, "server", "conv1", map[string]any{"text": "Continue", "client_msg_id": "fresh-1"})
+		if err != nil || !strings.Contains(next["text"].(string), "Do not drop on /compact.") {
+			t.Fatalf("next send = %+v, %v", next, err)
+		}
+		s.ConversationSent(ctx, ConversationSent{MachineID: "server", SessionID: "conv1", ClientMsgID: "fresh-1", Outcome: assistantwire.ConversationDelivered})
+		if len(laterFor(s, "conv1")) != 0 || laterSendsCount(s) != 0 {
+			t.Fatalf("next send did not clear state: Later=%d LaterSends=%d", len(laterFor(s, "conv1")), laterSendsCount(s))
+		}
+	})
+
+	t.Run("public_turn_reuses_failed_id", func(t *testing.T) {
+		st := newCountingRelayStore()
+		s, f := newQuietServiceOn(t, st)
+		f.setSessions("server", proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle})
+		ctx := context.Background()
+		if _, ok := s.keepRelayLater("conv1", relayMsg{From: "conv2", FromTitle: "Lead", Text: "Do not drop on public turn.", At: time.Now().UTC()}); !ok {
+			t.Fatal("keep")
+		}
+
+		if _, err := requestSendParams(t, s, "server", "conv1", map[string]any{"text": "Private try", "client_msg_id": "reuse-pub-1"}); err != nil {
+			t.Fatal(err)
+		}
+		s.ConversationSent(ctx, ConversationSent{MachineID: "server", SessionID: "conv1", ClientMsgID: "reuse-pub-1", Outcome: assistantwire.ConversationFailed})
+
+		pub, err := requestSendParams(t, s, "server", "conv1", map[string]any{"text": "Public turn", "public": true, "client_msg_id": "reuse-pub-1"})
+		if err != nil || pub["text"] != "Public turn" {
+			t.Fatalf("reused public turn = %+v, %v", pub, err)
+		}
+		s.ConversationSent(ctx, ConversationSent{MachineID: "server", SessionID: "conv1", ClientMsgID: "reuse-pub-1", Outcome: assistantwire.ConversationDelivered})
+		if left := laterFor(s, "conv1"); len(left) != 1 || left[0].Text != "Do not drop on public turn." {
+			t.Fatalf("public turn delivery dropped uncarried quiet relay: %+v", left)
+		}
+	})
+
+	t.Run("kept_undelivered_reservation_survives_stale_slash_command", func(t *testing.T) {
+		st := newCountingRelayStore()
+		s, f := newQuietServiceOn(t, st)
+		f.setSessions("server", proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle})
+		ctx := context.Background()
+		if _, ok := s.keepRelayLater("conv1", relayMsg{From: "conv2", FromTitle: "Lead", Text: "Kept in doubt.", At: time.Now().UTC()}); !ok {
+			t.Fatal("keep")
+		}
+
+		if _, err := requestSendParams(t, s, "server", "conv1", map[string]any{"text": "Original kept", "client_msg_id": "kept-reuse-1"}); err != nil {
+			t.Fatal(err)
+		}
+		s.ConversationSent(ctx, ConversationSent{MachineID: "server", SessionID: "conv1", ClientMsgID: "kept-reuse-1", Outcome: assistantwire.ConversationUnknown})
+		if _, err := s.KeepUndelivered(ctx, assistantwire.KeepUndeliveredParams{
+			MachineID: "server", SessionID: "conv1",
+			Params: map[string]any{"text": "Original kept", "client_msg_id": "kept-reuse-1"},
+			Human:  true, Code: assistantwire.CodeDeliveryUnknown, TriedAt: time.Now().Add(-time.Second),
+		}); err != nil {
+			t.Fatal(err)
+		}
+
+		// A stale SendParams with the same ID as a slash command must not discard the kept undelivered reservation.
+		if _, err := requestSendParams(t, s, "server", "conv1", map[string]any{"text": "/status", "client_msg_id": "kept-reuse-1"}); err != nil {
+			t.Fatal(err)
+		}
+		if laterSendsCount(s) != 1 {
+			t.Fatalf("kept undelivered reservation was cleared early: %d", laterSendsCount(s))
+		}
+
+		// Once undeliveredLook finds the kept message landed, it drains both Later and LaterSends.
+		f.setItems(proto.Item{ID: "u1#0", Seq: 1, Role: "user", Kind: proto.KindText, ClientMsgID: "kept-reuse-1", Text: "Original kept", TS: time.Now()})
+		s.undeliveredPass(ctx, time.Now().Add(time.Hour))
+		if len(laterFor(s, "conv1")) != 0 || laterSendsCount(s) != 0 {
+			t.Fatalf("undeliveredLook did not drain kept-reuse-1: Later=%d LaterSends=%d", len(laterFor(s, "conv1")), laterSendsCount(s))
+		}
+	})
+
+	t.Run("read_outage_degrade_recovery_before_delivered_does_not_drop_later", func(t *testing.T) {
+		st := newCountingRelayStore()
+		seed, fSeed := newQuietServiceOn(t, st)
+		fSeed.setSessions("server", proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle})
+		ctx := context.Background()
+		if _, ok := seed.keepRelayLater("conv1", relayMsg{From: "conv2", FromTitle: "Lead", Text: "Must survive degraded retry.", At: time.Now().UTC()}); !ok {
+			t.Fatal("keep")
+		}
+		// Attempt 1 persists a reservation for degrade-reuse-1 and fails before typing.
+		if _, err := requestSendParams(t, seed, "server", "conv1", map[string]any{"text": "Try 1", "client_msg_id": "degrade-reuse-1"}); err != nil {
+			t.Fatal(err)
+		}
+		seed.ConversationSent(ctx, ConversationSent{MachineID: "server", SessionID: "conv1", ClientMsgID: "degrade-reuse-1", Outcome: assistantwire.ConversationFailed})
+
+		// Manager restarts during a transient relay read outage; attempt 2 degrades and sends without quiet relays.
+		st.failKey(relayKey, errors.New("transient read failure"))
+		s, f := newQuietServiceOn(t, st)
+		f.setSessions("server", proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle})
+		degraded, err := requestSendParams(t, s, "server", "conv1", map[string]any{"text": "Try 2", "client_msg_id": "degrade-reuse-1"})
+		if err != nil || degraded["text"] != "Try 2" {
+			t.Fatalf("degraded retry = %+v, %v", degraded, err)
+		}
+
+		// Storage recovers before ConversationDelivered arrives: must NOT drop Q1 (which Try 2 never carried).
+		st.failKey(relayKey, nil)
+		s.ConversationSent(ctx, ConversationSent{MachineID: "server", SessionID: "conv1", ClientMsgID: "degrade-reuse-1", Outcome: assistantwire.ConversationDelivered})
+		if left := laterFor(s, "conv1"); len(left) != 1 || left[0].Text != "Must survive degraded retry." {
+			t.Fatalf("degraded delivery dropped uncarried quiet relay: %+v", left)
+		}
+		if laterSendsCount(s) != 0 {
+			t.Fatalf("stale reservation not cleared after degraded delivery: %d", laterSendsCount(s))
+		}
+
+		// Next owner send carries and drains Q1 cleanly.
+		next, err := requestSendParams(t, s, "server", "conv1", map[string]any{"text": "Try 3", "client_msg_id": "after-degrade-1"})
+		if err != nil || !strings.Contains(next["text"].(string), "Must survive degraded retry.") {
+			t.Fatalf("post-recovery send = %+v, %v", next, err)
+		}
+		s.ConversationSent(ctx, ConversationSent{MachineID: "server", SessionID: "conv1", ClientMsgID: "after-degrade-1", Outcome: assistantwire.ConversationDelivered})
+		if len(laterFor(s, "conv1")) != 0 || laterSendsCount(s) != 0 {
+			t.Fatalf("post-recovery send left state: Later=%d LaterSends=%d", len(laterFor(s, "conv1")), laterSendsCount(s))
+		}
+	})
 }
 
 // An owner send that failed, was kept in undelivered, and later succeeded via deliverKept (or landed detection)

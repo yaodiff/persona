@@ -37,9 +37,7 @@ func serviceWithLarkOff(t *testing.T) (s *Service, logs func() []string) {
 func TestFeishuPushesAreSkippedWithoutTheLarkModule(t *testing.T) {
 	s, logs := serviceWithLarkOff(t)
 	ctx := context.Background()
-	oldRetry := feishuMirrorRetry
-	feishuMirrorRetry = time.Millisecond // a retry, if one were scheduled, would show within the test
-	t.Cleanup(func() { feishuMirrorRetry = oldRetry })
+	s.setLarkTiming("mirror_retry", time.Millisecond)
 
 	r := newCopyReport(1)
 	if err := s.feishuPushTold(ctx, "m1", "s1", "title", "body", "", r); err != nil {
@@ -49,18 +47,15 @@ func TestFeishuPushesAreSkippedWithoutTheLarkModule(t *testing.T) {
 	if len(copies) != 1 || copies[0].channel != channel.Feishu || copies[0].state != copySkipped {
 		t.Fatalf("copies %+v, want one skipped Feishu copy", copies)
 	}
-	if err := s.feishuPushKeyed(ctx, "m1", "s1", "title", "body", "key"); err != nil {
-		t.Fatalf("pushKeyed: %v", err)
+	if err := (recordingHost{s: s}).FeishuPushKeyed(ctx, "m1", "s1", "title", "body", "key"); err != nil {
+		t.Fatalf("recording push would retry: %v", err)
 	}
 	s.feishuPush("m1", "s1", "title", "body")
-	if err := s.feishuTodoPush(ctx, "m1", "s1", "title", "body", Todo{ID: "todo_1"}); err != nil {
-		t.Fatalf("todoPush: %v", err)
-	}
 	remind := time.Now().Add(time.Minute)
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		s.feishuTodoReminder("m1", "s1", "title", "body", Todo{ID: "todo_1", RemindAt: &remind})
+		sendTestLarkReminder(s, "m1", "s1", "title", "body", Todo{ID: "todo_1", RemindAt: &remind})
 	}()
 	select {
 	case <-done:
@@ -69,7 +64,7 @@ func TestFeishuPushesAreSkippedWithoutTheLarkModule(t *testing.T) {
 	}
 	s.feishuAgentDone("m1", proto.Session{SessionID: "s2"}, "head", "text", "place", false)
 	s.feishuMirror(ctx, "m1", "s1")
-	<-time.After(50 * time.Millisecond) // a window past a retry slot (feishuMirrorRetry is 1 ms): nothing may be logged in it
+	<-time.After(50 * time.Millisecond) // a window past a retry slot: nothing may be logged in it
 	for _, l := range logs() {
 		if strings.Contains(l, "bots:") {
 			t.Fatalf("logged %q", l)

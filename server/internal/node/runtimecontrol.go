@@ -312,8 +312,10 @@ func (n *Node) takeOverInRuntime(ctx context.Context, h *runtimeConn, p runtimeS
 			}
 		}
 	}
-	if p.PermissionMode == "" && p.Effort == "" {
-		p.PermissionMode, p.Effort = n.modesOf(p.Resume)
+	if p.PermissionMode == "" || p.Effort == "" {
+		mode, effort := n.modesOf(p.Resume)
+		p.PermissionMode = cmp.Or(p.PermissionMode, mode)
+		p.Effort = cmp.Or(p.Effort, effort)
 	}
 	s, _, err := n.runtimeStartOn(ctx, h, p)
 	if elsewhere != nil && rpcCode(err) == openElsewhere {
@@ -369,7 +371,7 @@ func (n *Node) continueInRuntime(ctx context.Context, id, text string, images []
 
 // liveRuntimeModels asks runtime h, the one offering launcher name to the start in question (runtimeOfIn), for its
 // current native catalog when it opts in. Older runtimes keep their advertised list.
-func (n *Node) liveRuntimeModels(ctx context.Context, h *runtimeConn, name string, refresh bool, fallback proto.LauncherModels) (proto.LauncherModels, error) {
+func (n *Node) liveRuntimeModels(ctx context.Context, h *runtimeConn, name, requestedLauncher string, refresh bool, fallback proto.LauncherModels) (proto.LauncherModels, error) {
 	if h == nil {
 		return fallback, nil
 	}
@@ -379,10 +381,20 @@ func (n *Node) liveRuntimeModels(ctx context.Context, h *runtimeConn, name strin
 	if !supported {
 		return fallback, nil
 	}
+	params := map[string]any{"launcher": name, "refresh": refresh}
+	if h.agent() == agyAgent {
+		ch, err := n.agyChannelFor(ctx, cmp.Or(requestedLauncher, name))
+		if err != nil {
+			return proto.LauncherModels{}, err
+		}
+		if ch != nil {
+			params["channel"] = ch
+		}
+	}
 	ctx, cancel := context.WithTimeout(ctx, runtimeCallTimeout)
 	defer cancel()
 	var out proto.LauncherModels
-	if err := h.peer.Call(ctx, "launchers.models", map[string]any{"launcher": name, "refresh": refresh}, &out); err != nil {
+	if err := h.peer.Call(ctx, "launchers.models", params, &out); err != nil {
 		return proto.LauncherModels{}, err
 	}
 	// Apply the same bounds as runtime.launchers before exposing a native response.
@@ -415,6 +427,16 @@ func (n *Node) runtimeLauncherCheck(ctx context.Context, h *runtimeConn, name, c
 	params := map[string]any{"launcher": name, "cwd": cwd, "prompt": prompt}
 	if model != "" {
 		params["model"] = model
+	}
+	if h.agent() == agyAgent {
+		ch, err := n.agyChannelFor(ctx, name)
+		if err != nil {
+			result = proto.LauncherCheck{Agent: agyAgent, Error: textfmt.LauncherErrorSummary(err.Error(), 400), Millis: int(time.Since(start).Milliseconds())}
+			return result, true
+		}
+		if ch != nil {
+			params["channel"] = ch
+		}
 	}
 	if err := h.peer.Call(ctx, "launchers.check", params, &result); err != nil {
 		result = proto.LauncherCheck{Error: err.Error()}

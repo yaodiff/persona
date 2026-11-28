@@ -153,16 +153,18 @@ try {
         check(errors.length === 0, `${tag}: no page errors in the memory sheet`, errors.join("; "));
         await context.close();
       }
-      // 3. the disk sheet and its cleanup confirmation
+      // 3. Disk recovery on a computer that predates usage maps.
       {
         const { context, page, errors } = await open(theme, width);
         await page.waitForSelector("[data-alert=disk]", { timeout: 20_000 });
-        await sheetFor(page, "Build Box", "disk");
+        await page.route("**/storage/usage?*", route => route.fulfill({ status: 409, json: { code: "node_outdated" } }));
+        await card(page, "Build Box").locator("[data-alert=disk]").click();
+        await page.waitForURL(u => u.pathname.endsWith("/storage") && u.searchParams.get("mode") === "reclaim");
         await page.waitForSelector("[data-testid=caches] [data-cache]", { timeout: 10_000 });
         const inUse = await page.$eval("[data-cache=go-build] input", (i) => i.disabled).catch(() => null);
         check(inUse === true, `${tag}: the cache in use can't be picked`);
-        await checkSheet(page, `${tag} disk sheet`);
-        await shot(page, `disk-sheet-${tag}`);
+        await page.getByTestId("usage-map").scrollIntoViewIfNeeded();
+        await shot(page, `storage-${tag}`);
         await page.locator("[data-testid=caches]").scrollIntoViewIfNeeded();
         await shot(page, `disk-caches-${tag}`);
         await page.locator("[data-testid=clean-selected]").click();

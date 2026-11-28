@@ -9,7 +9,7 @@ import SwiftUI
 /// shapes, so focus and the IME's marked text survive the change; so are + and the mic (voice and stop too), which move
 /// with the box between the shapes (`ComposerBoxLayout`, #7278). Only what the card alone has comes and goes.
 /// The callers keep their own state (drafts, uploads, SendSafety in `Composer`; the starter's text in StarterComposer).
-struct ShellComposerBar<Attach: View, Modes: View>: View {
+struct ShellComposerBar<Attach: View, Modes: View, Top: View>: View {
     var placeholder: String
     @Binding var text: String
     @Binding var selection: TextSelection?
@@ -48,6 +48,8 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
     var send: () -> Void
     @ViewBuilder var attach: () -> Attach
     @ViewBuilder var modes: () -> Modes
+    /// Composer-bound accessories fused into the top edge of the card surface (queued messages, task routing).
+    @ViewBuilder var top: () -> Top
     @State private var dictation = Dictation()
     @Environment(\.buiTheme) private var theme
     #if os(iOS)
@@ -248,17 +250,28 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
         let erased = AnyView(box)
         #endif
         // Erased (#6735): generic, so every intermediate of the chain below took a run-time-sized stack slot holding the box.
-        erased
-        .padding(.horizontal, expanded ? 0 : Theme.Space.xs)
-        .padding(.vertical, expanded ? 0 : Theme.Space.xxs)
+        let input = erased
+            .padding(.horizontal, expanded ? 0 : Theme.Space.xs)
+            .padding(.vertical, expanded ? 0 : Theme.Space.xxs)
+            .contentShape(.rect(cornerRadius: Theme.Shell.composerRadius))
+            .onTapGesture { if !barOn { focused.wrappedValue = true } }
+        VStack(alignment: .leading, spacing: 0) {
+            top()
+                .clipShape(
+                    UnevenRoundedRectangle(
+                        topLeadingRadius: Theme.Shell.composerRadius,
+                        topTrailingRadius: Theme.Shell.composerRadius,
+                        style: .continuous
+                    )
+                )
+            input
+        }
         .modifier(ComposerSurface())
         #if os(iOS)
         .overlay { ComposerHoldOverlay(hold: hold) }
         .coordinateSpace(.named(ComposerHold.space))
         #endif
         .composerGlow(glows)
-        .contentShape(.rect(cornerRadius: Theme.Shell.composerRadius))
-        .onTapGesture { if !barOn { focused.wrappedValue = true } }
         .shellScaled()
         .animation(openMotion, value: expanded)
         .animation(Theme.Motion.state, value: canSend)
@@ -664,6 +677,27 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
     private func endDictation(then action: () -> Void) {
         dictation.stop()
         action()
+    }
+}
+
+extension ShellComposerBar where Top == EmptyView {
+    init(placeholder: String, text: Binding<String>, selection: Binding<TextSelection?>,
+         focused: FocusState<Bool>.Binding, canSend: Bool, hasAttachments: Bool = false,
+         stop: (() -> Void)? = nil, voice: (() -> Void)? = nil, voiceLabel: String? = nil,
+         modesTitle: SessionModes.ComposerTitle? = nil, modesDisclosure: Bool = false,
+         quotes: Binding<[ContextRef]>? = nil, gate: SendGate? = nil,
+         openAttach: ((CGRect) -> Void)? = nil, glows: Bool = false,
+         dictationHints: @escaping () -> [String] = { [] },
+         dictationRequest: DictationRequest? = nil, takeDictation: ((DictationRequest) -> Bool)? = nil,
+         send: @escaping () -> Void,
+         @ViewBuilder attach: @escaping () -> Attach,
+         @ViewBuilder modes: @escaping () -> Modes) {
+        self.init(placeholder: placeholder, text: text, selection: selection, focused: focused, canSend: canSend,
+                  hasAttachments: hasAttachments, stop: stop, voice: voice, voiceLabel: voiceLabel,
+                  modesTitle: modesTitle, modesDisclosure: modesDisclosure, quotes: quotes, gate: gate,
+                  openAttach: openAttach, glows: glows, dictationHints: dictationHints,
+                  dictationRequest: dictationRequest, takeDictation: takeDictation, send: send,
+                  attach: attach, modes: modes, top: { EmptyView() })
     }
 }
 

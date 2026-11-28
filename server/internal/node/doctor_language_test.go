@@ -253,7 +253,7 @@ func TestDoctorLegacyOutputGolden(t *testing.T) {
       "name": "path-access",
       "status": "warn",
       "state": "",
-      "detail": "读 /persona-test/work 超过 3s 没有返回：在这里启动的 Claude会停在 Loading commands and agents，等不到 SessionStart",
+      "detail": "读 /persona-test/work 超过 3s 没有返回：在这里启动的 Claude 会停在 Loading commands and agents，等不到 SessionStart",
       "hint": "检查这个路径的权限，或者它所在的挂载（网络盘、FUSE）是否还有响应；或者把目录挪到别处",
       "items": [
         "卡住（3s 没有返回）：/persona-test/work（工作目录）"
@@ -278,7 +278,7 @@ func TestDoctorLegacyOutputGolden(t *testing.T) {
 正常｜global-permission-hooks：没有全局 settings.json
 正常｜agent-sandbox：未开启（默认关闭）；工具不可用：bwrap unavailable
 正常｜launchd-process-type：没有常驻 node 的 LaunchAgent（node 经 ssh 启动，或者没装）
-注意｜path-access：读 /persona-test/work 超过 3s 没有返回：在这里启动的 Claude会停在 Loading commands and agents，等不到 SessionStart；检查这个路径的权限，或者它所在的挂载（网络盘、FUSE）是否还有响应；或者把目录挪到别处
+注意｜path-access：读 /persona-test/work 超过 3s 没有返回：在这里启动的 Claude 会停在 Loading commands and agents，等不到 SessionStart；检查这个路径的权限，或者它所在的挂载（网络盘、FUSE）是否还有响应；或者把目录挪到别处
 共 15 项：3 正常，6 注意，6 有问题
 `
 	if jsonOut.String() != wantJSON || textOut.String() != wantText {
@@ -324,7 +324,7 @@ func TestDoctorCommandSpeaksEveryTerminalLanguage(t *testing.T) {
 		{locale: "en", title: "Node self-check (/persona-test/node)", check: "OK | global-permission-hooks: No global settings.json",
 			path: "Reading /persona-test/work did not return within 3s; Claude started here can remain at Loading commands and agents and never reach SessionStart", summary: "Checks: 15 total; OK: 3; warnings: 6; problems: 6"},
 		{locale: "zh-Hans", title: "node 自检（/persona-test/node）", check: "正常｜global-permission-hooks：没有全局 settings.json",
-			path: "读 /persona-test/work 超过 3s 没有返回：在这里启动的 Claude会停在 Loading commands and agents，等不到 SessionStart", summary: "共 15 项：3 正常，6 注意，6 有问题"},
+			path: "读 /persona-test/work 超过 3s 没有返回：在这里启动的 Claude 会停在 Loading commands and agents，等不到 SessionStart", summary: "共 15 项：3 正常，6 注意，6 有问题"},
 		{locale: "ja", title: "ノードの自己診断（/persona-test/node）", check: "正常｜global-permission-hooks：グローバルsettings.jsonがありません",
 			path: "/persona-test/workの読み取りが3s以内に返りませんでした。ここで起動したClaudeはLoading commands and agentsのままとなり、SessionStartに到達しません", summary: "合計15件：正常3件、注意6件、問題6件"},
 		{locale: "fr", title: "Node self-check (/persona-test/node)", check: "OK | global-permission-hooks: No global settings.json",

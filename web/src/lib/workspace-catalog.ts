@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useSyncExternalStore } from "react";
 import { api, credentialOwner, onCredentialChange, subscribeCredentialOwner } from "./api";
 import { shownManager, MANAGER_HEADER, onManagerChoice, useShownManager } from "./manager-choice";
-import { sameValue } from "./stable-lines";
 import { directoryKey } from "./workspace-directory";
 import type { WorkspaceTarget as RuntimeWorkspaceTarget } from "./workspace-target";
 
@@ -39,7 +38,11 @@ export type WorkspaceCatalogOwner = Pick<WorkspaceTarget, "owner" | "manager">;
  *  changes (creating, renaming, removing one) refresh it at once (`refreshWorkspaceCatalog`), as does a page coming back
  *  into view. Each read asks every online computer live (`workspaces.list`), so this is 60 s, as on Apple (#4685). */
 export const CATALOG_POLL_MS = 60_000;
-export interface WorkspaceCatalogSnapshot extends WorkspaceCatalogOwner { workspaces: HostWorkspace[] }
+export interface WorkspaceCatalogSnapshot extends WorkspaceCatalogOwner {
+  workspaces: HostWorkspace[];
+  /** Undefined until discovery answers, null for a failed request, otherwise the machines with partial results. */
+  failedMachines?: string[] | null;
+}
 export interface WorkspaceCatalogList { workspaces: HostWorkspace[]; errors?: { machine_id: string; source?: string; error: string }[] }
 
 export function workspaceCatalogOwner(): WorkspaceCatalogOwner {
@@ -80,31 +83,21 @@ export class WorkspaceCatalog {
     this.controller = controller;
     try {
       // Pin even the default manager: a roster switch while this request is in flight cannot redirect it.
-      const result = await this.request<WorkspaceCatalogList>("/workspaces", {
-        signal: controller.signal, headers: { [MANAGER_HEADER]: this.state.manager },
-      });
-      if (controller.signal.aborted || read !== this.reads || !sameOwner(this.state, this.currentOwner()) || !Array.isArray(result.workspaces)) return;
-      const before = new Map(this.state.workspaces.map((w) => [workspaceKey(w, this.state.owner, this.state.manager), w]));
-      const unique = new Map<string, HostWorkspace>();
-      for (const w of result.workspaces) {
-        if (!w.machine_id || !w.source || !w.source_id) continue;
-        const key = workspaceKey(w, this.state.owner, this.state.manager);
-        const old = before.get(key);
-        unique.set(key, old && sameValue(old, w) ? old : w);
-      }
-      // Some older managers return partial inventories without cached failed machines. Keep those rows until a
-      // successful discovery answers for that machine; a successful empty inventory still removes vanished rows.
-      const failed = result.errors ?? [];
-      for (const [key, old] of before) {
-        if (!unique.has(key) && failed.some((e) => e.machine_id === old.machine_id && (!e.source || e.source === old.source))) unique.set(key, old);
-      }
-      // Discovery responses may complete in machine order rather than display order. A reorder is not a change.
-      const next = [...unique].sort(([a], [b]) => a.localeCompare(b)).map(([, w]) => w);
-      if (next.length === this.state.workspaces.length && next.every((w, i) => w === this.state.workspaces[i])) return;
-      this.state = { ...this.state, workspaces: next };
+      const [result, { reconcileInventory }] = await Promise.all([
+        this.request<WorkspaceCatalogList>("/workspaces", { signal: controller.signal, headers: { [MANAGER_HEADER]: this.state.manager } }),
+        import("./workspace-inventory"),
+      ]);
+      if (controller.signal.aborted || read !== this.reads || !sameOwner(this.state, this.currentOwner())) return;
+      if (!Array.isArray(result.workspaces)) throw new Error("Invalid workspace inventory");
+      const next = reconcileInventory(this.state, result);
+      if (next === this.state) return;
+      this.state = next;
       this.listeners.forEach((listener) => listener());
     } catch {
-      // Unsupported old hubs and transient failures retain the last good catalog/session-only view.
+      if (!controller.signal.aborted && read === this.reads && sameOwner(this.state, this.currentOwner()) && this.state.failedMachines !== null) {
+        this.state = { ...this.state, failedMachines: null };
+        this.listeners.forEach(listener => listener());
+      }
     } finally {
       if (read === this.reads) this.controller = undefined;
     }

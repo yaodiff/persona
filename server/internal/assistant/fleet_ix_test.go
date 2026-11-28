@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"sync"
@@ -12,15 +14,71 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
 // The interactions as the manager keeps them (fleet_ix.go), moved from the hub's tests with them.
 
+func TestResolveRequiresDecisionForInteractionKind(t *testing.T) {
+	for _, tc := range []struct {
+		name, kind, invalid, valid string
+	}{
+		{"approve on permission", proto.IxPermission, `{"approve":true}`, `{"allow":true}`},
+		{"allow on plan", proto.IxPlan, `{"allow":true}`, `{"approve":true}`},
+		{"empty permission decision", proto.IxPermission, `{}`, `{"allow":false}`},
+		{"null plan decision", proto.IxPlan, `{"approve":null}`, `{"approve":false}`},
+		{"cancel is only for questions", proto.IxPermission, `{"cancel":true}`, `{"dismiss":true}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ft := newFleetTest(t)
+			ix := proto.Interaction{ID: "ix_decision", MachineID: "mac", SessionID: "s1", Kind: tc.kind, OutwardWrite: tc.kind == proto.IxPermission}
+			announced := make(chan struct{})
+			done := make(chan proto.Resolution, 1)
+			go func() {
+				r, _ := ft.s.waitInteractionReady(t.Context(), ix, nil, announced)
+				done <- r
+			}()
+			select {
+			case <-announced:
+			case <-time.After(5 * time.Second):
+				t.Fatal("interaction was not announced")
+			}
+			h := ft.s.fleetHandler(http.NotFoundHandler())
+			post := func(body string) *httptest.ResponseRecorder {
+				rec := httptest.NewRecorder()
+				h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/interactions/"+ix.ID+"/resolve", strings.NewReader(body)))
+				return rec
+			}
+			if rec := post(tc.invalid); rec.Code != http.StatusBadRequest {
+				t.Fatalf("invalid decision: HTTP %d, body %s", rec.Code, rec.Body)
+			}
+			if _, ok := ft.s.pendingIx(ix.ID); !ok {
+				t.Fatal("invalid decision removed the pending card")
+			}
+			if status, answer, err := ft.st.InteractionOutcome(t.Context(), ix.ID); err != nil || status != "pending" || answer != nil {
+				t.Fatalf("invalid decision changed the stored card: %s %+v %v", status, answer, err)
+			}
+			if rec := post(tc.valid); rec.Code != http.StatusOK {
+				t.Fatalf("valid decision: HTTP %d, body %s", rec.Code, rec.Body)
+			}
+			select {
+			case answer := <-done:
+				raw, err := json.Marshal(answer)
+				if err != nil || string(raw) != tc.valid {
+					t.Fatalf("hook got %s, want %s (%v)", raw, tc.valid, err)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("valid decision did not release the waiter")
+			}
+		})
+	}
+}
+
 func TestWaitInteractionResolved(t *testing.T) {
 	ft := newFleetTestNoStore(t)
 	s := ft.s
-	ix := proto.Interaction{ID: "ix_1", MachineID: "mac", SessionID: "s1", Kind: proto.IxPermission, Summary: "send mail"}
+	ix := proto.Interaction{ID: "ix_1", MachineID: "mac", SessionID: "s1", Kind: proto.IxPermission, OutwardWrite: true, Summary: "send mail"}
 	announced := make(chan struct{})
 	done := make(chan proto.Resolution, 1)
 	go func() {
@@ -98,7 +156,7 @@ func TestWaitInteractionCancelledDismisses(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan proto.Resolution, 1)
 	go func() {
-		r, _ := ft.s.waitInteraction(ctx, proto.Interaction{ID: "ix_ctx", MachineID: "mac", Kind: proto.IxPermission,
+		r, _ := ft.s.waitInteraction(ctx, proto.Interaction{ID: "ix_ctx", MachineID: "mac", Kind: proto.IxPermission, OutwardWrite: true,
 			ExpiresAt: time.Now().Add(time.Hour)})
 		done <- r
 	}()
@@ -125,18 +183,20 @@ func TestWaitInteractionReplacesScreenGuess(t *testing.T) {
 	s.fleet.mu.Lock()
 	s.ixMapLocked()[scr.ID] = &pending{ix: scr, done: make(chan proto.Resolution, 1)}
 	s.fleet.mu.Unlock()
-	ix := proto.Interaction{ID: "ix_hook", MachineID: "mac", SessionID: "s1", Kind: proto.IxPermission, ExpiresAt: time.Now().Add(time.Hour)}
+	ix := proto.Interaction{ID: "ix_hook", MachineID: "mac", SessionID: "s1", Kind: proto.IxPermission, OutwardWrite: true, ExpiresAt: time.Now().Add(time.Hour)}
+	announced := make(chan struct{})
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		_, _ = s.waitInteraction(context.Background(), ix)
+		_, _ = s.waitInteractionReady(t.Context(), ix, nil, announced)
 	}()
-	for {
-		got := ids(s.pendingInteractions())
-		if strings.Join(got, ",") == "ix_hook" {
-			break
-		}
-		time.Sleep(5 * time.Millisecond)
+	select {
+	case <-announced:
+	case <-time.After(5 * time.Second):
+		t.Fatal("hook interaction was not announced")
+	}
+	if got := ids(s.pendingInteractions()); !slices.Equal(got, []string{ix.ID}) {
+		t.Fatalf("pending interactions: %v", got)
 	}
 	if st, _, _ := ft.st.InteractionOutcome(context.Background(), scr.ID); st != "cancelled" {
 		t.Fatalf("screen guess status %q, want cancelled", st)
@@ -155,8 +215,14 @@ func TestWaitInteractionReplacesScreenGuess(t *testing.T) {
 	if !found {
 		t.Fatal("the screen guess was never said to be over (the bot's card for it stays open)")
 	}
-	_ = s.resolve("ix_hook", proto.Resolution{})
-	<-done
+	if err := s.resolve(ix.ID, proto.Resolution{Dismiss: true}); err != nil {
+		t.Fatalf("dismiss: %v", err)
+	}
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("dismiss did not release the hook")
+	}
 }
 
 func TestScreenInteractionResolveRunsLocally(t *testing.T) {
@@ -218,10 +284,17 @@ func TestCancelMachineInteractions(t *testing.T) {
 // One of the hub's own features asks (fleet.ask): a card like a hook's, its answer back to the hub.
 func TestAskHub(t *testing.T) {
 	ft := newFleetTestNoStore(t)
-	done := make(chan proto.Resolution, 1)
+	b := &BusHub{svc: ft.s, helloed: make(chan struct{})}
+	close(b.helloed)
+	ask := assistantwire.FleetAskParams{Interaction: proto.Interaction{
+		MachineID: "mac", Kind: proto.IxPermission, OutwardWrite: true, ToolName: "mail_send", Summary: "send it", ExpiresAt: time.Now().Add(time.Minute),
+	}}
+	done := make(chan any, 1)
 	go func() {
-		r, _ := ft.s.askHub(context.Background(), proto.Interaction{MachineID: "mac", Kind: proto.IxPermission, ToolName: "mail_send",
-			Summary: "send it", ExpiresAt: time.Now().Add(time.Minute)})
+		r, err := b.answer(t.Context(), assistantwire.FleetAskMethod.Name, mustJSON(ask))
+		if err != nil {
+			t.Errorf("fleet ask: %v", err)
+		}
 		done <- r
 	}()
 	ix := ft.waitPending(1)[0]
@@ -232,8 +305,9 @@ func TestAskHub(t *testing.T) {
 	if err := ft.s.resolve(ix.ID, proto.Resolution{Allow: &no}); err != nil {
 		t.Fatal(err)
 	}
-	if r := <-done; r.Allow == nil || *r.Allow {
-		t.Fatalf("answer = %+v", r)
+	out := <-done
+	if r, ok := out.(proto.Resolution); !ok || r.Allow == nil || *r.Allow {
+		t.Fatalf("answer = %+v (%T), want a denied resolution", out, out)
 	}
 	// It was pushed as any card (to the devices that take "needs you" pushes).
 	if got := ft.pushesOf(assistantwire.NotifyInput, 1, time.Second); len(got) != 1 || got[0].Interaction == nil || got[0].Interaction.ID != ix.ID {
@@ -253,8 +327,90 @@ func TestTrimScreen(t *testing.T) {
 // ---- resumable cards ----
 
 func resumable(id string) proto.Interaction {
-	return proto.Interaction{ID: id, MachineID: "mac", SessionID: "s1", Kind: proto.IxPermission,
+	return proto.Interaction{ID: id, MachineID: "mac", SessionID: "s1", Kind: proto.IxPermission, OutwardWrite: true,
 		ExpiresAt: time.Now().Add(time.Hour), Resumable: true}
+}
+
+type overlappingAdmissionStore struct {
+	*fleetMem
+	mu         sync.Mutex
+	reads      int
+	firstRead  chan struct{}
+	secondRead chan struct{}
+	unblock    chan struct{}
+}
+
+func (s *overlappingAdmissionStore) InteractionRecord(ctx context.Context, id string) (*db.InteractionRecord, error) {
+	s.mu.Lock()
+	s.reads++
+	n := s.reads
+	if n == 1 {
+		close(s.firstRead)
+	} else if n == 2 {
+		close(s.secondRead)
+	}
+	s.mu.Unlock()
+	if n == 1 {
+		select {
+		case <-s.unblock:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	return s.fleetMem.InteractionRecord(ctx, id)
+}
+
+func TestConcurrentFirstCreatesShareOneAdmission(t *testing.T) {
+	store := &overlappingAdmissionStore{
+		fleetMem: newFleetMem(), firstRead: make(chan struct{}),
+		secondRead: make(chan struct{}), unblock: make(chan struct{}),
+	}
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(store.unblock) }) }
+	defer release()
+	ft := newFleetTestOn(t, store)
+	ix := resumable("ix_concurrent_first_create")
+	ix.CreatedAt = time.Now().UTC()
+	type result struct {
+		r   proto.Resolution
+		err error
+	}
+	results := make(chan result, 2)
+	go func() {
+		r, err := ft.s.waitInteraction(context.Background(), ix)
+		results <- result{r, err}
+	}()
+	select {
+	case <-store.firstRead:
+	case <-time.After(time.Second):
+		t.Fatal("the first create did not reach its occurrence-history read")
+	}
+	go func() {
+		r, err := ft.s.waitInteraction(context.Background(), ix)
+		results <- result{r, err}
+	}()
+	select {
+	case <-store.secondRead:
+		release()
+		t.Fatal("a concurrent first create passed the history check before the first create registered")
+	case <-time.After(75 * time.Millisecond):
+	}
+	release()
+	ft.waitPending(1)
+	allow := true
+	if err := ft.s.resolve(ix.ID, proto.Resolution{Allow: &allow}); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		select {
+		case got := <-results:
+			if got.err != nil || got.r.Allow == nil || !*got.r.Allow {
+				t.Fatalf("joined create = %+v, %v", got.r, got.err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("a joined first create did not receive the shared answer")
+		}
+	}
 }
 
 // The node goes away under a waiting hook; the hook comes back through the next node and gets the answer.
@@ -309,6 +465,268 @@ func TestResumableAnsweredDuringGap(t *testing.T) {
 	r, err := s.waitInteraction(context.Background(), resumable("ix_g"))
 	if err != nil || r.Allow == nil || *r.Allow || r.Message != "不行" {
 		t.Fatalf("got %+v %v", r, err)
+	}
+}
+
+// A resumable id is a reference to one occurrence, not permission to reuse its answer.
+func TestResumableReusedIDDoesNotInheritAnotherOccurrence(t *testing.T) {
+	for _, state := range []string{"live", "pending", "resolved"} {
+		t.Run(state, func(t *testing.T) {
+			ft := newFleetTest(t)
+			old := resumable("ix_reused_" + state)
+			old.CreatedAt = time.Unix(1000, 0).UTC()
+			var cancelOld context.CancelFunc
+			var oldDone chan struct{}
+			switch state {
+			case "live":
+				var ctx context.Context
+				ctx, cancelOld = context.WithCancel(context.Background())
+				oldDone = make(chan struct{})
+				go func() {
+					_, _ = ft.s.waitInteraction(ctx, old)
+					close(oldDone)
+				}()
+				ft.waitPending(1)
+			case "pending":
+				ft.s.record(old)
+			case "resolved":
+				ft.s.record(old)
+				allow := true
+				if err := ft.st.FinishInteraction(context.Background(), old.ID, "resolved", &proto.Resolution{Allow: &allow}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			changed := old
+			changed.CreatedAt = changed.CreatedAt.Add(time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+			r, err := ft.s.waitInteraction(ctx, changed)
+			cancel()
+			if err == nil || !strings.Contains(err.Error(), "different occurrence") {
+				t.Fatalf("reused id returned the old operation: resolution=%+v err=%v", r, err)
+			}
+			if cancelOld != nil {
+				cancelOld()
+				select {
+				case <-oldDone:
+				case <-time.After(time.Second):
+					t.Fatal("the original waiter did not finish")
+				}
+			}
+		})
+	}
+}
+
+func TestNodeLifecycleEventRejectsDifferentOccurrence(t *testing.T) {
+	for _, event := range []string{"interaction.cancel", "interaction.dismiss"} {
+		t.Run(event, func(t *testing.T) {
+			ft := newFleetTest(t)
+			original := resumable("ix_node_lifecycle_occurrence")
+			original.CreatedAt = time.Now().UTC()
+			type result struct {
+				r   proto.Resolution
+				err error
+			}
+			first := make(chan result, 1)
+			go func() {
+				r, err := ft.s.waitInteraction(context.Background(), original)
+				first <- result{r, err}
+			}()
+			ft.waitPending(1)
+			replacement := original
+			replacement.CreatedAt = original.CreatedAt.Add(time.Second)
+			if _, err := ft.s.waitInteraction(context.Background(), replacement); !errors.Is(err, errInteractionIDReused) {
+				t.Fatalf("replacement create = %v, want occurrence rejection", err)
+			}
+			params, _ := json.Marshal(map[string]any{"id": original.ID, "created_at": replacement.CreatedAt})
+			if ft.s.NodeEvent("mac", event, params) {
+				t.Fatal("a node lifecycle event must stay manager-owned")
+			}
+			pending := ft.waitPending(1)
+			if !pending[0].CreatedAt.Equal(original.CreatedAt) {
+				t.Fatalf("the old lifecycle event ended the replacement: %+v", pending[0])
+			}
+			select {
+			case got := <-first:
+				t.Fatalf("the original waiter ended on another occurrence's %s: %+v", event, got)
+			default:
+			}
+			deny := false
+			if err := ft.s.resolve(original.ID, proto.Resolution{Allow: &deny}); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case got := <-first:
+				if got.err != nil || got.r.Allow == nil || *got.r.Allow {
+					t.Fatalf("original cleanup = %+v, %v", got.r, got.err)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("the original waiter did not finish")
+			}
+		})
+	}
+}
+
+func TestCodexSyncReplacesSameIDOccurrence(t *testing.T) {
+	ft := newFleetTest(t)
+	ix := permission("ix_codex_sync_replacement")
+	ix.CreatedAt = time.Now().UTC()
+	params := func(card proto.Interaction) json.RawMessage {
+		raw, _ := json.Marshal(map[string]any{"interactions": []proto.Interaction{card}})
+		return raw
+	}
+	ft.s.syncCodexInteractions("mac", params(ix))
+	first := ft.waitPending(1)[0]
+	if !first.CreatedAt.Equal(ix.CreatedAt) {
+		t.Fatalf("first occurrence = %+v", first)
+	}
+	replacement := ix
+	replacement.CreatedAt = ix.CreatedAt.Add(time.Second)
+	ft.s.syncCodexInteractions("mac", params(replacement))
+	current := ft.waitPending(1)[0]
+	if !current.CreatedAt.Equal(replacement.CreatedAt) {
+		t.Fatalf("same-ID sync retained the earlier occurrence: first=%s current=%s want=%s", first.CreatedAt, current.CreatedAt, replacement.CreatedAt)
+	}
+	rec, err := ft.st.InteractionRecord(context.Background(), ix.ID)
+	if err != nil || rec == nil || rec.Status != "pending" || !rec.Interaction.CreatedAt.Equal(replacement.CreatedAt) {
+		t.Fatalf("replacement durable record = %+v, %v", rec, err)
+	}
+}
+
+func TestCodexReplacementIsAnnounced(t *testing.T) {
+	ft := newFleetTest(t)
+	ix := permission("ix_codex_replacement_announcement")
+	ix.CreatedAt = time.Now().UTC()
+	params := func(card proto.Interaction) json.RawMessage {
+		raw, _ := json.Marshal(map[string]any{"interactions": []proto.Interaction{card}})
+		return raw
+	}
+	ft.s.syncCodexInteractions("mac", params(ix))
+	if got := ft.pushesOf(assistantwire.NotifyInput, 1, time.Second); len(got) != 1 {
+		t.Fatalf("first occurrence pushes = %d, want 1", len(got))
+	}
+	replacement := ix
+	replacement.CreatedAt = ix.CreatedAt.Add(time.Second)
+	ft.s.syncCodexInteractions("mac", params(replacement))
+	if got := ft.pushesOf(assistantwire.NotifyInput, 2, time.Second); len(got) != 2 {
+		t.Fatalf("same-ID replacement was treated as a quiet reconnect: pushes = %d, want 2", len(got))
+	}
+}
+
+func TestOldLocalCompletionCannotFinalizeReplacement(t *testing.T) {
+	ft := newFleetTest(t)
+	original := permission("ix_local_completion_replacement")
+	original.CreatedAt = time.Now().UTC()
+	replacement := original
+	replacement.CreatedAt = original.CreatedAt.Add(time.Second)
+	p := &pending{ix: original, codex: true}
+	p.local = func(context.Context, proto.Resolution) error {
+		ft.s.record(replacement)
+		ft.s.fleet.mu.Lock()
+		ft.s.ixMapLocked()[replacement.ID] = &pending{ix: replacement, codex: true}
+		ft.s.fleet.mu.Unlock()
+		return nil
+	}
+	ft.s.record(original)
+	ft.s.fleet.mu.Lock()
+	ft.s.ixMapLocked()[original.ID] = p
+	ft.s.fleet.mu.Unlock()
+	allow := true
+	if err := ft.s.resolve(original.ID, proto.Resolution{Allow: &allow}); err != nil {
+		t.Fatal(err)
+	}
+	rec, err := ft.st.InteractionRecord(context.Background(), replacement.ID)
+	if err != nil || rec == nil || rec.Status != "pending" || !rec.Interaction.CreatedAt.Equal(replacement.CreatedAt) {
+		t.Fatalf("old local completion finalized the replacement: record=%+v err=%v", rec, err)
+	}
+	current := ft.waitPending(1)[0]
+	if !current.CreatedAt.Equal(replacement.CreatedAt) {
+		t.Fatalf("old local completion removed the replacement: %+v", current)
+	}
+}
+
+type expiryOccurrenceStore struct {
+	Store
+	onFinish func()
+	finishes int
+}
+
+func (s *expiryOccurrenceStore) ReserveConversationInteraction(context.Context, proto.Interaction, string, string, string, string, int64) error {
+	return nil
+}
+func (s *expiryOccurrenceStore) ConversationInteraction(context.Context, string) (*db.ConversationInteractionRoute, error) {
+	return nil, nil
+}
+func (s *expiryOccurrenceStore) FinishConversationInteraction(context.Context, string) error {
+	s.finishes++
+	s.onFinish()
+	return nil
+}
+
+func TestLocalExpiryCannotFinalizeReplacement(t *testing.T) {
+	ft := newFleetTest(t)
+	original := permission("ix_local_expiry_replacement")
+	original.CreatedAt = time.Now().UTC()
+	original.ExpiresAt = original.CreatedAt.Add(-time.Second)
+	replacement := original
+	replacement.CreatedAt = original.CreatedAt.Add(time.Second)
+	replacement.ExpiresAt = replacement.CreatedAt.Add(time.Hour)
+	p := &pending{ix: original, local: func(context.Context, proto.Resolution) error { return nil }}
+	ft.s.fleet.mu.Lock()
+	ft.s.ixMapLocked()[original.ID] = p
+	ft.s.fleet.mu.Unlock()
+	routes := &expiryOccurrenceStore{Store: ft.st}
+	routes.onFinish = func() {
+		// The route write is the deterministic race window: B replaces A after
+		// the expiry pass collected A but before its old ID-only finalizer returns.
+		ft.s.fleet.mu.Lock()
+		ft.s.ixMapLocked()[replacement.ID] = &pending{ix: replacement, local: func(context.Context, proto.Resolution) error { return nil }}
+		ft.s.fleet.mu.Unlock()
+	}
+	ft.s.setStore(func() Store { return routes })
+	ft.s.expireLocalInteractions(time.Now())
+	current, ok := ft.s.pendingIx(original.ID)
+	if !ok || !current.CreatedAt.Equal(replacement.CreatedAt) {
+		t.Fatalf("the earlier occurrence's expiry finalized its replacement: current=%+v ok=%v", current, ok)
+	}
+	if routes.finishes != 1 {
+		t.Fatalf("logical route finalizations = %d, want the original's one finalization", routes.finishes)
+	}
+}
+
+func TestAlwaysForANewOccurrenceDoesNotResolveThePendingOriginal(t *testing.T) {
+	ft := newFleetTest(t)
+	old := alwaysIx("ix_always_reused", "s1", "tool:old")
+	old.CreatedAt = time.Unix(1000, 0).UTC()
+	first := make(chan detachedTestResult, 1)
+	go func() {
+		res, err := ft.s.nodeInteraction(context.Background(), old)
+		first <- detachedTestResult{res: res, err: err}
+	}()
+	ft.waitPending(1)
+
+	changed := alwaysIx(old.ID, "s1", "tool:new")
+	changed.CreatedAt = old.CreatedAt.Add(time.Second)
+	if err := ft.st.AllowAlways(context.Background(), "s1", "Bash", changed.AlwaysKeys); err != nil {
+		t.Fatal(err)
+	}
+	res, err := ft.s.nodeInteraction(context.Background(), changed)
+	if !errors.Is(err, errInteractionIDReused) || (res.Allow != nil && *res.Allow) {
+		t.Fatalf("Always for the new occurrence = %+v, %v; want occurrence rejection", res, err)
+	}
+	if got := len(ft.s.pendingInteractions()); got != 1 {
+		t.Fatalf("the new occurrence's Always rule resolved the original: pending=%d", got)
+	}
+	select {
+	case got := <-first:
+		t.Fatalf("the original waiter received the unrelated Always answer: %+v", got)
+	default:
+	}
+	deny := false
+	if err := ft.s.resolve(old.ID, proto.Resolution{Allow: &deny}); err != nil {
+		t.Fatal(err)
+	}
+	if got := awaitDetachedTest(t, first); got.err != nil || (got.res.Allow != nil && *got.res.Allow) {
+		t.Fatalf("original cleanup = %+v, %v", got.res, got.err)
 	}
 }
 
@@ -391,15 +809,74 @@ func TestResumableSurvivesAManagerRestart(t *testing.T) {
 	}
 }
 
+func TestStaleAwakenedWaiterCannotFinishReplacement(t *testing.T) {
+	ft := newFleetTest(t)
+	first := resumable("ix_stale_awakened_waiter")
+	first.CreatedAt = time.Now().UTC()
+	second := first
+	second.CreatedAt = first.CreatedAt.Add(time.Second)
+	allow := true
+	resolved := make(chan struct{})
+	close(resolved)
+	old := &pending{ix: first, done: make(chan proto.Resolution, 1), resolved: resolved,
+		resolution: &proto.Resolution{Allow: &allow}}
+	replacement := &pending{ix: second, done: make(chan proto.Resolution, 1)}
+	putPending(ft.s, replacement)
+	got, err := ft.s.await(context.Background(), old)
+	if err != nil || got.Allow == nil || !*got.Allow {
+		t.Fatalf("stale waiter's own result = %+v, %v", got, err)
+	}
+	ft.s.fleet.mu.Lock()
+	kept := ft.s.fleet.interactions[second.ID] == replacement
+	ft.s.fleet.mu.Unlock()
+	if !kept {
+		t.Fatal("a stale awakened waiter deleted the replacement occurrence")
+	}
+	for _, raw := range ft.toldOf(assistantwire.EventFleetResolved) {
+		var event assistantwire.FleetResolved
+		if json.Unmarshal(raw, &event) == nil && event.ID == second.ID && event.CreatedAt.Equal(second.CreatedAt) {
+			t.Fatalf("stale waiter withdrew the replacement occurrence: %+v", event)
+		}
+	}
+}
+
+func TestFinishPreparedCannotFinishReplacement(t *testing.T) {
+	ft := newFleetTest(t)
+	first := resumable("ix_stale_prepared_finish")
+	first.CreatedAt = time.Now().UTC()
+	second := first
+	second.CreatedAt = first.CreatedAt.Add(time.Second)
+	old := &pending{ix: first, done: make(chan proto.Resolution, 1), prepared: &preparedApproval{
+		result: proto.Resolution{Dismiss: true},
+	}}
+	replacement := &pending{ix: second, done: make(chan proto.Resolution, 1)}
+	putPending(ft.s, replacement)
+	if err := ft.s.finishPrepared(old, "expired"); err != nil {
+		t.Fatal(err)
+	}
+	ft.s.fleet.mu.Lock()
+	kept := ft.s.fleet.interactions[second.ID] == replacement
+	ft.s.fleet.mu.Unlock()
+	if !kept {
+		t.Fatal("a stale prepared finalizer deleted the replacement occurrence")
+	}
+	for _, raw := range ft.toldOf(assistantwire.EventFleetResolved) {
+		var event assistantwire.FleetResolved
+		if json.Unmarshal(raw, &event) == nil && event.ID == second.ID && event.CreatedAt.Equal(second.CreatedAt) {
+			t.Fatalf("stale prepared finalizer withdrew the replacement occurrence: %+v", event)
+		}
+	}
+}
+
 // restoreMem is the interactions table as the next manager reads it: the resumable ones still pending, the others
 // cancelled (db ExpireStaleInteractions).
 type restoreMem struct{ *fleetMem }
 
-func (r *restoreMem) ExpireStaleInteractions(context.Context) ([]proto.Interaction, []string, error) {
+func (r *restoreMem) ExpireStaleInteractions(context.Context) ([]proto.Interaction, []proto.Interaction, error) {
 	r.fmu.Lock()
 	defer r.fmu.Unlock()
 	var out []proto.Interaction
-	var cancelled []string
+	var cancelled []proto.Interaction
 	for _, rec := range r.recs {
 		switch id := rec.Interaction.ID; {
 		case r.status[id] != "pending":
@@ -407,10 +884,24 @@ func (r *restoreMem) ExpireStaleInteractions(context.Context) ([]proto.Interacti
 			out = append(out, rec.Interaction)
 		default:
 			r.status[id] = "cancelled"
-			cancelled = append(cancelled, id)
+			cancelled = append(cancelled, rec.Interaction)
 		}
 	}
 	return out, cancelled, nil
+}
+
+// ResumableInteractions is the read-only startup retry: unlike
+// ExpireStaleInteractions it never cancels cards created by the current process.
+func (r *restoreMem) ResumableInteractions(context.Context) ([]proto.Interaction, error) {
+	r.fmu.Lock()
+	defer r.fmu.Unlock()
+	var out []proto.Interaction
+	for _, rec := range r.recs {
+		if r.status[rec.Interaction.ID] == "pending" && rec.Interaction.Resumable && rec.Interaction.ExpiresAt.After(time.Now()) {
+			out = append(out, rec.Interaction)
+		}
+	}
+	return out, nil
 }
 
 // The assistant's question that a hub switch took its manager away from (#4568): the next manager cancels it, as no
@@ -421,7 +912,7 @@ func TestRestartResolvesTheCardsTheLastManagerLeft(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel) // the first manager's call: it is gone with its process, nobody ends it
 	go func() {
-		_, _ = ft.s.toolAskUser(ctx, "mac", "s1", json.RawMessage(`{"questions":[{"header":"Merge","question":"Merge it?",
+		_, _ = ft.s.toolAskUser(ctx, "mac", "s1", json.RawMessage(`{"why_owner":"priority","questions":[{"header":"Merge","question":"Merge it?",
 			"options":[{"label":"Merge"},{"label":"Not yet"}]}]}`))
 	}()
 	asked := ft.waitPending(1)[0]
@@ -438,19 +929,19 @@ func TestRestartResolvesTheCardsTheLastManagerLeft(t *testing.T) {
 	if status, _, _ := st.InteractionOutcome(context.Background(), asked.ID); status != "cancelled" {
 		t.Fatalf("status %q", status)
 	}
-	var resolved []string
+	var resolved []assistantwire.FleetResolved
 	for _, tl := range f2.told {
 		var p assistantwire.FleetResolved
 		if tl.event == assistantwire.EventFleetResolved && json.Unmarshal(tl.params, &p) == nil {
-			resolved = append(resolved, p.ID)
+			resolved = append(resolved, p)
 		}
 		var full assistantwire.FleetInteractions
 		if tl.event == assistantwire.EventFleetInteractions && json.Unmarshal(tl.params, &full) == nil && len(full.Interactions) != 0 {
 			t.Fatalf("the hub's full list = %+v", full.Interactions)
 		}
 	}
-	if !slices.Equal(resolved, []string{asked.ID}) {
-		t.Fatalf("resolved for the hub = %v, want [%s]", resolved, asked.ID)
+	if len(resolved) != 1 || resolved[0].ID != asked.ID || asked.CreatedAt.IsZero() || !resolved[0].CreatedAt.Equal(asked.CreatedAt) {
+		t.Fatalf("resolved for the hub = %+v, want occurrence %s at %s", resolved, asked.ID, asked.CreatedAt)
 	}
 }
 
@@ -640,7 +1131,7 @@ func (ft *fleetTest) hubCards() map[string]bool {
 func TestCardCancelledWhileToldLeavesNoCardOnTheHub(t *testing.T) {
 	ft := newFleetTest(t)
 	ft.st.insertGate = make(chan struct{}) // the card is registered; its history row and the apps wait
-	ix := proto.Interaction{ID: "opencode-1", MachineID: "mac", SessionID: "ses_1", Kind: proto.IxPermission,
+	ix := proto.Interaction{ID: "opencode-1", MachineID: "mac", SessionID: "ses_1", Kind: proto.IxPermission, OutwardWrite: true,
 		ToolName: "external_directory", Resumable: true, ExpiresAt: time.Now().Add(time.Hour)}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -714,7 +1205,7 @@ func TestEscalatedCardCancelledAsItIsToldLeavesNoCardOnTheHub(t *testing.T) {
 // A card a supervisor passes up (ringAsks) and its node withdraws as it is told leaves no card on the hub.
 func TestRungCardCancelledAsItIsToldLeavesNoCardOnTheHub(t *testing.T) {
 	ft, h := newHookedFleet(t)
-	ix := proto.Interaction{ID: "ix_up", MachineID: "mac", SessionID: "s1", Kind: proto.IxPermission, ToolName: "Bash",
+	ix := proto.Interaction{ID: "ix_up", MachineID: "mac", SessionID: "s1", Kind: proto.IxPermission, OutwardWrite: true, ToolName: "Bash",
 		CreatedAt: time.Now(), ExpiresAt: time.Now().Add(time.Hour)}
 	ft.hold(ix)
 	cancelBeforeTold(ft, h, ix.ID)
@@ -733,7 +1224,7 @@ func TestRungCardCancelledAsItIsToldLeavesNoCardOnTheHub(t *testing.T) {
 // card shown while that end is being told reaches the hub after it.
 func TestEndToldAgainLeavesANewerCardUnderTheSameID(t *testing.T) {
 	ft, h := newHookedFleet(t)
-	old := proto.Interaction{ID: "ix_same", MachineID: "mac", SessionID: "s1", Kind: proto.IxPermission, ToolName: "Bash",
+	old := proto.Interaction{ID: "ix_same", MachineID: "mac", SessionID: "s1", Kind: proto.IxPermission, OutwardWrite: true, ToolName: "Bash",
 		CreatedAt: time.Now(), ExpiresAt: time.Now().Add(time.Hour)}
 	newer := old
 	newer.CreatedAt = old.CreatedAt.Add(time.Second)

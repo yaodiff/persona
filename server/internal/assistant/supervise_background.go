@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"maps"
+	"slices"
 	"sync"
 	"time"
 
@@ -315,8 +316,10 @@ func (s *Service) backgroundStranded(ctx context.Context) {
 	b.dedupMu.Lock()
 	defer b.dedupMu.Unlock()
 	lost := s.backgroundLost(ctx, id, cfg.Main, s.webBase(ctx))
-	if len(lost) == 0 || !s.autoSupervisionOn(ctx) {
-		return // with automatic supervision messages off what was lost is not told again
+	mode := s.supervisionMode(ctx)
+	lost = slices.DeleteFunc(lost, func(g superviseSignal) bool { return !supervisionSignalAllowed(mode, g) })
+	if len(lost) == 0 {
+		return // what the mode drops (all of it while off) is not told again
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()

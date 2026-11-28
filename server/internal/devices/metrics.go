@@ -461,13 +461,21 @@ type usageKey struct {
 	model    string
 	launcher string
 	agent    string
+	dir      string
+}
+
+// keyOf is a bucket's key in a machine's buckets.
+func keyOf(b proto.UsageBucket) usageKey {
+	return usageKey{b.Minute, b.Model, b.Launcher, b.Agent, b.Dir}
 }
 
 type machineUsage struct {
 	buckets map[usageKey]proto.UsageBucket
-	load    float64
-	cpus    int
-	at      time.Time // last report
+	// dirs: what the node resolved its directories to (usage_projects.go), the latest of each.
+	dirs map[string]proto.UsageDir
+	load float64
+	cpus int
+	at   time.Time // last report
 	// launchers: the node names the launcher of its buckets (an older one does not, usage.go's LaunchersKnown).
 	launchers bool
 }
@@ -486,6 +494,7 @@ func (u *usageBook) apply(machine string, params json.RawMessage, now time.Time)
 		Load      float64             `json:"load"`
 		CPUs      int                 `json:"cpus"`
 		Launchers bool                `json:"launchers"`
+		Dirs      []proto.UsageDir    `json:"dirs"`
 	}
 	if json.Unmarshal(params, &p) != nil || p.Full && p.Add {
 		return false
@@ -518,8 +527,16 @@ func (u *usageBook) apply(machine string, params json.RawMessage, now time.Time)
 			delete(m.buckets, k)
 		}
 	}
+	for _, x := range usableDirs(p.Dirs) {
+		if m.dirs == nil {
+			m.dirs = map[string]proto.UsageDir{}
+		}
+		if old, ok := m.dirs[x.Dir]; !ok || replacesResolution(old, x) {
+			m.dirs[x.Dir] = x
+		}
+	}
 	for _, b := range p.Buckets {
-		k := usageKey{b.Minute, b.Model, b.Launcher, b.Agent}
+		k := keyOf(b)
 		if b.Minute < cutoff && !p.Add {
 			continue
 		}

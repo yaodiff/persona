@@ -63,6 +63,7 @@ type pushGradingPreviewNotification struct {
 	Depth      string `json:"depth,omitempty"`
 	Manager    string `json:"manager,omitempty"`
 	Extension  string `json:"extension,omitempty"`
+	Asked      *bool  `json:"asked,omitempty"`
 	Done       bool   `json:"done,omitempty"`
 	System     bool   `json:"system,omitempty"`
 	Title      string `json:"title,omitempty"`
@@ -446,6 +447,10 @@ func (h *Hub) handlePostPushGradingPreview(w http.ResponseWriter, r *http.Reques
 		derived = assistantwire.LevelP1
 	}
 	done := req.Notification.Done || kind == assistantwire.NotifyDone
+	asked := true
+	if req.Notification.Asked != nil {
+		asked = *req.Notification.Asked
+	}
 	mainConv := kind == assistantwire.NotifyPush &&
 		h.isMainForManager(mgr, req.Notification.MachineID, req.Notification.SessionID)
 	policy := pushPolicy{
@@ -464,6 +469,7 @@ func (h *Hub) handlePostPushGradingPreview(w http.ResponseWriter, r *http.Reques
 		done:         done,
 		system:       req.Notification.System,
 		derivedLevel: req.Notification.Level == "",
+		asked:        asked,
 		mainConv:     mainConv,
 	}
 	decision, err := h.push.previewPushGrading(r.Context(), policy, draft, req.DropLayer)

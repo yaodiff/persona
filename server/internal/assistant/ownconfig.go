@@ -20,7 +20,8 @@ import (
 // long a card waits. A section manager.json has replaces the hello's; one it has not keeps it (an older hub still
 // sends them).
 type ownConfig struct {
-	Assistant *struct {
+	ProjectReview projectReviewConfig `json:"project_review"`
+	Assistant     *struct {
 		Owner                         *string `json:"owner"`
 		Notes                         *string `json:"notes"`
 		Machine                       *string `json:"machine"`
@@ -45,7 +46,13 @@ type ownConfig struct {
 		// AttachmentDaysBySource: attachment_days per source, e.g. years for a chat source whose history is imported.
 		AttachmentDaysBySource map[string]int `json:"attachment_days_by_source"`
 		// History: the history import (docs/assistant/knowledge.md "History import"); missing or not enabled: off.
-		History *assistantwire.KBHistory `json:"history"`
+		History        *assistantwire.KBHistory        `json:"history"`
+		ImportProvider *assistantwire.KBImportProvider `json:"import_provider"`
+		// LarkMinutes: importing Lark minutes and document titles through lark-cli; missing or not enabled: off.
+		LarkMinutes *assistantwire.KBLarkMinutes `json:"lark_minutes"`
+		// SpeakerTurnsImport: debug-only switch enabling PUT /api/v1/recordings/{id}/speakers/turns (#17674); off by
+		// default, read once at manager start, and never changeable from an app or PUT /api/v1/assistant.
+		SpeakerTurnsImport bool `json:"speaker_turns_import"`
 	} `json:"kb"`
 	AI *aiwire.Config `json:"ai"`
 	// Inbox: of it the hello carried the models and the AI twin's machine, each replaced only when it is there (the
@@ -67,7 +74,7 @@ func readOwnConfig(file string) (ownConfig, error) {
 	if file == "" {
 		return c, nil
 	}
-	b, err := managerconf.Sections(file)
+	b, err := managerconf.Sections(file, "project_review")
 	if err != nil {
 		if os.IsNotExist(err) {
 			return c, nil
@@ -90,7 +97,7 @@ func readOwnConfig(file string) (ownConfig, error) {
 			return c, fmt.Errorf("assistant.node_update_handoff_grace_seconds must be between 0 and %d", proto.MaxNodeUpdateHandoffGraceSeconds)
 		}
 	}
-	return c, nil
+	return c, c.ProjectReview.validate()
 }
 
 // validatePlacement rejects a configured assistant machine that the hub classifies as work.
@@ -139,7 +146,8 @@ func (c ownConfig) over(h Hello) Hello {
 	}
 	if k := c.KB; k != nil {
 		h.KB = &assistantwire.KBSettings{Off: k.Enabled != nil && !*k.Enabled, ReadOnly: k.ReadOnly, TextDays: k.TextDays,
-			AttachmentDays: k.AttachmentDays, ExtraDirs: k.ExtraDirs, RemoteFolders: k.RemoteFolders, AttachmentDaysBySource: positiveDays(k.AttachmentDaysBySource), History: k.History}
+			AttachmentDays: k.AttachmentDays, ExtraDirs: k.ExtraDirs, RemoteFolders: k.RemoteFolders, AttachmentDaysBySource: positiveDays(k.AttachmentDaysBySource), History: k.History,
+			LarkMinutes: k.LarkMinutes, ImportProvider: k.ImportProvider}
 		h.Models.KBAI = k.AI
 	}
 	if c.AI != nil {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -82,7 +83,18 @@ func (f *stateManager) answer(_ context.Context, method string, params json.RawM
 			if !f.sources[ref.Source] {
 				return nil, &rpc.Error{Code: extwire.CodeNoSource, Message: "no such source"}
 			}
-			return extwire.SourceBundle{Source: ref.Source, Kind: "mail", Data: json.RawMessage(`{"password":"pw"}`)}, nil
+			// A newer manager's bundle can have fields the hub has never seen.
+			return struct {
+				Data        json.RawMessage `json:"data"`
+				FutureField string          `json:"future_field"`
+				Kind        string          `json:"kind"`
+				Source      string          `json:"source"`
+			}{
+				Data:        json.RawMessage(`{"password":"pw"}`),
+				FutureField: "<&>",
+				Kind:        "mail",
+				Source:      ref.Source,
+			}, nil
 		case extwire.MethodSourceImport:
 			if f.sources[ref.Source] {
 				return nil, &rpc.Error{Code: extwire.CodeSourceExists, Message: "has it"}
@@ -328,11 +340,12 @@ func TestMoveMachineAndSource(t *testing.T) {
 	if a.has("mail:acct-1") || !b.has("mail:acct-1") {
 		t.Fatal("the source did not move")
 	}
+	const bundleJSON = `{"data":{"password":"pw"},"future_field":"<&>","kind":"mail","source":"mail:acct-1"}`
 	b.mu.Lock()
-	imported := strings.Join(b.calls, "\n")
+	imported := slices.Contains(b.calls, extwire.MethodSourceImport+" "+bundleJSON)
 	b.mu.Unlock()
-	if !strings.Contains(imported, extwire.MethodSourceImport) || !strings.Contains(imported, `"password":"pw"`) {
-		t.Fatalf("the new manager got: %s", imported)
+	if !imported {
+		t.Fatal("the new manager did not receive the original bundle JSON")
 	}
 	if code, out := post("/api/v1/managers/m-0c0c0c/sources", `{"source":"mail:acct-1","from":"m-0c0c0c"}`); code != http.StatusOK {
 		t.Fatalf("to where it is: %d %v", code, out)

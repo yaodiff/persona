@@ -80,6 +80,21 @@ func extensionSees(t *testing.T, e *todoEnv, ids ...string) map[string]bool {
 	return seen
 }
 
+// wantUntold fails unless an extension's GET of to-do id and of its timeline answer 503 todo_not_told_yet with
+// Retry-After, a to-do whose verdict cannot be told yet (#12216 item 12), and unless neither answer carries any of words.
+func wantUntold(t *testing.T, e *todoEnv, when, id string, words ...string) {
+	t.Helper()
+	for _, path := range []string{"/api/v1/todos/" + id, "/api/v1/todos/" + id + "/timeline"} {
+		got := extensionDo(e, "GET", path, "")
+		if got.Code != http.StatusServiceUnavailable || !strings.Contains(got.Body.String(), `"todo_not_told_yet"`) ||
+			got.Header().Get("Retry-After") == "" {
+			t.Errorf("%s: an extension's GET %s: %d %s (Retry-After %q), want 503 todo_not_told_yet with Retry-After",
+				when, path, got.Code, got.Body, got.Header().Get("Retry-After"))
+		}
+		noneOf(t, when+": an extension's GET "+path, got.Body.Bytes(), words...)
+	}
+}
+
 // wantShown fails unless an extension's list has exactly the to-dos of shown among those of all.
 func wantShown(t *testing.T, e *todoEnv, when string, all []Todo, shown ...Todo) {
 	t.Helper()
@@ -101,8 +116,10 @@ func wantShown(t *testing.T, e *todoEnv, when string, all []Todo, shown ...Todo)
 
 // The regression check of #10941: a task from a chat its computer no longer lists, one a quiet direction supervises
 // and, while the computer lists nothing (a restart, before the node is back), the main conversation's, all stay on an
-// extension's list and answer its routes; the health conversation's stays hidden, and so does one from a conversation
-// never noted. On the store the spaces outlive a restart of the manager.
+// extension's list and answer its routes; the health conversation's stays hidden (404, as one that does not exist),
+// and one from a conversation never noted, whose space cannot be told yet, stays off the list while its routes answer
+// 503 todo_not_told_yet with Retry-After rather than "does not exist" (#12216 item 12), carrying none of its words. On
+// the store the spaces outlive a restart of the manager.
 func TestQuietConversationsTasksStayShown(t *testing.T) {
 	todoStores(t, func(t *testing.T, e *todoEnv, database *db.DB) {
 		q := newQuietTasks(t, e)
@@ -129,12 +146,13 @@ func TestQuietConversationsTasksStayShown(t *testing.T) {
 				t.Errorf("an extension's %s %s once its chat is quiet: %d %s", w.method, w.path, got.Code, got.Body)
 			}
 		}
-		for _, path := range []string{"/api/v1/todos/" + q.health.ID, "/api/v1/todos/" + q.ghost.ID,
+		for _, path := range []string{"/api/v1/todos/" + q.health.ID,
 			"/api/v1/assistant/conversations/h0/feed", "/api/v1/assistant/conversations/ghost/feed"} {
 			if got := e.doAs(roleExtension, "GET", path, ""); got.Code != http.StatusNotFound {
 				t.Errorf("an extension's GET %s: %d %s", path, got.Code, got.Body)
 			}
 		}
+		wantUntold(t, e, "the chats quiet", q.ghost.ID, q.ghost.Title)
 
 		// The computer lists nothing yet.
 		e.sessions("server")
@@ -605,7 +623,10 @@ func TestSpaceBackfillBatches(t *testing.T) {
 // one under it when asked to resume it (an extension's resume, refused at the hub and the node now). A to-do whose
 // health chat was never noted was then told by that session's row, a terminal's outside the space: shown to
 // extensions, its held outcome line written to the project's timeline (kb.read). A row tells a conversation only as the
-// assistant's or as one in the space now, as a note is taken; the chat's real row in the space still hides it.
+// assistant's or as one in the space now, as a note is taken; the chat's real row in the space still hides it. Until
+// then the task cannot be told: its routes answer 503 todo_not_told_yet with Retry-After rather than "does not exist"
+// (#12216 item 12), and neither they, the list nor the project's timeline carry its words; once the chat is listed in
+// the space they answer 404 and its verdict is hidden.
 func TestNeverNotedChatIsNotToldByASessionUnderItsID(t *testing.T) {
 	const title, reply = "Book the sleep clinic", "Booked the sleep clinic for Tuesday 9:00 after the new dose"
 	projectStores(t, func(t *testing.T, e *todoEnv) {
@@ -627,27 +648,31 @@ func TestNeverNotedChatIsNotToldByASessionUnderItsID(t *testing.T) {
 		forged := scopeSession("h0", "hi", "/home/owner/errands")
 		forged.PaneID, forged.Launcher = "w7:p1", "claude"
 		e.sessions("server", main, forged)
-		hidden := func(when string) {
+		hidden := func(when string, untold bool) {
 			t.Helper()
-			for _, path := range []string{"/api/v1/todos/" + task.ID, "/api/v1/todos/" + task.ID + "/timeline"} {
-				if got := extensionDo(e, "GET", path, ""); got.Code != http.StatusNotFound {
-					t.Errorf("%s: an extension's GET %s: %d %s", when, path, got.Code, got.Body)
+			if untold {
+				wantUntold(t, e, when, task.ID, title, reply)
+			} else {
+				for _, path := range []string{"/api/v1/todos/" + task.ID, "/api/v1/todos/" + task.ID + "/timeline"} {
+					if got := extensionDo(e, "GET", path, ""); got.Code != http.StatusNotFound {
+						t.Errorf("%s: an extension's GET %s: %d %s", when, path, got.Code, got.Body)
+					}
 				}
 			}
 			noneOf(t, when+": an extension's GET /api/v1/todos", extensionDo(e, "GET", "/api/v1/todos", "").Body.Bytes(), title)
 			noneOf(t, when+": the project's timeline", []byte(strings.Join(kbEng(t, e.s).Store.Log("诊断能力", 20), "\n")), title, reply)
 		}
-		hidden("a terminal's session under h0's id")
+		hidden("a terminal's session under h0's id", true)
 		e.must("PATCH", "/api/v1/todos/"+task.ID, `{"done":true}`)
 		e.s.tasks.outcomeRuns.Wait()
 		timers.fire()
-		hidden("closed, its outcome line judged again")
+		hidden("closed, its outcome line judged again", true)
 		h0 := scopeSession("h0", "Sleep", identity.HealthDir("/home/owner"))
 		h0.Assistant = true
 		e.sessions("server", main, forged, h0) // the chat's own row, in the space, as the backfill asks
 		waitFor(t, "the note written", e.s.listedSpacesWritten)
 		timers.fire()
-		hidden("h0 listed in the space")
+		hidden("h0 listed in the space", false)
 		if v := e.s.todoVerdicts(ctx, []string{task.ID}, nil, nil)[task.ID]; v != todoHidden {
 			t.Fatalf("the task's verdict: %d, want hidden", v)
 		}

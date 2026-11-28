@@ -28,6 +28,7 @@ class OwnerApprovalReplyTest {
     private fun proposal() = Interaction(
         id = "proposal-1", machineId = "machine-1", sessionId = "session-1", kind = "permission",
         approvalBatchId = "batch-1", ownerProposal = true, ownerApprovalPhrases = listOf("发", "同意"),
+        createdAt = "2026-11-21T12:00:00.123456789Z",
     )
 
     @Test fun exactReplyHasOnlyTheProofEnvelopeAndRetriesUnderOneEventId() = runTest {
@@ -55,7 +56,23 @@ class OwnerApprovalReplyTest {
             "text" to JsonPrimitive("发"),
             "client_msg_id" to JsonPrimitive("event-1"),
             "approval_reply_to" to JsonPrimitive("proposal-1"),
+            "approval_reply_created_at" to JsonPrimitive("2026-11-21T12:00:00.123456789Z"),
         )), sent.first().body)
+    }
+
+    @Test fun aSameIdReplacementStartsANewOwnerEvent() = runTest {
+        val sent = mutableListOf<Sent>()
+        var ids = 0
+        val transport = HubChatTransport({ path, _, body, headers ->
+            val buffer = okio.Buffer().also { body!!.writeTo(it) }
+            sent += Sent(path, headers[HubChatTransport.OP_ID_HEADER], JsonCodec.parseToJsonElement(buffer.readUtf8()).jsonObject)
+            response(path, """{"ok":true,"approval_reply":true,"interaction_id":"proposal-1"}""")
+        }, newOpId = { "event-${++ids}" })
+        val original = proposal()
+        transport.replyOwnerApproval(original, "发")
+        transport.replyOwnerApproval(original.copy(createdAt = "2026-11-21T12:00:01.123456789Z"), "发")
+        assertEquals(listOf("event-1", "event-2"), sent.map { it.opId })
+        assertEquals(2, sent.map { it.body["approval_reply_created_at"] }.toSet().size)
     }
 
     @Test fun aLaterUserRetryKeepsTheSameEventIdUntilSuccess() = runTest {

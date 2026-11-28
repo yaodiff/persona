@@ -60,7 +60,7 @@ describe("the readiness gate and the machine list", () => {
     // renamed after the holder last drew: the click still finds it, under its new name
     act(() => applyMachine({ ...mac, name: "小林的 MacBook", trust: "pending" }));
     act(() => gate!.confirm());
-    expect(document.body.textContent).toContain("有一台电脑想加入：小林的 MacBook");
+    expect(document.body.textContent).toContain("一台电脑请求加入：小林的 MacBook");
   });
 
   it("opens the machines page when no computer is waiting", () => {
@@ -68,6 +68,6 @@ describe("the readiness gate and the machine list", () => {
     mount(true);
     act(() => gate!.confirm());
     expect(location.pathname).toMatch(/\/machines$/);
-    expect(document.body.textContent).not.toContain("有一台电脑想加入");
+    expect(document.body.textContent).not.toContain("一台电脑请求加入");
   });
 });

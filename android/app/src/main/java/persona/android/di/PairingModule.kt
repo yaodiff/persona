@@ -40,6 +40,7 @@ object PairingModule {
         machines: MachineManagement, models: ModelConfiguration, extensions: ExtensionManagement, providers: ProviderSetup,
         connectors: ConnectorsManagement, channels: ChannelManagement, platform: persona.android.platform.PlatformPairing,
         hubUpdates: HubUpdates, managers: HubManagers, sent: HubSent, translation: TranslationSettings, triage: AgentTriage, knowledgeSelection: KnowledgeSelection, capsule: persona.android.capsule.CapsuleRuntime,
+        digitalAssistantModel: persona.android.assist.AssistModelRuntime,
         attempts: PairingAttempts, application: Application, readiness: AssistantReadinessSource, feishuBot: FeishuBotSettings,
         standing: StandingAuthorizationsSource, extensionTrust: ExtensionTrustSource,
     ) = SettingsServices(pairing, connection, sessions, updates, diagnostics, binding = devices.binding,
@@ -47,7 +48,8 @@ object PairingModule {
         disconnect = { pairing.unpair() }, endpoints = runtime.endpoints, machines = machines, models = models, extensions = extensions, providers = providers,
         channels = channels, feishuBot = feishuBot, hubUpdates = hubUpdates, managers = managers, sent = sent,
         hubs = runtime.hubGroups, tunnels = runtime.hubTunnels, addHub = platform.adding, connectors = connectors,
-        translation = translation, triage = triage, knowledgeSelection = knowledgeSelection, capsule = capsule, pairingAttempts = attempts, readiness = readiness,
+        translation = translation, triage = triage, knowledgeSelection = knowledgeSelection, capsule = capsule,
+        digitalAssistantModel = digitalAssistantModel, pairingAttempts = attempts, readiness = readiness,
         standing = standing, extensionTrust = extensionTrust, developing = (application as PersonaApp).developingPersona,
         appUpdateStore = persona.feature.settings.AppUpdateStore(application, updates, devices.binding),
         desktops = (application as PersonaApp).desktops, clearCacheFiles = { files -> persona.core.data.CacheClearing.delete(files) })
@@ -85,11 +87,21 @@ class WiredPairingService @Inject constructor(application: Application, private 
             // A link's `url` behind a proxy with a public CA's certificate (#2622): that origin alone is checked like any site.
             val proxied = setOfNotNull(HubPairingClient.systemTrustedOrigin(parsed))
             networking = HubPairingClient(parsed.hub, parsed.fp, addresses, app.clientVersion(), parsed.access, systemOrigins = proxied)
-            val result = networking.pair(parsed.token, app.deviceName, deviceId = parsed.deviceId, progress = progress)
+            var replacedPrevious = false
+            val result = networking.pair(
+                parsed.token,
+                app.deviceName,
+                deviceId = parsed.deviceId,
+                replaces = { hubId -> runtime.previousDeviceId(hubId)?.takeIf(String::isNotBlank)?.also { replacedPrevious = true } },
+                progress = progress,
+            )
             val saved = HubCredentials(result.address, result.hubId, result.fingerprint,
                 result.candidates, result.token, result.deviceId, systemOrigins = result.systemOrigins.toList())
             withContext(NonCancellable) {
                 save(saved, parsed.access)
+                if (replacedPrevious && result.deviceId != null) {
+                    runtime.forgetUnrevokedDeviceId(result.hubId)
+                }
                 progress(PairingProgress(PairingStage.Complete))
             }
         } catch (cancelled: CancellationException) { throw cancelled }

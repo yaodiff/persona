@@ -4,7 +4,7 @@
 // sessions fold the same way while the hub folds them (#7944, lib/side-fold.ts); a list that holds them works out its
 // parents' side part from those rows, so a side seen here shows at once.
 import { foldedState, foldsUnderMachine, isFoldedIn, listedKeys, requestHome, requestHomeMachine, rowKey, type RequestHomeRef } from "./child-sessions";
-import { stateOf } from "./format";
+import { activityOf } from "./format";
 import { countSides, foldedStateWith, isSide, sideFoldOn, type SideRollup } from "./side-fold";
 import type { Interaction, Session } from "./types";
 
@@ -25,9 +25,9 @@ export function ownRow(s: Session): Session {
 /** A row as the lists draw and count it: in its folded state, `s` itself when that is its own state. `sides`: the
  *  rollup of its side rows the caller holds (else the hub's, `children.sides*`). */
 export function foldedRow(s: Session, sides?: SideRollup): Session {
-  if (!s.children || (!sides && settled.has(s))) return s;
+  if (s.view || !s.children || (!sides && settled.has(s))) return s;
   const state = sides ? foldedStateWith(s, sides) : foldedState(s);
-  if (state === stateOf(s)) return s;
+  if (state === activityOf(s)) return s;
   let copy = copies.get(s);
   if (copy?.state !== state) {
     copy = { ...s, state };
@@ -61,7 +61,9 @@ export function foldRows(rows: Session[]): Session[] {
   let changed = false;
   const out: Session[] = [];
   for (const s of rows) {
-    if (s.is_subagent || isFoldedIn(s, listed)) {
+    // Views are published per computer. A child on another computer can own
+    // a counted request even when the client also has its parent's row.
+    if (!s.view?.counted && (s.is_subagent || isFoldedIn(s, listed))) {
       changed = true;
       continue;
     }

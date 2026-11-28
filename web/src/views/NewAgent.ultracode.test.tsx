@@ -81,7 +81,7 @@ describe("New agent's ultracode switch", () => {
   it("is off, and a start with it left off sends nothing", async () => {
     await open("a");
     expect(theSwitch()!.getAttribute("aria-checked")).toBe("false");
-    expect(document.body.querySelector('[data-testid="new-agent-ultracode"]')!.textContent).toContain("每个任务都编排多 Agent workflow · 很费额度 · 只对本会话");
+    expect(document.body.querySelector('[data-testid="new-agent-ultracode"]')!.textContent).toContain("每个任务都将以多 Agent 工作流运行 · 消耗较多额度 · 仅对当前会话生效");
     act(() => button("启动").click());
     expect(launched).toHaveLength(1);
     expect(launched[0].ultracode).toBeUndefined();
@@ -111,7 +111,7 @@ describe("New agent's ultracode switch", () => {
     state.machines = [{ id: "mac", name: "Mac", online: true, claude_version: "2.1.250" }];
     await open("d");
     expect(theSwitch()!.disabled).toBe(true);
-    expect(document.body.querySelector('[data-testid="new-agent-ultracode"] [data-ultracode-line]')!.textContent).toBe("这台电脑的 Claude Code 是 2.1.250，要 2.1.284 或更新才能开 ultracode");
+    expect(document.body.querySelector('[data-testid="new-agent-ultracode"] [data-ultracode-line]')!.textContent).toBe("此电脑上的 Claude Code 版本为 2.1.250，需要 2.1.284 或更高版本才能开启 ultracode");
     act(() => theSwitch()!.click());
     expect(pill().querySelector("[data-ultracode-mark]")).toBeNull();
     act(() => button("启动").click());

@@ -1,9 +1,9 @@
 {
-  "summary_named": "{name} 现在 {now}，最高 {peak}",
-  "summary": "现在 {now}，最高 {peak}",
+  "summary_named": "{name} 当前 {now}，峰值 {peak}",
+  "summary": "当前 {now}，峰值 {peak}",
   "summary_sep": "；",
-  "now": "现在",
-  "no_data_at": "这时没有数据",
+  "now": "当前",
+  "no_data_at": "此时暂无数据",
   "chart_label": "{title}：{summary}",
-  "no_data": "这段时间没有数据"
+  "no_data": "该时段暂无数据"
 }

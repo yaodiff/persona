@@ -132,6 +132,8 @@ func (s *Service) nudgeLoop(ctx context.Context) {
 		case <-t.C:
 			cctx, cancel := context.WithTimeout(ctx, time.Minute)
 			s.larkModule().NudgeTick(cctx)
+			s.larkModule().HandoffTick(cctx)
+			s.larkModule().GuestTick(cctx)
 			cancel()
 		}
 	}
@@ -182,6 +184,14 @@ func (h larkHost) RecallRun(messageID string) {
 func (h larkHost) ResolveTarget(ctx context.Context, t botTarget) (assistantwire.ChatResolved, error) {
 	rt, err := h.s.resolveBotTarget(ctx, t)
 	return chatResolved(rt), err
+}
+
+func (h larkHost) SessionExists(ctx context.Context, machine, session string) bool {
+	if machine == "" {
+		machine = h.s.settings(ctx).MachineID
+	}
+	_, ok := h.s.session(ctx, machine, session)
+	return ok
 }
 
 // chatResolved is a resolved target as the module names it.
@@ -237,6 +247,10 @@ func (h larkHost) ApproveOwnerAction(ctx context.Context, ev botcard.MessageEven
 	return h.s.botApproveOwnerAction(ctx, ev, text, action)
 }
 
+func (h larkHost) ProjectReviewOwnerInput(ctx context.Context, ref, machine, session string) error {
+	return h.s.projectReviewFeishuInput(ctx, ref, SessionRef{MachineID: machine, SessionID: session})
+}
+
 // ---- the commands ----
 
 func (h larkHost) InterruptConversation(ctx context.Context, rt assistantwire.ChatResolved) (string, string) {
@@ -246,11 +260,6 @@ func (h larkHost) InterruptConversation(ctx context.Context, rt assistantwire.Ch
 }
 
 func (h larkHost) TurnPending(machine, session string) bool { return h.s.turnPending(machine, session) }
-
-func (h larkHost) StopProgressCard(ctx context.Context, f FeishuFeatures, t botTarget, messageID string) (string, string) {
-	out := h.s.stopProgressCard(ctx, f, t, messageID)
-	return out.kind, out.message
-}
 
 func (h larkHost) Conversations(ctx context.Context) ([]proto.Session, string) {
 	return h.s.conversations(ctx, false, "")
@@ -348,7 +357,24 @@ func (h larkHost) AskSensitive(ctx context.Context, ix proto.Interaction) bool {
 	return h.s.ixSensitive(ctx, ix)
 }
 
+func (h larkHost) AskDirect(ctx context.Context, ix proto.Interaction) bool {
+	return h.s.nonMainAssistantPermission(ctx, ix)
+}
+
 func (h larkHost) AskState(id string) (ended, pending bool) { return h.s.ixState(id) }
+
+func (h larkHost) AskStateFor(ix proto.Interaction) (ended, pending bool) {
+	_, pending = h.s.ixState(ix.ID)
+	return h.s.interactionEndedFor(ix), pending
+}
+
+// AskPostHook is the existing test-only race hook; the module calls it through
+// an optional interface after the first occurrence check, before claiming a card.
+func (h larkHost) AskPostHook(ix proto.Interaction) {
+	if h.s.postCardHook != nil {
+		h.s.postCardHook(ix)
+	}
+}
 
 func (h larkHost) AskPending(id string) (proto.Interaction, bool) { return h.s.pendingIx(id) }
 
@@ -356,10 +382,18 @@ func (h larkHost) ResolveInteraction(ctx context.Context, id string, r proto.Res
 	return h.s.resolveInteraction(ctx, channel.Feishu, id, r, action)
 }
 
+func (h larkHost) ResolveInteractionAt(ctx context.Context, id string, r proto.Resolution, action string, expected *time.Time) (bool, error) {
+	return h.s.resolveInteractionAt(ctx, channel.Feishu, id, r, action, expected)
+}
+
 func (h larkHost) ValidateClarifyQuestion(text string) error { return validateClarifyQuestion(text) }
 
 func (h larkHost) ClarifyInteraction(ctx context.Context, id, question, clientMsgID, action, chatID, messageID string) (bool, error) {
 	return h.s.clarifyInteraction(ctx, channel.Feishu, id, question, clientMsgID, action, chatID, messageID)
+}
+
+func (h larkHost) ClarifyInteractionAt(ctx context.Context, id, question, clientMsgID, action, chatID, messageID string, expected *time.Time) (bool, error) {
+	return h.s.clarifyInteractionAt(ctx, channel.Feishu, id, question, clientMsgID, action, chatID, messageID, expected)
 }
 
 // AcceptAction answers a press of a "Please verify" or decision card's button ({a: accept}): the toast's kind and
@@ -385,7 +419,7 @@ func (h larkHost) AcceptAction(ctx context.Context, a *botcard.CardAction) (stri
 			ask.Chosen = "" // the recommended one: taken as OK takes it
 		}
 	} else if at := a.Str("asked_at"); at != "" { // a button of a briefing card: it accepts the round it was asked in (briefing.go)
-		result, err = s.acceptTryFromBrief(ctx, a.Str("id"), at)
+		result, err = s.acceptReviewRound(ctx, a.Str("id"), at)
 	} else {
 		result, err = s.acceptTry(ctx, a.Str("id"), a.Context.MessageID)
 	}
@@ -473,20 +507,13 @@ func (h larkHost) TodoOfThread(chatID, threadID string) (assistantwire.ChatTodo,
 	return out, true
 }
 
-func (h larkHost) ThreadNoReply(ctx context.Context, ev botcard.MessageEvent, todoID, chatID, threadID string) {
+// ThreadNoReply records the owner's choice to stop reporting back, then replies in the to-do's topic.
+func (h larkHost) ThreadNoReply(ctx context.Context, messageID, todoID string, to assistantwire.ChannelTarget) {
 	t, ok := h.s.todoNow(todoID)
 	if !ok {
 		t = Todo{ID: todoID}
 	}
-	h.s.threadNoReply(ctx, ev, t, &feishuTopic{Chat: chatID, Thread: threadID})
-}
-
-func (h larkHost) ThreadRoutes(ctx context.Context, todoID string, f FeishuFeatures) ([]botTarget, error) {
-	t, ok := h.s.todoNow(todoID)
-	if !ok {
-		t = Todo{ID: todoID}
-	}
-	return h.s.threadRoutes(ctx, t, f)
+	h.s.stopReportOf(ctx, messageID, t, to, "thread_question", db.DecisionThread)
 }
 
 // TopicDecision notes text, said in a topic as message messageID, as a decision of todo todoID (asked as question).
@@ -530,10 +557,6 @@ func (h larkHost) SettleAskClaim(ctx context.Context, todoID string, ok bool) {
 }
 
 func (h larkHost) CloseAskTodo(ctx context.Context, todoID string) { h.s.closeAskTodo(ctx, todoID) }
-
-func (h larkHost) OpenTarget(ctx context.Context, st FeishuStatus) (botTarget, string, string) {
-	return h.s.openTarget(ctx, st)
-}
 
 func (h larkHost) TodoTitle(ctx context.Context, words string, l i18n.Lang, linkLabel bool) (string, bool) {
 	var title string
@@ -594,4 +617,29 @@ func (h larkHost) OpenTodo(ctx context.Context, o assistantwire.ChatOpenTodo) (s
 		s.logf("task %s: feed: %v", todo.ID, err)
 	}
 	return todo.ID, nil
+}
+
+// StartHandoffGuest starts the guest that answers a proxy reply (bot_handoff.go).
+func (h larkHost) StartHandoffGuest(ctx context.Context, handoff, text, launcher string) (string, string, error) {
+	return h.s.StartHandoffGuest(ctx, handoff, text, launcher)
+}
+
+// RaiseHandoffDecision asks the owner to approve one draft before the bot posts it.
+func (h larkHost) RaiseHandoffDecision(ctx context.Context, handoff string, req assistantwire.OutsideDecisionRequest) (string, error) {
+	return h.s.RaiseHandoffDecision(ctx, handoff, req)
+}
+
+// WithdrawHandoffDecision takes back a confirmation nobody answered.
+func (h larkHost) WithdrawHandoffDecision(ctx context.Context, id string) {
+	h.s.WithdrawHandoffDecision(ctx, id)
+}
+
+// StartGroupGuest starts the guest that answers one chat and thread (bot_guest.go).
+func (h larkHost) StartGroupGuest(ctx context.Context, group, text, launcher string, tools []string) (string, string, error) {
+	return h.s.StartGroupGuest(ctx, group, text, launcher, tools)
+}
+
+// SendGroupGuest sends a later question into the conversation that already answers the group.
+func (h larkHost) SendGroupGuest(ctx context.Context, machine, session, turn, text string) error {
+	return h.s.SendGroupGuest(ctx, machine, session, turn, text)
 }

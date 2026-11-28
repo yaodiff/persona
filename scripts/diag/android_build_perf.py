@@ -16,7 +16,7 @@ limits the scenarios."""
 from functools import partial
 import json, os, re, statistics, sys, time
 
-from android_perf_capture import adb_command, frame_counts
+from android_perf_capture import adb_command, frame_counts, write_report
 
 RUNS = int(os.environ.get("RUNS", "10"))
 SWIPE_MS = int(os.environ.get("SWIPE_MS", "180"))
@@ -133,8 +133,7 @@ def main():
         for label, values in cold.items():
             if values:
                 result[label + "/cold_start_ms"] = stats(values)
-        with open(out, "w") as f:
-            json.dump(result, f, ensure_ascii=False, indent=1)
+        write_report(out, result)
 
     for i in range(COLD):
         for label, package in ordered(packages, i):

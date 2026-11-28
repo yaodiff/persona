@@ -55,6 +55,9 @@ func init() {
 				return larksync.NewSyncer(h, now)
 			},
 		},
+		NewSyncService: func(h botport.SyncHost) botport.SyncService {
+			return larksync.NewService(h)
+		},
 	})
 	larkhost.Provide(lark.Module{}.Info().ID, func(h larkhost.Host) larkhost.Layer { return lark.New(h) })
 	cliport.Provide(lark.Module{}.Info().ID, cliport.Provider{

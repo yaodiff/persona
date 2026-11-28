@@ -145,7 +145,7 @@ func (h *Manager) installSpacesOperation(ctx context.Context, op *extOp) error {
 		installErr = errors.New("the Spaces extension requires a verified official market")
 		return installErr
 	}
-	if _, err := extension.CheckEngines(entry.Parsed, h.build.Number); err != nil {
+	if err := entry.EngineProblem(h.build.Number); err != nil {
 		installErr = err
 		return installErr
 	}

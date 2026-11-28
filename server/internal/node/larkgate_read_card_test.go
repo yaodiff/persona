@@ -32,6 +32,7 @@ func readScriptCommand(t *testing.T) string {
 }
 
 func TestLarkWholeCommandCardKeepsWriteWordingForMixedOrUnknownCalls(t *testing.T) {
+	needsLarkGate(t)
 	for _, tc := range []struct{ name, command string }{
 		{name: "mixed read and send", command: readScriptCommand(t) + `; lark-cli im +messages-send --text hello`},
 		{name: "no identified read", command: `python3 /tmp/parse_rx.py lark-cli`},
@@ -52,6 +53,7 @@ func TestLarkWholeCommandCardKeepsWriteWordingForMixedOrUnknownCalls(t *testing.
 }
 
 func TestLarkWholeCommandCardSaysReadNotWrite(t *testing.T) {
+	needsLarkGate(t)
 	cfg := olCfg()
 	cfg.CLI = &proto.LarkCLI{Bin: "/nonexistent/lark-cli"}
 	n, fh := readCardBypassNode(t, cfg)

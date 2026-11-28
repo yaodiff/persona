@@ -55,8 +55,8 @@ describe("Persona 关闭时 (#7459)", () => {
   it("关着：说能收到什么，点开就订阅", async () => {
     await render();
     expect(load).toHaveBeenCalled();
-    expect(text()).toContain("通知这个浏览器");
-    expect(text()).toContain("即使没有打开任何 Persona 页面");
+    expect(text()).toContain("向此浏览器推送通知");
+    expect(text()).toContain("即使未打开任何 Persona 页面");
     expect(toggle().getAttribute("aria-checked")).toBe("false");
     expect(toggle().disabled).toBe(false);
     expect(button("发送测试")).toBeUndefined();
@@ -69,11 +69,11 @@ describe("Persona 关闭时 (#7459)", () => {
     state = { loaded: true, working: false, status: { subscribed: true, service: "FCM", current: true, last_ok_at: "2026-11-14T06:00:00Z" } };
     await render();
     expect(toggle().getAttribute("aria-checked")).toBe("true");
-    expect(text()).toContain("已打开，经 FCM。上次送达：");
+    expect(text()).toContain("已开启，通过 FCM 推送。上次送达于 ");
     sendTest.mockResolvedValue(undefined);
     await act(async () => button("发送测试")!.click());
     expect(sendTest).toHaveBeenCalled();
-    expect(toast).toHaveBeenCalledWith("测试已发送，稍后就会出现。");
+    expect(toast).toHaveBeenCalledWith("测试通知已发送，稍后将会显示。");
     turnOff.mockResolvedValue(undefined);
     await act(async () => toggle().click());
     expect(turnOff).toHaveBeenCalled();
@@ -82,17 +82,17 @@ describe("Persona 关闭时 (#7459)", () => {
   it("上一条没推出去时说原因，测试失败也说", async () => {
     state = { loaded: true, working: false, status: { subscribed: true, service: "Apple", current: true, failed_at: "2026-11-14T06:00:00Z", status: 403, error: "403 BadJwtToken" } };
     await render();
-    expect(text()).toContain("上一条通知没有发出去：403 BadJwtToken");
+    expect(text()).toContain("上一条通知发送失败：403 BadJwtToken");
     expect(text()).toContain("未送达");
     sendTest.mockRejectedValue(new Error("推送服务没有接收这条通知：410"));
     await act(async () => button("发送测试")!.click());
-    expect(toast).toHaveBeenCalledWith("测试没有发出去：推送服务没有接收这条通知：410", "error");
+    expect(toast).toHaveBeenCalledWith("测试通知发送失败：推送服务没有接收这条通知：410", "error");
   });
 
   it("浏览器拒绝了通知：说去网站设置里允许，开关不能打开", async () => {
     vi.stubGlobal("Notification", { permission: "denied" });
     await render();
-    expect(text()).toContain("这个浏览器禁止了本站的通知");
+    expect(text()).toContain("当前浏览器已阻止本站的通知权限");
     expect(toggle().disabled).toBe(true);
   });
 
@@ -100,16 +100,16 @@ describe("Persona 关闭时 (#7459)", () => {
     turnOn.mockRejectedValue(new WebPushError("denied"));
     await render();
     await act(async () => toggle().click());
-    expect(toast).toHaveBeenCalledWith(expect.stringContaining("这个浏览器禁止了本站的通知"), "error");
+    expect(toast).toHaveBeenCalledWith(expect.stringContaining("当前浏览器已阻止本站的通知权限"), "error");
   });
 
   it("用不了时说为什么，不读 hub", async () => {
     const cases: [WebPushSupport, string][] = [
-      ["home-screen", "先把 Persona 添加到主屏幕"],
+      ["home-screen", "先将 Persona 添加到主屏幕"],
       ["insecure", "需要 HTTPS"],
       ["subpath", "子路径"],
-      ["desktop-app", "桌面应用会自己发通知"],
-      ["unsupported", "这个浏览器无法在 Persona 关闭时接收通知"],
+      ["desktop-app", "桌面应用会自行发送通知"],
+      ["unsupported", "当前浏览器不支持在 Persona 关闭后接收通知"],
     ];
     for (const [why, words] of cases) {
       support = why;
@@ -126,7 +126,7 @@ describe("Persona 关闭时 (#7459)", () => {
   it("hub 太旧时说去更新", async () => {
     state = { loaded: true, working: false, hubMissing: true };
     await render();
-    expect(text()).toContain("hub 版本太旧");
+    expect(text()).toContain("当前 hub 版本过旧");
     expect(toggle().disabled).toBe(true);
   });
 });

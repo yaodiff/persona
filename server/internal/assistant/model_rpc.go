@@ -68,28 +68,34 @@ func invalidModelParams(format string, args ...any) error {
 	return &rpc.Error{Code: bus.CodeInvalidParams, Message: "model.complete: " + fmt.Sprintf(format, args...)}
 }
 
+func strictModelParams(raw json.RawMessage, out any) error {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(out); err != nil {
+		return invalidModelParams("%v", err)
+	}
+	return nil
+}
+
 // extensionComplete answers models.extension_complete.
-func (s *Service) extensionComplete(ctx context.Context, raw json.RawMessage) (any, error) {
-	var call assistantwire.ExtensionComplete
-	if err := json.Unmarshal(raw, &call); err != nil || call.Extension == "" {
-		return nil, invalidModelParams("no extension")
+func (s *Service) extensionComplete(ctx context.Context, call assistantwire.ExtensionComplete) (assistantwire.ModelCompleteResult, error) {
+	if call.Extension == "" {
+		return assistantwire.ModelCompleteResult{}, invalidModelParams("no extension")
+	}
+	if len(call.Params) == 0 {
+		return assistantwire.ModelCompleteResult{}, invalidModelParams("params are required")
 	}
 	var p assistantwire.ModelCompleteParams
-	dec := json.NewDecoder(bytes.NewReader(call.Params))
-	dec.DisallowUnknownFields()
-	if len(call.Params) == 0 {
-		return nil, invalidModelParams("params are required")
-	}
-	if err := dec.Decode(&p); err != nil {
-		return nil, invalidModelParams("%v", err)
+	if err := strictModelParams(call.Params, &p); err != nil {
+		return assistantwire.ModelCompleteResult{}, err
 	}
 	c, err := checkModelCall(p)
 	if err != nil {
-		return nil, err
+		return assistantwire.ModelCompleteResult{}, err
 	}
 	purpose := assistantwire.ExtensionPurposePrefix + call.StorageKey()
 	if _, ok := s.extensionPurposeDef(ctx, purpose); !ok {
-		return nil, &rpc.Error{Code: assistantwire.CodeModelUnavailable, Message: "model.complete: the extension has no model purpose (is it on and granted models?)"}
+		return assistantwire.ModelCompleteResult{}, &rpc.Error{Code: assistantwire.CodeModelUnavailable, Message: "model.complete: the extension has no model purpose (is it on and granted models?)"}
 	}
 	return s.runModelCall(ctx, purpose, "extension "+call.Extension, "this extension", c)
 }
@@ -99,19 +105,13 @@ var managerPurposes = map[string]bool{assistantwire.PurposeSubscriptionRecipe: t
 
 // purposeComplete answers models.purpose_complete: a call the manager makes itself, such as drafting a subscription's
 // recipe (#2040), on one of managerPurposes.
-func (s *Service) purposeComplete(ctx context.Context, raw json.RawMessage) (any, error) {
-	var call assistantwire.PurposeComplete
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&call); err != nil {
-		return nil, invalidModelParams("%v", err)
-	}
+func (s *Service) purposeComplete(ctx context.Context, call assistantwire.PurposeComplete) (assistantwire.ModelCompleteResult, error) {
 	if !managerPurposes[call.Purpose] {
-		return nil, invalidModelParams("purpose %q is not one the manager calls", call.Purpose)
+		return assistantwire.ModelCompleteResult{}, invalidModelParams("purpose %q is not one the manager calls", call.Purpose)
 	}
 	c, err := checkModelCall(call.Params)
 	if err != nil {
-		return nil, err
+		return assistantwire.ModelCompleteResult{}, err
 	}
 	return s.runModelCall(ctx, call.Purpose, call.Purpose, "purpose "+call.Purpose, c)
 }
@@ -195,20 +195,20 @@ func checkModelCall(p assistantwire.ModelCompleteParams) (checkedCall, error) {
 // with what did not match. who names the caller in the log line, what in the error when nothing can be called.
 // With candidate models (c.p.Models, or the user's own list for an extension's purpose) it tries them in order
 // instead (model_candidates.go).
-func (s *Service) runModelCall(ctx context.Context, purpose, who, what string, c checkedCall) (any, error) {
+func (s *Service) runModelCall(ctx context.Context, purpose, who, what string, c checkedCall) (assistantwire.ModelCompleteResult, error) {
 	if chain := s.modelCandidates(ctx, purpose, c.p.Models); chain != nil {
 		return s.runCandidates(ctx, purpose, who, c, chain)
 	}
 	b, err := s.resolveModel(ctx, purpose)
 	if err != nil {
-		return nil, &rpc.Error{Code: assistantwire.CodeModelUnavailable, Message: i18n.Localize(err, s.lang(ctx))}
+		return assistantwire.ModelCompleteResult{}, &rpc.Error{Code: assistantwire.CodeModelUnavailable, Message: i18n.Localize(err, s.lang(ctx))}
 	}
 	config, err := s.apiConfig(ctx, b)
 	if err != nil {
-		return nil, &rpc.Error{Code: assistantwire.CodeModelUnavailable, Message: i18n.Localize(err, s.lang(ctx))}
+		return assistantwire.ModelCompleteResult{}, &rpc.Error{Code: assistantwire.CodeModelUnavailable, Message: i18n.Localize(err, s.lang(ctx))}
 	}
 	if !config.Configured() {
-		return nil, &rpc.Error{Code: assistantwire.CodeModelUnavailable, Message: "model.complete: nothing to call for " + what + "; pick a model for it in Settings › Model configuration"}
+		return assistantwire.ModelCompleteResult{}, &rpc.Error{Code: assistantwire.CodeModelUnavailable, Message: "model.complete: nothing to call for " + what + "; pick a model for it in Settings › Model configuration"}
 	}
 	var usage assistantwire.ModelUsage
 	started := time.Now()
@@ -216,10 +216,7 @@ func (s *Service) runModelCall(ctx context.Context, purpose, who, what string, c
 	s.logf("assistant: %s model call%s on %s: %s in %s, %d request(s), %d input + %d output tokens (cache read %d, written %d)",
 		who, labelPart(c.p.Label), config.Model, outcome, time.Since(started).Round(time.Millisecond), usage.Requests,
 		usage.InputTokens, usage.OutputTokens, usage.CacheReadInputTokens, usage.CacheCreationInputTokens)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
+	return out, err
 }
 
 // attemptModel makes c once on client within timeout, adding what it spends to usage: the answer, or the coded

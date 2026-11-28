@@ -1,65 +1,44 @@
 package extwire
 
+import "github.com/nwverse/persona/sdk/go/wire"
+
+// The transcription point's job wire lives in the Go SDK (sdk/go/wire/transcription.go) so a program outside personad
+// speaks it too (#16263); these names stay for the hub's own code.
+
 // TranscriptionProtocol is the transcription point's job wire (meeting-minutes.md "The `transcription` extension
 // point"): GET /transcription/{cid}/info and the job socket GET /transcription/{cid}/ws on the extension's own socket.
-const TranscriptionProtocol = 1
+const TranscriptionProtocol = wire.TranscriptionProtocol
 
 // Features of a contribution (/info) and of one job (ready).
 const (
-	TranscriptionLive    = "live"
-	TranscriptionReplay  = "replay"
-	TranscriptionInterim = "interim"
+	TranscriptionLive    = wire.TranscriptionLive
+	TranscriptionReplay  = wire.TranscriptionReplay
+	TranscriptionInterim = wire.TranscriptionInterim
 )
 
-// Frame types. Manager → extension: start, seek, flush, reference, end (and binary PCM16 LE mono 16 kHz).
-// Extension → manager: ready, interim, sentence, ack, flushed (every sentence before a flush's at was sent), window
-// (replay: every sentence of a window was sent), usage (the upstream's billed seconds), warning, error, done.
+// Frame types (wire.TFStart …).
 const (
-	TFStart, TFSeek, TFFlush, TFReference, TFEnd = "start", "seek", "flush", "reference", "end"
-	TFReady, TFInterim, TFSentence, TFAck        = "ready", "interim", "sentence", "ack"
-	TFFlushed, TFWindow, TFUsage                 = "flushed", "window", "usage"
-	TFWarning, TFError, TFDone                   = "warning", "error", "done"
+	TFStart, TFSeek, TFFlush, TFReference, TFEnd = wire.TFStart, wire.TFSeek, wire.TFFlush, wire.TFReference, wire.TFEnd
+	TFReady, TFInterim, TFSentence, TFAck        = wire.TFReady, wire.TFInterim, wire.TFSentence, wire.TFAck
+	TFFlushed, TFWindow, TFUsage                 = wire.TFFlushed, wire.TFWindow, wire.TFUsage
+	TFWarning, TFError, TFDone                   = wire.TFWarning, wire.TFError, wire.TFDone
 )
 
 // Codes (open sets).
 const (
-	TWSessionDropped, TWNoInterim, TWBehind = "session_dropped", "no_interim", "behind"
-	TENoUpstream, TEUpstreamForbidden       = "no_upstream", "upstream_forbidden"
-	TEUpstreamUnavailable, TEUpstreamFailed = "upstream_unavailable", "upstream_failed"
-	TEUpstreamBusy                          = "upstream_busy" // busy or rate-limited: too many sessions, quota used up (#13446)
-	TEBadFrame                              = "bad_frame"
-	TSetupLiveUpstream                      = "live_upstream" // /info.setup: no GPT-Live (live dialect) upstream
+	TWSessionDropped, TWNoInterim, TWBehind = wire.TWSessionDropped, wire.TWNoInterim, wire.TWBehind
+	TENoUpstream, TEUpstreamForbidden       = wire.TENoUpstream, wire.TEUpstreamForbidden
+	TEUpstreamUnavailable, TEUpstreamFailed = wire.TEUpstreamUnavailable, wire.TEUpstreamFailed
+	TEUpstreamBusy                          = wire.TEUpstreamBusy
+	TEBadFrame                              = wire.TEBadFrame
+	TSetupLiveUpstream                      = wire.TSetupLiveUpstream
 )
 
 // TranscriptionInfo is GET /transcription/{cid}/info.
-type TranscriptionInfo struct {
-	Protocol int      `json:"protocol"`
-	Features []string `json:"features"`
-	Setup    string   `json:"setup,omitempty"`
-}
+type TranscriptionInfo = wire.TranscriptionInfo
 
-// TranscriptionFrame is any text frame of a job, both ways; Type says which fields it has. Times are recording
-// seconds (never wall time, also at speed 4).
-type TranscriptionFrame struct {
-	Type     string   `json:"type"`
-	Mode     string   `json:"mode,omitempty"`     // start: live | replay
-	Speed    float64  `json:"speed,omitempty"`    // start, replay: 4
-	Language string   `json:"language,omitempty"` // start: a hint, never a lock
-	Glossary []string `json:"glossary,omitempty"` // start: spellings, data only
-	At       *float64 `json:"at,omitempty"`       // start, seek, ack, flushed
-	From     *float64 `json:"from,omitempty"`     // reference, window
-	To       *float64 `json:"to,omitempty"`       // reference, window
-	Start    *float64 `json:"start,omitempty"`    // interim, sentence
-	End      *float64 `json:"end,omitempty"`      // sentence
-	Text     *string  `json:"text,omitempty"`     // reference, interim, sentence
-	Features []string `json:"features,omitempty"` // ready
-	Kept     bool     `json:"kept,omitempty"`     // window
-	Seconds  float64  `json:"seconds,omitempty"`  // usage
-	Sessions int      `json:"sessions,omitempty"` // usage
-	Code     string   `json:"code,omitempty"`     // warning, error
-	Message  string   `json:"message,omitempty"`  // warning, error (never meeting text)
-	Fatal    bool     `json:"fatal,omitempty"`    // error
-}
+// TranscriptionFrame is any text frame of a job, both ways (wire.TranscriptionFrame).
+type TranscriptionFrame = wire.TranscriptionFrame
 
 // F is a pointer to v for the frames' optional numbers and texts.
-func F[T any](v T) *T { return &v }
+func F[T any](v T) *T { return wire.F(v) }

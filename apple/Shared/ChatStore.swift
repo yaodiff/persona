@@ -1677,6 +1677,9 @@ nonisolated struct PendingMessage: Identifiable, Hashable, Codable, Sendable {
     struct InboxHandOff: Hashable, Codable, Sendable {
         let itemID: String
         let manager: String?
+        /// The inbox the item came from; its Agent can be on another hub. The pairing survives regrouping.
+        var sourceGroup: String? = nil
+        var sourcePairing: String? = nil
         var filed = false
     }
     var id = UUID()

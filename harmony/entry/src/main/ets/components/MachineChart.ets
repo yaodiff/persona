@@ -1,4 +1,5 @@
 import { DashboardPoint, dashboardTimeTicks } from '../models/MachineDashboard';
+import { Haptics } from '../platform/Haptics';
 
 @ComponentV2
 export struct MachineChart {
@@ -28,7 +29,8 @@ export struct MachineChart {
 
   private grid(): void {
     const ctx = this.ctx, width = this.plotWidth-1, height = this.chartHeight-1;
-    ctx.strokeStyle = this.dark ? '#2C2C2A' : '#E1E0D9'; ctx.lineWidth = 0.6;
+    ctx.strokeStyle = this.dark ? '#2C2C2E' : '#E5E5EA'; ctx.lineWidth = 0.6;
+    ctx.setLineDash([2, 3]);
     ctx.beginPath();
     for (const time of dashboardTimeTicks(this.end,this.seconds)) {
       const x = this.x(time);
@@ -39,6 +41,7 @@ export struct MachineChart {
       ctx.moveTo(1,y); ctx.lineTo(width,y);
     }
     ctx.stroke();
+    ctx.setLineDash([]);
   }
 
   private line(alternate: boolean, color: string, highest: number): void {
@@ -46,6 +49,8 @@ export struct MachineChart {
     let run: DashboardPoint[] = [];
     const draw = (): void => {
       if (!run.length) return;
+      ctx.lineJoin = 'round';
+      ctx.lineCap = 'round';
       ctx.beginPath();
       for (let i = 0; i < run.length; i++) {
         const p = run[i], value = alternate ? p.alternate : p.value;
@@ -53,10 +58,20 @@ export struct MachineChart {
         if (i === 0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
         if (run.length === 1) { ctx.fillStyle = color; ctx.fillRect(x-0.7,y-0.7,1.4,1.4); }
       }
-      ctx.strokeStyle = color; ctx.lineWidth = this.chartHeight > 30 ? 1.7 : 1.3; ctx.stroke();
+      ctx.strokeStyle = color; ctx.lineWidth = this.chartHeight > 30 ? 1.85 : 1.4; ctx.stroke();
       if (!alternate && !this.alternateTint && run.length > 1) {
         ctx.lineTo(this.x(run[run.length-1].time), bottom); ctx.lineTo(this.x(run[0].time), bottom); ctx.closePath();
-        ctx.globalAlpha = this.interactive ? 0.1 : (this.dark ? 0.22 : 0.11); ctx.fillStyle = color; ctx.fill(); ctx.globalAlpha = 1;
+        const gradient = ctx.createLinearGradient(0, 1, 0, bottom);
+        const topAlpha = this.interactive ? (this.dark ? '38' : '24') : (this.dark ? '42' : '24');
+        const hex = color.startsWith('#') && color.length === 7 ? color.slice(1) : '';
+        if (hex) {
+          gradient.addColorStop(0, '#' + topAlpha + hex);
+          gradient.addColorStop(1, '#00' + hex);
+          ctx.fillStyle = gradient;
+          ctx.fill();
+        } else {
+          ctx.globalAlpha = this.interactive ? 0.1 : (this.dark ? 0.22 : 0.11); ctx.fillStyle = color; ctx.fill(); ctx.globalAlpha = 1;
+        }
       }
       run = [];
     };
@@ -113,9 +128,9 @@ export struct MachineChart {
   build() {
     if (this.interactive) {
       Stack() { this.plot() }.width('100%').height(this.chartHeight)
-        .onClick((event:ClickEvent) => this.scrub(event.x))
+        .onClick((event:ClickEvent) => { Haptics.selection(); this.scrub(event.x); })
         .parallelGesture(PanGesture({fingers:1,direction:PanDirection.Horizontal,distance:6})
-          .onActionStart((event:GestureEvent) => this.drag(event))
+          .onActionStart((event:GestureEvent) => { Haptics.selection(); this.drag(event); })
           .onActionUpdate((event:GestureEvent) => this.drag(event)))
     } else {
       this.plot()

@@ -252,7 +252,7 @@ func TestAutoReviewAgentKindInMemory(t *testing.T) {
 
 // The same value reaches the persistent todo_agents row rather than only the manager's transient copy.
 func TestAutoReviewAgentKindPersisted(t *testing.T) {
-	database, err := db.Open(context.Background(), newDatabase(t), db.ManagerSet)
+	database, err := db.Open(context.Background(), newMigratedDatabase(t, db.ManagerSet), db.ManagerSet)
 	if err != nil {
 		t.Fatal(err)
 	}

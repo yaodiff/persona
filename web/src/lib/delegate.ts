@@ -8,6 +8,7 @@ import { api, ApiError, enc, errorText } from "./api";
 import type { Resolution } from "./answered";
 import { itemHeaders } from "./manager-choice";
 import type { Delegate, Interaction, Question } from "./types";
+import { timeMs } from "./times";
 
 /** The assistant is still deciding whether it may answer this question for the user: nothing was pushed yet, and an
  *  answer given here wins. Only questions are ever delegated. */
@@ -163,7 +164,7 @@ export function delegatedHistory(records: InteractionRecord[]): DelegatedAnswer[
       ix: r.interaction,
       answers: answersIn(r.resolution?.answers),
       reason: typeof r.resolution?.reason === "string" ? r.resolution.reason : "",
-      at: (r.resolved_at && Date.parse(r.resolved_at)) || 0,
+      at: timeMs(r.resolved_at),
     }))
     .sort((a, b) => b.at - a.at);
 }

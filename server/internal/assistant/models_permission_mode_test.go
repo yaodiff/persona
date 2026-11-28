@@ -643,19 +643,19 @@ func TestModelProfilePermissionModeValidationAndCapture(t *testing.T) {
 	}{
 		{
 			name: "api purpose with permission_mode",
-			body: `{"revision":1,"name":"Bad API","purposes":{"kb":{"provider":"launcher.direct","permission_mode":"acceptEdits"}}}`,
+			body: `{"revision":0,"name":"Bad API","purposes":{"kb":{"provider":"launcher.direct","permission_mode":"acceptEdits"}}}`,
 		},
 		{
 			name: "purpose with runtime-unsupported permission_mode",
-			body: `{"revision":1,"name":"Bad Grok","purposes":{"agent.new":{"provider":"launcher.grok","permission_mode":"plan"}}}`,
+			body: `{"revision":0,"name":"Bad Grok","purposes":{"agent.new":{"provider":"launcher.grok","permission_mode":"plan"}}}`,
 		},
 		{
 			name: "purpose with discovered omp alias",
-			body: `{"revision":1,"name":"Bad OMP Alias","purposes":{"agent.new":{"provider":"launcher.alias-omp","permission_mode":"acceptEdits"}}}`,
+			body: `{"revision":0,"name":"Bad OMP Alias","purposes":{"agent.new":{"provider":"launcher.alias-omp","permission_mode":"acceptEdits"}}}`,
 		},
 		{
 			name: "tier with runtime-unsupported permission_mode",
-			body: `{"revision":1,"name":"Bad Grok Tier","tiers":{"fast":{"launcher":"grok","permission_mode":"plan"}}}`,
+			body: `{"revision":0,"name":"Bad Grok Tier","tiers":{"fast":{"launcher":"grok","permission_mode":"plan"}}}`,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -666,11 +666,11 @@ func TestModelProfilePermissionModeValidationAndCapture(t *testing.T) {
 	}
 
 	// Supported mode on discovered runtime succeeds.
-	if w := request(s, http.MethodPut, "/api/v1/model-profiles/custom", `{"revision":1,"name":"Good Grok","purposes":{"agent.new":{"provider":"launcher.grok","permission_mode":"bypassPermissions"}}}`); w.Code != http.StatusOK {
+	if w := request(s, http.MethodPut, "/api/v1/model-profiles/custom", `{"revision":0,"name":"Good Grok","purposes":{"agent.new":{"provider":"launcher.grok","permission_mode":"bypassPermissions"}}}`); w.Code != http.StatusOK {
 		t.Fatalf("supported runtime permission_mode rejected: %d %s", w.Code, w.Body.String())
 	}
 
-	// captureModels preserves purpose permission_mode but never copies assistant/agent.new permission_mode into seeded tiers.
+	// Capture preserves purpose permission_mode and leaves the generated presets' permission modes empty.
 	setModel(t, s, "assistant", ModelBinding{Provider: "launcher.claude", PermissionMode: "bypassPermissions"})
 	setModel(t, s, "agent.new", ModelBinding{Provider: "launcher.claude", PermissionMode: "acceptEdits"})
 	purposes, _, tiers, err := s.captureModels(ctx)
@@ -681,7 +681,7 @@ func TestModelProfilePermissionModeValidationAndCapture(t *testing.T) {
 		t.Fatalf("captured purposes missing permission_mode: %+v", purposes)
 	}
 	if len(tiers) != 2 || tiers["core"].PermissionMode != "" || tiers["dev"].PermissionMode != "" {
-		t.Fatalf("captureModels leaked permission_mode into seeded tiers: %+v", tiers)
+		t.Fatalf("captureModels leaked permission_mode into captured tiers: %+v", tiers)
 	}
 	if !slices.Equal(tiers["core"].Aliases, []string{"strong"}) || !slices.Equal(tiers["dev"].Aliases, []string{"standard"}) {
 		t.Fatalf("captured tiers do not answer to their older names: %+v", tiers)
@@ -821,5 +821,55 @@ func TestAgentStartConfirmationShowsPermissionMode(t *testing.T) {
 	out, _ := spaceTool(t, s, "sleep-000-0000", "agent_start", `{"machine":"server","cwd":"/home/me/src/app","prompt":"Check config","launcher":"codex","permission_mode":"bypassPermissions"}`)
 	if !strings.Contains(out, "declined") || len(f.starts) != 0 {
 		t.Fatalf("agent_start: %s, starts %v", out, f.starts)
+	}
+}
+
+func TestAgyUnavailableAutoModeDegradesAndHidesOption(t *testing.T) {
+	s, f, _ := modelService(t)
+	ctx := context.Background()
+	noAuto := proto.PermissionModeSetOf("default", "acceptEdits", "plan", "bypassPermissions")
+	f.mu.Lock()
+	f.zshrc = map[string][]proto.Launcher{
+		"server": {
+			{Name: "agy", Agent: "agy", Source: "agy", Assistant: true, PermissionModes: noAuto},
+		},
+	}
+	f.assistantAnswer = func(params map[string]any) map[string]any {
+		return map[string]any{"session_id": "agy-degraded-conv", "permission_mode": proto.ModeBypass}
+	}
+	f.mu.Unlock()
+
+	// Model configuration rejects auto once agy advertises permission_modes without auto, while accepting bypassPermissions.
+	if w := modelRequest(s, http.MethodPatch, "assistant", `{"revision":0,"provider":"launcher.agy","permission_mode":"auto"}`); w.Code != http.StatusBadRequest {
+		t.Fatalf("assistant on restricted agy accepted auto: %d %s", w.Code, w.Body.String())
+	}
+	if w := modelRequest(s, http.MethodPatch, "assistant", `{"revision":0,"provider":"launcher.agy","permission_mode":"bypassPermissions"}`); w.Code != http.StatusOK {
+		t.Fatalf("assistant on restricted agy rejected bypassPermissions: %d %s", w.Code, w.Body.String())
+	}
+
+	// Older client explicitly requesting permission_mode=auto still succeeds with the degraded mode returned by the node.
+	sess, err := s.startOn(ctx, "server", StartParams{Text: "hi", Launcher: "agy", PermissionMode: "auto"}, false)
+	if err != nil {
+		t.Fatalf("startOn explicit auto on agy: %v", err)
+	}
+	if sess.SessionID != "agy-degraded-conv" || sess.PermissionMode != proto.ModeBypass {
+		t.Fatalf("degraded session = %+v, want session_id=agy-degraded-conv permission_mode=%q", sess, proto.ModeBypass)
+	}
+
+	// Implicit DefaultPermissionMode=auto is dropped for restricted agy and returns the settled mode.
+	setSettings(t, s, func(v *Settings) { v.DefaultPermissionMode = "auto" })
+	if w := modelRequest(s, http.MethodPatch, "assistant", `{"revision":1,"provider":"launcher.agy","permission_mode":null}`); w.Code != http.StatusOK {
+		t.Fatalf("clear assistant permission_mode: %d %s", w.Code, w.Body.String())
+	}
+	sess, err = s.startOn(ctx, "server", StartParams{Text: "hi default", Launcher: "agy"}, false)
+	if err != nil {
+		t.Fatalf("startOn implicit auto default on agy: %v", err)
+	}
+	lastSend := f.sends[len(f.sends)-1]
+	if _, forwarded := lastSend["permission_mode"]; forwarded {
+		t.Fatalf("restricted agy forwarded unsupported implicit auto mode: %v", lastSend)
+	}
+	if sess.PermissionMode != proto.ModeBypass {
+		t.Fatalf("implicit default degraded session = %+v, want permission_mode=%q", sess, proto.ModeBypass)
 	}
 }

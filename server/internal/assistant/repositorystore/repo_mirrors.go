@@ -25,14 +25,9 @@ func scanRepoMirror(row pgx.Row) (repository.RepoMirrorRecord, error) {
 }
 
 // RepoMirror reads the mirror configuration and sync status for one (machine, repo_id) pair.
-// Returns (nil, nil) when no row exists (implicitly enabled=false, auto_sync=false).
+// Returns (nil, nil) when the pair has no saved settings.
 func (d *Store) RepoMirror(ctx context.Context, machineID, repoID string) (*repository.RepoMirrorRecord, error) {
-	var rec repository.RepoMirrorRecord
-	err := d.QueryRow(ctx, `SELECT `+repoMirrorColumns+` FROM repo_mirrors WHERE machine_id=$1 AND repo_id=$2`, machineID, repoID).Scan(
-		&rec.MachineID, &rec.RepoID, &rec.Enabled, &rec.AutoSync, &rec.SyncIntervalMinutes,
-		&rec.LastSyncedAt, &rec.LastHeadCommit, &rec.LastDefaultRef, &rec.LastError, &rec.DiskBytes,
-		&rec.ConsecutiveFailures, &rec.NextSyncAt, &rec.UpdatedAt,
-	)
+	rec, err := scanRepoMirror(d.QueryRow(ctx, `SELECT `+repoMirrorColumns+` FROM repo_mirrors WHERE machine_id=$1 AND repo_id=$2`, machineID, repoID))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -78,31 +73,23 @@ func (d *Store) ListRepoMirrors(ctx context.Context, machineID, repoID string) (
 	return out, err
 }
 
-// ListEnabledRepoMirrors returns enabled mirrors for the given machine and repository IDs.
-func (d *Store) ListEnabledRepoMirrors(ctx context.Context, machineID string, repoIDs []string) ([]repository.RepoMirrorRecord, error) {
-	out := []repository.RepoMirrorRecord{}
-	if machineID == "" || len(repoIDs) == 0 {
-		return out, nil
+// CreateOnDemandRepoMirror enrolls an unconfigured pair and returns its saved settings.
+// An explicit configuration or another enrollment can win the insert race.
+func (d *Store) CreateOnDemandRepoMirror(ctx context.Context, machineID, repoID string, now time.Time) (*repository.RepoMirrorRecord, error) {
+	if !repository.ValidateMirrorMachineID(machineID) || !repository.ValidateMirrorRepoID(repoID) {
+		return nil, repository.Problem("invalid")
 	}
 	err := d.Transaction(ctx, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT `+repoMirrorColumns+`
-			FROM repo_mirrors
-			WHERE machine_id=$1 AND repo_id = ANY($2) AND enabled = TRUE
-			ORDER BY repo_id ASC`, machineID, repoIDs)
-		if err != nil {
-			return err
-		}
-		defer rows.Close()
-		for rows.Next() {
-			r, err := scanRepoMirror(rows)
-			if err != nil {
-				return err
-			}
-			out = append(out, r)
-		}
-		return rows.Err()
+		_, err := tx.Exec(ctx, `INSERT INTO repo_mirrors
+			(machine_id, repo_id, enabled, auto_sync, sync_interval_minutes, updated_at)
+			VALUES ($1,$2,TRUE,FALSE,$3,$4)
+			ON CONFLICT (machine_id, repo_id) DO NOTHING`, machineID, repoID, repository.DefaultMirrorSyncIntervalMinutes, now.UTC())
+		return err
 	})
-	return out, err
+	if err != nil {
+		return nil, err
+	}
+	return d.RepoMirror(ctx, machineID, repoID)
 }
 
 // ListDueAutoSyncRepoMirrors returns enabled auto-sync mirrors whose next_sync_at is unset or at/before now.

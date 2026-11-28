@@ -53,10 +53,14 @@ func (s *Service) toolTaskDecided(ctx context.Context, machine, self string, arg
 		return "", fmt.Errorf("task %s is supervised by another conversation: record the owner's answer from the main conversation or its supervisor", t.ID)
 	}
 	// The decision it answers: a recurring check's goes to the supervisor, not the Agent (checkDecided), and the reply
-	// says so, so neither conversation takes the choice for one the Agent has.
+	// says so, so neither conversation takes the choice for one the Agent has. An open personal verification (user_check)
+	// has no multi-option decision ask; when the owner explicitly passes it in chat, settle it through acceptTry.
 	asked, ok := s.askCopy(t.ID)
 	if ok && asked.OutsideID != "" {
 		return "", fmt.Errorf("task %s is an outside decision: only its owner's Needs-you answer may settle it, not task_decided", t.ID)
+	}
+	if t.DoneAt == nil && t.Supervision.state(t) == reviewUserCheck {
+		return s.toolTaskDecidedUserCheck(ctx, machine, self, t.ID, a.Option, a.Said)
 	}
 	var result acceptResult
 	var err error
@@ -93,6 +97,45 @@ func (s *Service) toolTaskDecided(ctx context.Context, machine, self string, arg
 		return fmt.Sprintf("Recorded: the owner chose %q for task %s's decision. Its recurring progress check raised it, so, as their answer on the card would, the choice went to the task's supervisor as a check signal, not to its agent.", a.Option, t.ID), nil
 	}
 	return fmt.Sprintf("Recorded: the owner chose %q for task %s's decision, and it went to the task's agent as their answer on the card would.", a.Option, t.ID), nil
+}
+
+// toolTaskDecidedUserCheck settles an open personal verification (user_check) when the owner verbally passes it in a
+// conversation. Only an explicit approval word (passWords, such as "Pass" or "通过") settles the round; change requests
+// or non-pass options are refused so the supervisor routes them to rework or agent_send instead.
+func (s *Service) toolTaskDecidedUserCheck(ctx context.Context, machine, self, id, option, said string) (string, error) {
+	if !passWords.MatchString(option) {
+		return "", fmt.Errorf("task %s is awaiting the owner's verification (user_check), not a multi-option decision: pass option \"Pass\" with the owner's approval words in said to pass and close it, or use task_review(verdict=%q) if they requested changes", id, reviewRework)
+	}
+	s.reviewDismissals.actions.acquire(id)
+	defer s.reviewDismissals.actions.release(id)
+	t, ok := s.todoNow(id)
+	asked, askOK := s.askCopy(id)
+	if !ok || t.DoneAt != nil || t.Supervision.state(t) != reviewUserCheck ||
+		!askOK || decideAsk(&asked) || asked.Conclusion || asked.AskedAt.IsZero() || !asked.AcceptedAt.IsZero() ||
+		acceptAskEnded(&asked, t) || acceptAskStale(&asked, t) {
+		return "", fmt.Errorf("task %s has no personal verification waiting for the owner (answered, re-asked or closed meanwhile): nothing recorded", id)
+	}
+	result, err := s.acceptTryAsDismissalLocked(ctx, id, "", asked.AskedAt, false)
+	if err != nil {
+		return "", err
+	}
+	if !result.taken {
+		return "", fmt.Errorf("task %s has no personal verification waiting for the owner (answered, re-asked or closed meanwhile): nothing recorded", id)
+	}
+	if st := s.todoDB(); st != nil {
+		at, dec := decisionNow(), "dec_"+randomHex(8)
+		l := s.botLang(ctx)
+		question := cmp.Or(verdictText(l, &asked, currentDelivery(t)), i18n.T(l, "assistant-reports.verdict_verify"))
+		if inserted, err := s.insertDecision(ctx, st, db.TodoDecisionRow{
+			ID: dec, TodoID: id, Question: question, Choice: decisionText(option), Reason: decisionText(said),
+			Source: db.DecisionManual, SourceMachine: machine, SourceSession: self, CreatedAt: at,
+		}); err != nil {
+			s.logf("task %s: record oral user_check pass decision: %v", id, err)
+		} else if inserted {
+			s.decisionsChanged(ctx, id, at)
+		}
+	}
+	return fmt.Sprintf("Recorded: the owner passed task %s's personal verification (%q). The task is now accepted, verified, and closed (out of their Needs you).", id, option), nil
 }
 
 // decisionTold: the owner chose option label of task id's waiting decision in conversation (machine, session), which

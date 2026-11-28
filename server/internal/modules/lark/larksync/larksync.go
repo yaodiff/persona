@@ -14,6 +14,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -216,6 +217,32 @@ func (s *Syncer) ResolveNamesWithFallback(ctx context.Context, b larksyncwire.Bi
 	sess := &session{s: s, base: botcard.ResolveDomain(b.App.Domain), token: token, deadline: deadline}
 	overBudget := func() bool { return !s.now().Before(deadline) }
 	owner := openIDOf(b.AccountID)
+	now := s.now()
+	prog := parseNamesProgress(req.Progress, now)
+	// tracked are the member list scans this round keeps in prog: the chat's senders they were checked for, since when.
+	type trackedScan struct {
+		seen []string
+		at   int64
+	}
+	tracked := map[string]trackedScan{}
+	chatMembers := map[string]*chatMemberList{}
+	// finish ends the round: it keeps the progress and the names learned, and turns the budget running out into a
+	// partial round, which is not an error (the next round resumes).
+	finish := func(err error) (larksyncwire.NameResolveResult, error) {
+		for chatID, t := range tracked {
+			if l := chatMembers[chatID]; l != nil && !l.denied {
+				prog.keepScan(chatID, l, t.seen, t.at)
+			}
+		}
+		out.Progress = prog.encode()
+		book := parseNameBook(req.NameBook)
+		book.learnAll(out.UserNames, now)
+		out.NameBook = book.encode()
+		if err != nil && ctx.Err() == nil && errors.Is(err, context.DeadlineExceeded) {
+			out.Partial, err = true, nil
+		}
+		return out, err
+	}
 
 	contactTried := map[string]string{}
 	contactOff := false
@@ -225,8 +252,12 @@ func (s *Syncer) ResolveNamesWithFallback(ctx context.Context, b larksyncwire.Bi
 		if id == "" || !isContactUser(id, "") {
 			return "", nil
 		}
-		if name, tried := contactTried[id]; tried {
+		if name, seen := contactTried[id]; seen {
 			return name, nil
+		}
+		if tried(prog.Contact, id) {
+			contactTried[id] = ""
+			return "", nil
 		}
 		if contactOff {
 			return "", nil
@@ -261,10 +292,16 @@ func (s *Syncer) ResolveNamesWithFallback(ctx context.Context, b larksyncwire.Bi
 				return "", nil
 			}
 			contactTried[id] = ""
+			if e := asSyncError(err); e == nil || (e.Kind != larksyncwire.ErrKindRateLimited && e.Kind != larksyncwire.ErrKindTransient) {
+				mark(&prog.Contact, id, now) // not visible to this user: asked again after namesRetryAfter
+			}
 			return "", nil
 		}
 		name := strings.TrimSpace(data.User.Name)
 		contactTried[id] = name
+		if name == "" {
+			mark(&prog.Contact, id, now)
+		}
 		if name != "" {
 			out.UserNames[id] = name
 		}
@@ -286,7 +323,6 @@ func (s *Syncer) ResolveNamesWithFallback(ctx context.Context, b larksyncwire.Bi
 	}
 
 	known := nameBookNames(req.NameBook)
-	chatMembers := map[string]*chatMemberList{}
 	chatMembersOff := false
 	// memberName reads chatID's members on demand until want is among them ("" reads the whole list) and says want's
 	// name; it returns the members read so far.
@@ -300,6 +336,17 @@ func (s *Syncer) ResolveNamesWithFallback(ctx context.Context, b larksyncwire.Bi
 				return nil, nil
 			}
 			l = &chatMemberList{}
+			if want != "" {
+				// A group's scan resumes where an earlier round stopped while it was checked for every sender
+				// this chat wants named now; otherwise it starts again from the first page.
+				wanted := chatWanted(req.ChatSenders[chatID])
+				t := trackedScan{seen: wanted, at: now.Unix()}
+				if sc := prog.scanFor(chatID, wanted); sc != nil {
+					l.next, l.pages, l.done = sc.Next, sc.Pages, sc.Done
+					t = trackedScan{seen: sc.Seen, at: sc.At}
+				}
+				tracked[chatID] = t
+			}
 			chatMembers[chatID] = l
 		}
 		if !l.done && !chatMembersOff {
@@ -346,14 +393,14 @@ func (s *Syncer) ResolveNamesWithFallback(ctx context.Context, b larksyncwire.Bi
 			}
 			name, err := lookupContact(sid)
 			if err != nil {
-				return out, err
+				return finish(err)
 			}
 			if name != "" {
 				continue
 			}
 			members, err := memberName(chatID, sid)
 			if err != nil {
-				return out, err
+				return finish(err)
 			}
 			if mname := members[sid]; mname != "" {
 				out.UserNames[sid] = mname
@@ -368,7 +415,7 @@ func (s *Syncer) ResolveNamesWithFallback(ctx context.Context, b larksyncwire.Bi
 			continue
 		}
 		if _, err := lookupContact(id); err != nil {
-			return out, err
+			return finish(err)
 		}
 	}
 
@@ -392,7 +439,7 @@ func (s *Syncer) ResolveNamesWithFallback(ctx context.Context, b larksyncwire.Bi
 		var targetID string
 		if peer == "" {
 			if overBudget() {
-				return out, context.DeadlineExceeded
+				return finish(context.DeadlineExceeded)
 			}
 			var data struct {
 				Name          string `json:"name"`
@@ -408,13 +455,13 @@ func (s *Syncer) ResolveNamesWithFallback(ctx context.Context, b larksyncwire.Bi
 			}, &data)
 			if err != nil {
 				if ctx.Err() != nil {
-					return out, ctx.Err()
+					return finish(ctx.Err())
 				}
 				if runCtx.Err() != nil {
-					return out, runCtx.Err()
+					return finish(runCtx.Err())
 				}
 				if fatal(err) {
-					return out, err
+					return finish(err)
 				}
 			} else {
 				if name := strings.TrimSpace(data.Name); name != "" {
@@ -431,7 +478,7 @@ func (s *Syncer) ResolveNamesWithFallback(ctx context.Context, b larksyncwire.Bi
 						} else {
 							name, cerr := lookupContact(targetID)
 							if cerr != nil {
-								return out, cerr
+								return finish(cerr)
 							}
 							peer = name
 						}
@@ -451,7 +498,7 @@ func (s *Syncer) ResolveNamesWithFallback(ctx context.Context, b larksyncwire.Bi
 		if peer == "" {
 			members, err := memberName(chatID, "")
 			if err != nil {
-				return out, err
+				return finish(err)
 			}
 			if targetID != "" && members[targetID] != "" {
 				peer = members[targetID]
@@ -481,11 +528,11 @@ func (s *Syncer) ResolveNamesWithFallback(ctx context.Context, b larksyncwire.Bi
 			continue
 		}
 		msgID := strings.TrimSpace(req.SampleMessages[sid])
-		if msgID == "" {
+		if msgID == "" || tried(prog.Message, sid) {
 			continue
 		}
 		if overBudget() {
-			return out, context.DeadlineExceeded
+			return finish(context.DeadlineExceeded)
 		}
 		var data struct {
 			Items []apiMessage `json:"items"`
@@ -498,13 +545,13 @@ func (s *Syncer) ResolveNamesWithFallback(ctx context.Context, b larksyncwire.Bi
 		}, &data)
 		if err != nil {
 			if ctx.Err() != nil {
-				return out, ctx.Err()
+				return finish(ctx.Err())
 			}
 			if runCtx.Err() != nil {
-				return out, runCtx.Err()
+				return finish(runCtx.Err())
 			}
 			if fatal(err) {
-				return out, err
+				return finish(err)
 			}
 			continue
 		}
@@ -513,6 +560,8 @@ func (s *Syncer) ResolveNamesWithFallback(ctx context.Context, b larksyncwire.Bi
 		}
 		if name := msgNames[sid]; name != "" {
 			out.UserNames[sid] = name
+		} else {
+			mark(&prog.Message, sid, now)
 		}
 	}
 	// Pass 5: the binding's name book, for a sender no API names now (a member who left the group, a bot an earlier
@@ -533,10 +582,10 @@ func (s *Syncer) ResolveNamesWithFallback(ctx context.Context, b larksyncwire.Bi
 			continue
 		}
 		key := chatID + "\x00" + strconv.FormatInt(at.Unix()/3600, 10)
-		if !scanned[key] {
+		if !scanned[key] && !tried(prog.Mention, key) {
 			scanned[key] = true
 			if overBudget() {
-				return out, context.DeadlineExceeded
+				return finish(context.DeadlineExceeded)
 			}
 			var want []string
 			for _, other := range req.ChatSenders[chatID] {
@@ -546,12 +595,18 @@ func (s *Syncer) ResolveNamesWithFallback(ctx context.Context, b larksyncwire.Bi
 			}
 			if err := scanMentions(runCtx, sess, chatID, at, want, msgNames, overBudget); err != nil {
 				if ctx.Err() != nil {
-					return out, ctx.Err()
+					return finish(ctx.Err())
 				}
 				if runCtx.Err() != nil {
-					return out, runCtx.Err()
+					return finish(runCtx.Err())
 				}
-				return out, err
+				return finish(err)
+			}
+			if overBudget() {
+				return finish(context.DeadlineExceeded) // cut short: this hour is scanned again next round
+			}
+			if msgNames[sid] == "" {
+				mark(&prog.Mention, key, now)
 			}
 		}
 		for _, other := range req.ChatSenders[chatID] {
@@ -580,11 +635,24 @@ func (s *Syncer) ResolveNamesWithFallback(ctx context.Context, b larksyncwire.Bi
 		for _, rawID := range req.OpenIDs {
 			id := strings.TrimSpace(string(rawID))
 			if id != "" && isContactUser(id, "") && out.UserNames[id] == "" {
-				return out, contactScopeErr
+				return finish(contactScopeErr)
 			}
 		}
 	}
-	return out, nil
+	return finish(nil)
+}
+
+// chatWanted is the sorted, unique contact users among a chat's unnamed senders: what its member list scan is
+// checked for.
+func chatWanted(senders []string) []string {
+	var out []string
+	for _, sid := range senders {
+		if sid = strings.TrimSpace(sid); sid != "" && isContactUser(sid, "") {
+			out = append(out, sid)
+		}
+	}
+	slices.Sort(out)
+	return slices.Compact(out)
 }
 
 // Media fetches a message's image or file by its attachment Ref ("<binding key>|<message id>|<key>|<image|file>"),

@@ -3,7 +3,9 @@
 // POST /todos/{id}/accept, the route the briefing's Accept takes (Brief.tsx) — OK takes a decision's recommendation, Got it
 // acknowledges a conclusion, Accept verifies a deployed to-do. A decision that recommends nothing has no button: it is
 // answered in the conversation the task came from.
-import { useState } from "react";
+import { VerificationFollowUp } from "./assistant/VerificationFollowUp";
+import { EvidenceLink } from "./assistant/EvidenceLink";
+import { useRef, useState } from "react";
 import { t } from "../i18n";
 import { errorText } from "../lib/api";
 import { acceptBrief, setRoute } from "../lib/feed";
@@ -12,7 +14,7 @@ import { navigate } from "../lib/router";
 import { stateName } from "../lib/state-labels";
 import { refreshTodos } from "../lib/store";
 import { askTake, askTone, openAsk, type AskTake, type Todo, type TodoAsk } from "../lib/todos";
-import { Button, cx, toast } from "../ui/atoms";
+import { Button, cx, toast, type ToastAction } from "../ui/atoms";
 import { Icon, type IconName } from "../ui/icons";
 
 /** Where answering one round stands: not yet, sent, the hub took it, or that round was already answered (409). */
@@ -23,7 +25,8 @@ export interface TodoAskControls {
   onAccept?: (todoId: string, askedAt: string) => ReturnType<typeof acceptBrief>;
   onOpenConversation?: (todo: Todo, ask: TodoAsk) => void;
   onRefresh?: () => void | Promise<void>;
-  onNotice?: (message: string, tone: "ok" | "error") => void;
+  /** `resend`: on a failure, the action that answers the same round again (#17431). */
+  onNotice?: (message: string, tone: "ok" | "error", resend?: ToastAction) => void;
 }
 
 export interface TodoAskLineProps extends TodoAskControls {
@@ -75,7 +78,15 @@ export function useTakeAsk(
   const [state, setState] = useState<{ round: string; taking: AskTaking }>({ round: "", taking: "idle" });
   const taking = state.round === ask.asked_at ? state.taking : "idle";
   const what = askTake(ask);
-  const failed = (e: unknown) => onNotice(t("todos.ask_failed", { error: errorText(e) }), "error");
+  // One answer on its way at a time, from the button or the failure's Resend alike: never two for one round.
+  const running = useRef(false);
+  const current = useRef(ask.asked_at);
+  current.current = ask.asked_at;
+  const failed = (e: unknown, resend?: ToastAction) => {
+    const text = t("todos.ask_failed", { error: errorText(e) });
+    if (resend) onNotice(text, "error", resend);
+    else onNotice(text, "error");
+  };
   const refresh = async () => {
     try {
       await onRefresh();
@@ -84,7 +95,8 @@ export function useTakeAsk(
     }
   };
   const take = async () => {
-    if (taking !== "idle" || !what) return;
+    if (running.current || taking !== "idle" || !what) return;
+    running.current = true;
     const round = ask.asked_at;
     setState({ round, taking: "busy" });
     try {
@@ -95,8 +107,15 @@ export function useTakeAsk(
       if (onRefresh !== refreshTodos || onAccept !== acceptBrief || res === "handled") void refresh();
     } catch (e) {
       setState({ round, taking: "idle" });
-      failed(e);
+      // the choice stays: the button works again, and the failure offers to send this round once more
+      failed(e, { label: t("todos.ask_resend"), run: () => void resend(round) });
+    } finally {
+      running.current = false;
     }
+  };
+  // Resend from the failure: the same round only, while nothing else for it is on its way.
+  const resend = (round: string) => {
+    if (round === current.current) void take();
   };
   return { taking, take };
 }
@@ -189,6 +208,8 @@ function AskPanel({ todo, ask, onOpenConversation = openConversation, ...control
         <span className="text-[12.5px] font-semibold text-ink-2">{stateName("needs_you")}</span>
       </div>
       <p className={cx("mt-2 text-[13.5px] font-medium leading-[1.55] select-text [overflow-wrap:anywhere]", TONE[tone])}>{ask.verdict}</p>
+      {!ask.outcome && ask.summary && <p className="mt-1 whitespace-pre-wrap text-sm leading-relaxed text-ink-2 select-text [overflow-wrap:anywhere]" title={ask.summary}>{ask.summary}</p>}
+      {!ask.outcome && <EvidenceLink verification link={ask.link} todoId={todo.id} />}
       {ask.recommend && <p className="mt-1 text-[13px] leading-[1.55] text-ink select-text [overflow-wrap:anywhere]">{t("assistant-brief.recommend", { option: ask.recommend })}</p>}
       {!what && <p className="mt-1 text-[12.5px] leading-[1.6] text-ink-3">{t("todos.ask_answer_hint")}</p>}
       {(what || (decide && todo.origin)) && (
@@ -203,6 +224,7 @@ function AskPanel({ todo, ask, onOpenConversation = openConversation, ...control
                 {takeLabel(what, false)}
               </Button>
             ))}
+          {taking === "idle" && <VerificationFollowUp todo={todo} />}
           {decide && todo.origin && (
             // the conversation the task came from: the to-do's manager's, whichever assistant is current
             <Button icon="chat" onClick={() => onOpenConversation(todo, ask)}>

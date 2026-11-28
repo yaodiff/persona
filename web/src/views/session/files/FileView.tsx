@@ -3,8 +3,7 @@
 // Text files come a page (2 MB) at a time; only the lines on screen are rendered, so big files stay smooth.
 import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from "react";
 import { api, enc, errorText, fileDownloadURL, fileThumbURL, isAbort } from "../../../lib/api";
-import { delimitedSheet, type Sheet } from "../../../lib/sheets";
-import type { SheetReply, SheetRequest } from "../../../lib/sheets.worker";
+import { ModuleFilePreview } from "../../../core/ModuleFilePreview";
 import {
   base64Bytes,
   columns,
@@ -31,15 +30,15 @@ import { Icon } from "../../../ui/icons";
 import { Markdown } from "../../../ui/Markdown";
 import { ImageViewer, type ViewerImage } from "../../chat/ImageViewer";
 import { PanelHeader } from "../../../ui/PanelHeader";
-import { fileBytes, TOKEN_CLASS } from "./file-data";
+import { TOKEN_CLASS } from "./file-data";
 import { GutterNumber, LineBox, useLinePick, type LinePick } from "./LineComment";
 import { BackHeader, Empty, FileGlyph, Segmented, useWindow } from "./parts";
 import { parseNotebook } from "../../../lib/notebook";
 import { HtmlPreview } from "./HtmlPreview";
+import { FileSelection, type FileCommentTarget } from "./FileSelection";
 import { MediaPlayer } from "../../../ui/Media";
 import { NotebookView } from "./NotebookView";
-import { OfficeView } from "./OfficeView";
-import { SheetView } from "./SheetView";
+import { SheetLoader } from "./SheetLoader";
 import { editProblem, FileEdit } from "./FileEdit";
 import { FILE_WRITE_FEATURE } from "../../../lib/file-ops";
 import { hubHas, useStore } from "../../../lib/store";
@@ -52,10 +51,8 @@ const MAX_JSON = 24 << 20; // JSON is read whole up to this, then indented
 const COLOR_LINES = 100_000;
 const COLOR_BYTES = 8 << 20;
 const PRETTY_BYTES = 8 << 20; // bigger JSON shows as read, not re-indented
-const MAX_TABLE_TEXT = 64 << 20; // a CSV is read whole up to this, then parsed
 const MAX_NOTEBOOK = 64 << 20; // a notebook is read whole up to this (its outputs' pictures are inside)
 const MAX_HTML = 16 << 20; // an HTML page is read whole up to this to preview
-const MAX_TABLE_BYTES = 200 << 20; // a workbook bigger than this is not opened in the browser
 
 // stream=1: a binary file comes described, its bytes from file/download by Range (docs/protocol/protocol.md "File preview"); an
 // older hub ignores it and sends base64 as before.
@@ -67,29 +64,6 @@ export function fileURL(mid: string, path: string, cwd?: string, offset = 0) {
 function inlineSrc(mid: string, f: FileContent, cwd?: string): string {
   if (typeof f.text === "string") return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(f.text)}`; // an SVG, read as text
   return f.stream ? fileDownloadURL(mid, f.path, cwd, { inline: true }) : `data:${f.mime};base64,${f.data ?? ""}`;
-}
-
-/** Parses a table file in a worker: a workbook's bytes, or delimited text (small ones right here). */
-function parseSheets(req: SheetRequest, signal: AbortSignal): Promise<Sheet[]> {
-  if ("text" in req && req.text.length < 256 << 10) return Promise.resolve([delimitedSheet(req.name, req.text)]);
-  return new Promise((resolve, reject) => {
-    const w = new Worker(new URL("../../../lib/sheets.worker.ts", import.meta.url), { type: "module" });
-    const done = () => w.terminate();
-    signal.addEventListener("abort", () => {
-      done();
-      reject(new DOMException("aborted", "AbortError"));
-    });
-    w.onmessage = (e: MessageEvent<SheetReply>) => {
-      done();
-      if ("error" in e.data) reject(new Error(e.data.error));
-      else resolve(e.data.sheets);
-    };
-    w.onerror = (e) => {
-      done();
-      reject(new Error(e.message || t("session-files-fileview.sheet_parse_failed")));
-    };
-    w.postMessage(req, "bytes" in req ? [req.bytes] : []);
-  });
 }
 
 // ── loading ───────────────────────────────────────────────
@@ -238,6 +212,7 @@ export function FileView({
   cwd,
   line,
   lineTo,
+  leading,
   readOnly,
   onBack,
   onClose,
@@ -252,6 +227,8 @@ export function FileView({
   line?: number;
   /** The last line of the range marked, when it is one. */
   lineTo?: number;
+  /** Optional leading control in the header (e.g. directory tree toggle in the File Workbench). */
+  leading?: React.ReactNode;
   /** Suppresses edit, Show in Files, and line comments while keeping reads and downloads available. */
   readOnly?: boolean;
   onBack?: () => void;
@@ -336,6 +313,7 @@ export function FileView({
 
   const name = f?.name || fileName(path);
   const full = f?.path || path;
+  const comment = !readOnly && f && commentKey(mid, sid) ? { path: full, mid, sid, cwd } : undefined;
   const where = kind === "directory" ? shortPath(full) : shortPath(dirName(full)) || full; // the name is the title
   const actions = (
     <>
@@ -407,11 +385,9 @@ export function FileView({
         <Loading label={t("session-files-fileview.reading_notebook", { size: bytes(f.size) })} />
       </div>
     );
-  } else if (kind === "office") {
-    body = <OfficeView mid={mid} cwd={cwd} file={f} onDownload={download} />;
   } else if (kind === "sheet" && mode === "rendered") {
-    body = <SheetLoader mid={mid} cwd={cwd} doc={doc} file={f} onDownload={download} />;
-  } else if (kind === "binary") {
+    body = <SheetLoader file={f} source={doc.read} />;
+  } else if (kind === "binary" || kind === "office" || kind === "workbook") {
     body = (
       <Empty
         icon="read"
@@ -424,8 +400,9 @@ export function FileView({
         }
       />
     );
+    if (kind !== "binary") body = <ModuleFilePreview key={f.path} kind={kind} mid={mid} cwd={cwd} file={f} onDownload={download}>{body}</ModuleFilePreview>;
   } else if (kind === "markdown" && mode === "rendered") {
-    body = <MarkdownView doc={doc} file={f} mid={mid} onOpenPath={onOpenPath} />;
+    body = <MarkdownView doc={doc} file={f} mid={mid} onOpenPath={onOpenPath} comment={comment} />;
   } else {
     const shown = kind === "json" && mode === "rendered" && json?.pretty != null ? json.pretty : doc.text;
     const note =
@@ -444,7 +421,7 @@ export function FileView({
             : json?.error
               ? t("session-files-fileview.invalid_json", { error: json.error })
               : "";
-    body = <CodeView doc={doc} file={f} text={shown} line={line} lineTo={lineTo} note={note} where={{ mid, sid, cwd, readOnly }} />;
+    body = <CodeView doc={doc} file={f} text={shown} line={line} lineTo={lineTo} note={note} where={{ mid, sid, cwd, readOnly }} source={shown === doc.text} />;
   }
 
   if (editing && canWrite && f) {
@@ -465,9 +442,9 @@ export function FileView({
   return (
     <>
       {onBack ? (
-        <BackHeader title={name} subtitle={where} actions={actions} onBack={onBack} onClose={onClose} />
+        <BackHeader title={name} subtitle={where} leading={leading} actions={actions} onBack={onBack} onClose={onClose} />
       ) : (
-        <PanelHeader icon={kind === "directory" ? "folder" : kind === "image" ? "image" : "read"} title={name} subtitle={where} actions={actions} onClose={onClose} />
+        <PanelHeader icon={kind === "directory" ? "folder" : kind === "image" ? "image" : "read"} title={name} subtitle={where} leading={leading} actions={actions} onClose={onClose} />
       )}
       <div className="flex min-h-0 flex-1 flex-col" key={path}>
         {doc.pageError && !doc.changed && (kind !== "sheet" || mode === "source") && <div role="alert" className="flex shrink-0 flex-wrap items-center gap-2 border-b border-line px-3 py-2 text-xs text-ink-2">
@@ -482,7 +459,7 @@ export function FileView({
 
 // ── code ──────────────────────────────────────────────────
 
-function CodeView({ doc, file, text, line, lineTo, note, where }: { doc: FileDoc; file: FileContent; text: string; line?: number; lineTo?: number; note: string; where: { mid: string; sid?: string; cwd?: string; readOnly?: boolean } }) {
+function CodeView({ doc, file, text, line, lineTo, note, where, source }: { doc: FileDoc; file: FileContent; text: string; line?: number; lineTo?: number; note: string; where: { mid: string; sid?: string; cwd?: string; readOnly?: boolean }; source: boolean }) {
   const name = file.name;
   const lines = useMemo(() => splitLines(text), [text]);
   const lang = useMemo<Lang | null>(() => (text.length <= COLOR_BYTES && lines.length <= COLOR_LINES ? languageOf(name, lines[0]) : null), [name, text.length, lines]);
@@ -569,9 +546,11 @@ function CodeView({ doc, file, text, line, lineTo, note, where }: { doc: FileDoc
           </div>
         </div>
       )}
+      {key && lines.length > 0 && <FileSelection view={scroller} file={{ path: file.path, ...where }} lines={lines} source={source} maxWidth={MAX_LINE} />}
       {key && pick.range && (
         <LineBox
           where={`${relativeTo(where.cwd, file.path)}:${rangeLabel(pick.range.from, pick.range.to)}`}
+          anchor={pick.anchor}
           onCancel={pick.clear}
           onAdd={(body) => {
             const r = pick.range!;
@@ -585,7 +564,7 @@ function CodeView({ doc, file, text, line, lineTo, note, where }: { doc: FileDoc
   );
 }
 
-const NO_PICK: LinePick = { range: null, sweeping: null, down: () => {}, enter: () => {}, clear: () => {} };
+const NO_PICK: LinePick = { range: null, anchor: null, sweeping: null, down: () => {}, enter: () => {}, clear: () => {} };
 
 function CodeRow({ n, digits, text, tokens, cut, mark, picked, gutter }: { n: number; digits: number; text: string; tokens: Token[]; cut: boolean; mark: boolean; picked: boolean; gutter?: { pick: LinePick; marked?: number } }) {
   const parts: React.ReactNode[] = [];
@@ -610,9 +589,9 @@ function CodeRow({ n, digits, text, tokens, cut, mark, picked, gutter }: { n: nu
         className={cx("sticky left-0 shrink-0 border-r border-line pr-3 pl-3 text-right tabular-nums select-none", mark || picked ? "font-semibold text-accent-ink" : "bg-inset text-ink-3")}
         style={{ width: `calc(${digits}ch + 25px)`, ...(mark || picked ? { background: "linear-gradient(var(--accent-tint), var(--accent-tint)), var(--inset)" } : {}) }}
       />
-      <span className="pr-6 pl-3 whitespace-pre text-ink">
+      <span data-file-code-text className="pr-6 pl-3 whitespace-pre text-ink">
         {parts}
-        {cut && <span className="text-ink-3 select-none">{t("session-files-fileview.line_cut", { max: MAX_LINE })}</span>}
+        {cut && <span data-file-truncation-marker className="text-ink-3 select-none">{t("session-files-fileview.line_cut", { max: MAX_LINE })}</span>}
       </span>
     </div>
   );
@@ -649,9 +628,10 @@ function machineImage(mid: string, path: string): Promise<string | null> {
   return p;
 }
 
-function MarkdownView({ doc, file, mid, onOpenPath }: { doc: FileDoc; file: FileContent; mid: string; onOpenPath: (p: string) => void }) {
+function MarkdownView({ doc, file, mid, onOpenPath, comment }: { doc: FileDoc; file: FileContent; mid: string; onOpenPath: (p: string) => void; comment?: FileCommentTarget }) {
   const chunks = useMemo(() => markdownChunks(simplifyHTML(doc.text)), [doc.text]);
   const box = useRef<HTMLDivElement>(null);
+  const scroller = useRef<HTMLDivElement>(null);
   const base = dirName(file.path);
 
   // Relative images point at the machine, not at this page: swap them for the bytes read from there before paint.
@@ -683,7 +663,7 @@ function MarkdownView({ doc, file, mid, onOpenPath }: { doc: FileDoc; file: File
   };
 
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto" onClick={click} data-testid="file-markdown">
+    <div ref={scroller} className="min-h-0 flex-1 overflow-y-auto" onClick={click} data-testid="file-markdown">
       <div ref={box} className="mx-auto flex max-w-[760px] flex-col gap-4 px-5 py-5 sm:px-7">
         {chunks.map((c, i) => (
           <div key={i} style={{ contentVisibility: "auto", containIntrinsicSize: "auto 480px" }}>
@@ -701,51 +681,9 @@ function MarkdownView({ doc, file, mid, onOpenPath }: { doc: FileDoc; file: File
           </div>
         )}
       </div>
+      {comment && <FileSelection view={scroller} file={comment} />}
     </div>
   );
-}
-
-// ── tables ────────────────────────────────────────────────
-
-/** Reads a bounded CSV/TSV preview or a workbook's whole bytes and parses it off the main thread. */
-function SheetLoader({ mid, cwd, doc, file, onDownload }: { mid: string; cwd?: string; doc: FileDoc; file: FileContent; onDownload: () => void }) {
-  const [state, setState] = useState<{ sheets?: Sheet[]; error?: string; note?: string }>({});
-  const [attempt, retry] = useReducer((n: number) => n + 1, 0);
-  const { read } = doc;
-  useEffect(() => {
-    const ac = new AbortController();
-    setState({});
-    (async () => {
-      let req: SheetRequest;
-      let note = "";
-      if (typeof file.text === "string") {
-        const { text, complete } = await read(MAX_TABLE_TEXT);
-        if (ac.signal.aborted) return;
-        if (!complete) note = t("session-files-fileview.sheet_partial", { size: bytes(text.length) });
-        req = { name: file.name, text };
-      } else {
-        if (file.size > MAX_TABLE_BYTES) throw new Error(t("session-files-fileview.sheet_too_large", { size: bytes(file.size) }));
-        req = { name: file.name, bytes: await fileBytes(mid, file, cwd, ac.signal) };
-      }
-      const sheets = await parseSheets(req, ac.signal);
-      if (!ac.signal.aborted) setState({ sheets, note });
-    })().catch((e) => {
-      if (!isAbort(e) && !ac.signal.aborted) setState({ error: errorText(e) });
-    });
-    return () => ac.abort();
-  }, [mid, cwd, file, read, attempt]);
-  // a Numbers file SheetJS cannot read still has the preview Numbers wrote into it
-  if (state.error && extOf(file.name) === "numbers") return <OfficeView mid={mid} cwd={cwd} file={file} onDownload={onDownload} />;
-  if (state.error) return <Empty icon="info" title={t("session-files-fileview.sheet_open_failed")} detail={state.error}
-    action={<Button icon="retry" onClick={retry}>{t("session-files-fileview.retry")}</Button>} />;
-  if (!state.sheets)
-    return (
-      <div className="flex flex-1 items-center justify-center">
-        <Loading label={typeof file.text === "string" ? t("session-files-fileview.reading_sheet") : t("session-files-fileview.reading_sheet_size", { size: bytes(file.size) })} />
-      </div>
-    );
-  if (!state.sheets.length) return <Empty icon="info" title={t("session-files-fileview.no_sheets")} />;
-  return <SheetView sheets={state.sheets} note={state.note} />;
 }
 
 // ── images, PDFs, folders ─────────────────────────────────

@@ -235,7 +235,8 @@
             "highlight": {},
             "truncated": {},
             "load": {},
-            "line_url": {}
+            "line_url": {},
+            "navigate": {}
           },
           "additionalProperties": false
         },

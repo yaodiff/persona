@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
-	"github.com/nwverse/persona/server/internal/prompts"
 )
 
 func checkDeliveryApproval(t *testing.T, s *Service, id, state, gate, unblock string) {
@@ -214,7 +213,7 @@ func TestJudgedDeliveryUsesExplicitExternalWait(t *testing.T) {
 artifact: pr https://github.com/example/app/pull/42
 waiting: Waiting for the reviewer to respond
 </closeout>`
-	if got := judgedDelivery(deliveryPR, "", unblockUser, []prompts.TaskDoneReply{{Text: reply}}); got.Unblock != unblockOther {
+	if got := judgedDelivery(deliveryPR, "", unblockUser, []taskDoneReply{doneReply(reply)}); got.Unblock != unblockOther {
 		t.Errorf("judged closeout = %+v", got)
 	}
 	if got := judgedDelivery(deliveryPR, "Waiting for your approval to contact the reviewer", unblockUser, nil); got.Unblock != unblockUser {

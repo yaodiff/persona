@@ -34,10 +34,19 @@ internal data class ChatSearchResults(val hits: List<ChatSearchHit> = emptyList(
  */
 internal class ChatSearchProjection {
     private var structureGeneration = -1L
+    private var timelineVersion = -1
 
-    fun update(revision: ChatLiveItems.Revision, frozen: Boolean, project: () -> List<Item>): List<Item>? {
-        if (frozen && structureGeneration == revision.structureGeneration) return null
-        return project().also { structureGeneration = revision.structureGeneration }
+    fun update(
+        revision: ChatLiveItems.Revision,
+        frozen: Boolean,
+        timelineVersion: Int = 0,
+        project: () -> List<Item>,
+    ): List<Item>? {
+        if (frozen && structureGeneration == revision.structureGeneration && this.timelineVersion == timelineVersion) return null
+        return project().also {
+            structureGeneration = revision.structureGeneration
+            this.timelineVersion = timelineVersion
+        }
     }
 }
 

@@ -16,7 +16,8 @@ vi.mock("./api", async (orig) => {
   };
 });
 
-import { ApiError } from "./api";
+import { t } from "../i18n";
+import { ApiError, errorText, HubUnreachableError, isTransient } from "./api";
 import {
   acceptsType, base64Bytes, bigEnough, canSend, centeredCrop, clampCrop, cropSide, deleteUploadedLook, encodingFor, EXPORT_MAX, exportCrop,
   exportRect, MIN_SIDE, maxZoom, NAME_MAX, panCrop, PNG_LIMIT, refusalText, SUBTITLE_MAX, uploadBody, uploadLook, xhrPost, ZOOM_MAX, zoomCrop,
@@ -247,6 +248,18 @@ describe("the upload request (XHR, for its progress)", () => {
     expect(e).toBeInstanceOf(ApiError);
     expect((e as ApiError).code).toBe("too_large");
     expect(refusalText(e)).toBe("Too big");
+  });
+
+  it("says a dropped connection is \"Can't reach the hub\", and may be retried", async () => {
+    vi.stubGlobal("XMLHttpRequest", FakeXHR);
+    const p = xhrPost("/looks/uploads", {}, {});
+    FakeXHR.last.onerror!();
+    const e = await p.catch((err: unknown) => err);
+    expect(e).toBeInstanceOf(HubUnreachableError);
+    expect(e).toBeInstanceOf(TypeError);
+    expect(errorText(e)).toBe(t("lib-api.cant_reach_hub"));
+    expect(refusalText(e)).toBe(t("lib-api.cant_reach_hub"));
+    expect(isTransient(e)).toBe(true);
   });
 
   it("stops when aborted", async () => {

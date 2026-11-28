@@ -324,7 +324,7 @@ func TestDirectionTreeNestsSpawnedAndSubAgents(t *testing.T) {
 	for _, k := range kids {
 		ids = append(ids, k.SessionID)
 	}
-	if !slices.Equal(ids, []string{"s-c", "s-p@a1", "s-cx"}) {
+	if !slices.Equal(ids, []string{"s-c", "s-p@a1", "s-p@a3", "s-cx"}) {
 		t.Fatalf("children: %+v", kids)
 	}
 	if kids[0].Title != "Spawned" || kids[0].State != proto.StateIdle {
@@ -334,8 +334,69 @@ func TestDirectionTreeNestsSpawnedAndSubAgents(t *testing.T) {
 		sub.Children[0].SessionID != "s-p@a2" || sub.Children[0].Title != "Read one file" {
 		t.Fatalf("sub-agents: %+v", sub)
 	}
-	if cx := kids[2]; cx.Title != "Codex child" || cx.Agent != "codex" || cx.State != proto.StateWorking {
+	if done := kids[2]; done.Title != "Done already" || done.State != proto.StateIdle {
+		t.Fatalf("stopped sub-agent: %+v", done)
+	}
+	if cx := kids[3]; cx.Title != "Codex child" || cx.Agent != "codex" || cx.State != proto.StateWorking {
 		t.Fatalf("codex child: %+v", cx)
+	}
+}
+
+func TestDirectionTreeStoppedSubagentSnapshot(t *testing.T) {
+	e := treeEnv(t)
+	e.task("Review", func(t *Todo) {
+		t.Supervision = &Supervision{Supervisor: "conv_lead_a"}
+		t.Agents = []TodoAgent{{MachineID: "mac", SessionID: "root"}}
+	})
+	root := proto.Session{MachineID: "mac", SessionID: "root", State: proto.StateIdle}
+	read := func() treeDirection {
+		t.Helper()
+		e.f.setSessions("mac", root)
+		rec := httptest.NewRecorder()
+		e.s.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/assistant/directions/tree", nil))
+		var tree directionTree
+		if err := json.Unmarshal(rec.Body.Bytes(), &tree); err != nil || rec.Code != http.StatusOK || len(tree.Directions) == 0 {
+			t.Fatalf("direction tree: %d %s", rec.Code, rec.Body)
+		}
+		return tree.Directions[0]
+	}
+
+	// The child is reported before its stopped launcher.
+	for _, running := range []bool{true, false} {
+		root.Subagents = []proto.Subagent{
+			{ID: "child", ParentID: "parent", Running: running},
+			{ID: "parent"},
+		}
+		d := read()
+		if d.Running != running {
+			t.Fatalf("child running %v: direction running %v", running, d.Running)
+		}
+		kids := d.Tasks[0].Agents[0].Children
+		if len(kids) != 1 || kids[0].SessionID != "root@parent" || kids[0].State != proto.StateIdle {
+			t.Fatalf("expected the stopped parent under the root: %+v", kids)
+		}
+		wantState := proto.StateIdle
+		if running {
+			wantState = proto.StateWorking
+		}
+		if child := kids[0].Children; len(child) != 1 || child[0].SessionID != "root@child" || child[0].State != wantState {
+			t.Fatalf("expected %s child under the stopped parent: %+v", wantState, child)
+		}
+	}
+
+	// Two stopped launchers name each other. A repeated session still occupies one row.
+	root.Subagents = []proto.Subagent{
+		{ID: "a", ParentID: "b"}, {ID: "b", ParentID: "a"}, {ID: "a", ParentID: "b"},
+	}
+	kids := read().Tasks[0].Agents[0].Children
+	if len(kids) != 1 || kids[0].SessionID != "root@a" || len(kids[0].Children) != 1 ||
+		kids[0].Children[0].SessionID != "root@b" || len(kids[0].Children[0].Children) != 0 {
+		t.Fatalf("expected one row for each session in the cycle: %+v", kids)
+	}
+
+	root.Subagents = nil
+	if kids := read().Tasks[0].Agents[0].Children; len(kids) != 0 {
+		t.Fatalf("rows absent from the new snapshot: %+v", kids)
 	}
 }
 
@@ -660,6 +721,173 @@ func TestDirectionTreeSessionsChangedSchedulesABuild(t *testing.T) {
 	}
 }
 
+func TestDirectionTreeUnifiesNeedsYouWithProjectionAndSeparatesUserCheck(t *testing.T) {
+	e := treeEnv(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Second)
+	recent := now.Add(-15 * time.Minute)
+
+	e.f.setSessions("mac",
+		proto.Session{MachineID: "mac", SessionID: "s-idle", Title: "Done run", Status: proto.StatusIdle, State: proto.StateIdle, StateSince: recent, UpdatedAt: recent},
+		proto.Session{MachineID: "mac", SessionID: "s-503-sup", Title: "Supervised 503", Status: proto.StatusIdle, State: proto.StateIdle, StateSince: recent, UpdatedAt: recent, TurnError: "API Error: 503 Service Unavailable", TurnErrorKind: proto.TurnErrorTransient},
+		proto.Session{MachineID: "mac", SessionID: "s-503-own", Title: "Unsupervised 503", Status: proto.StatusIdle, State: proto.StateIdle, StateSince: recent, UpdatedAt: recent, TurnError: "API Error: 503 Service Unavailable", TurnErrorKind: proto.TurnErrorTransient},
+		proto.Session{MachineID: "mac", SessionID: "s-held", Title: "Supervisor-held card", Status: proto.StatusBlocked, State: proto.StateNeedsYou, StateSince: recent, UpdatedAt: recent, PendingInteractions: 1},
+		proto.Session{MachineID: "mac", SessionID: "s-owner-ask", Title: "Direct owner card", Status: proto.StatusBlocked, State: proto.StateNeedsYou, StateSince: recent, UpdatedAt: recent, PendingInteractions: 1},
+	)
+	e.s.fleet.mu.Lock()
+	if e.s.fleet.interactions == nil {
+		e.s.fleet.interactions = map[string]*pending{}
+	}
+	e.s.fleet.interactions["ix_tree_held"] = &pending{ix: proto.Interaction{
+		ID: "ix_tree_held", MachineID: "mac", SessionID: "s-held",
+		Kind: proto.IxPermission, ToolName: "Bash", Delegating: true,
+		CreatedAt: recent, ExpiresAt: now.Add(time.Hour),
+	}}
+	e.s.fleet.interactions["ix_tree_owner"] = &pending{ix: proto.Interaction{
+		ID: "ix_tree_owner", MachineID: "mac", SessionID: "s-owner-ask",
+		Kind: proto.IxQuestion, ToolName: "AskUserQuestion", Delegating: false,
+		CreatedAt: recent, ExpiresAt: now.Add(time.Hour),
+	}}
+	e.s.fleet.mu.Unlock()
+
+	// Six user_check tasks (B-class): awaiting owner verification, not blocking red Needs you.
+	var userCheckIDs []string
+	for i := range 6 {
+		id := e.task("Read-only verification "+string(rune('A'+i)), func(td *Todo) {
+			td.Supervision = &Supervision{
+				Supervisor: "conv_lead_a",
+				State:      reviewUserCheck,
+				UpdatedAt:  recent,
+				Reviews:    []TaskReview{{At: recent, Verdict: reviewAccepted, UserCheck: true}},
+			}
+			td.Agents = []TodoAgent{{MachineID: "mac", SessionID: "s-idle", Title: "Done run"}}
+		})
+		userCheckIDs = append(userCheckIDs, id)
+	}
+	// One supervised 503 interrupted agent (C-class): supervisor handles it until escalated.
+	sup503ID := e.task("Supervised 503 task", func(td *Todo) {
+		td.Supervision = &Supervision{Supervisor: "conv_lead_a", UpdatedAt: recent}
+		td.Agents = []TodoAgent{{MachineID: "mac", SessionID: "s-503-sup", Title: "Supervised 503"}}
+	})
+	// One supervisor-held delegating card (C-class): held by supervisor.
+	heldID := e.task("Supervisor-held task", func(td *Todo) {
+		td.Supervision = &Supervision{Supervisor: "conv_lead_a", UpdatedAt: recent}
+		td.Agents = []TodoAgent{{MachineID: "mac", SessionID: "s-held", Title: "Supervisor-held card"}}
+	})
+	// Two genuine A-class tasks under lead A: one needs_user decision, one direct owner card.
+	decideID := e.task("Owner decision task", func(td *Todo) {
+		td.Supervision = &Supervision{
+			Supervisor: "conv_lead_a",
+			State:      reviewNeedsUser,
+			UpdatedAt:  recent,
+			Reviews:    []TaskReview{{At: recent, Verdict: reviewNeedsUser, Reason: "Choose rollout"}},
+		}
+		td.Agents = []TodoAgent{{MachineID: "mac", SessionID: "s-idle", Title: "Done run"}}
+	})
+	directCardID := e.task("Direct owner ask task", func(td *Todo) {
+		td.Supervision = &Supervision{Supervisor: "conv_lead_a", UpdatedAt: recent}
+		td.Agents = []TodoAgent{{MachineID: "mac", SessionID: "s-owner-ask", Title: "Direct owner card"}}
+	})
+	// One unsupervised 503 interrupted task (in secretary group): must STILL alert owner in Needs you.
+	unsup503ID := e.task("Personal terminal 503 task", func(td *Todo) {
+		td.Agents = []TodoAgent{{MachineID: "mac", SessionID: "s-503-own", Title: "Unsupervised 503"}}
+	})
+
+	tr := e.s.directionTree(ctx, now)
+	leadA := tr.Directions[0]
+	sec := tr.Directions[2]
+
+	stateOf := func(d treeDirection) map[string]string {
+		m := map[string]string{}
+		for _, tk := range d.Tasks {
+			m[tk.ID] = tk.State
+		}
+		return m
+	}
+	stA := stateOf(leadA)
+	for _, id := range userCheckIDs {
+		if stA[id] != treeReview {
+			t.Errorf("user_check task %s state = %q, want %q", id, stA[id], treeReview)
+		}
+	}
+	if stA[sup503ID] != treeWorking {
+		t.Errorf("supervised 503 task state = %q, want %q", stA[sup503ID], treeWorking)
+	}
+	if stA[heldID] != treeWorking {
+		t.Errorf("supervisor-held card task state = %q, want %q", stA[heldID], treeWorking)
+	}
+	if stA[decideID] != treeNeedsYou {
+		t.Errorf("needs_user decision task state = %q, want %q", stA[decideID], treeNeedsYou)
+	}
+	if stA[directCardID] != treeNeedsYou {
+		t.Errorf("direct owner ask task state = %q, want %q", stA[directCardID], treeNeedsYou)
+	}
+	if stSec := stateOf(sec); stSec[unsup503ID] != treeNeedsYou {
+		t.Errorf("unsupervised 503 task state = %q, want %q", stSec[unsup503ID], treeNeedsYou)
+	}
+
+	if leadA.Counts.NeedsYou != 2 || leadA.Counts.UserCheck != 6 || leadA.Counts.Review != 6 || leadA.Counts.Working != 2 {
+		t.Fatalf("leadA counts = %+v, want NeedsYou=2 UserCheck=6 Review=6 Working=2", leadA.Counts)
+	}
+	if got := leadA.Counts.Working + leadA.Counts.NeedsYou + leadA.Counts.Stuck + leadA.Counts.Review + leadA.Counts.Planned; got != len(leadA.Tasks) {
+		t.Fatalf("leadA 5-state sum = %d, len(tasks) = %d", got, len(leadA.Tasks))
+	}
+	if sec.Counts.NeedsYou != 1 || sec.Counts.UserCheck != 0 {
+		t.Fatalf("sec counts = %+v, want NeedsYou=1 UserCheck=0", sec.Counts)
+	}
+
+	// Cross-surface invariant: direction tree NeedsYou total equals projection Counts.NeedsYou.
+	listed := e.s.treeTodos()
+	projCounts := e.s.todoProjectionOf(ctx, listed, now).counts()
+	treeNeedsTotal := 0
+	for _, d := range tr.Directions {
+		treeNeedsTotal += d.Counts.NeedsYou
+	}
+	if treeNeedsTotal != projCounts.NeedsYou {
+		t.Fatalf("tree total NeedsYou = %d, projection Counts.NeedsYou = %d (must match)", treeNeedsTotal, projCounts.NeedsYou)
+	}
+}
+
+func TestDirectionTreeDoesNotDoubleCountCarriedPartOfStepInNeedsYou(t *testing.T) {
+	e := treeEnv(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Second)
+	recent := now.Add(-5 * time.Minute)
+
+	e.f.setSessions("mac", proto.Session{
+		MachineID: "mac", SessionID: "s-step-ask", Title: "Step asking", Status: proto.StatusBlocked, State: proto.StateNeedsYou,
+		PendingInteractions: 1, UpdatedAt: recent, StateSince: recent,
+	})
+	e.s.fleet.mu.Lock()
+	if e.s.fleet.interactions == nil {
+		e.s.fleet.interactions = map[string]*pending{}
+	}
+	e.s.fleet.interactions["ix_step_q"] = &pending{ix: proto.Interaction{
+		ID: "ix_step_q", MachineID: "mac", SessionID: "s-step-ask", Kind: proto.IxQuestion, ToolName: "AskUserQuestion",
+		CreatedAt: recent, ExpiresAt: now.Add(time.Hour),
+	}}
+	e.s.fleet.mu.Unlock()
+
+	parentID := e.task("Parent task", func(td *Todo) {
+		td.Supervision = &Supervision{Supervisor: "conv_lead_a", UpdatedAt: recent}
+	})
+	e.task("Child step asking owner", func(td *Todo) {
+		td.PartOf = parentID
+		td.Agents = []TodoAgent{{MachineID: "mac", SessionID: "s-step-ask", Title: "Step asking"}}
+		td.Supervision = &Supervision{Supervisor: "conv_lead_a", UpdatedAt: recent}
+	})
+
+	tr := e.s.directionTree(ctx, now)
+	leadA := tr.Directions[0]
+	if leadA.Counts.NeedsYou != 1 {
+		t.Fatalf("leadA counts.NeedsYou = %d, want 1 (parent carries PartOf step without double-counting)", leadA.Counts.NeedsYou)
+	}
+	projCounts := e.s.todoProjectionOf(ctx, e.s.treeTodos(), now).counts()
+	if leadA.Counts.NeedsYou != projCounts.NeedsYou {
+		t.Fatalf("leadA NeedsYou = %d, projection Counts.NeedsYou = %d (must match)", leadA.Counts.NeedsYou, projCounts.NeedsYou)
+	}
+}
+
 func TestDirectionTreeSupervisorHeldDirectAndFoldedSubagentCards(t *testing.T) {
 	e := treeEnv(t)
 	ctx := context.Background()
@@ -781,10 +1009,13 @@ func TestDirectionTreeSupervisorHeldDirectAndFoldedSubagentCards(t *testing.T) {
 	if alphaTasks[failedStartID].State != treeWorking {
 		t.Errorf("supervised failed start state = %q, want %q", alphaTasks[failedStartID].State, treeWorking)
 	}
-	// An open personal verification is the owner's to pass: the projection lists it under Needs you (reason verify,
-	// #16002), and the tree follows the projection.
-	if alphaTasks[userCheckID].State != treeNeedsYou {
-		t.Errorf("user_check task state = %q, want %q", alphaTasks[userCheckID].State, treeNeedsYou)
+	// An open personal verification is the optional "to verify" layer (#15638/#15680): calm review and
+	// counts.user_check, kept out of red Needs you on every surface, including the authoritative projection.
+	if alphaTasks[userCheckID].State != treeReview {
+		t.Errorf("user_check task state = %q, want %q", alphaTasks[userCheckID].State, treeReview)
+	}
+	if dirAlpha.Counts.UserCheck != 1 {
+		t.Errorf("dir-alpha counts = %+v, want UserCheck=1 for the personal verification", dirAlpha.Counts)
 	}
 	if alphaTasks[genuineDecideID].State != treeNeedsYou {
 		t.Errorf("owner decision task state = %q, want %q", alphaTasks[genuineDecideID].State, treeNeedsYou)
@@ -792,8 +1023,8 @@ func TestDirectionTreeSupervisorHeldDirectAndFoldedSubagentCards(t *testing.T) {
 	if !dirAlpha.Running {
 		t.Errorf("dir-alpha Running = false, want true while supervisor handles held agent cards")
 	}
-	if dirAlpha.Counts.NeedsYou != 2 {
-		t.Fatalf("dir-alpha counts = %+v, want NeedsYou=2 (the owner decision and the personal verification)", dirAlpha.Counts)
+	if dirAlpha.Counts.NeedsYou != 1 {
+		t.Fatalf("dir-alpha counts = %+v, want NeedsYou=1 (the owner decision; the personal verification is calm user_check)", dirAlpha.Counts)
 	}
 	if got := dirAlpha.Counts.Working + dirAlpha.Counts.NeedsYou + dirAlpha.Counts.Stuck + dirAlpha.Counts.Review + dirAlpha.Counts.Planned; got != len(dirAlpha.Tasks) {
 		t.Fatalf("dir-alpha 5-state sum = %d, len(tasks) = %d", got, len(dirAlpha.Tasks))
@@ -811,11 +1042,11 @@ func TestDirectionTreeSupervisorHeldDirectAndFoldedSubagentCards(t *testing.T) {
 	for _, d := range tr.Directions {
 		treeNeeds += d.Counts.NeedsYou
 	}
-	if treeNeeds != projCounts.NeedsYou || treeNeeds != 3 {
-		t.Fatalf("before escalation: treeNeeds=%d projCounts.NeedsYou=%d, want both 3", treeNeeds, projCounts.NeedsYou)
+	if treeNeeds != projCounts.NeedsYou || treeNeeds != 2 {
+		t.Fatalf("before escalation: treeNeeds=%d projCounts.NeedsYou=%d, want both 2", treeNeeds, projCounts.NeedsYou)
 	}
 
-	// Escalate the folded sub-agent's card to the user: counts must move to 3 in dir-alpha and 4 overall.
+	// Escalate the folded sub-agent's card to the user: counts must move to 2 in dir-alpha and 3 overall.
 	e.s.fleet.mu.Lock()
 	e.s.fleet.interactions["ix-alpha-sub-ro"].ix.Delegating = false
 	e.s.fleet.mu.Unlock()
@@ -826,16 +1057,16 @@ func TestDirectionTreeSupervisorHeldDirectAndFoldedSubagentCards(t *testing.T) {
 	if alphaAfter[foldedHeldID].State != treeNeedsYou || alphaAfter[foldedHeldID].Agents[0].State != proto.StateNeedsYou {
 		t.Fatalf("after escalation: folded task=%+v, want task/agent needs_you", alphaAfter[foldedHeldID])
 	}
-	if dirAlphaAfter.Counts.NeedsYou != 3 {
-		t.Fatalf("after escalation: dir-alpha counts=%+v, want NeedsYou=3", dirAlphaAfter.Counts)
+	if dirAlphaAfter.Counts.NeedsYou != 2 {
+		t.Fatalf("after escalation: dir-alpha counts=%+v, want NeedsYou=2", dirAlphaAfter.Counts)
 	}
 	projAfter := e.s.todoProjectionOf(ctx, e.s.treeTodos(), now).counts()
 	treeNeedsAfter := 0
 	for _, d := range trAfter.Directions {
 		treeNeedsAfter += d.Counts.NeedsYou
 	}
-	if treeNeedsAfter != projAfter.NeedsYou || treeNeedsAfter != 4 {
-		t.Fatalf("after escalation: treeNeeds=%d projCounts.NeedsYou=%d, want both 4", treeNeedsAfter, projAfter.NeedsYou)
+	if treeNeedsAfter != projAfter.NeedsYou || treeNeedsAfter != 3 {
+		t.Fatalf("after escalation: treeNeeds=%d projCounts.NeedsYou=%d, want both 3", treeNeedsAfter, projAfter.NeedsYou)
 	}
 }
 
@@ -910,4 +1141,149 @@ func TestCardStateChangedRefreshesTodoViewsAndDirectionTree(t *testing.T) {
 	resetFlags()
 	e.s.finished(&pending{ix: ix})
 	checkArmed("finished(resolved)", true)
+}
+
+func TestDirectionTreeEffectiveDirectionsTodosV2(t *testing.T) {
+	e := treeEnv(t)
+	now := time.Now().UTC()
+
+	// 1. Undirected umbrella parent with unanimous children under conv_lead_a (plus an undirected sibling).
+	umbrellaA := e.task("Umbrella goal A", nil)
+	umbrellaAChild1 := e.task("Umbrella A child 1", func(td *Todo) {
+		td.PartOf = umbrellaA
+		td.DirectionID = "conv_lead_a"
+	})
+	umbrellaAChild2 := e.task("Umbrella A child 2 (undirected sibling)", func(td *Todo) {
+		td.PartOf = umbrellaA
+	})
+
+	// 2. Directed parent with undirected child (part_of ancestor inheritance).
+	directedParentB := e.task("Directed parent B", func(td *Todo) {
+		td.DirectionID = "conv_lead_b"
+	})
+	inheritedChildB := e.task("Undirected child of B", func(td *Todo) {
+		td.PartOf = directedParentB
+	})
+
+	// 3. Undirected umbrella parent with conflicting children (conv_lead_a vs conv_lead_b) -> stays in secretary.
+	conflictUmbrella := e.task("Conflicting umbrella", nil)
+	conflictChildA := e.task("Conflict child A", func(td *Todo) {
+		td.PartOf = conflictUmbrella
+		td.Supervision = &Supervision{Supervisor: "conv_lead_a"}
+	})
+	conflictChildB := e.task("Conflict child B", func(td *Todo) {
+		td.PartOf = conflictUmbrella
+		td.Supervision = &Supervision{Supervisor: "conv_lead_b"}
+	})
+
+	// 4. Explicit direction_id pointing to an ended/unknown (non-leader) direction stays in secretary even when
+	// supervisor, origin, and children belong to current leader conv_lead_a.
+	endedExplicit := e.task("Explicit ended direction", func(td *Todo) {
+		td.DirectionID = "conv_lead_ended"
+		td.Origin = "conv_lead_a"
+		td.Supervision = &Supervision{Supervisor: "conv_lead_a"}
+	})
+	endedExplicitChild := e.task("Child of ended explicit", func(td *Todo) {
+		td.PartOf = endedExplicit
+		td.Supervision = &Supervision{Supervisor: "conv_lead_a"}
+	})
+
+	// 5. Worker task under a closed task-leader agent keeps existing taskOwner behavior (resolving to conv_lead_b),
+	// and an undirected umbrella parent above that orphan worker inherits conv_lead_b.
+	closedLead := e.task("Closed leader task", func(td *Todo) {
+		td.Supervision = &Supervision{Supervisor: "conv_lead_b"}
+		td.DoneAt = &now
+		td.Agents = []TodoAgent{{MachineID: "mac", SessionID: "s-lead-old", Source: sourceLeader}}
+	})
+	workerUmbrella := e.task("Umbrella above orphan worker", nil)
+	orphanWorker := e.task("Orphan worker of closed leader", func(td *Todo) {
+		td.PartOf = workerUmbrella
+		td.Supervision = &Supervision{Supervisor: leaderRef("mac", "s-lead-old")}
+		td.Agents = []TodoAgent{{MachineID: "mac", SessionID: "s-w2", Source: sourceWorker, Via: closedLead}}
+	})
+
+	// 6. Cycle in part_of stays safe and lands in secretary.
+	cycleA := e.task("Cycle A", nil)
+	cycleB := e.task("Cycle B", func(td *Todo) { td.PartOf = cycleA })
+	e.s.todos.mu.Lock()
+	e.s.todos.todos[cycleA].PartOf = cycleB
+	e.s.todos.mu.Unlock()
+
+	byID := func(tr directionTree) map[string]string {
+		out := map[string]string{}
+		for _, d := range tr.Directions {
+			group := d.ID
+			if d.Secretary {
+				group = "secretary"
+			}
+			for _, tk := range d.Tasks {
+				out[tk.ID] = group
+			}
+		}
+		return out
+	}
+
+	// Legacy mode (todos_v2 = false): zero behavior change.
+	legacy := byID(e.tree())
+	wantLegacy := map[string]string{
+		umbrellaA:          "secretary",
+		umbrellaAChild1:    "secretary", // DirectionID ignored when todos_v2=false
+		umbrellaAChild2:    "secretary",
+		directedParentB:    "secretary", // DirectionID ignored when todos_v2=false
+		inheritedChildB:    "secretary",
+		conflictUmbrella:   "secretary",
+		conflictChildA:     "conv_lead_a",
+		conflictChildB:     "conv_lead_b",
+		endedExplicit:      "conv_lead_a", // legacy uses taskOwner (supervisor)
+		endedExplicitChild: "conv_lead_a",
+		workerUmbrella:     "secretary",
+		orphanWorker:       "conv_lead_b",
+		cycleA:             "secretary",
+		cycleB:             "secretary",
+	}
+	for id, want := range wantLegacy {
+		if got := legacy[id]; got != want {
+			t.Errorf("todos_v2=false task %s (%s): group = %q, want %q", id, e.s.todos.todos[id].Title, got, want)
+		}
+	}
+
+	// Enable todos_v2 = true: direction tree aligns with resolveEffectiveDirections.
+	on := true
+	setSettings(t, e.s, func(v *Settings) { v.TodosV2 = &on })
+
+	v2 := byID(e.tree())
+	wantV2 := map[string]string{
+		umbrellaA:          "conv_lead_a",
+		umbrellaAChild1:    "conv_lead_a",
+		umbrellaAChild2:    "conv_lead_a",
+		directedParentB:    "conv_lead_b",
+		inheritedChildB:    "conv_lead_b",
+		conflictUmbrella:   "secretary",
+		conflictChildA:     "conv_lead_a",
+		conflictChildB:     "conv_lead_b",
+		endedExplicit:      "secretary",
+		endedExplicitChild: "conv_lead_a",
+		workerUmbrella:     "conv_lead_b",
+		orphanWorker:       "conv_lead_b",
+		cycleA:             "secretary",
+		cycleB:             "secretary",
+	}
+	for id, want := range wantV2 {
+		if got := v2[id]; got != want {
+			t.Errorf("todos_v2=true task %s (%s): group = %q, want %q", id, e.s.todos.todos[id].Title, got, want)
+		}
+	}
+
+	boardResp := doTodoHTTP(e.s, http.MethodGet, "/api/v1/todos", "")
+	var list todosList
+	if boardResp.Code != http.StatusOK || json.Unmarshal(boardResp.Body.Bytes(), &list) != nil || list.Board == nil {
+		t.Fatalf("GET /api/v1/todos: %d %s", boardResp.Code, boardResp.Body.String())
+	}
+	for _, row := range list.Todos {
+		if row.ID == orphanWorker || row.ID == workerUmbrella {
+			if row.EffectiveDirectionID != v2[row.ID] {
+				t.Errorf("board row %s has direction %q, tree has %q", row.ID, row.EffectiveDirectionID, v2[row.ID])
+			}
+		}
+	}
 }

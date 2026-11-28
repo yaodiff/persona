@@ -1,7 +1,8 @@
 // The seen outbox (lib/seen-outbox.ts): a session this page marked seen stays seen until the hub's own rows say it was
 // recorded, a new turn ended, or the agent works or needs you again.
 import { afterEach, describe, expect, it } from "vitest";
-import { dueMarks, heldCounts, heldRows, heldSeen, liveMarks, markOver, newMark, nextDue, SEEN_CONFIRM_MS, SEEN_KEEP_MS, SEEN_SETTLE_MS, settleMarks, unansweredMarks, type SeenMark } from "./seen-outbox";
+import { dueMarks, heldCounts, heldRows, heldSeen, liveMarks, markOver, newMark, nextDue, SEEN_CONFIRM_MS, SEEN_KEEP_MS, SEEN_SETTLE_MS, settleMarks, unansweredMarks, unseen, type SeenMark } from "./seen-outbox";
+import { activityOf } from "./format";
 import type { ListCounts } from "./session-list";
 import { runtimeIdentity } from "./runtime-list";
 import { setSideFold, unreadSides } from "./side-fold";
@@ -14,6 +15,17 @@ const row = (patch: Partial<Session> = {}): Session => ({
 });
 
 describe("seen outbox", () => {
+  it.each([{ kind: "unseen" }, { kind: "just_finished" }, { kind: "asks", unseen: true }] as const)("acknowledges $kind locally while preserving the manager's view", (reason) => {
+    const session = row({ state: "working", view: { phase: "done", reason, rank: 30 } });
+    const mark = newMark(session, T0);
+    expect(mark).toBeDefined();
+    const shown = heldSeen(session, mark, T0 + 1000);
+    expect(shown.view).toBe(session.view);
+    expect(unseen(shown)).toBe(false);
+    expect(activityOf(shown)).toBe("idle");
+    expect(unseen(session)).toBe(true);
+  });
+
   it("only waits for unread agents", () => {
     expect(newMark(row(), T0)).toBeDefined();
     expect(newMark(row({ state: "idle" }), T0)).toBeUndefined();

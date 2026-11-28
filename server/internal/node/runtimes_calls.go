@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -71,7 +72,7 @@ func (n *Node) runtimeFor(ctx context.Context, method, id string) (*runtimeConn,
 	if len(conns) == 0 {
 		// Asked lately: what the runtime whose id it is said then, unless this machine has the session by now.
 		if gone := n.runtimes.goneOf(id); gone != nil && !n.hasOwnSession(id) {
-			return nil, gone
+			return nil, n.runtimeGoneErr(id, gone)
 		}
 		return nil, nil
 	}
@@ -95,7 +96,92 @@ func (n *Node) runtimeFor(ctx context.Context, method, id string) (*runtimeConn,
 		}
 	}
 	n.runtimes.unclaim(id, gone)
-	return nil, gone
+	return nil, n.runtimeGoneErr(id, gone)
+}
+
+// runtimeGoneErr marks an owning-prefix runtime's not_found error with confirmed_missing=true when this node also sees
+// no local terminal pane, presence lock, or active start holding the session. Existing message and data fields are kept
+// untouched; any live or uncertain local ownership leaves the plain not_found error so callers stay fail-closed.
+func (n *Node) runtimeGoneErr(id string, err error) error {
+	if err == nil {
+		return nil
+	}
+	var re *rpc.Error
+	if !errors.As(err, &re) || re.Code != codeNotFound {
+		return err
+	}
+	if n.runtimeSessionLocallyHeld(id) {
+		return err
+	}
+	out := *re
+	fields := map[string]any{}
+	if len(re.Data) > 0 && json.Unmarshal(re.Data, &fields) != nil {
+		return err
+	}
+	fields["confirmed_missing"] = true
+	if raw, merr := json.Marshal(fields); merr == nil {
+		out.Data = raw
+	}
+	return &out
+}
+
+// runtimeSessionLocallyHeld reports whether this node still sees local live/starting ownership or an Antigravity
+// terminal pane or presence lock for id, vetoing confirmed_missing even when a runtime answered not_found.
+func (n *Node) runtimeSessionLocallyHeld(id string) bool {
+	if n.hasOwnSession(id) || n.isAssistantSession(id) || n.runtimeAssistant(id) || n.restarting(id) {
+		return true
+	}
+	if r := n.starts.get(id); r != nil && r.ended.IsZero() {
+		return true
+	}
+	if n.externalStarts.has(id) || n.startsBegun.within(id, n.startWait()) {
+		return true
+	}
+	if st, ok := n.state.get(id); ok && (st.AwaitingFirstMessage || !st.StartedAt.IsZero() && time.Since(st.StartedAt) < n.startWait()) {
+		return true
+	}
+	if conversation, ok := agyConversationID(id); ok {
+		if _, _, held := n.agyOpenIn(id); held || n.agyHasRawPaneAttribution(conversation) {
+			return true
+		}
+		switch agyPresenceLockProbe(filepath.Join(n.agyDataRoot(), "presence", conversation+".lock")) {
+		case agyLockHeld, agyLockUnknown:
+			return true
+		}
+	}
+	return false
+}
+
+// agyHasRawPaneAttribution checks local panes, raw host snapshots, verified pane bindings, and fresh hook reports for
+// conversation without cross-pane alias suppression, so twin terminal panes running one conversation still veto
+// confirmed_missing.
+func (n *Node) agyHasRawPaneAttribution(conversation string) bool {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	for _, a := range n.agents {
+		if a.PaneID == "" {
+			continue
+		}
+		if reportedAgyConversation(a) == conversation || n.agyReports[a.PaneID].conversation == conversation {
+			return true
+		}
+		if b := n.agyBound[a.PaneID]; b.verified && b.conversation == conversation {
+			return true
+		}
+	}
+	for _, agents := range n.hostAgents {
+		for _, a := range agents {
+			if a.PaneID != "" && reportedAgyConversation(a) == conversation {
+				return true
+			}
+		}
+	}
+	for _, rep := range n.agyReports {
+		if rep.conversation == conversation && time.Since(rep.at) <= agyReportGrace {
+			return true
+		}
+	}
+	return false
 }
 
 // hasSession: a runtime's answer to session.items {limit: 1} says the session is its own. A page does, and so does a
@@ -292,12 +378,35 @@ func (n *Node) runtimeHandle(ctx context.Context, h *runtimeConn, method string,
 				if err := n.a2aSendReady(ctx, p.SessionID); err != nil {
 					return err
 				}
+				if h.agent() == agyAgent {
+					if err := n.agyIdleCompactBeforeInput(ctx, h, p.SessionID, p.Text, p.Images, false, false); err != nil {
+						return err
+					}
+				}
 				input := map[string]any{"session_id": p.SessionID, "text": p.Text, "images": p.Images}
 				if !syntheticSegment {
 					input["client_msg_id"] = opts.ClientMsgID
 				}
+				if h.agent() == agyAgent && caps.Model && p.Model != "" {
+					input["model"] = p.Model
+				}
 				if p.PermissionMode != "" {
 					input["mode"] = p.PermissionMode
+				} else if h.agent() == agyAgent && !n.runtimeAssistant(p.SessionID) {
+					if mode := agySendMode(n.runtimePermissionMode(h, p.SessionID), n.agyRuntimeMode(p.SessionID)); mode != "" {
+						input["mode"] = mode
+					}
+				}
+				if h.agent() == agyAgent && !n.runtimeAssistant(p.SessionID) && n.state != nil {
+					if st, ok := n.state.get(p.SessionID); ok && st.Launcher != "" {
+						ch, err := n.agyChannelFor(ctx, st.Launcher)
+						if err != nil {
+							return err
+						}
+						if ch != nil {
+							input["channel"] = ch
+						}
+					}
 				}
 				if p.A2AWakeOnSend {
 					input["a2a_wake_on_send"] = true
@@ -418,16 +527,20 @@ func (n *Node) runtimeHandle(ctx context.Context, h *runtimeConn, method string,
 		for _, s := range h.sessionsCopy() {
 			if s.SessionID == p.SessionID {
 				info["cwd"], info["model"], info["agent"], info["last_activity"] = s.Cwd, s.Model, s.Agent, s.UpdatedAt
-				info["permission_mode"], info["effort"] = s.PermissionMode, s.Effort
-				if conversation, ok := strings.CutPrefix(s.SessionID, agyAgent+"-"); h.agent() == agyAgent && ok {
-					if workers := n.agySwarmWorkers(conversation); len(workers) > 0 {
-						info["swarm_workers"] = workers
-					}
+				mode := s.PermissionMode
+				if h.agent() == agyAgent && !n.runtimeAssistant(p.SessionID) {
+					mode = agyShownMode(mode, n.agyRuntimeMode(p.SessionID))
 				}
+				info["permission_mode"], info["effort"] = mode, s.Effort
 				if h.agent() == agyAgent {
-					if s.ContextTokens > 0 || s.OutputTokens > 0 {
+					if conversation, ok := strings.CutPrefix(s.SessionID, agyAgent+"-"); ok {
+						if workers := n.agySwarmWorkers(conversation); len(workers) > 0 {
+							info["swarm_workers"] = workers
+						}
+					}
+					if s.ContextTokens > 0 || s.OutputTokensValue() > 0 {
 						info["context_tokens"] = int(s.ContextTokens)
-						info["output_tokens"] = s.OutputTokens
+						info["output_tokens"] = int(s.OutputTokensValue())
 						delete(info, "usage_unknown")
 					}
 					n.resolveAgyContextWindow(&s)
@@ -451,6 +564,15 @@ func (n *Node) runtimeHandle(ctx context.Context, h *runtimeConn, method string,
 			return nil, err, true
 		}
 		_, err := call("session.modes", map[string]any{"session_id": p.SessionID, "permission_mode": p.PermissionMode, "effort": p.Effort, "model": p.Model})
+		if err == nil && h.agent() == agyAgent && p.PermissionMode != "" && n.state != nil {
+			n.state.update(p.SessionID, func(st *sessionState) bool {
+				if st.AppMode == p.PermissionMode {
+					return false
+				}
+				st.AppMode = p.PermissionMode
+				return true
+			})
+		}
 		return okResult(err), err, true
 	case "session.queue.edit":
 		if !caps.QueueEdit || strings.Contains(p.SessionID, subagentSep) {
@@ -481,6 +603,58 @@ func (n *Node) runtimeHandle(ctx context.Context, h *runtimeConn, method string,
 		return map[string]any{"sent": true}, nil, true
 	}
 	return nil, nil, false
+}
+
+// agyRuntimeMode returns the persisted permission mode for a Persona-started non-assistant agy companion session, or ""
+// when none was recorded (settings-derived or externally started sessions).
+func (n *Node) agyRuntimeMode(id string) string {
+	if n.state == nil || id == "" {
+		return ""
+	}
+	st, ok := n.state.get(id)
+	if !ok || st.AppMode == "" {
+		return ""
+	}
+	return st.AppMode
+}
+
+// agyLiveAutoFallback reports whether a companion row is currently running under a live auto-to-bypass fallback for a
+// persisted "auto" session.
+func agyLiveAutoFallback(rowMode, savedMode string) bool {
+	return savedMode == "auto" && rowMode == proto.ModeBypass
+}
+
+// agyShownMode overlays a persisted agy permission mode onto a companion row's reported mode while preserving a live
+// auto-to-bypass fallback reported by the companion.
+func agyShownMode(rowMode, savedMode string) string {
+	if savedMode == "" {
+		return rowMode
+	}
+	if agyLiveAutoFallback(rowMode, savedMode) {
+		return rowMode
+	}
+	return savedMode
+}
+
+// agySendMode returns the persisted agy permission mode to replay on session.send, or "" when no mode should be sent
+// (unset/external sessions, or a live auto-to-bypass fallback where replaying "auto" would re-trigger the fallback).
+func agySendMode(rowMode, savedMode string) string {
+	if savedMode == "" || agyLiveAutoFallback(rowMode, savedMode) {
+		return ""
+	}
+	return savedMode
+}
+
+func (n *Node) runtimePermissionMode(h *runtimeConn, id string) string {
+	if h == nil {
+		return ""
+	}
+	for _, s := range h.sessionsCopy() {
+		if s.SessionID == id {
+			return s.PermissionMode
+		}
+	}
+	return ""
 }
 
 func (n *Node) runtimeStatus(h *runtimeConn, id string) string {

@@ -39,6 +39,31 @@ class HubPairingClientTest {
         }
     }
 
+    @Test fun pairingSendsReplacesResolvedFromVerifiedHubId() = runBlocking {
+        MockWebServer().use { server ->
+            server.start(InetAddress.getLoopbackAddress(), 0)
+            var exchangeBody = ""
+            server.dispatcher = object : Dispatcher() {
+                override fun dispatch(request: RecordedRequest): MockResponse = when (request.path) {
+                    "/api/v1/health" -> MockResponse().setBody("""{"ok":true,"hub_id":"test-hub"}""")
+                    "/api/v1/auth/tokens" -> {
+                        exchangeBody = request.body.readUtf8()
+                        MockResponse().setBody("""{"id":"dev_new","token":"jd_new"}""")
+                    }
+                    "/api/v1/machines" -> MockResponse().setBody("""{"machines":[]}""")
+                    else -> MockResponse().setResponseCode(404)
+                }
+            }
+            HubPairingClient(null, null, listOf(server.url("/").toString()), "test").use { client ->
+                val paired = client.pair("jp_code", "Phone", replaces = { hubId ->
+                    if (hubId == "test-hub") "dev_old" else null
+                }) {}
+                assertEquals("dev_new", paired.deviceId)
+                assertTrue(exchangeBody.contains(""""replaces":"dev_old""""))
+            }
+        }
+    }
+
     @Test fun pinnedPairingExchangesCredentialsAndDownloadsVerifiedApk() = runBlocking {
         val certificate = HeldCertificate.Builder().commonName("example.com").build()
         val fingerprint = Base64.getUrlEncoder().withoutPadding().encodeToString(

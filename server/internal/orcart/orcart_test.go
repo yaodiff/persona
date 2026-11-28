@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -226,6 +227,88 @@ func TestRead(t *testing.T) {
 	}
 }
 
+// The output tail is the read without screen or cursor; the log pages by cursor, from the oldest line Orca keeps when
+// the cursor is older. An Orca that answers without cursors reads no log.
+func TestReadTailAndLog(t *testing.T) {
+	f := orcarttest.New(t)
+	f.SetTerminals(orcarttest.Terminal("term_1", "tab1", "leaf1", "wt1", "/tmp/p", "", "x", "claude"))
+	log := make([]string, 0, 2000)
+	for i := 501; i <= 2500; i++ {
+		log = append(log, fmt.Sprintf("line-%d", i))
+	}
+	f.SetOutput("term_1", append(slices.Clone(log), "$ "), true, log, 2500)
+	c := client(f, nil)
+	ctx := context.Background()
+	tg := orcart.Target{Handle: "term_1", Incarnation: "inc-term_1"}
+	tail, truncated, limited, source, err := c.ReadTail(ctx, tg, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"line-2497", "line-2498", "line-2499", "line-2500", "$ "}; !slices.Equal(tail, want) ||
+		!truncated || !limited || source != "stream" {
+		t.Errorf("tail = %q truncated %v limited %v source %q", tail, truncated, limited, source)
+	}
+	lines, oldest, err := c.ReadLog(ctx, tg, 0, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"line-501", "line-502", "line-503"}; !slices.Equal(lines, want) || oldest != 500 {
+		t.Errorf("log = %q from %d", lines, oldest)
+	}
+	if lines, _, err := c.ReadLog(ctx, tg, 1<<53, 10); err != nil || len(lines) != 0 {
+		t.Errorf("past the newest: %q, %v", lines, err)
+	}
+	if got := f.Trace("terminal.read"); !slices.Equal(got, []string{
+		`terminal.read {"limit":5,"terminal":"term_1"}`,
+		`terminal.read {"cursor":0,"limit":3,"terminal":"term_1"}`,
+		`terminal.read {"cursor":9007199254740992,"limit":10,"terminal":"term_1"}`,
+	}) {
+		t.Errorf("reads: %q", got)
+	}
+	if inv := f.Invalid(); len(inv) != 0 {
+		t.Errorf("invalid requests: %v", inv)
+	}
+	f.SetOldOutput("term_1", []string{"$ "})
+	if _, _, err := c.ReadLog(ctx, tg, 0, 10); !errors.Is(err, orcart.ErrNoCursor) {
+		t.Errorf("no cursors: %v", err)
+	}
+}
+
+// Orca 1.4.277 lifts the text of an agent's input box out of the screen rows into draft, leaving the prompt row as
+// its bare glyph (seen live with Claude Code 2.1.331, for a typed draft and for Claude's grey suggestion alike). Text
+// puts it back where it is on screen, so the node reads the box as drawn; without a draft the rows stay as sent.
+func TestReadPutsTheDraftBack(t *testing.T) {
+	f := orcarttest.New(t)
+	f.SetTerminals(orcarttest.Terminal("term_1", "tab1", "leaf1", "wt1", "/tmp/p", "", "x", "claude"))
+	c := client(f, nil)
+	rule := strings.Repeat("─", 20)
+	read := func() *orcart.Screen {
+		t.Helper()
+		s, err := c.Read(context.Background(), orcart.Target{Handle: "term_1"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	f.SetBoxScreen("term_1", "● done\n"+rule+"\n❯\n"+rule+"\n  ? for shortcuts", "fix the flaky test")
+	if s := read(); s.Draft != "fix the flaky test" ||
+		s.Text() != "● done\n"+rule+"\n❯ fix the flaky test\n"+rule+"\n  ? for shortcuts\n" {
+		t.Errorf("one line: draft %q text %q", s.Draft, s.Text())
+	}
+	f.SetBoxScreen("term_1", "❯ an old prompt\n"+rule+"\n❯\n"+rule, "line one\nline two")
+	if got := read().Text(); got != "❯ an old prompt\n"+rule+"\n❯ line one\n  line two\n"+rule+"\n" {
+		t.Errorf("two lines: %q", got)
+	}
+	f.SetBoxScreen("term_1", rule+"\n❯\n"+rule, "")
+	if s := read(); s.Draft != "" || s.Text() != rule+"\n❯\n"+rule+"\n" {
+		t.Errorf("empty box: draft %q text %q", s.Draft, s.Text())
+	}
+	f.SetBoxScreen("term_1", rule+"\n❯ drawn in the row\n"+rule, "")
+	if got := read().Text(); got != rule+"\n❯ drawn in the row\n"+rule+"\n" {
+		t.Errorf("older runtime: %q", got)
+	}
+}
+
 // A wedged Orca (accepts, never answers) costs a call its timeout, not more; the failure is logged once per episode.
 func TestTimeoutAndEpisodeLog(t *testing.T) {
 	f := orcarttest.New(t)
@@ -266,6 +349,10 @@ func TestReadOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := c.AgentStatus(ctx, tg); err != nil {
+		t.Fatal(err)
+	}
+	f.SetProcess("term_1", orcarttest.ShellAtRest(7))
+	if _, err := c.InspectProcess(ctx, tg); err != nil {
 		t.Fatal(err)
 	}
 	_, perr := c.Prompt(ctx, tg, "x")
@@ -319,6 +406,39 @@ func TestWorktreeSnapshots(t *testing.T) {
 	}
 	if tr := f.Trace("worktree.ps"); len(tr) != 3 || tr[0] != `worktree.ps {"afterSnapshotId":null}` {
 		t.Errorf("calls %v", tr)
+	}
+}
+
+// A list Orca cut short at its limit says so: terminal.list's Truncated, AllWorktrees' ErrPartial (whole answers only,
+// outside a snapshot series).
+func TestListsCutShortSaySo(t *testing.T) {
+	f := orcarttest.New(t)
+	f.SetTerminals(orcarttest.Terminal("term_1", "tab1", "leaf1", "wt1", "/tmp/p", "refs/heads/main", "x", ""))
+	f.SetWorktrees(orcarttest.Worktree("wt1", "/tmp/p", "main"))
+	c := client(f, nil)
+	ctx := context.Background()
+	l, err := c.Terminals(ctx, true)
+	if err != nil || l.Truncated || len(l.Terminals) != 1 {
+		t.Fatalf("whole terminal list: %+v %v", l, err)
+	}
+	trees, err := c.AllWorktrees(ctx)
+	if err != nil || len(trees) != 1 {
+		t.Fatalf("whole worktree list: %v %v", trees, err)
+	}
+	if tr := f.Trace("worktree.ps"); len(tr) != 1 || tr[0] != `worktree.ps {"afterSnapshotId":null}` {
+		t.Errorf("calls %v", tr)
+	}
+	f.Handle("terminal.list", func(map[string]any) any {
+		return map[string]any{"terminals": []any{}, "totalCount": 201, "truncated": true}
+	})
+	f.Handle("worktree.ps", func(map[string]any) any {
+		return map[string]any{"worktrees": []any{}, "totalCount": 201, "truncated": true}
+	})
+	if l, err := c.Terminals(ctx, false); err != nil || !l.Truncated {
+		t.Fatalf("cut terminal list: %+v %v", l, err)
+	}
+	if _, err := c.AllWorktrees(ctx); !errors.Is(err, orcart.ErrPartial) {
+		t.Fatalf("cut worktree list: %v", err)
 	}
 }
 
@@ -482,5 +602,60 @@ func TestNewFindsOrcadRuntimeStartedLater(t *testing.T) {
 	}
 	if _, err := c.Probe(context.Background()); err != nil {
 		t.Fatalf("after orcad started: %v", err)
+	}
+}
+
+// terminal.inspectProcess, as Orca 1.4.277 answers it: a shell at rest (no foreground, no children, proved idle, the
+// shell's pid in the fence), a program in front, and an unverifiable answer whose foreground is only a guess. The call
+// is fenced to the terminal's incarnation; an Orca without it answers method_not_found.
+func TestInspectProcess(t *testing.T) {
+	f := orcarttest.New(t)
+	f.SetTerminals(orcarttest.Terminal("term_1", "tab1", "leaf1", "wt1", "/tmp/p", "", "x", ""))
+	c := &orcart.Client{MetaPath: f.MetaPath}
+	ctx := context.Background()
+	tg := orcart.Target{Handle: "term_1", Incarnation: "inc-term_1"}
+	if _, err := c.InspectProcess(ctx, tg); !orcart.IsCode(err, "method_not_found") {
+		t.Fatalf("an Orca without the call: %v", err)
+	}
+	type process struct {
+		foreground     string
+		children, idle bool
+		shellPID       int
+		known          bool
+		unverified     string
+	}
+	for _, tc := range []struct {
+		name string
+		in   map[string]any
+		want process
+	}{
+		{"shell at rest", orcarttest.ShellAtRest(41), process{idle: true, shellPID: 41, known: true}},
+		{"shell with jobs", orcarttest.ShellWithJobs(41), process{shellPID: 41, known: true}},
+		{"program", orcarttest.Running("sleep", 41), process{foreground: "sleep", children: true, shellPID: 41, known: true}},
+		{"unverifiable", orcarttest.Unverifiable("incarnation_mismatch"),
+			process{foreground: "bash", unverified: "incarnation_mismatch"}},
+		{"no evidence", map[string]any{"foregroundProcess": nil, "hasChildProcesses": true, "childProcessEvidence": "unverifiable"},
+			process{children: true, unverified: "unverifiable"}},
+		{"evidence without a verdict", map[string]any{"foregroundProcess": nil, "hasChildProcesses": false,
+			"foregroundProcessEvidence": map[string]any{}}, process{unverified: "unverifiable"}},
+	} {
+		f.SetProcess("term_1", tc.in)
+		p, err := c.InspectProcess(ctx, tg)
+		if err != nil {
+			t.Errorf("%s: %v", tc.name, err)
+			continue
+		}
+		got := process{p.Foreground(), p.HasChildren(), p.IdleShell(), p.ShellPID(), p.Known(), p.Unverified()}
+		if got != tc.want {
+			t.Errorf("%s: %+v; want %+v", tc.name, got, tc.want)
+		}
+	}
+	for _, p := range f.Params("terminal.inspectProcess") {
+		if p["terminal"] != "term_1" || p["expectedIncarnationId"] != "inc-term_1" {
+			t.Errorf("params %v", p)
+		}
+	}
+	if inv := f.Invalid(); len(inv) != 0 {
+		t.Errorf("params Orca would refuse: %v", inv)
 	}
 }

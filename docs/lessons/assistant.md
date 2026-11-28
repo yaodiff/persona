@@ -1,5 +1,15 @@
 # Lessons: assistant (headless Claude / Codex)
 
+- A channel topic may have two routing keys during a Labs rollback (#17664). Reserve both keys at admission, use the active
+  binding under the other key on a lookup miss, and refresh both known bindings after delivery. A `/new` can supply only one
+  key. Clear the other bindings for the same conversation so the next message starts fresh.
+  Keep the accepted routing reference through queued commands and delivery (#17762). Recomputing it after a Labs switch can
+  make a queued topic reset change the channel's default target. Use a synchronized clock in rollback tests because
+  background snapshots also read the clock, including from managers that have been reloaded.
+
+- A start failure awaiting retry is open for supervision handover even though the stored row has `done_at`
+  (#17273). Use `closedForGood` to distinguish it from completed or cancelled work.
+
 - Node preparation can call back into the hub for settings (#16065). Release the database connection before the RPC
   and use the existing durable start claim and candidate receipt to reconcile it. Recheck the epoch when mapping the
   receipt and keep late candidate identities for cleanup. A batch larger than the pool should exercise a real
@@ -71,6 +81,15 @@
 
 - A rendered prompt used as a source-snapshot fingerprint must compare with the call's captured language (#6272). Re-reading the current language while committing a valid model answer makes a preference change look like a concurrent source edit. Freeze the wrapper language, keep the source comparison, and test both a locale-only change and real source changes. Audit natural-language parsers too: a conservative Chinese uncertainty check must recognize uncertainty in newly supported English and Japanese outputs. Shared recording inputs must keep their recording-language contract rather than inheriting a non-recording wrapper accidentally.
 - Persist a complete delivery round before its first external send (#10393). Saving only when the call returns handles a returned error but loses the result if the manager exits inside the call, after task acceptance has committed. Keep the original timestamp/key and acceptance metadata on disk while retaining an in-memory claim to block overlapping sends. Every other book save must preserve that prepared record too; retry must not send from memory when its preparation could not be saved. Use a child-process exit at the real provider boundary and a fresh manager on the same disposable database to prove recovery, with the returned-error case as a control.
+
+- Prove a reported PR's ownership before asking its repository provider (#9725). A provider-specific address is eligible when a successful native creation record names that exact plain URL; an unstructured CLI URL is not equivalent proof. Recheck the original address's report turn and active Agent after asynchronous resolution, even when the provider canonicalizes an alias. Share only provider metadata across pending reports, never their authorization.
+- A reply can name a dependency's merged or deployed PR (#9725). Use the same ownership proof or the task's recorded PR for progress, delivery judgment, and the receipt's PR field. If a reply describes several PRs, its merge or deploy words cannot establish the task PR's state. A separate check of the task PR can still establish delivery.
+- Deterministic task admission must use saved repository links, not advisory duplicate hints (#9725). Check the original title, goal and prompt before clipping, and recheck waiting cards before Start. Read associations without importing legacy metadata; a store failure is not proof that no match exists. A distinct-work override must identify every conflicting to-do and preserve its reason in the brief. Validate original URLs before discarding query parameters: canonicalization must not hide credentials from the repository parser or echo them in an error.
+- Saving an Agent's PR association is only half the feedback path (#9725). Inbox routing must read the same saved links, not only the legacy current PR or transcript preview, and its repository-scope check must retain that exact association. Import explicit work artifacts only for the session's current open task and a turn at or after its Agent link; reuse report receipts so retries cannot resurrect links the user removed. A final closeout's PR artifacts outrank incidental background links in the reply.
+- Inbox handoffs may continue an existing Agent without making a plan (#9725). Apply the same persisted-source inference to `agent_send` and `task_scope`; refuse ambiguity before sending or logging scope. Record the task backlink and Agent chain link, not the coding Agent as the item's processing conversation, and preserve the task's original Inbox source. After delivery or a queued receipt, save the association with a fresh bounded context independent of the send deadline and caller cancellation. Report a real association-save failure as partial success so it cannot cause a blind duplicate send.
+- Native PR-create and push records must match the report being processed, not just its Agent link (#9725). Cut at the latest prompt, reject side exchanges, and bind report text and its recorded timestamp or the persisted artifact's turn end. Compare stored timestamps at Postgres microsecond precision. Missing or mismatched turn evidence needs an independent author, branch and commit readback; positive fixtures must provide the same turn identity. Include the turn timestamp in preview deduplication so identical text in a new turn can still prove fresh ownership.
+- Inbox preflight is not a reservation across Agent delivery (#9725). Recheck against the actual adopted task before sending, and reconcile a later conflicting claim by removing only a task just created for that handoff, without stopping its Agent or changing the competing owner. Keep an accurate partial-delivery receipt; a failed rollback must name the task that remains, never invite a resend or claim that nothing happened.
+- An omitted Inbox source is resolved from the persisted user handoff, not model text (#9725). Exactly one eligible unarchived item handed to the calling conversation and computer is a safe default; multiple eligible items require `inbox_item`. Filter the existing link policy before counting candidates, so excluded bot handoffs neither block unrelated work nor create false ambiguity. Persist that exact handoff on the plan and keep Start checks; a later handoff must not retarget a waiting card.
 - A review wake is not a completion verdict (#8373). PR events and judged-done candidates share the same signal. Keep its wording neutral, preserve the actual reason and criterion evidence, and leave acceptance gates and display grouping unchanged.
 - A parked wait can cite a PR while waiting for a separate deployment or verification (#9775). Enroll the exact PR from an explicit event binding. Keep the source receipt and review transition together and identify the notification by that park. Test both a stage PR with terminal facts and a PR named only in the park.
 
@@ -142,6 +161,16 @@
   Remove the older copy, retain the newer obligations, and check both decision gating and the actual synthetic
   `DeviceAssistantSend` text. This proves literal deduplication, not a stable-policy refactor or provider-context savings.
 
+- Prompt-size checks read the MCP catalog goldens, not newly added tool files (#9762). Regenerate every assistant
+  catalog and check `TestGoldenMCPTools` before trusting the footprint. Measure changed tool and shared-prompt sources
+  too, so stale goldens cannot hide growth. Fitting the total budget does not register a new per-tool baseline key;
+  keep that remaining gate explicit when baseline edits are not authorized.
+
+- Bind manual send approvals as tightly as standing grants (#9762). After the card
+  resolves, serialize the sender recheck and transport with identity changes.
+  Handed-off Inbox suggestions stay manual even when their scope matches a grant.
+  A transport's already-delivered ID proves only a prior send, not delivery of a
+  new attempted text; audit that outcome separately and never report a fresh send.
 
 - Rechecking an Inbox task link must not replay event handling (#5680). Existing processing conversations and saved
   drafts skip the initial task judge; resetting their processing fields to force another pass can duplicate work.
@@ -296,6 +325,7 @@ Pitfalls, unusual behavior, and decisions at the time (formerly `CLAUDE.md`; ind
 - Scheduled assistant work needs one table only (2026-10-31, `docs/assistant/assistant.md` “Scheduled tasks”). Separate schedules / follow-ups forced repeated checks to `schedule_followup` each round; entry disappeared on start, invisible / unstopppable during hour-long approval waits. Repeating work uses every; self-reschedule recognized as same task. Only user changes task model / permission in app; assistant cannot elevate itself. Headless `bypassPermissions` only at launch.
 - Lark assistant uses gateway skill (copy formerly `server/internal/assistantskills/`, embedded personad, installed `.claude/skills` at assistant startup, upstream sync script; since 2026-11-04 in Lark plugin). Token formerly process env; since #1317 not even env, below. Node Bash PreToolUse `node/larkgate.go` applies only `assistant-hooks` / assistant-settings.json. Unparsed commands containing `ol POST/PUT/PATCH/DELETE` still require phone confirmation, otherwise bypass permits; credential-proxy gate now rejects them outright.
   Test hub uses own HOME / port / DB (`/tmp/jt`), never live personad. SSH pkill -f pattern can match own SSH command; use [/]tmp/…. [x] works only if literal absent elsewhere in same SSH command: 2026-11-01 `pkill -f "[d]rive.py x"` followed by `python3 drive.py x …`, and `pgrep -f persona_args` then process-group kill both killed SSH, exit 255. Safest anchor full path, `pgrep -f '^/tmp/jt/…/personad'`, get PID / kill, only that task per SSH.
+- Proving a shell variable constant needs allowlists, not denylists (#16491, 2026-11-27). The gate parses with a bash grammar, but the assistant's Bash may be zsh, which sets variables through builtins and modifiers that leave no assignment in the syntax tree (`print -v`, `zstyle -s`, `set -A`, `emulate -c`, `noglob eval`, `repeat`), and evaluates arithmetic in places bash does not (`-t` / `-v` test operands, `$name[expr]`, integer specials like `HISTSIZE=expr`, `$~name` glob qualifiers). Eight adversarial review rounds each found new bypasses until the rule became: only listed commands and test operators, ordinary names, no arithmetic, `cd /tmp` alone. Extend the gate's reading of the shell only with allowlists, and have a reviewer check each claim in real bash and zsh.
 - Keep credentials out of Agent env, not protected by read-command blacklists (#1317,2026-11-05). Env, split-variable-name printenv, `cat /proc/self/env*`, ${!prefix*}, `python3 -c 'import os…'` bypass; review also nohup env, `compgen -e`, ps eww, eval-built names, `env -u HOME printenv`—unpatchable. Worse, token-bearing scripts bypass write confirmation directly. Credentials stay in node; local proxy checks every actual request against same rules (`node/gateproxy.go`). Proxy belongs to entire persistent `assistantKeeper` process, not per-connection Node: reconnect replaces Node, surviving chat retains old proxy address, new approved calls cannot reach old proxy. One approval allows method + path + body once. Writes in unparsed loops / scripts must be refused and sent as standalone commands; never open timed allow-all windows, which permit unrelated later commands in same chat.
 - Codex assistant uses `codex app-server` (`docs/assistant/assistant.md` “Codex”). MCP approval arrives as `mcpServer/elicitation/request` with `_meta.codex_approval_kind: mcp_tool_call`, not command approval. Default tool timeout 60 seconds needs larger `tool_timeout_sec` for ask_user. Default command env strips `*KEY*` / `*TOKEN*` (ol lost token). `turn/interrupt` does not stop running commands; `thread/backgroundTerminals/clean` additionally, experimental generate-ts --experimental. Codex owns thread ID, unknown when MCP starts. Lark gate relies on approval arriving; never `approvalPolicy: never`.
 - Codex / Claude share assistant auto-memory (`docs/assistant/assistant.md`). Untrusted Codex approves even head; without separate allowance every memory read prompts phone (tested 2026-11-01). Memory outside assistant directory needs writableRoots. Do not enable machine-wide `~/.codex/memories` for assistant.
@@ -304,7 +334,7 @@ Pitfalls, unusual behavior, and decisions at the time (formerly `CLAUDE.md`; ind
 - Fake HOME is not isolation. Node follows launcher-selected `CLAUDE_CONFIG_DIR`; hardcoded profile launcher writes real transcripts, and cwd suffix `/.persona/assistant` makes real assistant chats appear in test hub, editable by test assistant (2026-11-01 chat-management tests). Copy launcher into fake HOME, redirect `CLAUDE_CONFIG_DIR` there, copy settings.json, define `_claude_launchers` in fake .bashrc, prompt only own created chats; delete full fake HOME afterward, keys included.
 - Unknown `assistant.send` session ID starts **blank new chat** rather than error if no transcript. Resume-or-report-failure calls (scheduled chats 2026-11-01) use `resume_only`; no process / transcript errors, hub creates / records new chat (`docs/assistant/assistant.md` “Scheduled tasks”). Busy state comes from hub working / needs_you and only listed sessions; retain long-lived chats in `keptSessions`, or 80 new transcripts on busy machine evict them.
 - **No per-message changing data in system prompt** (2026-11-01, `docs/assistant/assistant.md` “Live snapshots and prefix caching”). Prefix caching puts system / tools before history; one byte change rewrites hundreds of thousands of tokens after restart, first output 10 seconds to minutes. Snapshots accompany messages. Claude resume actually retains first system prompt until compaction, so old snapshot stale, not cache-invalidating. Real restart cache miss was **changed tools**: one removed MCP tool rewrites all, schema key order does not. Diagnose experimentally: copy real chat with new ID / temporary directory, change one thing per restart, inspect `message_start` cache_read_input_tokens.
-- Per-start compaction belongs in both the process environment and the final merged settings (#6481). Claude settings `env` can override the process. Preserve launcher settings / hooks, then pin the computed AUTO and MAX values last in both. A launcher AUTO value is not evidence of backend capacity. Match warm spares and restarts by explicit main-chat scope, not the assistant directory or model purpose; scheduled chats share both. Don't turn "nothing declared" into a Persona number (#3008, #3066): a guessed 200k, then fixed 200k / 400k targets, made 1M conversations compact at about 167k. The one Persona number left is explicit and narrow: `assistant.main_compact_window` (#7314) caps only the main conversation, only on a managed launcher that declares a larger window, and only when the manager sends it (absent or 0: no cap). Follow what the launcher declares, write nothing otherwise (Claude Code already holds AUTO to its own model window), and read the real window from `result.modelUsage.<model>.contextWindow` where Persona needs it (the idle threshold). Write values only where Persona owns the environment (a managed launcher): over a shell launcher they would override its own declarations.
+- Per-start compaction belongs in both the process environment and the final merged settings (#6481). Claude settings `env` can override the process. Preserve launcher settings / hooks, then pin the computed AUTO and MAX values last in both. A launcher AUTO value is not evidence of backend capacity. Match warm spares and restarts by explicit main-chat scope, not the assistant directory or model purpose; scheduled chats share both. Don't turn "nothing declared" into a Persona number (#3008, #3066): a guessed 200k, then fixed 200k / 400k targets, made 1M conversations compact at about 167k. The one Persona number left is explicit and narrow: `assistant.main_compact_window` (#7314) caps only the main conversation and the directions' lead conversations (#15318), only on a managed launcher that declares a larger window, and only when the manager sends it (absent or 0: no cap). The manager decides which conversations get it; the node applies what comes with a non-guest start, so a new kind of conversation is added in the manager alone. Before #15318 the node also required `is_main`, and leads woken all day by supervision grew to about 970k on a 1M launcher before anything compacted them. Follow what the launcher declares, write nothing otherwise (Claude Code already holds AUTO to its own model window), and read the real window from `result.modelUsage.<model>.contextWindow` where Persona needs it (the idle threshold). Write values only where Persona owns the environment (a managed launcher): over a shell launcher they would override its own declarations.
 
 - Headless `claude -p` auto-compacts via `CLAUDE_CODE_AUTO_COMPACT_WINDOW`; idle compaction only interactive. `stream-json` `/compact` manually compacts. First resumed-process message sometimes does not compact, second does; one miss not proof unsupported.
 - `ssh_host` aliases exist only hub ~/.ssh/config. Giving remote assistant ssh <alias> supplies unusable command.
@@ -316,6 +346,7 @@ Pitfalls, unusual behavior, and decisions at the time (formerly `CLAUDE.md`; ind
 - Nor may one part of the list failing drop that part (2026-11-13, #6422). The manager's `mcpTools` asked the hub for the phone's tools, logged a failure and listed the rest, so a conversation that started while the hub restarted had no `phone_*` for its whole life and the model told the user the phone couldn't set a reminder. Ask again briefly, then list what the hub last gave (`phoneTools`, `server/internal/assistant/fleet_tools.go`); each call is still the phone's to refuse.
 - Separate assistant process (2026-11-04,#1446, `docs/assistant/assistant.md` “Process”) can be unavailable to every hub inquiry. Startup connector registration asked each assistant tool name before connection,10 seconds each,60-second test. Startup / registration read last `assistantToolsNow`; wait only when node requests tools for assistant chat. Assistant schedule loop waits first handshake machine / timezone reply before running due tasks, or starts with empty config and fails all.
 - Bus events synchronously invoke read-loop callbacks (`internal/rpc`); slow handler stalls connection. Assistant queues in order, handles `session.turn_ended` separately (model query / waiting task Agent stop). To wait in tests, call assistant after event on same connection, then await empty queue (`BusHub.Settle`).
+- A full queue must not hand each event to a goroutine that waits for room (2026-11-26, #15906). Past 1024 waiting, the assistant's event queue did that: nothing bounded the goroutines, they reached the queue in the order the scheduler ran them (a turn's start, a stop and a seen mark of one conversation out of order), and they stayed blocked for good once the consumer's context ended. Blocking the caller is no way out either: it is the read loop, which also brings the answers the handlers wait for. The queue is now one ordered list (`eventQueue`, `server/internal/assistant/bus_events.go`): while more than `eventsRoom` wait, an event of which only the newest matters (the mutes, a resync request) replaces the waiting one of its key at the back of the line, every other event waits in arrival order up to `eventsMost`, and what comes past that is counted and made up for by dropping the connection once the line reaches that point, so the reconnection path reads everything again. "Says the whole of something" is not enough to let a newer event replace a waiting one: the handler must also read nothing of the one before. `manager.updated` and `sessions.changed` are whole states, but their handlers go by what changed since the previous one (`trustChanged` gives keys to the computers a hello lists and the one before did not; `followStarts` and `taskStageSessions` go by consecutive lists), so replacing one loses a transition for good; each of them waits itself. And after a loss the line waits for the new connection's hello answer before it takes what is behind the note (`waitHelloAfter`, `helloWait` at most, once per connection): a lost `manager.updated` leaves the kept settings older than the events that follow. Hold the consumer in tests with `BusHub.taking`, not a sleep.
 - Hub default `os.Executable() assistant` launches test binary in tests, rerunning entire suite. Tests replace `assistantCommand` in init; subprocess tests detect env in `TestMain` and act as assistant.
 - `zsh -ic` expands existing aliases before script execution (#1674). Codex alias makes `codex() { … }` definition parse fail; earlier unalias in same string too late. Use function codex { … }, calls \codex to prevent recursive alias expansion. Real zsh regression with temporary ZDOTDIR, no user shell read / writes.
 - Session-only Agent approval lives in process (2026-11-05,#2202): Claude `addRules … destination: session`, Codex `acceptForSession`, Lark node memory lost on assistant recycle / deploy / launcher switch / node restart, not restored by `--resume`, causing repeated prompts despite Always Allow. Cross-process assistant state belongs in hub DB: cards `always_keys`, hub `assistant_always` auto-answers matches (`docs/assistant/assistant.md` “Always allow in this session”).
@@ -364,6 +395,7 @@ Pitfalls, unusual behavior, and decisions at the time (formerly `CLAUDE.md`; ind
   it hands out as within the `mine` context made a lone mention `mentions+mine` (the longer days) where daily ingestion says `mentions`. Its `Kept` hook
   names those; `pick` leaves them out of `near`.
 - **A small-task model call is sized by what the model is today, not by the first measurement** (#1532): chat titles had 15 s per call and `max_tokens` 200 from a 2–3 s measurement. Once "Chat title" inherited a thinking flash model behind the gateway, a title-sized call took p50 6 s / p90 21.6 s and its thinking ate the 200 tokens (188–192 thinking + 4–8 output, `stop_reason: max_tokens`), so about a fifth of new chats kept "explore | the first message cut short" and some kept a two-character half topic that still parsed. A call off the user's path gets minutes, room for the thinking, and `Chat` instead of `Complete` so a cut-off reply (`Reply.Truncated`) is not taken as an answer; retry only what another try can change (`ai.Transient`: no answer, 5xx; not a 4xx or a model that isn't set up), each kind of failure once, so one doesn't use up another's retry; a naming that got no answer is a stand-in, done again later, and "again later" must read the first turn (`after_seq: 0`): `turns: 1` is the newest. To find which, match the hub's `context deadline exceeded` lines with the gateway's request log: the hub's cancellations sit at the call's timeout to the millisecond (14 996 ms).
+- **Short naming calls must switch thinking off and still guard their write-back against reasoning leaks** (#17207): giving title calls more token room (#1532) did not stop a Direct API thinking model whose compatible gateway surfaces cut-off monologue as ordinary text deltas — first lines like `We need answer title` became todo titles, `we-need-answer-title` tab slugs, and (behind a known kind prefix) assistant topics. `ai.Request.DisableThinking` forces the protocol's existing "off" encoding (`ApplyReasoningEffort`: Messages `thinking.type=disabled` with the model-specific fallbacks, Chat `reasoning_effort=none` with its rejection cache, Responses `reasoning.effort=none`) for `todo.title` / `agent.title` / `assistant.title` only; long-reasoning purposes keep the connection effort. The parsers stay strict (Messages skips thinking blocks/deltas, Chat reads only `delta.content`, never `reasoning_content`, Responses only `output_text`), and `title_guard.go` is the second line: strip `<think>` blocks, reject a bar-delimited topic/first line that pairs a monologue opener with a second meta-reasoning signal, and never overwrite on a reject. An opener alone is not enough (`We need new icons`, `I should answer Sarah's email`, `我应该回复客户邮件` are titles); keep those near-misses in the guard test corpus.
 
 - **Model listing and saving must agree on online launcher selection** (#1840). A cached provider's first machine can be offline even when another machine successfully lists its models. For a purpose without a bound machine, reuse `pickMachine` for model validation; if no reported candidate is online, allow saving without a live check. Keep known bound-machine validation and managed-launcher behavior intact. Cover the HTTP save and profile-apply paths, including effort-only edits, rejected online models, exact RPC destinations, and unchanged storage after rejection.
 
@@ -389,6 +421,7 @@ Pitfalls, unusual behavior, and decisions at the time (formerly `CLAUDE.md`; ind
 
 - Inbox fixtures must wait for the first asynchronous roster count before writing directly to their items (#3459). `inboxReady` returns after scheduling `tellInboxNeedsYou`, whose goroutine holds the Inbox mutex while reading the map and status fields. Legacy fixture seeding bypassed that mutex and could crash the whole test process, even without the race detector. Use `waitNeedsYouIdle` at the fixture readiness boundary; later concurrent mutations must still use the Inbox mutex. Keep the real teller enabled and verify the complete Inbox test group under `-race`.
   Observing a fake send is not the end of `tellSoon` (#7035). Before restoring a swapped `Service.store`, hold the fixture's handling pass and call `deliverNotes` synchronously for the item: its per-item lock waits through the background save, while `toldConv` returns as soon as the send is recorded.
+  A confirmed send also opens the processing conversation's next turn in the background (#16974): `tellSoon` delivers the sent note through `deliverNotes`, which issues a new `ProcessingTurn`. A test that then plays the conversation's later turn (`suggestTool` reads the live turn) holds the handling pass and calls `deliverNotes` for the item first; otherwise the delivery can land between reading the turn and the suggestion's check, and the call is refused as superseded.
   Scheduling is not completion for transcription readiness either (#7232): after a fixture calls `transcriptionReadinessChanged`, `hubTr.wg.Wait` must precede a direct `Service.store` replacement because `transcriptionJobsCheck` reads settings through that store.
 - **An optional object in a tool's schema can come filled with zero values** (#3386): runtimes that fill in every field
   of a tool's schema send `agent_send`'s `task` as `{"title":"","done_when":[],"expect_minutes":0}` instead of leaving it
@@ -426,7 +459,7 @@ Pitfalls, unusual behavior, and decisions at the time (formerly `CLAUDE.md`; ind
   " | " and with empty ones skipped (a trailing `||` adds no junk), clipped and escaped like any other cell. When
   changing how a table row is laid out, compare its card with its fallback.
 
-- **Text a client draws as Markdown is cut with `clipMarkdown`, not `clip`** (#3818). The briefing card quoted the model's answer through `textfmt.Clip` (exactly n runes plus an ellipsis), so an answer over 1500 runes was cut inside whatever it was in: an unclosed code fence turned the rest of the quote into code, and a cut inside `**`, a code span or a link left half a marker or half a URL. `clipMarkdown` (`assistant/mdtext.go`) cuts on a line break where it can, closes a code block the cut lands in, and moves the cut back out of an unclosed span, emphasis or link; it also flattens a `persona-card` block to its title (`wire.AssistantCardText`), so draw charts first with `feishubot.PersonaCards` and cut after, as `answerCards` does for the bot's answers. Plain fallback text (the push body, a notice's fallback) keeps `clip` / `textfmt.PlainMarkdown`; only the Markdown element takes `clipMarkdown`. Test through the same builder the card uses, not the clippers alone, and assert the shape (`fences % 2 == 0`, no `](https://…` left) rather than an exact string. The same trap caught the task report's item body (#4093): it drew the answer with `CardMarkdown` *after* `clipMarkdown`, which flattens a chart to its title on its own, so the owner read the report with no numbers. Any Markdown a client draws that is clipped first must have `PersonaCards` run before the clip.
+- **Text a client draws as Markdown is cut with `clipMarkdown`, not `clip`** (#3818). The briefing card quoted the model's answer through `textfmt.Clip` (exactly n runes plus an ellipsis), so an answer over 1500 runes was cut inside whatever it was in: an unclosed code fence turned the rest of the quote into code, and a cut inside `**`, a code span or a link left half a marker or half a URL. `textfmt.ClipMarkdown` (`textfmt/mdtext.go`) cuts on a line break where it can, closes a code block the cut lands in, and moves the cut back out of an unclosed span, emphasis or link; it also flattens a `persona-card` block to its title (`wire.AssistantCardText`), so draw charts first with `feishubot.PersonaCards` and cut after, as `answerCards` does for the bot's answers. Plain fallback text (the push body, a notice's fallback) keeps `clip` / `textfmt.PlainMarkdown`; only the Markdown element takes `clipMarkdown`. Test through the same builder the card uses, not the clippers alone, and assert the shape (`fences % 2 == 0`, no `](https://…` left) rather than an exact string. The same trap caught the task report's item body (#4093): it drew the answer with `CardMarkdown` *after* `clipMarkdown`, which flattens a chart to its title on its own, so the owner read the report with no numbers. Any Markdown a client draws that is clipped first must have `PersonaCards` run before the clip.
 
 - **A finished run's last write into the progress card has to wait out a card rate limit** (#3915). The progress tick
   answers 230020 by pausing its updates (`prog.quietUntil`), but the answer's write comes right after a tick's, and a
@@ -570,6 +603,16 @@ Without a background supervisor the main conversation's own card went to itself.
 delegating, check that the conversation it goes to is woken for it, can answer or hand it up, and is not the one
 waiting on it. A new route also keeps the exceptions of the existing ones: `askLadder` already left the supervising
 conversations' cards with the user, and the new route had to share that rule (`supervisorConversation`).
+
+For an Agent's permission without an open to-do (#16093), use the active relay queue and keep the card available
+in the app once its hold ends. Tie the queued message to the card's current route. A queued wake can outlive its card
+or the manager that routed it, so check the route before sending and drop stale wakes even if their target stays offline.
+
+For an internal question that outlives its manager (#17823), restore the task and its worker link before publishing
+the question in the restart fixture. The real store already has that assignment. Capture the relay while its send is
+blocked and again after the queue removal is durable. A pending card gets a fresh wake in both cases. Check the queued
+wake against the current route before looking for an earlier send in the transcript, so the previous route's retry
+timer cannot delay the fresh wake.
 
 ## One `todos` event per write, and nothing that copies every finished task on a timer (#5995)
 
@@ -836,6 +879,12 @@ keyed to the event that told of the turn, not to the turn.
 
 When `session.start` never answers, the hub lists the machine and adopts the session its start probably created. The first version guessed from shape: not in the pre-start snapshot, `StartedByPersona`, same launcher and cwd, a fresh sign of life, newest wins. Three rows are indistinguishable by shape: a session the owner started by hand also carries `StartedByPersona` (the app's start path stamps it), and two workspace-none tasks run in the same directory with no workspace claim between them, so each could adopt the other's session — and nothing excluded a session already linked to another open todo. A heuristic over mutable, shared signals (`UpdatedAt`, cwd) cannot identify one specific start. The fix carries the identity instead: the hub generates a v4 UUID and sends it on the existing `session.start` `session_id`, the node starts Claude with `--session-id <id>` on every Claude path (the sync terminal path had been passing an empty id), and adoption matches that exact id first with no other condition. The heuristic is only the fallback for a node too old to honor the field, and even then it skips every session in `todos.activeBySession` and fails closed when the todo book cannot load. Lesson: when an action's result can be lost, make the request carry a unique correlation token and match on that; keep a heuristic only as a version-compatibility fallback, and have it exclude resources already claimed elsewhere rather than merely rank candidates.
 
+## A drifted workspace and its launch require separate checks (#17087)
+
+Retry replays a frozen operation, while a continuation with changed inputs can collide with the previous head. Confirm
+Git drift against the exact Node receipt, then let the Node decide whether its launch has stopped. Replace the manager
+head under the to-do lock and prepare a distinct directory, keeping the old checkout available for inspection.
+
 ## A hidden effective cadence overrides the interval the user configured (#7619)
 
 #3811 gave interval follow-ups in leader conversations a hidden 10-minute cadence while an open supervised todo had an active agent: `nextWithLeaderCadence` derived extra runs from `LastRun` while leaving the stored `At` / `EveryMinutes` on the original rule, and the run copy's `cadenceEvery` made `taskPrompt` print "每 10 分钟". The stored task still showed 30 minutes / 1 hour in `list_followups`, so nothing visible explained why a patrol the user asked for every 30 minutes fired every 10 minutes from its first run, and it became the main chat's biggest token sink. Lesson: a scheduler may have exactly one effective cadence, and it must be the one stored on the task and shown in every view and run prompt; an "accelerate while busy" rule that is invisible to both storage and UI is indistinguishable from a bug. If such a rule is ever wanted again, it must be an explicit, user-visible setting with its own stored field, not a second rule derived inside the scheduler. Keep interval advancement in one place (`runDue` advancing `At` by `EveryMinutes`); tests assert the prompt text states the configured interval even while supervised work is open.
@@ -918,6 +967,36 @@ answer retryable. Tests must check both the in-memory receipt and stored one, pl
 Restore the previous `DueAt` on acceptance-save failure, not an empty time: an owner message in the Agent chat uses
 that marker to pause the default. A later rejected answer must preserve both that pause and the dismissal.
 
+## Task-close guards must not wait for activity storage (#6819)
+
+Publish owner input in the activity cache before saving it, and keep the cache mutex out of database I/O. A review's
+transaction can hold the connection that an activity save is waiting for: its final guard must read caches only, not
+wait for that save. Serialize activity snapshots separately so a slower save cannot overwrite newer input.
+
+The judge's unsampled acceptance and a leaderless worker's cancellation need the same atomic ledger-and-closure
+commit as `task_review`. A refused close must leave no accepted/cancelled ledger or checked criteria on an open task.
+Defer the judge's completed turn on late owner activity so it can be judged again after inactivity; return a
+cancellation only when it actually committed. Regress the real owner bus event while storage is blocked, and check
+both the stored ledger and memory at the ledger, closure and final transaction boundaries.
+
+Lifecycle tests wait for the operation they exercise: acknowledge `task_review` before sending the next owner turn,
+and wait for `fleet.clients` notifications until the viewer snapshot matches. A terminal error can arrive before that
+snapshot. Fixed delays hide this ordering and grow the sleep ratchet; keep bounded failure deadlines, not guessed sleeps.
+
+- An opt-in terminal cleanup must not replace a guarded task retirement with an unconditional close (#6819, #10355).
+  Keep cancellation and the final input check through both irreversible boundaries: stopping the Agent and closing
+  the shell it left. Exercise the setting on and off, including input arriving during terminal inspection.
+
+- A terminal task review must commit its closure before publishing review effects (#6819). Activity can arrive after the initial guard, while another writer holds the ledger or task lock, or during a database write. Validate on a private ledger, save the ledger and closure in one transaction, and recheck activity immediately before commit so a refusal rolls both back. Only then record the brief result, review feed, decision changes and supervision signals; apply the same boundary to a task leader's review and tasks without a ledger.
+
+## To-do topology writes share the review lock order (#17693)
+
+Reopen, terminal review, guarded park and topology writes take the to-do writer before the supervision writer.
+An idle-close fence waits with both writers free. Reorganize, split and merge validate the graph before any
+side effects, commit the rows and their related records in PostgreSQL, then publish one in-memory batch.
+A split retry uses the existing child identities, and a merge's source closes only after its target's changes.
+Auto-seen checks both the completion and reopen timestamps. A reopen clears the previous round's seen and Undo marks.
+
 ## Reserve a conversation for replacement in the same step as the check that nothing goes in (#7315)
 
 The background supervisor is replaced when its rounds outgrow it, and the first version checked that no queued message
@@ -967,6 +1046,21 @@ A failed ledger read or checkpoint is unknown: keep the original queue. Move a c
 remove its source entries in the same saved relay state. Do not change an uncertain send's text or destination: its
 old once-only identity may already have reached the node. Test both an entirely obsolete digest and a mixed one,
 including a real database reload into a new service; the in-memory signal map alone does not survive restart.
+
+An Agent's PR artifact is a claim, not proof of ownership. Deployment reports and
+evidence often name other Agents' PRs, sometimes under the same GitHub account.
+Automatic repository links need a native successful creation record or an
+independent node read matching author, head branch and published commit (a native
+push can establish the actor for a shared PR). Exclude another open to-do's PR in
+the same transaction, including concurrent reports, and apply the result to legacy
+stage PRs too; otherwise feedback routing and deterministic duplicate admission
+inherit the false association (`todo_repository_ownership_test.go`).
+Native CLI evidence must exclude help, web and dry-run modes, including Boolean
+`=true` flags, bundled short options and arguments whose shell expansion is unknown.
+The node's `gh` lookup covers GitHub PRs. A manual review can proceed when another host
+supplies no verified artifact. Any already recorded GitHub PR still goes through the delivery
+gate. Reuse the stored canonical URL after a verified import. Apply GitLab's legacy MR
+alias only on its known host so unclaimed review URLs keep their own meaning.
 
 ## Manual compaction is not a main-only policy (#10064)
 
@@ -1028,6 +1122,17 @@ to-do's no-progress decision quoted another task. Find the run's own prompt by i
 reply after it, up to the next message that opened a turn. Refuse turns that a queued message mixed. Test with real
 transcript pages (`runChat`), not bare item lists.
 
+## Direct reply recovery across a hub switch (#10427)
+
+A node can lose a live conversation during a hub switch without publishing a normal turn end. Claude can append a
+synthetic placeholder only when the conversation resumes. Keep the latest verified app input ID alongside the
+recovery claim, and check that input when the node lists the conversation again. Read the current transcript,
+since indexed history can predate the echo that identifies the app input. A guarded send that finds the same
+transcript but no process leaves a retry notice. A Stop or later owner input makes the earlier attempt obsolete.
+An accepted Assistant input supersedes an older explicit Stop or Exit. Clear only the mark captured before the send,
+since an interrupt can record its intent before it gets the typing lock. Session metadata saved during delivery must
+preserve that newer mark.
+
 ## A node's own session rows never carry the assistant mark (#13879)
 
 `Session.Assistant` is set only when the hub decorates a list for the apps (`hub/assistant_link.go`). The manager's
@@ -1049,9 +1154,57 @@ turn's decision to the delayed push and channel mirror. Reading the conversation
 time can pick up the next round. A restart test for promotion must show the hold still exists before it checks
 that a silent finish is refused.
 
+## A wait the Agent names outranks the state the hub guessed (#14899)
+
+A supervised Agent reported `blocked` / `unblock: other` ("someone has to fill in the web form") while two of its old
+polling shells were still running. Triage's background rule read the turn as "N background tasks running, it wakes
+itself" before it looked at the closeout, and the same background work kept the task's turn from settling, so no
+receipt, judgment or supervision signal went out. The task also sat in `needs_user` from an earlier decision the owner
+had dismissed, and `superviseJudged` returned early in that state. Nobody heard of the wait for three and a half hours.
+A rule that runs before the closeout is read must give way when the closeout names a person to wait for, and
+holding a decision open must not silence the task's later turns. The supervisor decides whether the news replaces the
+decision. A `done` closeout that still names the owner as the one to unblock it (`unblock: user` with a `waiting`
+line and no delivery) is a question, not finished work.
+
+Settling such a turn right after triage must not read the work state from the session lists: they pick up the
+triage's state only on the next publish, so the settle saw the previous turn's state and put the turn off again, with
+nothing left to wake it. The settle takes the triage's own entry for that turn (`withPersonWait`).
+
 ## An inbox row can carry more than one provider event (#15517)
 
 Keep the deduplication key independent of the Inbox row and the binding that matched. Two readers can report
 the same comment, and the row can collect a later comment while the first is waiting for its digest. Commit the
 source receipt with the Inbox write. Reserve only one action owner and pin the delivery before contacting the
 Agent. Record uncertain delivery against that recipient so a restarted worker does not try another one.
+
+## Check-time `@file` content is not what an Auth-less gate sends (#8413)
+
+A command gate without `Auth` has no local proxy to inspect the HTTP body at send time, so check-time `@file` content
+cannot grant a silent body-scoped `allow` or bypass an earlier body-scoped restriction in default mode. Read `@file`
+bodies and `--url-query @file` inputs through a pinned `os.OpenRoot` with `openKnowledgeFile` (`O_NONBLOCK|O_NOFOLLOW`),
+reject final symlinks, non-regular files, files over 1 MiB, and lexical or resolved `/proc`, `/dev` and `/sys` paths.
+Output-filter whitelists also need argument checks: `sort -o` / `--output` / `--compress-program`, `date -s` / `--set` /
+positional timestamp operands, and `uniq IN OUT` write files, execute programs, or mutate system state rather than only
+formatting output.
+
+## A loop started with the run's cancellation taken off outlives the run (#16215)
+
+`FleetUp` handed `fleetStart` `context.WithoutCancel(ctx)` so its one-time reads would finish, and `fleetStart` started
+`liveLoop` and `expireLoop` on the same context. When a manager's run ended without the process (its token revoked, a
+restart in place for a new binary), `run()` closed the store, but both loops went on against the old Service: every
+15 s `liveLoop` read the settings through the devices' time zone hook and logged `assistant: settings: closed pool`,
+for days, and each restart left another pair. Take the cancellation off only the one-time reads; a loop gets the
+run's context. Test it by finding the loop's goroutine in the stacks, ending the run, and waiting until it is gone
+(`server/internal/assistant/fleet_loops_run_test.go`).
+
+## A start path of its own skips what the shared start decides (#14887)
+
+`a2a_send`'s new Agent and `dispatch_start` built their own `session.start`, so they never got two things `agent_start`
+and `task_plan` decide before a start goes out: the start host (an agy launcher on the computer's Antigravity companion,
+`companionStartHost`, #13447) and the read-only refusal (`readonlyLauncherRefusal`, #8316). An agy launch, in `plan` by
+default, went to a pane, where the node refused it after its A2A task was recorded. The failed task then said "Persona
+could not confirm the Agent started.", the words for an unknown outcome, about a definite refusal with a reason. A path
+that starts an Agent readies its start with the same steps as the others (`agentStartedHost`,
+`server/internal/assistant/start_host.go`), refuses what it can before anything is recorded, and keeps a definite
+refusal's reason; only an outcome that is really unknown says it is unknown.
+

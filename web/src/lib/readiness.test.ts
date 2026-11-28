@@ -48,8 +48,8 @@ describe("sendLabel", () => {
   it("says what to do first", () => {
     expect(sendLabel(step("computer", "todo", { code: "no_machine" }))).toBe("先添加电脑");
     expect(sendLabel(step("computer", "problem", { code: "node_unreachable" }))).toBe("先唤醒电脑");
-    expect(sendLabel(step("claude", "problem", { code: "claude_missing" }))).toBe("先接上模型");
-    expect(sendLabel(step("model", "problem", { code: "auth_failed" }))).toBe("先接上模型");
+    expect(sendLabel(step("claude", "problem", { code: "claude_missing" }))).toBe("先连接模型");
+    expect(sendLabel(step("model", "problem", { code: "auth_failed" }))).toBe("先连接模型");
   });
 });
 
@@ -180,7 +180,7 @@ describe("turn errors", () => {
   it("says a signed-out CLI is the one to sign in, not the desktop app, in every language (#9366)", async () => {
     const words = {
       en: ["Claude Code CLI", "Claude desktop app's sign-in doesn't count", "claude auth login", "API key"],
-      "zh-Hans": ["Claude Code 命令行", "Claude 桌面版登录了也不算", "claude auth login", "API Key"],
+      "zh-Hans": ["Claude Code 命令行", "Claude 桌面版的登录状态不与此通用", "claude auth login", "API Key"],
       ja: ["Claude Code CLI", "Claude デスクトップアプリのログインはこれに含まれません", "claude auth login", "API キー"],
     };
     try {

@@ -13,8 +13,8 @@ class NotificationActionJournal @Inject constructor(@ApplicationContext context:
     private val preferences = context.getSharedPreferences("notification_actions", Context.MODE_PRIVATE)
 
     @Synchronized
-    internal fun claim(id: String): Boolean {
-        val digest = digest(id)
+    internal fun claim(id: String, createdAt: String? = null): Boolean {
+        val digest = digest(id, createdAt)
         if (preferences.contains(digest)) return false
         // Commit before the HTTP write so process death cannot turn a second tap into a replay.
         check(preferences.edit().putString(digest, UUID.randomUUID().toString()).commit()) {
@@ -28,8 +28,10 @@ class NotificationActionJournal @Inject constructor(@ApplicationContext context:
      * gone from the hub that this phone claimed was most likely answered by this phone, not on the computer (#2483).
      */
     @Synchronized
-    internal fun claimed(id: String): Boolean = preferences.contains(digest(id))
+    internal fun claimed(id: String, createdAt: String? = null): Boolean =
+        preferences.contains(digest(id, createdAt)) || createdAt != null && preferences.contains(digest(id))
 
-    private fun digest(id: String) = MessageDigest.getInstance("SHA-256").digest(id.toByteArray())
+    private fun digest(id: String, createdAt: String? = null) = MessageDigest.getInstance("SHA-256")
+        .digest((if (createdAt == null) id else "$id\u0000$createdAt").toByteArray())
         .joinToString("") { "%02x".format(it) }
 }

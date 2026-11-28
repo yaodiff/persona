@@ -3,7 +3,7 @@
 // (docs/protocol/protocol.md "Projects and spaces"): a repository checked out on several computers is one project with
 // a place for each directory, and a space is one computer's. Without it the groups are the count maps' keys, as before.
 import { t } from "../i18n";
-import { baseName } from "./format";
+import { baseName, shortPath, WINDOWS_PATH } from "./format";
 import { LIST_PAIRS_MAX, listPair, type ListCounts, type ListFilters } from "./session-list";
 import { STATE_LABEL, stateName } from "./state-labels";
 import type { AgentState } from "./types";
@@ -30,7 +30,8 @@ export interface TodoNames { order: readonly string[]; title: (id: string) => st
 // needs_you: how many of them need the user, left out when none do
 export interface CatalogPlace { machine_id: string; path: string; total: number; needs_you?: number }
 export interface CatalogProject { id: string; name: string; origin?: string; total: number; needs_you?: number; places: CatalogPlace[] }
-export interface CatalogSpace { machine_id: string; id: string; name: string; total: number; needs_you?: number }
+/** `path`: the folder its rows are in, from a hub that says it (#13522). */
+export interface CatalogSpace { machine_id: string; id: string; name: string; path?: string; total: number; needs_you?: number }
 export interface SessionCatalog {
   revision: string;
   total: number;
@@ -51,10 +52,10 @@ export function validCatalog(v: unknown): v is SessionCatalog {
       (p.origin === undefined || typeof p.origin === "string") && Array.isArray(p.places) && p.places.length > 0 &&
       p.places.every((x: unknown) => record(x) && typeof x.machine_id === "string" && x.machine_id !== "" && typeof x.path === "string" && count(x.total))) &&
     v.spaces.every((s: unknown) => record(s) && typeof s.machine_id === "string" && s.machine_id !== "" && typeof s.id === "string" &&
-      typeof s.name === "string" && count(s.total) && optionalCount(s.needs_you));
+      typeof s.name === "string" && (s.path === undefined || typeof s.path === "string") && count(s.total) && optionalCount(s.needs_you));
 }
 
-/** One directory of a project, or the computer of a space (no path). */
+/** One directory of a project, or the computer of a space and its folder ("" when the hub does not say). */
 export interface GroupPlace { machine: string; path: string; count: number }
 
 export interface SessionGroup {
@@ -72,6 +73,9 @@ export interface SessionGroup {
   rest?: boolean;
   /** The machine and value pairs its sessions have (`holdsPlace`); absent when the key itself is the value. */
   members?: string[];
+  /** What tells it apart from a group of the same name beside it: a space's parent folder, where another space of its
+   *  computer has its name (`~/Desktop` for `app` in `~/Desktop/app`, #13522). */
+  qualifier?: string;
   /** What lists its sessions, on top of the search and the state. */
   filters: ListFilters;
 }
@@ -82,6 +86,29 @@ const REST_KEY = "\u0000rest";
 /** Projects and spaces have a fixed name order; sessions without a place stay last. Counts and activity only
  *  change their badges and rows, never their position (#11801). */
 const byGroupPlace = (a: SessionGroup, b: SessionGroup) => Number(Boolean(a.rest)) - Number(Boolean(b.rest)) || a.name.localeCompare(b.name) || a.key.localeCompare(b.key);
+
+/** The folder a path is in, by its computer's own separator ("" for a path with none): `~/Desktop` of `~/Desktop/app`. */
+export function parentFolder(path: string): string {
+  const windows = WINDOWS_PATH.test(path);
+  const trimmed = path.replace(windows ? /[\\/]+$/ : /\/+$/, "");
+  const cut = windows ? Math.max(trimmed.lastIndexOf("\\"), trimmed.lastIndexOf("/")) : trimmed.lastIndexOf("/");
+  if (cut < 0) return "";
+  // a drive's or the root's own folder keeps its separator: `C:\` of `C:\app`, `/` of `/srv`
+  return cut === 0 || (windows && /^[A-Za-z]:$/.test(trimmed.slice(0, cut))) ? trimmed.slice(0, cut + 1) : trimmed.slice(0, cut);
+}
+
+/** Spaces that share a name on one computer are told apart by their parent folder, where the hub says their folder. */
+function qualifySpaces(groups: SessionGroup[]): SessionGroup[] {
+  const named = new Map<string, number>();
+  const nameKey = (g: SessionGroup) => JSON.stringify([g.places[0]?.machine ?? "", g.name.toLocaleLowerCase()]);
+  for (const g of groups) if (!g.rest) named.set(nameKey(g), (named.get(nameKey(g)) ?? 0) + 1);
+  return groups.map((g) => {
+    const folder = g.places[0]?.path;
+    if (g.rest || !folder || (named.get(nameKey(g)) ?? 0) < 2) return g;
+    const parent = parentFolder(folder);
+    return parent ? { ...g, qualifier: shortPath(parent) } : g;
+  });
+}
 
 /** The projects or spaces of a hub's catalog, each with how many of its sessions need the user, as the hub counted. */
 export function catalogGroups(catalog: SessionCatalog, dimension: "project" | "group"): SessionGroup[] {
@@ -96,23 +123,35 @@ export function catalogGroups(catalog: SessionCatalog, dimension: "project" | "g
       };
     }).sort(byGroupPlace);
   }
-  const groups: SessionGroup[] = [];
-  // the computers' sessions in no space are one group: nobody looks for them by computer
-  const rest: SessionGroup = { key: REST_KEY, name: t("paged-agents.no_space"), count: 0, needs: 0, places: [], rest: true, members: [], filters: {} };
-  for (const s of catalog.spaces) {
-    if (s.total <= 0) continue;
+  // A space and a computer's sessions in no space (No project) are that computer's: listed under it when the list is
+  // on several computers (`computerSections`, #13522), the latter last among its spaces.
+  return qualifySpaces(catalog.spaces.filter((s) => s.total > 0).map((s): SessionGroup => {
     const pair = listPair(s.machine_id, s.id);
-    if (s.id) {
-      groups.push({ key: pair, name: s.name || s.id, count: s.total, needs: s.needs_you ?? 0, members: [pair], filters: { space: [pair] },
-        places: [{ machine: s.machine_id, path: "", count: s.total }] });
-    } else {
-      rest.count += s.total;
-      rest.needs += s.needs_you ?? 0;
-      rest.members!.push(pair);
-    }
+    return {
+      key: pair, name: s.id ? s.name || s.id : t("paged-agents.no_space"), count: s.total, needs: s.needs_you ?? 0, rest: !s.id || undefined,
+      members: [pair], filters: { space: [pair] }, places: [{ machine: s.machine_id, path: s.id ? s.path ?? "" : "", count: s.total }],
+    };
+  })).sort(byGroupPlace);
+}
+
+/** One computer's groups in a list by space on several computers (#13522), as iOS's By Project lists them. */
+export interface ComputerSection { machine: string; groups: SessionGroup[]; count: number; needs: number }
+
+/** Spaces under their computers: the computers in the hub's order (any it does not list after, by id), each with its
+ *  spaces in their fixed order and its sessions in no space last, and its numbers the sum of theirs. */
+export function computerSections(groups: readonly SessionGroup[], machineOrder: readonly string[] = []): ComputerSection[] {
+  const order = new Map(machineOrder.map((id, i) => [id, i]));
+  const byMachine = new Map<string, ComputerSection>();
+  for (const g of groups) {
+    const machine = g.places[0]?.machine ?? "";
+    let section = byMachine.get(machine);
+    if (!section) byMachine.set(machine, section = { machine, groups: [], count: 0, needs: 0 });
+    section.groups.push(g);
+    section.count += g.count;
+    section.needs += g.needs;
   }
-  if (rest.count > 0) groups.push({ ...rest, filters: { space: rest.members!.slice(0, LIST_PAIRS_MAX) } });
-  return groups.sort(byGroupPlace);
+  const place = (id: string) => order.get(id) ?? order.size;
+  return [...byMachine.values()].sort((a, b) => place(a.machine) - place(b.machine) || a.machine.localeCompare(b.machine));
 }
 
 /** The groups of a counts read: computers on any hub, and on a hub without the catalog (or for personal agents)

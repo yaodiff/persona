@@ -17,11 +17,12 @@ internal open class PaseoCatalogTestService : AgentCreationService {
     var rows: List<AgentWorkspace> = emptyList()
     var failure: Exception? = null
     var complete = true
+    var failedSources: Set<String> = emptySet()
     val reads = mutableListOf<String>()
     override suspend fun workspaceCatalog(machineId: String): AgentWorkspaceCatalog {
         reads += machineId
         failure?.let { throw it }
-        return AgentWorkspaceCatalog(rows.filter { it.machineId == machineId }, complete)
+        return AgentWorkspaceCatalog(rows.filter { it.machineId == machineId }, complete, failedSources)
     }
     override suspend fun launchers(machineId: String) = emptyList<AgentLauncher>()
     override suspend fun directories(machineId: String, path: String) = error("Not used")
@@ -51,6 +52,52 @@ class AgentsWorkspaceCatalogTest {
         service.rows = emptyList()
         catalog.refresh(service, machines)
         assertTrue(catalog.rows.value.isEmpty())
+    }
+
+    /** Orca's rows feed only the worktree actions (#17054): never the repository rows, kept through a failed read. */
+    @Test fun orcaRowsAreKeptApartFromTheRepositoryRows() = runTest {
+        val orca = AgentWorkspace(machineId = "computer", source = "orca", sourceId = "repo::/code/app", title = "app", cwd = "/code/app")
+        val orcaOnly = orca.copy(machineId = "laptop", sourceId = "repo::/code/web", cwd = "/code/web")
+        val service = PaseoCatalogTestService().apply { rows = listOf(workspace(), orca, orcaOnly, orcaOnly.copy(source = "herdr", sourceId = "w1")) }
+        val catalog = AgentsWorkspaceCatalog()
+        catalog.refresh(service, listOf("computer" to true), orcaOnly = listOf("laptop" to false))
+        assertEquals(listOf("paseo"), catalog.rows.value.map { it.source })
+        assertEquals(listOf(orca.sourceId, orcaOnly.sourceId), catalog.orcaRows.value.map { it.sourceId })
+        // An offline computer's rows are kept but can take nothing.
+        assertEquals(false, catalog.orcaRows.value.single { it.machineId == "laptop" }.available)
+        service.failedSources = setOf("orca")
+        service.complete = false
+        service.rows = listOf(workspace())
+        catalog.refresh(service, listOf("computer" to true), orcaOnly = listOf("laptop" to true))
+        assertEquals(listOf(orca.sourceId), catalog.orcaRows.value.filter { it.machineId == "computer" }.map { it.sourceId })
+        service.failedSources = emptySet()
+        service.complete = true
+        catalog.refresh(service, listOf("computer" to true), orcaOnly = listOf("laptop" to true))
+        assertTrue(catalog.orcaRows.value.isEmpty())
+    }
+
+    @Test fun partialReadsRetainOnlyTheFailingSourcesRows() = runTest {
+        val paseo = workspace()
+        val herdr = paseo.copy(source = "herdr")
+        val machines = listOf("computer" to true)
+        val service = PaseoCatalogTestService().apply { rows = listOf(paseo, herdr) }
+        val catalog = AgentsWorkspaceCatalog()
+        catalog.refresh(service, machines)
+        assertEquals(setOf("herdr", "paseo"), catalog.rows.value.map { it.source }.toSet())
+        service.rows = emptyList()
+        service.failedSources = setOf("herdr")
+        catalog.refresh(service, machines)
+        assertEquals(listOf(herdr), catalog.rows.value)
+        service.failedSources = emptySet()
+        catalog.refresh(service, machines)
+        assertTrue(catalog.rows.value.isEmpty())
+        service.rows = listOf(paseo, herdr)
+        catalog.refresh(service, machines)
+        service.rows = emptyList()
+        service.failedSources = setOf("paseo")
+        service.complete = false
+        catalog.refresh(service, machines)
+        assertEquals(listOf(paseo), catalog.rows.value)
     }
 
     @Test fun offlineAndReconnectReadTheHubAndKeepSourceIdentity() = runTest {

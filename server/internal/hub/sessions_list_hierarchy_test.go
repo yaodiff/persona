@@ -337,14 +337,15 @@ func TestPagedCountsSupervisorHeld(t *testing.T) {
 	m.sessions = []proto.Session{needs("screen"), needs("perm"), needs("mixed"), needs("deciding"), needs("plain"), needs("held-p1")}
 	h.reported.mu.Lock()
 	h.reported.interactions = map[string]proto.Interaction{
-		"ix-screen":  {ID: "ix-screen", MachineID: "demo", SessionID: "screen", Kind: proto.IxScreen, Delegating: true},
-		"ix-perm":    {ID: "ix-perm", MachineID: "demo", SessionID: "perm", Kind: proto.IxPermission, Delegating: true},
-		"ix-mixed-1": {ID: "ix-mixed-1", MachineID: "demo", SessionID: "mixed", Kind: proto.IxScreen, Delegating: true},
-		"ix-mixed-2": {ID: "ix-mixed-2", MachineID: "demo", SessionID: "mixed", Kind: proto.IxPermission},
-		"ix-decide":  {ID: "ix-decide", MachineID: "demo", SessionID: "deciding", Kind: proto.IxQuestion, Delegating: true},
-		"ix-plain":   {ID: "ix-plain", MachineID: "demo", SessionID: "plain", Kind: proto.IxScreen},
-		"ix-held-1":  {ID: "ix-held-1", MachineID: "demo", SessionID: "held-p1", Kind: proto.IxScreen, Delegating: true},
-		"ix-held-2":  {ID: "ix-held-2", MachineID: "demo", SessionID: "held-p1", Kind: proto.IxPermission, PushLevel: assistantwire.LevelP1},
+		"ix-screen":        {ID: "ix-screen", MachineID: "demo", SessionID: "screen", Kind: proto.IxScreen, Delegating: true},
+		"ix-screen-mirror": {ID: "ix-screen-mirror", MachineID: "demo", SessionID: "screen", Kind: proto.IxScreen, MirrorOf: "ix-screen"},
+		"ix-perm":          {ID: "ix-perm", MachineID: "demo", SessionID: "perm", Kind: proto.IxPermission, Delegating: true},
+		"ix-mixed-1":       {ID: "ix-mixed-1", MachineID: "demo", SessionID: "mixed", Kind: proto.IxScreen, Delegating: true},
+		"ix-mixed-2":       {ID: "ix-mixed-2", MachineID: "demo", SessionID: "mixed", Kind: proto.IxPermission},
+		"ix-decide":        {ID: "ix-decide", MachineID: "demo", SessionID: "deciding", Kind: proto.IxQuestion, Delegating: true},
+		"ix-plain":         {ID: "ix-plain", MachineID: "demo", SessionID: "plain", Kind: proto.IxScreen},
+		"ix-held-1":        {ID: "ix-held-1", MachineID: "demo", SessionID: "held-p1", Kind: proto.IxScreen, Delegating: true},
+		"ix-held-2":        {ID: "ix-held-2", MachineID: "demo", SessionID: "held-p1", Kind: proto.IxPermission, PushLevel: assistantwire.LevelP1},
 	}
 	h.reported.mu.Unlock()
 	c := hierarchyCounts(t, h, "agents_only=1")

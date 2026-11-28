@@ -1,8 +1,8 @@
 {
   "add": "添加图片或文件",
   "add_hint": "选择、粘贴或拖入图片和文件，每次最多 4 个",
-  "too_many_other": "每次最多 4 个附件，有 {count} 个没有加入",
-  "quote_unsupported": "需要更新 Hub 上的飞书扩展，才能引用消息发送图片和文件",
+  "too_many_other": "每次最多添加 4 个附件，其余 {count} 个未添加。",
+  "quote_unsupported": "请先更新 hub 上的飞书扩展，即可在引用消息时发送图片和文件。",
   "drop": "松开即可添加附件",
   "message": "飞书消息"
 }

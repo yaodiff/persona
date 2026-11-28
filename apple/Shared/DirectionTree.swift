@@ -76,7 +76,7 @@ nonisolated struct DirectionTree: Codable, Hashable, Sendable {
     /// An Agent working on a to-do, or one of its sub-Agents (`children`, same shape).
     nonisolated struct AgentNode: Codable, Hashable, Sendable, Identifiable {
         var machineID: String
-        /// A sub-Agent running inside a session is `<parent>@<id>`.
+        /// An in-session sub-Agent uses `<parent>@<id>`.
         var sessionID: String
         var title: String
         /// claude, codex…; may be empty.
@@ -315,7 +315,12 @@ nonisolated extension DirectionTree {
     /// Whether a conversation-backed leader is absent from the page's conversations and needs one assistant reread.
     /// Outside ids are complete directions in their own right, not temporarily missing conversations (#8236).
     func hasUnlistedConversation(known: Set<String>) -> Bool {
-        leaders.contains { !$0.isExternal && !known.contains($0.id) }
+        !unlistedConversations(known: known).isEmpty
+    }
+
+    /// The conversation-backed leaders absent from `known`, by id (`hasUnlistedConversation`).
+    func unlistedConversations(known: Set<String>) -> Set<String> {
+        Set(leaders.lazy.filter { !$0.isExternal && !known.contains($0.id) }.map(\.id))
     }
 
     /// The directions with a to-do, in the tree's order: the To-dos page's and the Agents page's sections.

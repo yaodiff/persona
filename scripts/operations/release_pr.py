@@ -279,9 +279,45 @@ def bind_cli_web(plan_path, directory):
     return plan
 
 
-def verify_artifacts(plan_path, repository, channel, commit, additional=()):
+def resolve_target_commit(plan_dir, version, channel, merge_commit, cwd=None, runner=subprocess.check_output):
+    """Resolve the pinned target commit from .github/release-prs/<version>.json, or fall back to merge_commit."""
+    if channel not in ("release", "beta"):
+        raise ReleaseError("channel must be release or beta")
+    if not isinstance(merge_commit, str) or not SHA.fullmatch(merge_commit):
+        raise ReleaseError("a full merge commit is required to resolve the release target")
+    tag = "v" + version
+    if not ((channel == "beta" and BETA.fullmatch(tag)) or (channel == "release" and STABLE.fullmatch(tag))):
+        raise ReleaseError("version and channel differ")
+    descriptor = Path(plan_dir) / (version + ".json")
+    if not descriptor.exists():
+        return merge_commit
+    if descriptor.is_symlink() or not descriptor.is_file():
+        raise ReleaseError("release target descriptor must be a regular file")
+    data = json.loads(descriptor.read_text())
+    if not isinstance(data, dict):
+        raise ReleaseError("release target descriptor must be a JSON object")
+    if data.get("version") != version or data.get("channel") != channel:
+        raise ReleaseError("release target descriptor does not match the release PR version and channel")
+    target = data.get("commit")
+    if not isinstance(target, str) or not SHA.fullmatch(target):
+        raise ReleaseError("release target descriptor must name a full 40-character commit SHA")
+    if "ci_run_id" in data:
+        ci_run_id = data["ci_run_id"]
+        if type(ci_run_id) is not int or ci_run_id < 1:
+            raise ReleaseError("release target descriptor ci_run_id must be a positive integer")
+    if target != merge_commit:
+        try:
+            runner(["git", "merge-base", "--is-ancestor", target, merge_commit],
+                   cwd=cwd, text=True, timeout=60)
+        except subprocess.CalledProcessError as exc:
+            raise ReleaseError("pinned release target commit is not an ancestor of the merge commit") from exc
+    return target
+
+
+def verify_artifacts(plan_path, repository, channel, commit, additional=(), merge_commit=""):
     plan = load_plan(plan_path, repository, channel, commit)
-    if plan.get("merge_commit") != commit:
+    expected_merge = merge_commit or commit
+    if not isinstance(expected_merge, str) or not SHA.fullmatch(expected_merge) or plan.get("merge_commit") != expected_merge:
         raise ReleaseError("the verified release plan does not name the actual merge commit")
     artifacts = list(plan["artifacts"])
     by_name = {item["name"]: item for item in artifacts}
@@ -348,7 +384,12 @@ def main(argv=None):
     verify_artifacts_parser = sub.add_parser("verify-artifacts")
     verify_artifacts_parser.add_argument("--plan", type=Path, required=True)
     verify_artifacts_parser.add_argument("--commit", required=True)
+    verify_artifacts_parser.add_argument("--merge-commit", default="")
     verify_artifacts_parser.add_argument("--add", type=Path, nargs="*", default=[])
+    resolve = sub.add_parser("resolve-target")
+    resolve.add_argument("--dir", type=Path, required=True)
+    resolve.add_argument("--version", required=True)
+    resolve.add_argument("--merge-commit", required=True)
     merged = sub.add_parser("verify-merged-pr")
     merged.add_argument("--pr-json", type=Path, required=True)
     merged.add_argument("--commit", required=True)
@@ -381,8 +422,10 @@ def main(argv=None):
         data = bind_cli_web(args.plan, args.downloads)
         print('Bound %d verified CLI/Web artifacts' % len(data['artifacts']))
     elif args.command == "verify-artifacts":
-        data = verify_artifacts(args.plan, args.repository, args.channel, args.commit, args.add)
+        data = verify_artifacts(args.plan, args.repository, args.channel, args.commit, args.add, args.merge_commit)
         print('Verified %d artifacts for %s' % (len(data['artifacts']), data['tag']))
+    elif args.command == "resolve-target":
+        print(resolve_target_commit(args.dir, args.version, args.channel, args.merge_commit))
     else:
         data = load_plan(args.plan, args.repository, args.channel, args.commit)
         print(json.dumps({key: data[key] for key in ("tag", "version", "build", "commit", "pr")}, sort_keys=True))

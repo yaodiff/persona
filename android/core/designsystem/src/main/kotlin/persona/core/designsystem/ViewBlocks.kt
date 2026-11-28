@@ -2,6 +2,7 @@ package persona.core.designsystem
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.staticCompositionLocalOf
+import persona.core.contracts.api.ExtensionView
 
 /**
  * Fenced blocks in an assistant's reply that are drawn as an extension's view (docs/extensions/extensions.md "Declarative UI", #1850):
@@ -29,6 +30,8 @@ class ViewBlocks(
     val picture: @Composable (language: String, raw: String, complete: Boolean, index: Int) -> Unit = { language, raw, complete, _ ->
         if (complete) parse(language, raw)?.let { draw(it) }
     },
+    /** A transcript tool result supplies a read-only view outside the message text. */
+    val toolView: @Composable (ExtensionView) -> Unit = {},
 )
 
 val LocalViewBlocks = staticCompositionLocalOf<ViewBlocks?> { null }

@@ -1,6 +1,7 @@
 {
   "waiting_idle": "更新已排队",
   "transferring": "正在准备更新",
+  "draining": "等待重启",
   "restarting": "正在重启以应用更新",
   "confirming": "正在检查连接",
   "updating": "更新中",

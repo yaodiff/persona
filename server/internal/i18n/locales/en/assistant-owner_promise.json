@@ -1,0 +1,5 @@
+{
+  "label": "Follow up on your promise",
+  "uncovered": "You offered to follow up. There is no linked to-do yet.",
+  "covered": "This promise already has a to-do."
+}

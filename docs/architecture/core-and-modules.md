@@ -179,7 +179,8 @@ Because a missing flag means off, every flag a client gates on has to be announc
   with it ("How to build and run the core alone" below).
 - **At run time**: the settings row `modules` (the `settings` table, as every other setting; no state file) holds
   `{"disabled": ["<id>", …]}`. `persona_settings` lists and reads this row as the `modules` key. A set rejects unknown
-  or duplicate ids (compiled-in modules and the client-only ones of `modapi.ClientModules`) before showing the existing owner approval card; `null` or an empty disabled list
+  or duplicate ids (known are the compiled-in modules, the client-only ones of `modapi.ClientModules` and the ones
+  installed extensions may supply, `modapi.ExtensionModules`, on any build) before showing the existing owner approval card; `null` or an empty disabled list
   restores the default. The manager reads the row once where it starts (`server/internal/assistant/main.go`,
   `ReadModuleSwitch`) and hands it to `assistant.New` as `Options.ModulesOff`, so the saved change takes effect at the
   next manager start, never as a hot switch in the running process. The manager reads it before it makes the extension
@@ -215,7 +216,7 @@ What switched off means, by seam (each port follows `Set.On`; a build without th
 | `server/internal/builtinext` (`ProvideVolc`, `ProvideVoice`) | `volc`, `voice` | The built-in extension is not registered or started; no meeting transcribes with it |
 | `server/internal/builtinext` (`AddProgram`) | `volc`, `voice` | The extension host starts no `personad volc` / `personad voice`, a `hub.json` entry's included (`ProgramOff`: it fails as the unknown subcommand would). The subcommand stays in the binary |
 | `server/internal/botport` | `lark` | No bot client is made: the bot cannot be bound, registered or started |
-| `server/internal/cliport` | `lark` | `lark.cli` is not read (logged at start) and the extension host's lark-cli integration is off |
+| `server/internal/cliport` | `lark` | `lark.cli` is not read (logged at start), the extension host's lark-cli integration is off and the knowledge base's Lark import (`kb.lark_minutes`) logs that and skips its runs |
 | `server/internal/larkhost` | `lark` | The outbound channel port is `larkhost.None`, as without the module; the core's pushes to the chat return `nil` without a log or a retry, and `notify_user`'s copy report records the Feishu copy as `skipped` (told nowhere in its answer) |
 | `server/internal/knowledgeuihost` | `knowledge-ui` | No layer: no `kb_history_*` tool or import, the selection page's chat list answers as a source without history, days carry no sent marks |
 | `server/internal/healthhost` | `health` | No layer: the intake and items routes answer 404, no `health_intake` tool, no `health_intake` or `health_items` capability, no water reminders |
@@ -259,6 +260,10 @@ Persona Core is a product on its own: a hub built without any module starts, ser
 - **Run**: the core-only `persona-hub run` (or `personad hub run`) with a `hub.json` as for any hub (docs/operations/config.md);
   keep `persona-manager` beside `persona-hub` and the hub starts it. The manager's log says `modules: loaded none`
   (a default build: `modules: loaded briefing, voice, volc`, …).
+- **Install**: a release has the core alone as install packages beside the full ones (the core edition:
+  `core-latest.json`, `core-personad-<os>-<arch>.gz`, …), `install.sh --core` installs them, and an install keeps its
+  edition through every update. [core-install.md](../operations/core-install.md) is the document;
+  `python3 scripts/ci/core-install.py` follows it in a clean container, from the packages alone.
 - **Smoke test**: `python3 scripts/ci/core-only-smoke.py` builds the three programs with `persona_core_only`, starts a
   disposable `postgres:18-alpine` container on a private port, writes a `hub.json` in a temporary home and runs
   `persona-hub run` with a clean environment (no `PERSONA_HOME` of the machine's own hub). It checks health, an
@@ -278,7 +283,7 @@ Persona Core is a product on its own: a hub built without any module starts, ser
   --database-file <file with database_url>` runs a shard's every package without modules; a test of a module's own
   behaviour skips without it (`needsBriefingModule`, `needsVoiceModule`, `needsVolcModule`). Locally the `other` shard
   needs Bun 1.4.2 on `PATH`, as in CI.
-- **CI** (`scripts/ci/server.sh`): the `build` lane runs 'Core-only hub smoke' and 'Builds without each module' (each
+- **CI** (`scripts/ci/server.sh`): the `core-other` lane runs 'Core-only install from packages'; the `build` lane runs 'Core-only hub smoke' and 'Builds without each module' (each
   `server/internal/modules/<id>/module.json`: `go build -tags persona_without_<id> ./...` and the module list and guard
   tests, so a module that moves is covered with no edit); the `core-node`, `core-managers` and `core-other` lanes (and
   `all`) run 'Server <shard> tests with Postgres, core only'. Measured on the hub machine (64 cores, shared): node
@@ -377,8 +382,9 @@ leaf library the core's cards are built with), and `server/internal/modules/all/
 `server/internal/modules/lark/connector/larkcli`) are reached the same way through `server/internal/cliport`, with their
 values in the contract `server/internal/cliwire`; the connector builds on the connector SPI (`connectorwire`). Without the
 module `botport.Available()` and `cliport.Available()` are false: the bot cannot be bound, registered or started (the
-setting answers that it is not part of this build), `lark.cli` is not read (a warning at start), and the extension
-host's tests of them skip (`needsLarkModule`, `needsLarkCLI`). `scripts/ci/server.sh build` builds and tests with `persona_core_only` and with
+setting answers that it is not part of this build), `lark.cli` is not read (a warning at start), the knowledge base's
+Lark import (`server/internal/assistant/kblark`, through the same runner) skips its runs, and the extension host's and
+the import's tests of them skip (`needsLarkModule`, `needsLarkCLI`). `scripts/ci/server.sh build` builds and tests with `persona_core_only` and with
 `persona_without_lark`. The assistant's own Feishu layer reaches the module through `server/internal/larkhost` ("Lark" below).
 
 ### The node's modules
@@ -429,12 +435,12 @@ The modules of this kind:
 
 **Controlling changes to the core (#14916).** Persona Core has no UI: it is the hub API and data model for Agents, sessions,
 tasks and to-dos, with the clients' headless code and the foundation interfaces. The clients' interface code is the default
-panel built on Core. `schema/core-paths.txt` has two tiers: `core` (strict: label + reason, owner review, no module
-references) and `panel` (only no module references); modules are free. The guards below keep modules and core apart; three
+panel built on Core. `schema/core-paths.txt` has two tiers: `core` (strict review, owner review, no module
+references; the label is recommended, not required since #17195) and `panel` (only no module references); modules are free. The guards below keep modules and core apart; three
 more pieces control changes to tier core itself, in this order of strength. The merge check: `scripts/hooks/core-change-check.py`, run by
-`scripts/hooks/merge-pr.sh`, refuses a PR that changes a tier-core path of `schema/core-paths.txt` (read by `scripts/test/core_paths.py`:
+`scripts/hooks/merge-pr.sh`, is advisory (#17195): it reports which tier-core paths of `schema/core-paths.txt` a PR changes (read by `scripts/test/core_paths.py`:
 the server units this file's classification calls `core`, the clients' headless directories and the foundation interfaces
-and guards named one by one; panel files and tests-only changes do not count) unless it has the label `core-change` and a `## Why this must change the core` section. CODEOWNERS:
+and guards named one by one; panel files and tests-only changes do not count) and whether a `core-change` label and a `## Why this must change the core` section are present, but no longer refuses the merge — Core changes get strict review instead of a required label. CODEOWNERS:
 the core block of `.github/CODEOWNERS` is generated from tier core of the same list (`scripts/hooks/codeowners.py --write`) and requests
 the owners' review; whether the review is required is a branch ruleset the administrator sets. The reference guard:
 `scripts/test/test_core_references_no_module.py` needs no toolchain and checks on every platform that the four guards'
@@ -479,23 +485,23 @@ platform compiles cannot hide a violation (`TestModuleGuardsSeeEveryBuild` prove
 
 ### The briefing pilot
 
-The daily briefing (`internal/assistant/briefing*.go`) is a module (#13430, decision 3; #13845). Fact gathering, the
-evening all-day recording summary, the `brief` chat feed item, the model-failure fallback, the wait-row setting and the
-wait rules live in `server/internal/modules/briefing` behind narrow `modapi.Host` ports; the Lark card renderer
-(`briefing_card.go`) and HTTP routes (`briefRoutes` in `briefing_feed.go`) stay in package assistant until a neutral
-`Card` model and the `hub_routes` slot land.
+The daily briefing is a built-in module (#13430, decision 3; #13845). The scheduler calls its runner through
+`modapi`. The runner prepares the facts, feed item and paginated message cards for delivery.
 
 - **The module owns** (`server/internal/modules/briefing`): the `assistant.briefing_waits` setting (its type, defaults,
   validation and card text), the wait rules of the briefing's per-direction rows, routine fact gathering (`FactsAt`,
   Inbox follow-up filtering, in-progress sorting, per-run retention and schedule lifecycle hooks), the evening day
-  recording summary (`Day`, `BoundDay`), the `brief` feed item body and writer, and the model-failure fallback lifecycle.
+  recording summary (`Day`, `BoundDay`), the `brief` feed item body and writer, the model-failure fallback lifecycle,
+  card rendering and pagination, and the `POST /api/v1/later/{id}/handled` feed action registered through `AddHubRoute`.
 - **The core keeps** the stored value (the `briefing_waits` field of the assistant's settings, byte for byte as before),
   the setting's description in `persona_settings`, the ledgers behind the narrow `modapi.Ports` adapters
-  (`server/internal/assistant/modules_ports.go`), the Lark card renderer (`briefing_card.go`) and `briefRoutes`.
+  (`server/internal/assistant/modules_ports.go`), transport retries and the shared `POST /api/v1/todos/{id}/accept`
+  action used by ordinary to-do reviews and decisions.
 - **With the module absent** a routine with facts on opens with no facts and keeps no briefing run, so its answer goes
   out as a routine with facts off does (no brief item, no briefing rows on the Lark card); a daily report gets the north
   star's lines alone; the acceptance reminders wait for no briefing; `assistant.briefing_waits` is hidden from
-  `persona_settings` but stays stored. `server/internal/assistant/modules_test.go` covers each of these.
+  `persona_settings` but stays stored. The later-item action returns 404. Conversation history still serves stored
+  brief items and the shared to-do acceptance action stays available. `server/internal/assistant/modules_test.go` covers each of these.
 
 ### Volcengine speech
 
@@ -503,7 +509,64 @@ wait rules live in `server/internal/modules/briefing` behind narrow `modapi.Host
 section 2): the program `personad volc` and its stand-in service `volctest` (docs/extensions/volcengine-speech.md). The
 extension host keeps the extension's manifest, its meetings switch and its settings text (`internal/extmgr/volc_extension.go`),
 from what the module provides through `builtinext`; its catalog strings (`hub-volc_extension.*`, `volc-*`) stay in the
-hub's locales.
+hub's locales. `volc` is also the first id of `modapi.ExtensionModules` ("Modules from extensions" below): once the
+official market's `volc` package is installed (handed off from the built-in, or on a build without the module), that
+package decides `module.volc`, on while it is enabled with both `transcription/volc` and `speech/volc` on; until
+then the built-in module's flag stands as before.
+
+### Modules from extensions
+
+An installed extension may supply a module's flag (#16254), so a module can move out of the binary into an
+extension package without its clients noticing. Only the host decides which: `modapi.ExtensionModules`
+(`server/internal/modapi/modapi.go`) lists the module ids an extension may supply and the contributions
+(`<point>/<id>`) each needs; today it is `volc` (`transcription/volc`, `speech/volc`). A package never names the
+module it claims.
+
+- **Who is a provider** (`server/internal/extmgr/module_providers.go`): the registry's record of the listed id, a
+  package installed on the hub's machine (`source: installed`, not a remote plugin installed from `remote:` without a
+  package; an installed package whose program is attached, `Record.AttachedPackage`, still counts), from a market whose spec is the
+  official one (`extension.IsOfficialMarket`), verified with the official signing key or a retired one
+  (`extension.Official.PreviousSigningKeys`). A local upload, a private market's package and another id are not
+  providers. A private market cannot hold an official key, current or retired (`extension.NormalizeMarketKeys`).
+- **Its flag** is on while the extension is enabled, every contribution the module needs is on and the `modules`
+  row leaves the id on. Whether its program is running, or has a problem, does not count.
+- **The channel**: the manager reports each provider with its flag in `extensions.report` (`modules: [{id, on}]`,
+  `extwire.Report.Modules`, [protocol.md](../protocol/protocol.md) "Extensions, connectors and bots (extensions.*, 2026-11-05)"), again on every
+  registry change, when its extensions are loaded and on every reconnection. The hub
+  (`server/internal/hub/extensions_link.go`, `reportedModules`) reads it from the default manager only, while that
+  manager is connected and its hello carries the `modules` marker, beside the built-in modules' flags of the same
+  hello. An installed provider decides its module's flag: one that is on adds `module.<id>`, one that is off removes the
+  built-in module's flag of that id. The hub keeps the report while the manager is away (the flags go with the
+  connection, as the hello's do) and, for the assistant, across a restart. An older manager reports no providers and
+  an older hub ignores them, so both keep today's flags.
+- **Reserved features**: the marker `modules` and any `module.<id>` are never an extension's own feature. The manifest
+  schema cannot declare `module.<id>`, the manager drops both from the `api.features` it reports (logged once), and the
+  hub drops them from every report's features.
+- **Rows nothing may serve** (#16263, `server/internal/extension/dormant.go`): before it loads the registry the manager
+  names every listed id with whether the `modules` row switched it off (`Registry.HoldModule`). Load then sets aside,
+  in a private dormant table, the rows of a listed id that nothing may serve: a built-in's row on a build without that
+  built-in (an orphan, such as `volc` on a `persona_without_volc` or core-only build), and any row of a module the
+  `modules` row switched off, installed packages included. A dormant row is not listed, nothing runs it, it supplies no
+  flag, and nothing in it changes: its settings, switches, sealed secrets and files stay as they were. Load never fails
+  because of one. Switching the module back on and restarting reads the row again as it was.
+- **Adopting an orphan**: the catalog offers the official package of an orphan's id as an install. The registry's
+  commit (`validatePlan`, which every install entry point goes through: the catalog, a bundle, an upload, the command
+  line) takes the orphan's row over in place only for a package from the official market verified with its current
+  signing key that provides every contribution the built-in's stored manifest names, and only while the module is on.
+  The installed row keeps the owner's settings, switch, switched-off contributions and installation time, and is the
+  built-in's verified successor (`BuiltinPredecessor`, `PreviousOrigin: builtin:<id>`), so its storage key, sealed
+  secrets, data and the transcription pinned to the built-in stay; the write is pinned to the row as Load read it, so a
+  row that changed meanwhile is refused. Anything else over an orphan (a local upload, a private market, a missing
+  contribution, a module switched off) is refused with the identity error and writes nothing. Once adopted it is an
+  ordinary installed package: it can be upgraded, rolled back to the built-in on a build that has it, or uninstalled.
+- **Rollback across builds**: a package rolled back to its first version on a build without the built-in has no
+  built-in to name as its previous version. On a build with the built-in again, rollback still returns to it
+  (`Registry.Rollback`), with the owner's settings, switches and secrets. On a build without it, rolling back to the
+  built-in is refused and nothing changes.
+- **The stream contract in the SDK**: the transcription point's job wire (`TranscriptionInfo`, `TranscriptionFrame`,
+  the frame and code names, `F`) and the `X-Persona-Role` and `X-Persona-Lang` header names are in the Go SDK
+  (`sdk/go/wire/transcription.go`, hand-written, not generated from the schemas) so a package outside personad speaks
+  them; `server/internal/extwire` keeps its names as aliases of these.
 
 ### Voice
 
@@ -516,8 +579,8 @@ chosen extension or on the phone. The apps' composer dictation is core; the exte
 (docs/assistant/voice.md 4.18) goes with the module, and apps use it only while the extension advertises its
 `dictation` feature. Still in the core and named by string, to move as the host serves their slots: the channel kind
 (`channel.KindVoice`), `assistantwire.PluginsVoice`, the `voice` and `speech` extension points, the extension host's
-glue (`internal/extmgr/voice_extension.go`) and the `hub-voice_extension.*` strings; `internal/transcribelive`, a
-measuring tool that also reads the knowledge base, stays where it is.
+glue (`internal/extmgr/voice_extension.go`) and the `hub-voice_extension.*` strings. The developer tool
+`server/scripts/transcribelive` measures live transcription and reads the knowledge base.
 
 ### Recording
 
@@ -811,6 +874,16 @@ workbench, topics and pushes, about 10k lines) is moving into the `lark` module 
   `BoardChanged` may hold its own lock (`channels_handler.go`, `todos.go`): the call takes only the chat's lock and the
   board's `mu`, as `boardChanged` did, and never waits for `run`. The acceptance rounds cross as data
   (`Host.WorkbenchBoard`'s rows).
+- **The user sync is the module's** (`server/internal/modules/lark/larksync/service.go` and `service_*.go`):
+  settings and sealed-token management, OAuth v3 user authorization and refresh, sync-only bot device-code
+  registration, HTTP routes (`/api/v1/bots/feishu/sync*`), scheduler loop, and the `larksync` outbox connector
+  (`Changes`, `Items`, `Status`). Core (`server/internal/extmgr/larksync_host.go`) holds only the minimal adapter
+  implementing `botport.SyncHost` (`server/internal/botport/botport.go`) and delegates the five external call sites
+  through `botport.SyncService`, while `server/internal/larksyncwire/types.go` holds the shared settings keys, sealed
+  field lists, outbox row structs, and `larksyncwire.Store` contract implemented by `internal/db`. With the `lark`
+  module off or built out, the routes answer 404, the `larksync` connector is absent, the loop is a no-op, primary
+  registration falls back to `docs_standard`, and stored `bots.feishu.sync*` settings remain untouched
+  (`server/internal/extmgr/larksync_module_test.go`).
 - **Tests**: the turns' own tests run in the module on a fake core (`server/internal/modules/lark/service_test.go`:
   the channels' runs, their finishing, folding and dropping, and the hub's transport; `chat_fake_test.go`: the chat's
   host methods as the core answers the plain case); the assistant's tests of the turns through the channels' pipeline
@@ -827,6 +900,11 @@ workbench, topics and pushes, about 10k lines) is moving into the `lark` module 
 
 ### How to add a module
 
+These steps move a feature of this repository into an in-tree module, and step 3 changes Core paths (the
+registration in `server/internal/modules/all`, a `module <id>` line in `schema/module-classification.txt`). To add a
+feature to a core-only install without changing Core code, write an extension instead:
+`docs/extensions/core-only-features.md`, with the sample `sdk/examples/quicknotes`.
+
 1. Pick the id from #13430 section 2 and check its manifest needs only slots the kernel serves; if it needs another,
    add the `Host` method and the kernel's support first, in their own PR, and update "Slots" above.
 2. Create `server/internal/modules/<id>/` with `module.json` (validated by `schema/module.schema.json`), a `Module` whose
@@ -841,7 +919,8 @@ workbench, topics and pushes, about 10k lines) is moving into the `lark` module 
 
 ## Clients
 
-Each client documents its side in its own platform doc; these are pointers only.
+Each client documents its side in its own platform doc; these are pointers only. Across both Core and feature
+modules, shared domain logic lives in the Go server while clients stay thin (`docs/architecture/server-first-logic.md`).
 
 - **Apple** (#13432): `PersonaHostApp` with `PersonaModuleAPI` and `PersonaModule<Name>` packages. See `docs/apple/` (written with #13432).
   A module the hub may turn off declares `feature` = `module.<id>`; the app follows the rule agreed on #13844 (off only
@@ -861,6 +940,7 @@ debug controls and placeholder demos out of Labs. See `docs/web/web.md` ("Labs")
 **Hub flags.** Every client switches modules on the hub's hello the same way (agreed on #13844): a module's `feature`
 is `module.<id>`; a hub that publishes module flags also announces the marker `modules`; a module with a `feature` is
 off only when the hello has `modules` and lacks the module's flag. No hello yet, or an older hub without `modules`,
-leaves it on.
+leaves it on. An approved installed extension supplies its module's flag the same way ("Modules from extensions"
+above): the clients see only `module.<id>`.
 
 Every client reads the same manifest fields from `schema/module.schema.json`.

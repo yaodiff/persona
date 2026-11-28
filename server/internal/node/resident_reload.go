@@ -34,6 +34,7 @@ type ResidentReload struct {
 	idle                  chan struct{}
 	peers                 map[*rpc.Peer]func()
 	logger                *log.Logger
+	draining              *proto.NodeUpdateDraining
 }
 
 func (r *ResidentReload) enter() (func(), error) {
@@ -332,16 +333,76 @@ func (r *ResidentReload) Prepare(ctx context.Context) error {
 	return nil
 }
 
+// SetUpdateDraining records the committed update transaction currently waiting for idle handover,
+// or clears it when id is empty.
+func (r *ResidentReload) SetUpdateDraining(id, target string) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	if id == "" {
+		r.draining = nil
+	} else {
+		r.draining = &proto.NodeUpdateDraining{ID: proto.NodeUpdateID(id), Target: target}
+	}
+	r.mu.Unlock()
+}
+
+// UpdateDraining returns a copy of the active committed update waiting for idle handover, or nil.
+func (r *ResidentReload) UpdateDraining() *proto.NodeUpdateDraining {
+	if r == nil {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.draining == nil {
+		return nil
+	}
+	cp := *r.draining
+	return &cp
+}
+
+// ReportUpdateDraining records draining state and notifies connected peers without stalling the reload worker.
+func (r *ResidentReload) ReportUpdateDraining(ctx context.Context, id, target string) {
+	if r == nil || id == "" {
+		return
+	}
+	draining := proto.NodeUpdateDraining{ID: proto.NodeUpdateID(id), Target: target}
+	r.mu.Lock()
+	r.draining = &draining
+	peers := make([]*rpc.Peer, 0, len(r.peers))
+	for peer := range r.peers {
+		peers = append(peers, peer)
+	}
+	r.mu.Unlock()
+	for _, peer := range peers {
+		go func(p *rpc.Peer) {
+			send, cancel := context.WithTimeout(ctx, time.Second)
+			defer cancel()
+			_ = p.NotifyContext(send, nodeproto.EventUpdateDraining, draining)
+		}(peer)
+	}
+}
+
 func (r *ResidentReload) Announce(ctx context.Context) error {
 	r.mu.Lock()
 	var peers []*rpc.Peer
 	for peer := range r.peers {
 		peers = append(peers, peer)
 	}
+	var params map[string]any
+	if r.draining != nil && r.draining.ID != "" {
+		params = map[string]any{"id": string(r.draining.ID)}
+		if r.draining.Target != "" {
+			params["target"] = r.draining.Target
+		}
+	} else {
+		params = map[string]any{}
+	}
 	r.mu.Unlock()
 	for _, peer := range peers {
 		err := r.exchange(ctx, peer, func() error {
-			return peer.NotifyContext(ctx, nodeproto.EventRestarting, map[string]any{})
+			return peer.NotifyContext(ctx, nodeproto.EventRestarting, params)
 		})
 		if errors.Is(err, rpc.ErrClosed) {
 			continue

@@ -250,7 +250,7 @@ func TestGatewayQuotaWaitRestartsAndClaimsOnceInPostgres(t *testing.T) {
 func testGatewayClaimOnce(t *testing.T, resourceWait bool) {
 	t.Helper()
 	ctx := context.Background()
-	database, err := db.Open(ctx, newDatabase(t), db.ManagerSet)
+	database, err := db.Open(ctx, newMigratedDatabase(t, db.ManagerSet), db.ManagerSet)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -306,7 +306,7 @@ func testGatewayClaimOnce(t *testing.T, resourceWait bool) {
 
 func TestGatewayQuotaWaitKeepsUnconfirmedClaimAcrossRestart(t *testing.T) {
 	ctx := context.Background()
-	database, err := db.Open(ctx, newDatabase(t), db.ManagerSet)
+	database, err := db.Open(ctx, newMigratedDatabase(t, db.ManagerSet), db.ManagerSet)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -341,7 +341,7 @@ func TestGatewayQuotaWaitChecksPeerCancellationAndLink(t *testing.T) {
 		for _, phase := range []string{"before claim", "before dispatch"} {
 			t.Run(how+"/"+phase, func(t *testing.T) {
 				ctx := context.Background()
-				database, err := db.Open(ctx, newDatabase(t), db.ManagerSet)
+				database, err := db.Open(ctx, newMigratedDatabase(t, db.ManagerSet), db.ManagerSet)
 				if err != nil {
 					t.Fatal(err)
 				}

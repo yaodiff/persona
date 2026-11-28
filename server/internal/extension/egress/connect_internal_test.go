@@ -72,7 +72,7 @@ func TestClientHelloRejectsUnsafeReplayWithoutLosingBytes(t *testing.T) {
 func TestConnectCacheIsBoundedAndCannotBypassFreshDNS(t *testing.T) {
 	p := &Proxy{}
 	for i := range connectCacheMost + 20 {
-		p.rememberConnect(fmt.Sprintf("service-%d.example.com:443", i), "192.0.2.1:443")
+		p.rememberConnect(connectKey{host: fmt.Sprintf("service-%d.example.com", i), port: "443"}, "192.0.2.1:443")
 	}
 	if len(p.lastGood) != connectCacheMost {
 		t.Fatalf("cache contains %d entries", len(p.lastGood))
@@ -82,7 +82,8 @@ func TestConnectCacheIsBoundedAndCannotBypassFreshDNS(t *testing.T) {
 			"192.0.2.1:443": {}, "192.0.2.2:443": {},
 		}}
 		p := racingProxy(f, "192.0.2.1", "192.0.2.2", "127.0.0.1")
-		p.rememberConnect("api.example.com:443", "127.0.0.1:443")
+		key := connectKey{host: "api.example.com", port: "443"}
+		p.rememberConnect(key, "127.0.0.1:443")
 		ctx := context.WithValue(context.Background(), connectDialKey{}, true)
 		c, err := p.dialOut(ctx, "api.example.com", "443", Rule{})
 		if err != nil {
@@ -96,7 +97,7 @@ func TestConnectCacheIsBoundedAndCannotBypassFreshDNS(t *testing.T) {
 			t.Fatalf("configured name with forbidden address: %v", err)
 		}
 		p = racingProxy(f, "192.0.2.1", "192.0.2.2")
-		p.rememberConnect("api.example.com:443", "192.0.2.99:443")
+		p.rememberConnect(key, "192.0.2.99:443")
 		c, err = p.dialOut(ctx, "api.example.com", "443", Rule{})
 		if err != nil {
 			t.Fatal(err)
@@ -128,8 +129,13 @@ func TestConnectCancellationClosesReplacement(t *testing.T) {
 			_, err := peer.Read(b)
 			closed <- err
 		}()
-		p := &Proxy{Dial: func(context.Context, string, string) (net.Conn, error) { return replacement, nil }}
-		plan := &connectPlan{Conn: far, key: "api.example.com:443", target: "192.0.2.1:443", remaining: []string{"192.0.2.2:443"}}
+		p := &Proxy{}
+		plan := &connectPlan{
+			Conn:      far,
+			target:    "192.0.2.1:443",
+			remaining: []string{"192.0.2.2:443"},
+			attempt:   func(context.Context, string) (net.Conn, error) { return replacement, nil },
+		}
 		began := time.Now()
 		_, c, err := p.tryConnect(ctx, nil, plan, hello, readConnectByte(far), time.Second)
 		if !errors.Is(err, context.Canceled) || c != nil {

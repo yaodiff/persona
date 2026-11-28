@@ -29,7 +29,7 @@ func init() {
 			return b, true
 		},
 		State: func(s builtinext.VoiceSources) (string, []string, error) {
-			cfg, err := voice.Merge(voice.Sources{Form: s.Form, Key: s.Key, HubJSON: s.HubJSON, Gateway: s.Gateway})
+			cfg, err := voice.Merge(voice.Sources{Form: s.Form, Key: s.Key, TTSKey: s.TTSKey, HubJSON: s.HubJSON, Gateway: s.Gateway})
 			if err != nil {
 				return "", nil, err
 			}
@@ -39,6 +39,11 @@ func init() {
 			var f voice.Form
 			_ = json.Unmarshal(config, &f)
 			return strings.TrimSpace(f.URL)
+		},
+		FormTTSURL: func(config json.RawMessage) string {
+			var f voice.Form
+			_ = json.Unmarshal(config, &f)
+			return strings.TrimSpace(f.TTSURL)
 		},
 		Handler: func(config json.RawMessage, hubURL, hubToken string, logger *log.Logger) (http.Handler, error) {
 			cfg, err := voice.Merge(voice.Sources{HubJSON: config})

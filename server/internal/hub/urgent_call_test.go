@@ -66,16 +66,17 @@ func relayGrant(t *testing.T, srv *httptest.Server, token, topic string) string 
 
 var testRing = assistantwire.CallRing{ID: "call_7f3a", Title: "登录失败率 18%", ConversationID: "conv_1", Attempt: 1}
 
-// TestRingCallThroughRelay: a ring goes to the phone's PushKit token as a voip push that carries only the sealed
-// matter; the phone opens the call's id, title, manager and conversation from it.
+// TestRingCallThroughRelay: the manager rings over the bus. The push to the phone's PushKit token carries the
+// call's id, title, manager and conversation sealed for the phone.
 func TestRingCallThroughRelay(t *testing.T) {
 	h, f, priv, _ := callHub(t, true)
 	if route, _ := h.push.callRouteOfID("phone"); route.Route != pushRelay {
 		t.Fatalf("call route %+v", route)
 	}
-	res := h.push.ringCall(context.Background(), "assistant", testRing)
-	if res.Devices != 1 || res.Reason != "" {
-		t.Fatalf("ring %+v", res)
+	a := connectAssistant(t, h)
+	res, err := a.bh.CallRing(t.Context(), testRing)
+	if err != nil || res.Devices != 1 || res.Reason != "" {
+		t.Fatalf("ring %+v, %v", res, err)
 	}
 	r := f.wait(t, 1)[0]
 	if r.PushType != "voip" || r.Token != callVoIPToken || r.Topic != "app.example.voip" || r.Priority != "10" {

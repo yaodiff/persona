@@ -185,7 +185,7 @@ struct TodoDetailView: View {
 
     /// Shows a failed write's error, from a plain method rather than inside the async block.
     private func report(_ failure: any Error) {
-        AppModel.shared.show(failure)
+        TodoStore.reportWriteFailure(failure)
     }
 
     private func content(_ todo: TodoItem) -> some View {
@@ -255,6 +255,12 @@ struct TodoDetailView: View {
                     }
                 }
                 .padding(.vertical, Theme.Space.xs)
+            }
+
+            if let wait = todo.wait {
+                TodoWaitSection(wait: wait, openDetail: openDetail) { url in
+                    link = LinkTarget(url: url)
+                }
             }
 
             TodoPlanSection(todo: todo).id(todo.id) // due date, reminder, priority (#1683)
@@ -333,6 +339,8 @@ struct TodoDetailView: View {
                             .readingContent()
                             .font(Theme.Font.body)
                             .foregroundStyle(Color.primary)
+                            .lookUpWords(plain: text.notes)
+                            .textLookupSurface("todo") // a tap on a word looks it up (#10977); the field above never does
                     } else {
                         Text("No notes yet")
                             .font(Theme.Font.body)

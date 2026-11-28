@@ -219,7 +219,7 @@ private final class Gate: Sendable {
             return try hub.answer(request)
         })
         return RecordingDaySync(store: store, library: library, api: { api }, features: { [unowned self] in self.features },
-                                now: { clock.now }, days: { 14 }, appState: app,
+                                now: { clock.now }, audioDays: { 14 }, appState: app,
                                 noteParts: { [unowned self] day, ids in self.noted[day] = ids },
                                 removed: { [unowned self] in self.removed.append($0) },
                                 removeEverywhere: { [unowned self] id in

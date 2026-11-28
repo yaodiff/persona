@@ -167,4 +167,47 @@ describe("inbox selection (#2059)", () => {
     expect(bar()).toBeNull();
     expect(calls.list.some((c) => c.path === "/inbox/bulk")).toBe(false);
   });
+
+  it("keeps selection when Escape targets an open overlay, IME composition, or a text field", async () => {
+    await click(button("选择"));
+    await click(boxes()[1]);
+    expect(bar()?.textContent).toContain("已选 1 项");
+
+    // Open dialog above Inbox: Escape must not clear selection.
+    const dialog = document.createElement("div");
+    dialog.setAttribute("role", "dialog");
+    document.body.append(dialog);
+    try {
+      await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", cancelable: true })));
+      await flush();
+      expect(bar()?.textContent).toContain("已选 1 项");
+    } finally {
+      dialog.remove();
+    }
+
+    // IME Escape (isComposing / Safari keyCode 229) must not clear selection.
+    await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", isComposing: true, cancelable: true })));
+    const safariEsc = new KeyboardEvent("keydown", { key: "Escape", cancelable: true });
+    Object.defineProperty(safariEsc, "keyCode", { value: 229 });
+    await act(async () => window.dispatchEvent(safariEsc));
+    await flush();
+    expect(bar()?.textContent).toContain("已选 1 项");
+
+    // Escape inside a text field (e.g. detail reply textarea) must not clear selection.
+    const area = document.createElement("textarea");
+    host.append(area);
+    try {
+      area.focus();
+      await act(async () => area.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
+      await flush();
+      expect(bar()?.textContent).toContain("已选 1 项");
+    } finally {
+      area.remove();
+    }
+
+    // Plain Escape outside overlays/text fields clears selection.
+    await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", cancelable: true })));
+    await flush();
+    expect(bar()).toBeNull();
+  });
 });

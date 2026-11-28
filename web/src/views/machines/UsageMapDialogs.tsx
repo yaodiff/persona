@@ -9,7 +9,7 @@ import type { OffloadProvider, OffloadTool, UsageNode } from "../../lib/usage-ma
 import { Button, Dialog } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { Segmented } from "../assistant/parts";
-import { cacheTitle } from "./AlertDisk";
+import { cacheTitle } from "./LegacyCacheRecovery";
 
 export const sumBytes = (nodes: readonly UsageNode[]) => nodes.reduce((s, n) => s + Math.max(0, n.bytes), 0);
 

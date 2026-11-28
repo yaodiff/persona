@@ -4,7 +4,7 @@
 // They are not the AI's, so no gate asks (as with replies in the inbox, #1203). Routes: docs/protocol/protocol.md "Lark API".
 // No DOM here.
 
-import { ApiError, api, enc, getToken } from "./api";
+import { ApiError, api, enc, getToken, isNetworkFailure } from "./api";
 import type { LarkPerson } from "./lark-people";
 import { itemHeaders } from "./manager-choice";
 import { t } from "../i18n";
@@ -108,7 +108,7 @@ export function writeErrorText(e: unknown): string {
     if (e.code === "comment_unsupported") return t("lib-doc-comments.comment_unsupported");
     return e.message;
   }
-  if (e instanceof TypeError) return t("lib-api.cant_reach_hub");
+  if (isNetworkFailure(e)) return t("lib-api.cant_reach_hub");
   return e instanceof Error ? e.message : String(e);
 }
 

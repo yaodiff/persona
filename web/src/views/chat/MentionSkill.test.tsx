@@ -422,7 +422,7 @@ it("keeps commands and the highlighted row stable while the slash catalog loads,
   await type("/e");
   await waitForOptions(2);
   await vi.waitFor(() => expect(api).toHaveBeenCalledTimes(1));
-  expect(host.textContent).toContain("正在读取");
+  expect(host.textContent).toContain("正在加载");
   key("ArrowDown");
   expect(focused()?.textContent).toBe("beta");
   await act(async () => resolve({ catalog_version: 1, complete: true, skills }));
@@ -489,7 +489,7 @@ it("waits for the first skill answer before announcing an empty skills-only pale
   expect(options()).toHaveLength(0);
   expect(host.textContent).not.toContain(t("chat-slashpalette.no_match_skills"));
   expect(host.querySelectorAll('[role="status"]')).toHaveLength(1);
-  expect(host.textContent).toContain("正在读取");
+  expect(host.textContent).toContain("正在加载");
   await act(async () => resolve({ catalog_version: 1, complete: true, skills }));
   await waitForOptions(2);
   expect(host.textContent).not.toContain(t("chat-slashpalette.no_match_skills"));

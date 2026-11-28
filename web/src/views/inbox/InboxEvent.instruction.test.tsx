@@ -109,17 +109,17 @@ describe("收件箱事件：说一句与再试一次", () => {
   it("says something to an open item without a suggestion at version 0, with its manager's header", async () => {
     calls.suggestion = () => Promise.resolve({ ...open, handling: { owner: "manager", state: "looking" } });
     await act(async () => root.render(<EventBody item={{ ...open, manager: "m-work" }} onSource={() => {}} />));
-    await press("说一句");
+    await press("补充说明");
     expect(host.querySelector("[data-event-say]")).not.toBeNull();
     await type("接着看一下");
-    await press("说一句");
+    await press("补充说明");
     await flush();
     expect(sent()).toHaveLength(1);
     expect(sent()[0].path).toBe("/inbox/lark:oc_demo3:300/suggestion");
     expect(sent()[0].json).toEqual({ version: 0, action: "instruct", text: "接着看一下", client_id: expect.any(String) });
     expect(sent()[0].headers).toEqual({ "X-Persona-Manager": "m-work" });
     expect(host.querySelector("[data-event-say]")).toBeNull();
-    expect(vi.mocked(toast).mock.calls.at(-1)).toEqual(["已交给 AI，等它重新出建议", "ok"]);
+    expect(vi.mocked(toast).mock.calls.at(-1)).toEqual(["已交给 AI，正在重新生成建议", "ok"]);
   });
 
   it("retries the default manager's item without sending instruction text", async () => {
@@ -132,20 +132,20 @@ describe("收件箱事件：说一句与再试一次", () => {
     expect(retries()).toEqual([{ path: "/inbox/lark:oc_demo6:600/retry", method: "POST", json: undefined, headers: undefined }]);
     expect(sent()).toHaveLength(0);
     expect(getInbox().items.find((item) => item.id === failed.id)?.handling?.state).toBe("looking");
-    expect(vi.mocked(toast).mock.calls.at(-1)).toEqual(["已请 AI 再试一次", "ok"]);
+    expect(vi.mocked(toast).mock.calls.at(-1)).toEqual(["已请 AI 重新处理", "ok"]);
   });
 
   it("keeps the words typed when the instruction fails", async () => {
     calls.suggestion = () => Promise.reject(new ApiError(502, "AI 暂时连不上", { code: "assistant_offline" }));
     await act(async () => root.render(<EventBody item={open} onSource={() => {}} />));
-    await press("说一句");
+    await press("补充说明");
     await type("先问时间");
-    await press("说一句");
+    await press("补充说明");
     await flush();
     expect(host.querySelector<HTMLInputElement>("[data-event-say-input]")?.value).toBe("先问时间");
     expect(host.querySelector("[data-event-say]")).not.toBeNull();
     expect(vi.mocked(toast).mock.calls.at(-1)?.[1]).toBe("error");
-    expect(String(vi.mocked(toast).mock.calls.at(-1)?.[0])).toContain("建议没处理成：");
+    expect(String(vi.mocked(toast).mock.calls.at(-1)?.[0])).toContain("处理建议失败：");
   });
 
   it("reconciles a stale retry without changing another manager's item of the same ID", async () => {
@@ -178,19 +178,19 @@ describe("收件箱事件：说一句与再试一次", () => {
 
   it("shows neither button with a suggestion card, nor on a done item", async () => {
     await act(async () => root.render(<EventBody item={withSuggestion} onSource={() => {}} />));
-    expect(buttons()).not.toContain("说一句");
+    expect(buttons()).not.toContain("补充说明");
     expect(buttons()).not.toContain("再试一次");
     await act(async () => root.render(<EventBody item={{ ...withSuggestion, suggestion: undefined, done_at: "2026-01-01T10:00:00Z", done_by: "user" }} onSource={() => {}} />));
-    expect(buttons()).not.toContain("说一句");
+    expect(buttons()).not.toContain("补充说明");
     expect(buttons()).not.toContain("再试一次");
   });
 
   it("takes retry from the state key alone, and says a word from the handling state alone", async () => {
     await act(async () => root.render(<EventBody item={failedNow} onSource={() => {}} />));
     expect(buttons()).toContain("再试一次");
-    expect(buttons()).not.toContain("说一句");
+    expect(buttons()).not.toContain("补充说明");
     await act(async () => root.render(<EventBody item={{ ...failed, handling: undefined, now: "needs_you" }} onSource={() => {}} />));
-    expect(buttons()).toContain("说一句");
+    expect(buttons()).toContain("补充说明");
     expect(buttons()).not.toContain("再试一次");
   });
 });

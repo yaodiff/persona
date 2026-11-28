@@ -2,6 +2,7 @@ package bus
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -14,6 +15,10 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/coder/websocket"
+
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 // signal wakes the waiters of a test's counts: more is closed at the next change.
@@ -607,5 +612,252 @@ func TestProbeGoesTheClientsWay(t *testing.T) {
 	upstreamDown.Store(true)
 	if reach(context.Background(), time.Second) {
 		t.Fatal("a proxy that cannot reach the hub passed for it")
+	}
+}
+
+// A peer the service closed itself (rpc.Peer.Close: it wants everything read again on a new connection) ends the
+// connection: the client hangs up and dials again. It used to wait for the hub to close a socket whose peer
+// answered nothing any more.
+func TestClientDialsAgainOnceItsPeerIsClosed(t *testing.T) {
+	f := &fakeHub{}
+	srv := httptest.NewServer(f)
+	defer srv.Close()
+	var log logLines
+	c := &Client{Hub: srv.URL, Token: "t", HelloMethod: "manager.hello", Logf: log.logf, Backoff: 10 * time.Millisecond}
+	ctx, _, _ := runClient(t, c)
+	wctx, wcancel := context.WithTimeout(ctx, 10*time.Second)
+	defer wcancel()
+	if err := c.Wait(wctx); err != nil {
+		t.Fatal(err)
+	}
+	first := c.Peer()
+	if first == nil {
+		t.Fatal("no peer once connected")
+	}
+	why := errors.New("read everything again")
+	first.Close(why)
+	log.waitFor(t, tryEnded, 1, 10*time.Second)
+	if n := log.count(why.Error()); n != 1 {
+		t.Errorf("the log does not say why the connection ended: %q", log.all())
+	}
+	if err := c.Wait(wctx); err != nil { // the peer was let go before the log said so: this waits for the next
+		t.Fatalf("no new connection: %v", err)
+	}
+	if p := c.Peer(); p == nil || p == first {
+		t.Fatalf("the peer after the new connection: %p, the closed one %p", p, first)
+	}
+	if n := f.dials.Load(); n != 2 {
+		t.Errorf("%d dials, want the first and the one after the peer was closed", n)
+	}
+}
+
+// A peer closed with no error (rpc.Peer.Close(nil), an orderly close) still ends the connection with a reason:
+// session returns rpc.ErrClosed, and Run logs it instead of "<nil>".
+func TestClientSaysWhyWhenItsPeerClosesWithoutAnError(t *testing.T) {
+	f := &fakeHub{}
+	srv := httptest.NewServer(f)
+	defer srv.Close()
+	var log logLines
+	c := &Client{Hub: srv.URL, Token: "t", HelloMethod: "manager.hello", Logf: log.logf}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	type result struct {
+		helloed bool
+		err     error
+	}
+	ended := make(chan result, 1)
+	go func() {
+		helloed, err := c.session(ctx)
+		ended <- result{helloed, err}
+	}()
+	if err := c.Wait(ctx); err != nil {
+		t.Fatal(err)
+	}
+	c.Peer().Close(nil)
+	select {
+	case r := <-ended:
+		if !r.helloed || !errors.Is(r.err, rpc.ErrClosed) {
+			t.Fatalf("session after a nil close: helloed %v, err %v; want helloed and rpc.ErrClosed", r.helloed, r.err)
+		}
+	case <-ctx.Done():
+		t.Fatal("session did not end once its peer was closed")
+	}
+
+	c.Backoff = 10 * time.Millisecond
+	rctx, _, _ := runClient(t, c)
+	if err := c.Wait(rctx); err != nil {
+		t.Fatal(err)
+	}
+	c.Peer().Close(nil)
+	log.waitFor(t, tryEnded, 1, 10*time.Second)
+	if log.count("<nil>") != 0 || log.count(rpc.ErrClosed.Error()) != 1 {
+		t.Fatalf("Run's log after a nil close: %q; want the reason %q", log.all(), rpc.ErrClosed)
+	}
+}
+
+// Closing the WebSocket with CloseRevoked (4002) during the HelloMethod handshake must still map to
+// ErrRevoked so StopWhenRevoked stops immediately instead of retrying forever.
+func TestClientHelloCloseRevokedStopsWhenRevoked(t *testing.T) {
+	for _, readFirst := range []bool{true, false} {
+		name := "immediate_close"
+		if readFirst {
+			name = "after_reading_hello"
+		}
+		t.Run(name, func(t *testing.T) {
+			var dials atomic.Int32
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != Path {
+					http.NotFound(w, r)
+					return
+				}
+				dials.Add(1)
+				ws, err := websocket.Accept(w, r, nil)
+				if err != nil {
+					return
+				}
+				if readFirst {
+					_, _, _ = ws.Read(r.Context())
+				}
+				_ = ws.Close(CloseRevoked, "token revoked during hello")
+			}))
+			defer srv.Close()
+
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			c := &Client{
+				Hub:             srv.URL,
+				Token:           "t",
+				HelloMethod:     "manager.hello",
+				StopWhenRevoked: true,
+				Backoff:         10 * time.Millisecond,
+				MaxBackoff:      50 * time.Millisecond,
+			}
+			err := c.Run(ctx)
+			if !errors.Is(err, ErrRevoked) || !errors.Is(err, ErrRejected) {
+				t.Fatalf("Run returned %v (dials=%d), want ErrRevoked", err, dials.Load())
+			}
+			if got := dials.Load(); got != 1 {
+				t.Fatalf("dials = %d, want 1", got)
+			}
+		})
+	}
+}
+
+// Closing the WebSocket with CloseRefused (4003) during HelloMethod must map to ErrRejected (not
+// ErrRevoked), so StopWhenRejected stops it and normal Run waits MaxBackoff without health probes.
+func TestClientHelloCloseRefusedMapsToRejectedAndMaxBackoff(t *testing.T) {
+	var probes events
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case healthPath:
+			if probeUA(r) {
+				probes.add()
+			}
+			_, _ = w.Write([]byte(`{"ok":true}`))
+		case Path:
+			ws, err := websocket.Accept(w, r, nil)
+			if err != nil {
+				return
+			}
+			_, _, _ = ws.Read(r.Context())
+			_ = ws.Close(CloseRefused, "wrong identity")
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	c := &Client{Hub: srv.URL, Token: "t", HelloMethod: "manager.hello"}
+	helloed, err := c.session(ctx)
+	if helloed || !errors.Is(err, ErrRejected) || errors.Is(err, ErrRevoked) {
+		t.Fatalf("session = (%v, %v), want (false, ErrRejected && !ErrRevoked)", helloed, err)
+	}
+
+	// With StopWhenRevoked + StopWhenRejected, CloseRefused during hello stops Run as ErrRevoked.
+	cStop := &Client{
+		Hub:              srv.URL,
+		Token:            "t",
+		HelloMethod:      "manager.hello",
+		StopWhenRevoked:  true,
+		StopWhenRejected: true,
+		Backoff:          10 * time.Millisecond,
+		MaxBackoff:       50 * time.Millisecond,
+	}
+	if err := cStop.Run(ctx); !errors.Is(err, ErrRevoked) {
+		t.Fatalf("Run with StopWhenRejected returned %v, want ErrRevoked", err)
+	}
+
+	// Without StopWhenRejected, CloseRefused during hello backs off directly to MaxBackoff with no health probes.
+	var log logLines
+	cWait := &Client{
+		Hub:         srv.URL,
+		Token:       "t",
+		HelloMethod: "manager.hello",
+		Logf:        log.logf,
+		Backoff:     10 * time.Millisecond,
+		MaxBackoff:  300 * time.Millisecond,
+		probeOver:   time.Nanosecond,
+		probeEvery:  10 * time.Millisecond,
+	}
+	_, stopWait, ran := runClient(t, cWait)
+	log.waitFor(t, "again in 300ms", 1, 2*time.Second)
+	stop(t, stopWait, ran)
+	if got := probes.count(); got != 0 {
+		t.Fatalf("CloseRefused during hello triggered %d health probes, want 0", got)
+	}
+
+	// An ordinary non-identity RPC error during hello must return promptly and not map to ErrRejected.
+	rpcErrSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != Path {
+			http.NotFound(w, r)
+			return
+		}
+		ws, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		conn := NewConn(r.Context(), ws)
+		p := rpc.New("h", conn)
+		p.OnRequest = func(_ context.Context, _ string, _ json.RawMessage) (any, error) {
+			return nil, &rpc.Error{Code: CodeStoreUnavailable, Message: "store busy"}
+		}
+		_ = p.Serve(r.Context(), conn)
+	}))
+	defer rpcErrSrv.Close()
+	cRPC := &Client{Hub: rpcErrSrv.URL, Token: "t", HelloMethod: "manager.hello"}
+	helloed, err = cRPC.session(ctx)
+	var coded *rpc.Error
+	if helloed || !errors.As(err, &coded) || coded.Code != CodeStoreUnavailable || errors.Is(err, ErrRejected) {
+		t.Fatalf("ordinary hello RPC error = (%v, %v), want CodeStoreUnavailable and !ErrRejected", helloed, err)
+	}
+}
+
+// When ws.Write fails with a raw transport error right before p.Serve finishes decoding the hub's
+// Close frame, helloError waits briefly on served so CloseRevoked / CloseRefused is not lost,
+// while an expired hello context returns immediately without waiting.
+func TestHelloErrorSurfacesDelayedCloseFromServed(t *testing.T) {
+	p := rpc.New("s", io.Discard)
+	served := make(chan error, 1)
+	sctx := context.Background()
+	hctx, hcancel := context.WithTimeout(sctx, time.Second)
+	defer hcancel()
+
+	go func() {
+		served <- websocket.CloseError{Code: CloseRevoked, Reason: "revoked during write"}
+	}()
+	got := helloError(errors.New("write: broken pipe"), p, served, sctx, hctx)
+	if !errors.Is(got, ErrRevoked) || !errors.Is(got, ErrRejected) {
+		t.Fatalf("helloError = %v, want ErrRevoked", got)
+	}
+
+	// An already-expired hello context returns its own error immediately without reading served.
+	expiredCtx, cancelExpired := context.WithCancel(sctx)
+	cancelExpired()
+	blockedServed := make(chan error)
+	gotExpired := helloError(context.Canceled, p, blockedServed, sctx, expiredCtx)
+	if !errors.Is(gotExpired, context.Canceled) {
+		t.Fatalf("helloError with canceled hctx = %v, want context.Canceled", gotExpired)
 	}
 }

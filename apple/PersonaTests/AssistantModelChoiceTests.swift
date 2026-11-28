@@ -359,6 +359,8 @@ struct AssistantModelChoiceTests {
         #expect(AssistantModelChoice.displayName(onlyLauncherModel, response: r) == "Opus 5.5")
         let unknown = AssistantModelChoice.Effective(launcher: "team-api", model: nil, effort: nil, source: .pick)
         #expect(AssistantModelChoice.displayName(unknown, response: r) == "team-api")
+        let builtin = AssistantModelChoice.Effective(launcher: "claude-desktop", model: nil, effort: nil, source: .pick)
+        #expect(AssistantModelChoice.displayName(builtin, response: r) == "Claude Desktop")
     }
 
     @Test func anOlderNodesDefaultPlaceholderIsNoExplicitModel() {

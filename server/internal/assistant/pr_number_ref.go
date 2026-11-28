@@ -3,10 +3,12 @@ package assistant
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistant/repository"
 	"github.com/nwverse/persona/server/internal/closeout"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -26,6 +28,7 @@ var (
 	githubRepoLink        = lazyre.New(`https://github\.com/([\w.-]+/[\w.-]+)/(?:pull|issues)/\d+`)
 	closeoutApplicability = lazyre.New(`\b(merged|deployed)\s*=\s*"([^"]*)"`)
 	closeoutPRLine        = lazyre.New(`(?im)^[\t *-]*artifact\s*[:\x{ff1a}]\s*pr(?:\s|:|$)`)
+	replyPRNumber         = lazyre.New(`(?i)(?:^|[^\w/&#])(?:(build[ \t]*)|([\w.-]+/[\w.-]+))?#(\d+)\b`)
 )
 
 // repoRootsKey keeps, per computer and repository root, the GitHub repository its agents' PRs went to.
@@ -84,6 +87,83 @@ func closeoutPRRef(text string) string {
 		return ""
 	}
 	return ref
+}
+
+func canonicalReplyPR(raw string) string {
+	if _, link, err := repository.ParseTaskLink(raw); err == nil && link.Kind == "pull_request" {
+		return link.CanonicalURL
+	}
+	return raw
+}
+
+func sameReplyPR(a, b string) bool {
+	return a == b || canonicalReplyPR(a) == canonicalReplyPR(b)
+}
+
+// The checkout lookup uses gh. Other providers can supply native evidence without that lookup.
+func githubPROwnershipCandidate(raw string) bool {
+	host, _ := repository.RemoteHost(raw)
+	switch host {
+	case "github.com", "www.github.com", "api.github.com", "ssh.github.com":
+		return true
+	}
+	identity, link, err := repository.ParseTaskLink(raw)
+	return err == nil && identity.Provider == repository.GitHub && link.Kind == "pull_request"
+}
+
+// replyNamesOtherPR prevents an unqualified status word from being applied to the task's PR when the reply
+// also names a different change. A bare #number can refer to a dependency even without the word PR.
+func replyNamesOtherPR(text, pr string, aliases ...string) bool {
+	links := prLink.FindAllString(text, -1)
+	if deliveryCloseout(text) != "" {
+		links = append(links, taskRepositoryReportLinks(text)...)
+	}
+	for _, link := range links {
+		if !sameReplyPR(link, pr) && !slices.ContainsFunc(aliases, func(alias string) bool { return sameReplyPR(link, alias) }) {
+			return true
+		}
+	}
+	known := ciPRURL.FindStringSubmatch(pr)
+	for _, ref := range replyPRNumber.FindAllStringSubmatch(text, -1) {
+		if ref[1] != "" { // build #1234
+			continue
+		}
+		if known == nil || ref[3] != known[2] || ref[2] != "" && !strings.EqualFold(ref[2], known[1]) {
+			return true
+		}
+	}
+	return false
+}
+
+// ownedReplyPR selects delivery evidence without changing the to-do or importing repository links.
+// Its saved PR is already eligible. Any new PR must pass the same ownership check as a report.
+func (s *Service) ownedReplyPR(ctx context.Context, t Todo, machine, session, text string, at time.Time) string {
+	urls := prLink.FindAllString(text, -1)
+	if deliveryCloseout(text) != "" {
+		urls = taskRepositoryReportLinks(text)
+	}
+	if len(urls) == 0 && prNumberIn(text) == "" {
+		return t.PRURL
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if len(urls) == 0 {
+		if pr := s.prFromNumber(ctx, t, machine, session, text); pr != "" {
+			urls = append(urls, pr)
+		}
+	}
+	var candidates []repository.LinkInput
+	for _, url := range urls {
+		if sameReplyPR(url, t.PRURL) {
+			return t.PRURL
+		}
+		candidates = append(candidates, repository.LinkInput{URL: url})
+	}
+	owned, err := s.ownedTaskRepositoryLinkInputs(ctx, t, machine, session, candidates, text, at)
+	if err == nil && len(owned) > 0 {
+		return owned[len(owned)-1].URL
+	}
+	return t.PRURL
 }
 
 // deliveryCloseout accepts the reply's own final record, not a quoted example or an earlier reference.
@@ -259,8 +339,10 @@ func (s *Service) reportedTaskPR(ctx context.Context, t Todo, current string) (p
 			continue
 		}
 		_, items = splitLastTurn(items)
+		var replyAt time.Time
 		for j := len(items) - 1; j >= 0; j-- {
 			if it := items[j]; it.Role == "assistant" && it.Kind == proto.KindText && strings.TrimSpace(it.Text) != "" {
+				replyAt = it.TS
 				if it.FullSize > 0 || !it.TS.IsZero() && it.TS.Before(a.LinkedAt) {
 					ok = false
 				}
@@ -318,7 +400,7 @@ func (s *Service) reportedTaskPR(ctx context.Context, t Todo, current string) (p
 					return "", false, fmt.Errorf("the reported delivery PR could not be confirmed: %w", err)
 				}
 			}
-		} else if m := ciPRURL.FindStringSubmatch(pr); pr != current && m != nil {
+		} else if m := ciPRURL.FindStringSubmatch(pr); m != nil && !sameReplyPR(pr, current) {
 			number, err := strconv.Atoi(m[2])
 			if err != nil {
 				return "", false, err
@@ -331,12 +413,28 @@ func (s *Service) reportedTaskPR(ctx context.Context, t Todo, current string) (p
 				continue // do not cycle between several misreported issue URLs
 			}
 		}
-		if pr != "" {
-			if recovered != "" && recovered != pr {
-				return "", false, fmt.Errorf("task %s: its active agents report different delivery PR artifacts; clarify before accepting", t.ID)
-			}
-			recovered = pr
+		if pr == "" {
+			continue
 		}
+		if sameReplyPR(pr, current) {
+			pr = current
+		} else {
+			owned, err := s.importOwnedTaskRepositoryLinks(ctx, t, a.MachineID, a.SessionID, []string{pr}, text, replyAt, nil)
+			if err != nil {
+				return "", false, fmt.Errorf("task %s: delivery PR ownership could not be verified: %w", t.ID, err)
+			}
+			if len(owned) == 0 && !githubPROwnershipCandidate(pr) {
+				continue // no automatic evidence; any recorded GitHub delivery still goes through its gate
+			}
+			if len(owned) != 1 {
+				return "", false, fmt.Errorf("task %s: the reported PR has no verified ownership or belongs to another open to-do", t.ID)
+			}
+			pr = owned[0].canonical // the importer verified this one candidate and returns its stored canonical URL
+		}
+		if recovered != "" && !sameReplyPR(recovered, pr) {
+			return "", false, fmt.Errorf("task %s: its active agents report different delivery PR artifacts; clarify before accepting", t.ID)
+		}
+		recovered = pr
 	}
 	return recovered, active > 0 && noPR, nil
 }

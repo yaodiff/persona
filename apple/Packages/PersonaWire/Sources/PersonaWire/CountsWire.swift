@@ -78,21 +78,27 @@ public nonisolated struct CountsViewCounts: Codable, Hashable, Sendable {
     public var agentsNeedsYou: CountsViewCount?
     /// The to-dos that need the owner, N of the To-dos list (docs/protocol/counts.md, "todos_needs_you").
     public var todosNeedsYou: CountsViewCount?
+    /// Pending owner cards on Persona conversations and quiet tasks' agents, one per card (docs/protocol/counts.md,
+    /// "persona_cards").
+    public var personaCards: CountsViewCount?
 
-    public init(agentsNeedsYou: CountsViewCount? = nil, todosNeedsYou: CountsViewCount? = nil) {
+    public init(agentsNeedsYou: CountsViewCount? = nil, todosNeedsYou: CountsViewCount? = nil, personaCards: CountsViewCount? = nil) {
         self.agentsNeedsYou = agentsNeedsYou
         self.todosNeedsYou = todosNeedsYou
+        self.personaCards = personaCards
     }
 
     enum CodingKeys: String, CodingKey {
         case agentsNeedsYou = "agents_needs_you"
         case todosNeedsYou = "todos_needs_you"
+        case personaCards = "persona_cards"
     }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.agentsNeedsYou = try? c.decodeIfPresent(CountsViewCount.self, forKey: .agentsNeedsYou)
         self.todosNeedsYou = try? c.decodeIfPresent(CountsViewCount.self, forKey: .todosNeedsYou)
+        self.personaCards = try? c.decodeIfPresent(CountsViewCount.self, forKey: .personaCards)
     }
 }
 
@@ -103,21 +109,26 @@ public nonisolated struct CountsViewTotals: Codable, Hashable, Sendable {
     public var agentsNeedsYou: Int?
     /// counts.todos_needs_you.n.
     public var todosNeedsYou: Int?
+    /// counts.persona_cards.n.
+    public var personaCards: Int?
 
-    public init(agentsNeedsYou: Int? = nil, todosNeedsYou: Int? = nil) {
+    public init(agentsNeedsYou: Int? = nil, todosNeedsYou: Int? = nil, personaCards: Int? = nil) {
         self.agentsNeedsYou = agentsNeedsYou
         self.todosNeedsYou = todosNeedsYou
+        self.personaCards = personaCards
     }
 
     enum CodingKeys: String, CodingKey {
         case agentsNeedsYou = "agents_needs_you"
         case todosNeedsYou = "todos_needs_you"
+        case personaCards = "persona_cards"
     }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.agentsNeedsYou = try? c.decodeIfPresent(Int.self, forKey: .agentsNeedsYou)
         self.todosNeedsYou = try? c.decodeIfPresent(Int.self, forKey: .todosNeedsYou)
+        self.personaCards = try? c.decodeIfPresent(Int.self, forKey: .personaCards)
     }
 }
 
@@ -158,8 +169,8 @@ public nonisolated struct CountsViewCount: Codable, Hashable, Sendable {
 /// One counted row.
 public nonisolated struct CountsRow: Codable, Hashable, Sendable {
     public var id: CountsRowKey
-    /// The row's pending cards, oldest first: a card on no session is its own one card. Absent for a session that
-    /// waits in its terminal with no card.
+    /// The row's pending cards, oldest first: a card row lists that one card. Absent for a session that waits in its
+    /// terminal with no card.
     public var cards: [CountsCardID]?
 
     public init(id: CountsRowKey = CountsRowKey(""), cards: [CountsCardID]? = nil) {
@@ -202,7 +213,7 @@ public nonisolated struct CountsHeldRow: Codable, Hashable, Sendable {
 }
 
 /// A row as the shared fixtures key it: agent:<machine>/<session> for a session (its children's and sides' cards
-/// under it), card:<interaction id> for a card on no session.
+/// under it), card:<interaction id> for a card counted on its own.
 /// It encodes as the bare string.
 public nonisolated struct CountsRowKey: RawRepresentable, Codable, Hashable, Sendable, CustomStringConvertible {
     public let rawValue: String

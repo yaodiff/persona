@@ -98,7 +98,7 @@ describe("workspace board HTTP contract", () => {
     const request = vi.fn(async (path: string, init?: unknown) => { if (path === "/workspaces") return { workspaces: [] }; if (init) throw new ApiError(409, "conflict", {}); return { ...initial(), revision: ++reads === 1 ? 3 : 5 }; });
     const model = new BoardModel(request as never); await model.refresh();
     expect(await model.mutate({ action: "update_card", id: "a", pinned: true })).toBe(false);
-    expect(model.snapshot().board?.revision).toBe(5); expect(model.snapshot().error).toContain("已经重新加载");
+    expect(model.snapshot().board?.revision).toBe(5); expect(model.snapshot().error).toContain("已重新加载");
   });
   it("honors server can_write on first load and 403 on revoked access", async () => {
     const request = vi.fn(async (path: string) => path === "/workspaces" ? { workspaces: [] } : { ...initial(), can_write: false });

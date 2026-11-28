@@ -330,7 +330,7 @@ describe("Hand to AI: delivery authority", () => {
   it("does not record a failure after a same-id retry replaced the flight", async () => {
     const held = await sendAgentHeld();
     // Another view has exposed Retry for this unconfirmed send. The real retry keeps its id and supersedes its flight.
-    keepFailed("mac", "s1", { id: held.id, text: held.text, images: [], at: Date.now() }, new TypeError("connection lost"));
+    keepFailed("mac", "s1", { id: held.id, text: held.text, images: [], at: Date.now() }, new TypeError("Failed to fetch"));
     const retried = retryOutbox("mac", "s1", held.id);
     try {
       held.respond(0, 409, { error: "superseded refusal", delivered: "none" });

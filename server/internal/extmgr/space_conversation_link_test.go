@@ -9,10 +9,10 @@ import (
 func TestSpaceConversationsMayOpenOnlyTheConversationHandoff(t *testing.T) {
 	page := extension.UIItem{ID: "space", Placement: "extension_page"}
 	ok := "persona://tracks/computer-example/reading/session-example"
-	if err := checkOpenURL(spacesMigrationID, page, "", ok); err != nil {
+	if err := checkOpenURL(spacesMigrationID, nil, page, "", ok); err != nil {
 		t.Fatalf("%s: %v", ok, err)
 	}
-	if err := checkOpenURL("another-extension", page, "", ok); err == nil {
+	if err := checkOpenURL("another-extension", nil, page, "", ok); err == nil {
 		t.Fatal("another extension opened the conversation handoff")
 	}
 	for _, bad := range []string{
@@ -30,7 +30,7 @@ func TestSpaceConversationsMayOpenOnlyTheConversationHandoff(t *testing.T) {
 		"persona://settings",
 		"javascript:alert(1)",
 	} {
-		if err := checkOpenURL(spacesMigrationID, page, "", bad); err == nil {
+		if err := checkOpenURL(spacesMigrationID, nil, page, "", bad); err == nil {
 			t.Errorf("%s: allowed", bad)
 		}
 	}

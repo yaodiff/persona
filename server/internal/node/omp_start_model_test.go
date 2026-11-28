@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/host"
+	"github.com/nwverse/persona/server/internal/orcart/orcarttest"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -109,9 +111,13 @@ func TestOmpModelChecksPrecedeTab(t *testing.T) {
 	})
 	t.Run("unsupported host", func(t *testing.T) {
 		n, herdr, orca := startNode(t)
-		_, err := request(t, n, "session.start", map[string]any{"cwd": t.TempDir(), "launcher": "omp", "host": "orca", "model": "opus"})
-		if code, _ := refusalOf(t, err); code != "omp_options" || herdr.asked() != 0 || orca.asked() != 0 {
-			t.Fatalf("start error = %v, herdr = %d, Orca = %d", err, herdr.asked(), orca.asked())
+		tern := &launchHost{setHost: newSetHost(host.Tern)}
+		n.hosts = host.NewRegistry(herdr, orca, tern)
+		c := proto.EngineChoice{Hosts: []string{proto.EngineHerdr, proto.EngineOrca, proto.EngineTern}, Default: proto.EngineHerdr}
+		n.eng.name, n.eng.set = proto.LegacyEngine(c), &c
+		_, err := request(t, n, "session.start", map[string]any{"cwd": t.TempDir(), "launcher": "omp", "host": proto.EngineTern, "model": "opus"})
+		if code, _ := refusalOf(t, err); code != "omp_options" || herdr.asked() != 0 || orca.asked() != 0 || tern.asked() != 0 {
+			t.Fatalf("start error = %v, herdr = %d, Orca = %d, tern = %d", err, herdr.asked(), orca.asked(), tern.asked())
 		}
 	})
 	t.Run("managed launcher named omp", func(t *testing.T) {
@@ -150,7 +156,7 @@ func TestOmpModelPickerLocksUnsupportedLaunch(t *testing.T) {
 		t.Fatal(err)
 	}
 	n, f, cwd := herdrNode(t)
-	for _, tc := range []struct{ launcher, host string }{{"omp", "herdr"}, {"my-omp", "herdr"}, {"omp", "orca"}} {
+	for _, tc := range []struct{ launcher, host string }{{"omp", "herdr"}, {"omp", "orca"}, {"my-omp", "herdr"}, {"my-omp", "orca"}, {"omp", "herdr-core"}} {
 		got, err := request(t, n, "launchers.models", map[string]any{"name": tc.launcher, "agent_type": "omp", "host": tc.host})
 		if _, advertised := got["supports_start_model"]; err != nil || got["locked"] == nil || advertised {
 			t.Errorf("%s on %s: launcher models = %v, %v", tc.launcher, tc.host, got, err)
@@ -213,4 +219,151 @@ func TestOmpResumeKeepsRecordedModel(t *testing.T) {
 	if s["session_id"] != id || s["requested_model"] != "vendor/saved" || len(f.trace("tab.create")) != 1 {
 		t.Fatalf("resumed session = %v, tabs = %v", s, f.trace("tab.create"))
 	}
+}
+
+func TestOmpStartUsesSelectedModelOnOrca(t *testing.T) {
+	fakeCLIHome(t)
+	withPaneShell(t, "/bin/zsh")
+	withPiFamilyGrace(t, 0)
+	for _, tc := range []struct {
+		name, model, prompt, command string
+	}{
+		{"default", "", "hello", "omp hello"},
+		{"fuzzy", "opus", "", "omp --model opus"},
+		{"qualified model and dash prompt", "example/quality[1m]", "- Summarize my notes", "omp --model 'example/quality[1m]' -- '- Summarize my notes'"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			n, _, o, procs, home := orcaNode(t)
+			projDir := filepath.Join(home, "proj")
+			mkdir(t, projDir)
+			o.SetWorktrees(orcarttest.Worktree("repo1::"+projDir, projDir, "refs/heads/main"))
+			var captured []string
+			o.Handle("terminal.send", func(p map[string]any) any {
+				text, _ := p["text"].(string)
+				_, line, _ := strings.Cut(strings.TrimSuffix(text, "\r"), " && ")
+				if cmd, ok := startFileCommand(line); ok {
+					captured = append(captured, cmd)
+				}
+				// Expose the newly launched omp process to Orca's process scan.
+				procs.set("tab_1:leaf_1", orcaProc{pid: 5001, agent: ompAgent, cwd: projDir})
+				return map[string]any{"send": map[string]any{"handle": p["terminal"], "accepted": true, "bytesWritten": len(text)}}
+			})
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			result, err := requestCtx(t, ctx, n, "session.start", map[string]any{
+				"cwd": projDir, "launcher": "omp", "host": "orca", "model": tc.model, "prompt": tc.prompt,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := inAgentEnv(n.dir, tc.command, shellQuote)
+			if len(captured) != 1 || captured[0] != want {
+				t.Fatalf("orca start command = %q, want %q", captured, want)
+			}
+			s := result["session"].(map[string]any)
+			st, ok := n.state.get(s["session_id"].(string))
+			if !ok || st.Launcher != "omp" || st.Model != tc.model || s["requested_model"] != tc.model {
+				t.Fatalf("model in start record %q and response %v, want %q", st.Model, s["requested_model"], tc.model)
+			}
+		})
+	}
+}
+
+func TestOmpStartPassesModelAndPromptAsArgumentsOnOrca(t *testing.T) {
+	home := fakeCLIHome(t)
+	withPaneShell(t, "/bin/zsh")
+	withPiFamilyGrace(t, 0)
+	fakeProgram(t, filepath.Join(home, "bin", "omp"), `printf '%s\0' "$@" >> "$OMP_TEST_ARGV"`)
+	argv := filepath.Join(home, "argv")
+	n, _, o, procs, cwd := orcaNode(t)
+	projDir := filepath.Join(cwd, "proj")
+	mkdir(t, projDir)
+	o.SetWorktrees(orcarttest.Worktree("repo1::"+projDir, projDir, "refs/heads/main"))
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	o.Handle("terminal.send", func(p map[string]any) any {
+		text, _ := p["text"].(string)
+		line := strings.TrimSuffix(text, "\r")
+		shell := exec.CommandContext(ctx, "zsh", "-f", "-c", line)
+		shell.Dir = projDir
+		shell.Env = append(shell.Environ(), "OMP_TEST_ARGV="+argv)
+		if out, err := shell.CombinedOutput(); err != nil {
+			t.Errorf("running the Orca pane command: %v\n%s", err, out)
+		}
+		procs.set("tab_1:leaf_1", orcaProc{pid: 5002, agent: ompAgent, cwd: projDir})
+		return map[string]any{"send": map[string]any{"handle": p["terminal"], "accepted": true, "bytesWritten": len(text)}}
+	})
+	const model, prompt = "vendor/standard", "Please summarize these notes"
+	if _, err := requestCtx(t, ctx, n, "session.start", map[string]any{
+		"cwd": projDir, "launcher": "omp", "host": "orca", "model": model, "prompt": prompt,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	received, err := os.ReadFile(argv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := strings.Join([]string{"--model", model, "--", prompt, ""}, "\x00"); string(received) != want {
+		t.Fatalf("omp on Orca received %q, want %q", received, want)
+	}
+}
+
+func TestOmpModelChecksOnOrca(t *testing.T) {
+	fakeCLIHome(t)
+	t.Run("launchers.models advertises supports_start_model", func(t *testing.T) {
+		n, _, _, _, _ := orcaNode(t)
+		for _, host := range []string{"", "orca"} {
+			got, err := request(t, n, "launchers.models", map[string]any{"name": "omp", "agent_type": "omp", "host": host, "configured": true})
+			models, ok := got["models"].([]any)
+			if err != nil || got["agent"] != "omp" || !ok || len(models) != 0 || got["locked"] != nil || got["supports_start_model"] != true {
+				t.Fatalf("orca launcher models (host %q) = %v, %v", host, got, err)
+			}
+		}
+	})
+	t.Run("invalid model ID precedes terminal creation", func(t *testing.T) {
+		n, _, o, _, home := orcaNode(t)
+		_, err := request(t, n, "session.start", map[string]any{"cwd": home, "launcher": "omp", "host": "orca", "model": "two words"})
+		if err == nil || !strings.Contains(err.Error(), "invalid model") || len(o.Params("terminal.create")) != 0 {
+			t.Fatalf("start error = %v, creates = %v", err, o.Params("terminal.create"))
+		}
+	})
+	t.Run("unsupported options refused with omp_options", func(t *testing.T) {
+		cases := map[string]map[string]any{
+			"mode":         {"permission_mode": "plan"},
+			"effort":       {"effort": "high"},
+			"ultracode":    {"ultracode": true},
+			"model+mode":   {"model": "opus", "permission_mode": "plan"},
+			"resume model": {"model": "opus", "resume_session_id": "00000000-0000-4000-8000-000000000001"},
+		}
+		for name, extra := range cases {
+			t.Run(name, func(t *testing.T) {
+				n, _, o, _, home := orcaNode(t)
+				params := map[string]any{"cwd": home, "launcher": "omp", "agent_type": "omp", "host": "orca"}
+				for k, v := range extra {
+					params[k] = v
+				}
+				_, err := request(t, n, "session.start", params)
+				if code, _ := refusalOf(t, err); code != "omp_options" || len(o.Params("terminal.create")) != 0 {
+					t.Fatalf("start error = %v, creates = %v", err, o.Params("terminal.create"))
+				}
+			})
+		}
+	})
+	t.Run("managed launcher named omp refused on Orca", func(t *testing.T) {
+		n, _, o, _, home := orcaNode(t)
+		n.setManaged([]proto.ManagedLauncher{{Name: "omp", Agent: "omp", Kind: "api"}})
+		got, err := request(t, n, "launchers.models", map[string]any{"name": "omp", "agent_type": "omp", "host": "orca", "configured": true})
+		if lock, _ := got["locked"].(string); err != nil || lock == "" || got["supports_start_model"] != nil {
+			t.Fatalf("managed launcher models on Orca = %v, %v", got, err)
+		}
+		_, err = request(t, n, "session.start", map[string]any{"cwd": home, "launcher": "omp", "host": "orca", "model": "opus"})
+		if code, _ := refusalOf(t, err); code != "omp_options" || len(o.Params("terminal.create")) != 0 {
+			t.Fatalf("start error = %v, creates = %v", err, o.Params("terminal.create"))
+		}
+	})
+	t.Run("agentOfCmd recognizes omp", func(t *testing.T) {
+		if got := agentOfCmd([]string{"/Users/test/.local/bin/omp", "--model", "opus"}); got != ompAgent {
+			t.Fatalf("agentOfCmd(omp) = %q, want %q", got, ompAgent)
+		}
+	})
 }

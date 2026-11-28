@@ -31,22 +31,23 @@ extension MarkdownUI.Theme {
             .strong { FontWeight(.semibold) }
             .link { ForegroundColor(Theme.accent) }
             .heading1 { config in
-                config.label.runFonts().markdownMargin(top: ReplyMetrics.heading1.top, bottom: ReplyMetrics.heading1.bottom)
+                config.label.lookUpWords(config.content).runFonts().markdownMargin(top: ReplyMetrics.heading1.top, bottom: ReplyMetrics.heading1.bottom)
                     .markdownTextStyle { FontWeight(.bold); FontSize(.em(ReplyMetrics.heading1.size)) }
             }
             .heading2 { config in
-                config.label.runFonts().markdownMargin(top: ReplyMetrics.heading2.top, bottom: ReplyMetrics.heading2.bottom)
+                config.label.lookUpWords(config.content).runFonts().markdownMargin(top: ReplyMetrics.heading2.top, bottom: ReplyMetrics.heading2.bottom)
                     .markdownTextStyle { FontWeight(.semibold); FontSize(.em(1)) }
             }
             .heading3 { config in
-                config.label.runFonts().markdownMargin(top: ReplyMetrics.heading3.top, bottom: ReplyMetrics.heading3.bottom)
+                config.label.lookUpWords(config.content).runFonts().markdownMargin(top: ReplyMetrics.heading3.top, bottom: ReplyMetrics.heading3.bottom)
                     .markdownTextStyle { FontWeight(.semibold); FontSize(.em(1)) }
             }
             .heading4 { config in minorHeading(config) }
             .heading5 { config in minorHeading(config) }
             .heading6 { config in minorHeading(config) }
             .paragraph { config in
-                config.label.runFonts().fixedSize(horizontal: false, vertical: true).relativeLineSpacing(.em(ReplyMetrics.lineSpacing))
+                // Words a reading surface makes tappable for lookup (#10977, `textLookupSurface`); as they were elsewhere.
+                config.label.lookUpWords(config.content).runFonts().fixedSize(horizontal: false, vertical: true).relativeLineSpacing(.em(ReplyMetrics.lineSpacing))
                     .markdownMargin(top: 0, bottom: ReplyMetrics.paragraphBottom)
             }
             .listItem { config in config.label.markdownMargin(top: .em(ReplyMetrics.itemTop)) }
@@ -126,7 +127,7 @@ extension MarkdownUI.Theme {
     /// below the third level (the secondary level's size), semibold in the quieter ink, more space above than below.
     /// Its label is built as heading1–3's are: a modifier theirs gains (the style's run fonts, say) belongs here too.
     @MainActor static func minorHeading(_ config: BlockConfiguration) -> some View {
-        config.label.runFonts().markdownMargin(top: ReplyMetrics.heading4.top, bottom: ReplyMetrics.heading4.bottom)
+        config.label.lookUpWords(config.content).runFonts().markdownMargin(top: ReplyMetrics.heading4.top, bottom: ReplyMetrics.heading4.bottom)
             .markdownTextStyle {
                 FontWeight(.semibold)
                 FontSize(.em(ReplyMetrics.heading4.size))
@@ -1510,6 +1511,18 @@ nonisolated enum RowMemo {
     static func prewarm(_ items: [Item], scope: String) {
         for it in items {
             if Task.isCancelled { return }
+            if it.botmux?.isInbound == true {
+                let shown = BotmuxPresentation.user(it)
+                _ = user(key(scope, shown.id)) { _ in UserRowText(shown.text ?? "") }
+            }
+            if let reply = it.botmux, reply.kind == "reply" {
+                let shown = BotmuxPresentation.reply(reply, from: it)
+                _ = assistant(key(scope, shown.id)) { _ in AssistantRowText(reply.text) }
+            }
+            for (index, reply) in (it.fold?.botmux ?? []).enumerated() where reply.kind == "reply" {
+                let shown = BotmuxPresentation.reply(reply, from: it, index: index)
+                _ = assistant(key(scope, shown.id)) { _ in AssistantRowText(reply.text) }
+            }
             if it.kind == .toolUse { ToolDiffMemo.prewarm(it) }
             if it.kind == .toolUse || it.kind == .toolResult { ToolTextMemo.prewarm(it, scope: scope) }
             guard it.kind == .text else { continue }

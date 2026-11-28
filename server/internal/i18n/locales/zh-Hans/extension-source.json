@@ -10,5 +10,7 @@
   "runtime_required": "启用此扩展前，请先在管理器上配置固定版本的源码运行时。",
   "isolation_required": "源码扩展的隔离不能关闭。",
   "package_check_only": "源码包检查通过。运行时验证必须使用管理器强制执行的沙箱；单独启动引擎不算通过。",
-  "created": "已创建源码扩展。使用 personad extension pack 打包；启用时需要固定版本运行时及强制执行的 Linux 隔离。"
+  "created": "已创建源码扩展。使用 personad extension pack 打包；启用时需要固定版本运行时及强制执行的 Linux 隔离。",
+  "package_size_invalid": "包里的文件大小无效：{size}",
+  "package_too_big": "包太大"
 }

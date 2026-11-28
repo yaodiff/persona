@@ -25,8 +25,8 @@ function alwaysToolName(ix: AlwaysCard): string {
 export function alwaysScope(ix: AlwaysCard): string {
   if (!offersAlways(ix)) return "";
   if (ix.always_label) return t("chat-interactions.always_scope_named", { scope: ix.always_label });
-  if (ix.agent && ix.agent !== "claude") return "";
   const keys = ix.always_keys ?? [];
+  if (ix.agent && ix.agent !== "claude" && !keys.length) return "";
   if (keys.length && keys.every((key) => /^tool:(Read|Edit)\(\/\/.*\/\*\*\)$/.test(key))) {
     return t("chat-interactions.always_scope_directory");
   }

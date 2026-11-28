@@ -593,10 +593,10 @@ func TestBusDeltasAreTakenTogether(t *testing.T) {
 	}
 	b.queueEvent(assistantwire.EventSessionDelta, delta("c2", "另一段"))
 	b.queueEvent(assistantwire.EventTurnEnded, json.RawMessage(`{"machine_id":"server","session_id":"c1"}`))
-	if n := len(b.events); n != 3 {
+	if n := b.events.len(); n != 3 {
 		t.Fatalf("%d events waiting, want 3", n)
 	}
-	first := <-b.events
+	first, _ := b.events.take()
 	var p SessionDelta
 	_ = json.Unmarshal(b.takeDelta(first.params), &p)
 	if p.SessionID != "c1" || p.Text != "第4999个字" {
@@ -691,6 +691,12 @@ func TestChannelsReadFailureNeverOverwrites(t *testing.T) {
 	// The runs' machine is known: otherwise their watchers drop them (the machine left the configuration) while the
 	// test is still looking.
 	f := newFakeHub().withMachine()
+	f.answerApp(AppChannels, ChannelsList, func(json.RawMessage) (any, error) {
+		return map[string]any{"channels": []channel.View{{
+			ID: "wechat_x", Kind: channel.KindIM, Source: channel.SourcePlugin,
+			Installed: true, Enabled: true, State: channel.StateConnected,
+		}}}, nil
+	})
 	f.answerApp(AppFeishu, FeishuStatusGet, func(json.RawMessage) (any, error) {
 		return FeishuStatus{Ready: true, Enabled: true, Owner: "ou_example", PairedAt: time.Unix(100, 0)}, nil
 	})

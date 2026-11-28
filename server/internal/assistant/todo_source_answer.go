@@ -92,6 +92,8 @@ func (s *Service) sourceMainReply(ctx context.Context, t Todo) (text string, wai
 		}
 		return s.sourceWaitFloor(t.ID, sourceReportWait)
 	}
+	// Asked before the read, so the items read after it hold the turn the node said was over.
+	idle := s.sourceSessionIdle(ctx, machine, t.Origin)
 	// A second turn can start by the time the completion is recorded. Only the handoff's own
 	// exchange is eligible, even when a newer answer is present.
 	items, at, err := s.sourceMainPage(ctx, machine, t.Origin, channel.ClientMsgID(channel.Feishu, handoff))
@@ -104,7 +106,7 @@ func (s *Service) sourceMainReply(ctx context.Context, t Todo) (text string, wai
 		return "", unknown()
 	}
 
-	reply, wait := sourceMainReplyItems(items[at+1:], heldThrough)
+	reply, wait := sourceMainReplyItems(items[at+1:], heldThrough, idle)
 	if len(reply) == 0 {
 		if wait >= channel.HeldMost {
 			s.noteSourceWait(t.ID, wait)
@@ -115,6 +117,18 @@ func (s *Service) sourceMainReply(ctx context.Context, t Todo) (text string, wai
 		return text, 0
 	}
 	return "", unknown()
+}
+
+// sourceSessionIdle: the node lists conversation id as done with its turn and not waiting on the
+// user. A headless conversation (claude -p, how the assistant runs the main one) writes no
+// turn_duration line, so this is how its turn's end shows. A conversation the node cannot list,
+// or lists with no status, is not taken as idle.
+func (s *Service) sourceSessionIdle(ctx context.Context, machine, id string) bool {
+	c, ok := s.session(ctx, machine, id)
+	if !ok || c.Starting || c.Status == proto.StatusWorking || c.State == proto.StateWorking || c.State == proto.StateNeedsYou {
+		return false
+	}
+	return c.Status == proto.StatusIdle || c.Status == proto.StatusDone
 }
 
 // sourceMainTurns are the windows, in prompts, read for the handoff's prompt: the near one
@@ -189,10 +203,46 @@ func (s *Service) forgetSourceWait(id string) {
 // even when the wake ended the last background work and no channel run is held: the short wait
 // counts from the close and has usually passed by then. A continuation that ends without words
 // falls back to the short wait.
-func sourceMainReplyItems(items []proto.Item, heldThrough int) ([]proto.Item, time.Duration) {
+//
+// A turn ends at its turn_duration line. The assistant runs the main conversation headless
+// (claude -p), and Claude Code writes no such line there, so the handoff's exchange also ends
+// where what follows shows it did: a wake, or another request that was not queued mid-turn, is
+// only taken once the turn before it is over. The exchange at the end of items ends when idle
+// says the node lists the conversation as done (sourceSessionIdle), and only once it holds its
+// words: the node can say a turn is over a moment before its last words are in the transcript.
+func sourceMainReplyItems(items []proto.Item, heldThrough int, idle bool) ([]proto.Item, time.Duration) {
 	owned, start := true, 0
 	wait := sourceReportWait
 	var calls, background, reply, last []proto.Item
+	// end closes the handoff's exchange items[start:stop], a turn that ended; seq is its last line.
+	// tail: the end is only the conversation's idle state, which counts once the turn has words.
+	end := func(stop, seq int, tail bool) {
+		turn := items[start:stop]
+		words := sourceTurnWords(turn)
+		if tail && len(words) == 0 && channel.Stopped(turn) == "" {
+			return
+		}
+		owned = false
+		if len(words) != 0 {
+			last = words
+		}
+		if len(background) != 0 || heldThrough >= 0 && (start == 0 || seq <= heldThrough) {
+			return
+		}
+		reply = words
+		if len(reply) != 0 || channel.Stopped(turn) != "" {
+			wait = 0
+		} else {
+			wait = sourceReportWait
+		}
+	}
+	// before is the line the exchange ending at items[i] last wrote.
+	before := func(i int) int {
+		if i > start {
+			return items[i-1].Seq
+		}
+		return items[i].Seq
+	}
 	for i, it := range items {
 		if it.Task != nil && taskEnded(it.Task.Status) {
 			background = slices.DeleteFunc(background, func(launch proto.Item) bool {
@@ -200,18 +250,19 @@ func sourceMainReplyItems(items []proto.Item, heldThrough int) ([]proto.Item, ti
 			})
 		}
 		if it.Wake {
+			if owned {
+				end(i, before(i), false)
+			}
 			if launchedIn(calls, it.Task) {
 				owned, start = true, i+1
 				reply, wait = nil, channel.HeldMost
-			} else {
-				if owned {
-					wait = 0
-				}
-				owned = false
 			}
 			continue
 		}
 		if sourceOtherRequest(it) {
+			if owned && !it.Queued {
+				end(i, before(i), false)
+			}
 			return last, 0
 		}
 		if !owned {
@@ -228,22 +279,11 @@ func sourceMainReplyItems(items []proto.Item, heldThrough int) ([]proto.Item, ti
 				}
 			}
 		case turnDurationKind:
-			owned = false
-			turn := items[start : i+1]
-			words, _ := sourceReplyItems(turn)
-			if len(words) != 0 {
-				last = words
-			}
-			if len(background) != 0 || heldThrough >= 0 && (start == 0 || it.Seq <= heldThrough) {
-				continue
-			}
-			reply = words
-			if len(reply) != 0 || channel.Stopped(turn) != "" {
-				wait = 0
-			} else {
-				wait = sourceReportWait
-			}
+			end(i+1, it.Seq, false)
 		}
+	}
+	if owned && idle && len(items) > start {
+		end(len(items), items[len(items)-1].Seq, true)
 	}
 	if len(reply) != 0 {
 		return reply, 0
@@ -275,6 +315,15 @@ func sourceReplyItems(items []proto.Item) ([]proto.Item, bool) {
 	if _, ok := turnEndOf(items); !ok {
 		return nil, true
 	}
+	return sourceTurnWords(items), false
+}
+
+// sourceTurnWords is the final answer of a turn known to have ended: its assistant text after the
+// last tool call or result; none for a stopped turn.
+func sourceTurnWords(items []proto.Item) []proto.Item {
+	if channel.Stopped(items) != "" {
+		return nil
+	}
 	for i := len(items) - 1; i >= 0; i-- {
 		it := items[i]
 		if it.Kind == proto.KindToolUse || it.Kind == proto.KindToolResult || it.Role == "user" || it.Wake {
@@ -282,7 +331,7 @@ func sourceReplyItems(items []proto.Item) ([]proto.Item, bool) {
 			break
 		}
 	}
-	return channel.Answer(items), false
+	return channel.Answer(items)
 }
 
 func readSourceReply(ctx context.Context, src channel.ItemSource, reply []proto.Item) string {

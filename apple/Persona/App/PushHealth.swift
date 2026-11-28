@@ -225,6 +225,14 @@ extension PushHealth {
         if unchecked?.isEmpty == true { unchecked = nil }
     }
 
+    /// Whether the hub at group can push to this device, from what it last said: false for a route that reaches nothing
+    /// (`none`) and for a confirmed missing route (no push registration from this credential, #16756); nil when it never
+    /// said (an older hub that reports no routes, or none read yet). A failed read keeps the last answer, as `routes` does.
+    nonisolated func pushReaches(group: String) -> Bool? {
+        if missingRoutes?.contains(group) == true { return false }
+        return routes[group]?.reaches
+    }
+
     /// The route at group could not be read: why, in the error's words.
     mutating func readFailed(_ why: String, group: String) {
         var all = unchecked ?? [:]

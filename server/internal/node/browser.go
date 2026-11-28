@@ -8,6 +8,8 @@ package node
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,6 +19,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -26,9 +30,19 @@ import (
 
 const (
 	// egoTeam is Citro Labs' Developer ID team: an app that is not signed by it is not installed.
-	egoTeam = "JGQLC6YQYJ"
-	egoName = "ego lite"
+	egoTeam                 = "JGQLC6YQYJ"
+	egoName                 = "ego lite"
+	egoMinMacOS             = "13.0"
+	egoUnsupportedOSMessage = "当前 macOS %s 低于 ego lite 要求的 %s，无法运行" // i18n-ignore: canonical node text localized by hub-browser.rpc_unsupported_os
 )
+
+var macOSProductVersion = func(ctx context.Context) string {
+	out, err := exec.CommandContext(ctx, "/usr/bin/sw_vers", "-productVersion").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
 
 // egoDMG is the official DMG for this Mac's chip (the download link the project's README gives).
 var egoDMG = func() string {
@@ -41,6 +55,149 @@ var egoDMG = func() string {
 
 // egoHome is where ego keeps its things; tests point it elsewhere.
 var egoHome = func() string { h, _ := os.UserHomeDir(); return h }
+
+func browserDownloadsDir() string { return filepath.Join(egoHome(), ".persona", "browser-downloads") }
+
+func ensureBrowserDownloadsDir() (string, error) {
+	dir := browserDownloadsDir()
+	if !filepath.IsAbs(dir) {
+		return "", errors.New("cannot locate Persona browser downloads: the home directory is unavailable")
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", fmt.Errorf("create Persona browser downloads directory: %w", err)
+	}
+	real, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return "", fmt.Errorf("locate Persona browser downloads: %w", err)
+	}
+	return real, nil
+}
+
+func resolveBrowserDownload(filename string) (string, os.FileInfo, error) {
+	if filename == "" || filename == "." || filename == ".." ||
+		strings.ContainsAny(filename, "/\\\x00") || filepath.Base(filename) != filename {
+		return "", nil, errors.New("give the exact filename in Persona browser downloads, without a directory")
+	}
+	dir := browserDownloadsDir()
+	if !filepath.IsAbs(dir) {
+		return "", nil, errors.New("cannot locate Persona browser downloads: the home directory is unavailable")
+	}
+	dirReal, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return "", nil, fmt.Errorf("locate Persona browser downloads: %w", err)
+	}
+	path := filepath.Join(dir, filename)
+	info, err := os.Lstat(path)
+	if err != nil {
+		return "", nil, fmt.Errorf("find %q in Persona browser downloads: %w", filename, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return "", nil, errors.New("only regular files in Persona browser downloads can be retrieved")
+	}
+	parent, err := filepath.EvalSymlinks(filepath.Dir(path))
+	if err != nil {
+		return "", nil, fmt.Errorf("check Persona browser downloads directory: %w", err)
+	}
+	if parent != dirReal {
+		return "", nil, errors.New("the Persona browser downloads directory changed")
+	}
+	if info.Size() > proto.MaxTerminalUploadBytes {
+		return "", nil, fmt.Errorf("the download is larger than %d bytes", proto.MaxTerminalUploadBytes)
+	}
+	return filepath.Join(dirReal, filename), info, nil
+}
+
+func openBrowserDownload(filename string) (*os.File, os.FileInfo, error) {
+	path, info, err := resolveBrowserDownload(filename)
+	if err != nil {
+		return nil, nil, err
+	}
+	f, err := openNoBlock(path)
+	if err != nil {
+		return nil, nil, fmt.Errorf("open %q in Persona browser downloads: %w", filename, err)
+	}
+	if err := checkBrowserDownload(f, info); err != nil {
+		f.Close()
+		return nil, nil, err
+	}
+	return f, info, nil
+}
+
+func checkBrowserDownload(f *os.File, info os.FileInfo) error {
+	current, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	if !sameFileRead(info, current) {
+		return errFileChanged
+	}
+	return nil
+}
+
+func browserDownloadInfo(params json.RawMessage) (proto.BrowserDownloadInfo, error) {
+	var p struct {
+		Filename string `json:"filename"`
+	}
+	if err := json.Unmarshal(params, &p); err != nil {
+		return proto.BrowserDownloadInfo{}, fmt.Errorf("bad download info params: %w", err)
+	}
+	f, info, err := openBrowserDownload(p.Filename)
+	if err != nil {
+		return proto.BrowserDownloadInfo{}, err
+	}
+	defer f.Close()
+	digest := sha256.New()
+	size, err := io.Copy(digest, io.LimitReader(f, info.Size()+1))
+	if err != nil {
+		return proto.BrowserDownloadInfo{}, fmt.Errorf("read %q in Persona browser downloads: %w", p.Filename, err)
+	}
+	if size != info.Size() {
+		return proto.BrowserDownloadInfo{}, errFileChanged
+	}
+	if err := checkBrowserDownload(f, info); err != nil {
+		return proto.BrowserDownloadInfo{}, err
+	}
+	return proto.BrowserDownloadInfo{Name: p.Filename, Path: f.Name(), Size: size, SHA256: hex.EncodeToString(digest.Sum(nil))}, nil
+}
+
+func browserDownloadChunk(params json.RawMessage) (proto.BrowserDownloadChunk, error) {
+	var p struct {
+		Filename string `json:"filename"`
+		Offset   int64  `json:"offset"`
+		Length   int    `json:"length"`
+	}
+	if err := json.Unmarshal(params, &p); err != nil {
+		return proto.BrowserDownloadChunk{}, fmt.Errorf("bad download chunk params: %w", err)
+	}
+	if p.Offset < 0 {
+		return proto.BrowserDownloadChunk{}, errors.New("download offset cannot be negative")
+	}
+	f, info, err := openBrowserDownload(p.Filename)
+	if err != nil {
+		return proto.BrowserDownloadChunk{}, err
+	}
+	defer f.Close()
+	if p.Offset > info.Size() {
+		return proto.BrowserDownloadChunk{}, errors.New("download offset is outside the file")
+	}
+	if p.Length <= 0 || p.Length > proto.FileDownloadChunkBytes {
+		p.Length = proto.FileDownloadChunkBytes
+	}
+	data := make([]byte, min(int64(p.Length), info.Size()-p.Offset))
+	n, err := f.ReadAt(data, p.Offset)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return proto.BrowserDownloadChunk{}, fmt.Errorf("read %q in Persona browser downloads: %w", p.Filename, err)
+	}
+	if n != len(data) {
+		return proto.BrowserDownloadChunk{}, errFileChanged
+	}
+	if err := checkBrowserDownload(f, info); err != nil {
+		return proto.BrowserDownloadChunk{}, err
+	}
+	return proto.BrowserDownloadChunk{
+		Name: p.Filename, Offset: p.Offset, Size: info.Size(), Data: data, EOF: p.Offset+int64(n) == info.Size(),
+	}, nil
+}
 
 // egoApp is the installed app, "" when there is none.
 var egoApp = func() string {
@@ -78,15 +235,18 @@ var egoProbe struct {
 
 func browserStatus(ctx context.Context) proto.Browser {
 	b := proto.Browser{}
-	if app := egoApp(); app != "" {
+	app := egoApp()
+	if app != "" {
 		b.Installed = true
 		b.Version = plistString(ctx, filepath.Join(app, "Contents", "Info.plist"), "CFBundleShortVersionString")
 	}
 	b.SetUp, b.Imported, b.Analytics = egoSetUp()
-	if b.Installed && b.SetUp && egoBin() != "" {
-		b.Ready, b.Note = probeEgo(ctx)
-	}
-	if !b.Ready || b.Note == "" {
+	if cur, req, bad := egoUnsupportedOS(ctx, app); bad {
+		b.Note = fmt.Sprintf(egoUnsupportedOSMessage, cur, req)
+	} else {
+		if b.Installed && b.SetUp && egoBin() != "" {
+			b.Ready, b.Note = probeEgo(ctx)
+		}
 		b.Note = browserNote(b, b.Note)
 	}
 	b.ScreenSharing = screenSharing(ctx)
@@ -162,6 +322,42 @@ func plistString(ctx context.Context, plist, key string) string {
 	return strings.TrimSpace(string(out))
 }
 
+// versionLess compares dotted numeric versions, treating omitted components as zero.
+// An unreadable version does not establish incompatibility.
+func versionLess(cur, req string) bool {
+	parse := func(version string) []uint64 {
+		parts := strings.Split(strings.TrimSpace(version), ".")
+		numbers := make([]uint64, len(parts))
+		for i, part := range parts {
+			n, err := strconv.ParseUint(part, 10, 64)
+			if err != nil {
+				return nil
+			}
+			numbers[i] = n
+		}
+		for len(numbers) > 0 && numbers[len(numbers)-1] == 0 {
+			numbers = numbers[:len(numbers)-1]
+		}
+		return numbers
+	}
+	a, b := parse(cur), parse(req)
+	return a != nil && b != nil && slices.Compare(a, b) < 0
+}
+
+func egoUnsupportedOS(ctx context.Context, app string) (cur, req string, unsupported bool) {
+	if installOS != "darwin" {
+		return "", "", false
+	}
+	if app != "" {
+		req = plistString(ctx, filepath.Join(app, "Contents", "Info.plist"), "LSMinimumSystemVersion")
+	}
+	if req == "" {
+		req = egoMinMacOS
+	}
+	cur = macOSProductVersion(ctx)
+	return cur, req, versionLess(cur, req)
+}
+
 // ---- install and open ----
 
 // installEgo downloads the official DMG, checks the app in it (signed by Citro Labs' team, notarized), copies it into
@@ -174,11 +370,17 @@ func installEgo(ctx context.Context, step func(string)) error {
 	if egoApp() != "" {
 		return errors.New("已经装好了")
 	}
+	if cur, req, bad := egoUnsupportedOS(ctx, ""); bad {
+		return fmt.Errorf(egoUnsupportedOSMessage, cur, req)
+	}
 	app, done, err := fetchEgo(ctx, step)
 	if err != nil {
 		return err
 	}
 	defer done()
+	if cur, req, bad := egoUnsupportedOS(ctx, app); bad {
+		return fmt.Errorf(egoUnsupportedOSMessage, cur, req)
+	}
 	step("装进「应用程序」")
 	dest := filepath.Join("/Applications", egoName+".app")
 	if out, err := exec.CommandContext(ctx, "/usr/bin/ditto", app, dest).CombinedOutput(); err != nil {
@@ -193,7 +395,7 @@ func installEgo(ctx context.Context, step func(string)) error {
 
 // fetchEgo downloads ego's DMG, mounts it read-only and checks the app in it (verifyEgoApp); done unmounts it and
 // removes the download.
-func fetchEgo(ctx context.Context, step func(string)) (app string, done func(), err error) {
+var fetchEgo = func(ctx context.Context, step func(string)) (app string, done func(), err error) {
 	dir, err := os.MkdirTemp("", "persona-ego-install-")
 	if err != nil {
 		return "", nil, err
@@ -268,6 +470,9 @@ func openEgo(ctx context.Context, step func(string)) error {
 	if app == "" {
 		return errors.New("这台 Mac 上没有装 ego lite")
 	}
+	if cur, req, bad := egoUnsupportedOS(ctx, app); bad {
+		return fmt.Errorf(egoUnsupportedOSMessage, cur, req)
+	}
 	step("在那台 Mac 上打开 ego lite")
 	if out, err := exec.CommandContext(ctx, "/usr/bin/open", app).CombinedOutput(); err != nil {
 		return fmt.Errorf("打不开 ego lite：%s", oneLine(string(out), 2))
@@ -302,13 +507,21 @@ func browserCall(ctx context.Context, params json.RawMessage) (*proto.ComputerRe
 	if p.Session == "" || (!p.Look && strings.TrimSpace(p.Script) == "") {
 		return nil, errors.New("browser.call: need a session and a script")
 	}
+	var dlDir string
+	if !p.Look {
+		var err error
+		dlDir, err = ensureBrowserDownloadsDir()
+		if err != nil {
+			return nil, err
+		}
+	}
 	dir, err := os.MkdirTemp("", "persona-browser-")
 	if err != nil {
 		return nil, err
 	}
 	defer os.RemoveAll(dir)
 	shot := filepath.Join(dir, "page.png")
-	wrapped := browserScript(p.Session, p.Script, p.Look, p.Full, p.Screenshot || p.Look, shot)
+	wrapped := browserScript(p.Session, p.Script, p.Look, p.Full, p.Screenshot || p.Look, shot, dlDir)
 	timeout := time.Duration(p.TimeoutMS) * time.Millisecond
 	if timeout <= 0 || timeout > 2*time.Minute {
 		timeout = time.Minute
@@ -410,10 +623,20 @@ const browserMark = "@@persona-browser@@"
 // browserScript wraps the assistant's script: the task space and its first tab, the script as the body of an async
 // function, and one last line with what it returned (or threw), the page's address and title, and the snapshot when
 // it is a look.
-func browserScript(session, script string, look, full, screenshot bool, shot string) string {
+func browserScript(session, script string, look, full, screenshot bool, shot, dlDir string) string {
 	var b strings.Builder
 	b.WriteString("const task = await taskSpace(" + jsString(session) + ");\n")
 	b.WriteString("const page = task.page(\"p1\");\n")
+	if !look && dlDir != "" {
+		b.WriteString("const __dlDir = " + jsString(dlDir) + ";\n")
+		b.WriteString(`const __bindDl = async (p) => { try { await p.cdp("Page.setDownloadBehavior", { behavior: "allow", downloadPath: __dlDir }); } catch (e) {} };
+await __bindDl(page);
+try {
+  const __origNewPage = task.newPage.bind(task);
+  task.newPage = async (...args) => { const p = await __origNewPage(...args); await __bindDl(p); return p; };
+} catch (e) {}
+`)
+	}
 	b.WriteString("const __r = {};\n")
 	b.WriteString("try {\n")
 	if look {

@@ -157,14 +157,14 @@ describe("Switch Agent?", () => {
     expect(dialog()).toBeNull();
     expect(modes()).toEqual([{ launcher: "cx", from: "gateway", model: "gpt-5.5-mini", effort: "low" }]); // no `agent` on the wire
     expect(getSession(s.machine_id, "s1")?.pending_switch).toMatchObject({ launcher: "cx", model: "gpt-5.5-mini", effort: "low", agent: "codex" });
-    expect(toast).toHaveBeenCalledWith(t("chat-modelpanel.switch_scheduled_engine", { agent: "Codex", model: "5.5 Mini" }), "ok");
+    expect(toast).toHaveBeenCalledWith(t("chat-modelpanel.switch_scheduled_engine", { agent: "Codex", model: "GPT-5.5 Mini" }), "ok");
     expect(localStorage.getItem(ENGINE_SWITCH_SKIP_KEY)).toBeNull(); // not ticked: it asks next time
     // the pill: a clock, the engine and model it moves to; reopened, the panel warns and stands on what runs now
     act(() => root.render(<AgentModelPill session={getSession(s.machine_id, "s1")!} />));
     await flush();
     expect(pill()!.getAttribute("data-model-pill")).toBe("pending");
     expect(pill()!.querySelector("[data-pill-target]")!.textContent).toBe("cx");
-    expect(pill()!.getAttribute("aria-label")).toBe(t("chat-modelpill.aria_pending_effort", { agent: "cx", model: "5.5 Mini", effort: "Low" }));
+    expect(pill()!.getAttribute("aria-label")).toBe(t("chat-modelpill.aria_pending_effort", { agent: "cx", model: "GPT-5.5 Mini", effort: "Low" }));
     expect(panel.props!.state.note).toBe(t("chat-modelpanel.engine_note"));
     expect(panel.props!.state.current).toMatchObject({ provider: "gateway", model: "opus" });
   });

@@ -10,6 +10,7 @@ import {
   cleanAssistantText,
   cleanGenericOutput,
   cleanUserText,
+  mapPermissionToolCall,
   mapToolCall,
   mapToolInput,
   mapToolName,
@@ -17,9 +18,25 @@ import {
   stepsToItems,
   toAgyId,
   toPersonaId,
+  workspacePathOf,
 } from '../lib/map.js'
 
 describe('antigravity transcript and tool mapping', () => {
+  it('keeps botmux marker lines out of reply previews within the current turn', () => {
+    const marker = 'BOTMUX_NOTHING_TO_SEND'
+    const reply = (content) => ({ type: 'PLANNER_RESPONSE', content })
+    const mention = `The guide mentions ${marker}.`
+    const mixed = reply(`${mention}\n${marker}`)
+    const steps = [mixed, reply(marker)]
+    for (const summaryOnly of [false, true]) {
+      const result = stepsToItems(steps, { summaryOnly })
+      assert.equal(result.lastText, mention)
+      if (!summaryOnly) assert.deepEqual(result.items.map((item) => item.text), [mixed.content, marker])
+      const next = { type: 'USER_INPUT', source: 'USER_EXPLICIT', content: 'Next question' }
+      assert.equal(stepsToItems([...steps, next, reply(marker)], { summaryOnly }).lastText, '')
+    }
+  })
+
   it('keeps reply previews within the latest explicit user turn', () => {
     const question = { type: 'PLANNER_RESPONSE', content: 'Which configuration should I use?' }
     const prompt = { type: 'USER_INPUT', source: 'USER_EXPLICIT', content: 'What were the results?' }
@@ -70,6 +87,15 @@ describe('antigravity transcript and tool mapping', () => {
       ['similar scheme', 'Content of persona-context-extra:///snapshot.txt:\n' + context + user, 'Content of persona-context-extra:///snapshot.txt:\n' + user],
       ['quoted label', 'Example:\n' + label + user, 'Example:\n' + label + user],
       ['incomplete envelope', label + '<persona-context>unfinished', label + '<persona-context>unfinished'],
+      ['leading resource with literal context tags', label + '<persona-context><persona-context>inner</persona-context>outer</persona-context>' + user, user],
+      ['leading resource with nested prose', label + '<persona-context>outer\n<persona-context>inner</persona-context>\n\nGenerated prose\n</persona-context>\n' + user, user],
+      ['trailing resource', user + '\n\n' + label + context, user],
+      ['trailing resource with literal context tags', user + '\n\n' + label + '<persona-context><persona-context>inner</persona-context>outer</persona-context>', user],
+      ['trailing resource before user prose', user + '\n\n' + label + '<persona-context>generated</persona-context>\n\nMy example: <persona-context>user</persona-context>', user + '\n\nMy example:'],
+      ['resources around user prose', user + '\n\n' + label + context + '\n\nkeep me\n\n' + label + context, user + '\n\nkeep me'],
+      ['trailing view errors', user + '\n\n<persona-view-errors>bad</persona-view-errors>', user],
+      ['malformed trailing URI', user + '\n\nContent of persona-context:// /snapshot.txt:\n' + context, user + '\n\nContent of persona-context:// /snapshot.txt:'],
+      ['quoted trailing label', 'Example: ' + label + context, 'Example: Content of persona-context:///snapshot.txt:'],
     ]
     for (const [name, content, expected] of cases) {
       const steps = [{ step_index: 0, type: 'USER_INPUT', source: 'USER_EXPLICIT', content }]
@@ -147,6 +173,211 @@ describe('antigravity transcript and tool mapping', () => {
     assert.deepEqual(items[0].tool_input, { message: 'Reminder ready' })
     assert.equal(items[1].tool_name, 'mcp__persona__task_review')
     assert.deepEqual(items[1].tool_input, { todo_id: 'todo_1', verdict: 'accepted' })
+  })
+
+  it('normalizes Run-prefixed Persona MCP titles in mapToolName and mapPermissionToolCall without misclassifying shell or non-MCP titles', () => {
+    for (const server of MCP_SERVER_NAMES) {
+      for (const prefix of [`mcp_${server}`, `mcp_${server}_19d68ad7`]) {
+        assert.equal(mapToolName(`Run ${prefix}_todo_decisions`), 'mcp__persona__todo_decisions')
+        assert.deepEqual(
+          mapPermissionToolCall({
+            kind: 'other',
+            title: `Run ${prefix}_todo_decisions`,
+            rawInput: { todo_id: 'todo_1' },
+          }),
+          { toolName: 'mcp__persona__todo_decisions', toolInput: { todo_id: 'todo_1' } },
+        )
+        assert.deepEqual(
+          mapPermissionToolCall({
+            title: `Run ${prefix}_notify_user`,
+            rawInput: { message: 'Ready' },
+          }),
+          { toolName: 'mcp__persona__notify_user', toolInput: { message: 'Ready' } },
+        )
+        assert.deepEqual(
+          mapPermissionToolCall({
+            kind: 'execute',
+            title: `Run ${prefix}_todo_decisions`,
+            rawInput: { todo_id: 'todo_2' },
+          }),
+          { toolName: 'mcp__persona__todo_decisions', toolInput: { todo_id: 'todo_2' } },
+        )
+        assert.deepEqual(
+          mapPermissionToolCall({
+            kind: 'other',
+            title: `Run ${prefix}_persona_call`,
+            rawInput: { name: 'todo_decisions', arguments: { todo_id: 'todo_3' } },
+          }),
+          { toolName: 'mcp__persona__todo_decisions', toolInput: { todo_id: 'todo_3' } },
+        )
+      }
+    }
+
+    // Shell commands, explicit tool names, trailing shell metacharacters, and non-Persona MCP titles must never be misclassified.
+    assert.deepEqual(
+      mapPermissionToolCall({
+        kind: 'execute',
+        title: 'Run mcp_persona_19d68ad7_todo_decisions',
+        rawInput: { CommandLine: 'rm -rf /tmp/x' },
+      }),
+      { toolName: 'Bash', toolInput: { command: 'rm -rf /tmp/x', description: 'Run mcp_persona_19d68ad7_todo_decisions' } },
+    )
+    assert.deepEqual(
+      mapPermissionToolCall({
+        name: 'run_command',
+        kind: 'execute',
+        title: 'Run mcp_persona_19d68ad7_todo_decisions',
+        rawInput: { command: 'echo hi' },
+      }),
+      { toolName: 'Bash', toolInput: { command: 'echo hi', description: 'Run mcp_persona_19d68ad7_todo_decisions' } },
+    )
+    assert.deepEqual(
+      mapPermissionToolCall({
+        kind: 'execute',
+        title: 'Run mcp_persona_19d68ad7_todo_decisions && ls',
+        rawInput: {},
+      }),
+      { toolName: 'Bash', toolInput: { command: 'Run mcp_persona_19d68ad7_todo_decisions && ls', description: '' } },
+    )
+    assert.deepEqual(
+      mapPermissionToolCall({
+        kind: 'execute',
+        title: 'Run npm test',
+        rawInput: {},
+      }),
+      { toolName: 'Bash', toolInput: { command: 'Run npm test', description: '' } },
+    )
+    assert.deepEqual(
+      mapPermissionToolCall({
+        kind: 'other',
+        title: 'Run npm test',
+        rawInput: {},
+      }),
+      { toolName: 'Run npm test', toolInput: {} },
+    )
+    assert.deepEqual(
+      mapPermissionToolCall({
+        kind: 'other',
+        title: 'Run mcp_github_create_issue',
+        rawInput: { repo: 'nwverse/persona' },
+      }),
+      { toolName: 'Run mcp_github_create_issue', toolInput: { repo: 'nwverse/persona' } },
+    )
+    assert.equal(mapToolName('Run run_command'), 'Run run_command')
+    assert.equal(mapToolName('Run read_file'), 'Run read_file')
+    assert.equal(mapToolName('Run\nmcp_persona_19d68ad7_todo_decisions'), 'Run\nmcp_persona_19d68ad7_todo_decisions')
+    assert.equal(mapToolName('Run mcp_persona_19d68ad7_todo_decisions --flag'), 'Run mcp_persona_19d68ad7_todo_decisions --flag')
+
+    // Adversarial security & misclassification guards:
+    // 1. Bare mcp_persona_* command under kind: "execute" must stay Bash (cannot bypass Assistant command gate).
+    assert.deepEqual(
+      mapPermissionToolCall({
+        kind: 'execute',
+        title: 'mcp_persona_19d68ad7_evil',
+        rawInput: {},
+      }),
+      { toolName: 'Bash', toolInput: { command: 'mcp_persona_19d68ad7_evil', description: '' } },
+    )
+    // 2. kind: "execute" with shell Cwd or lowercase cwd must stay Bash even with "Run " prefix.
+    assert.deepEqual(
+      mapPermissionToolCall({
+        kind: 'execute',
+        title: 'Run mcp_persona_19d68ad7_evil',
+        rawInput: { Cwd: '/tmp' },
+      }),
+      { toolName: 'Bash', toolInput: { command: 'Run mcp_persona_19d68ad7_evil', description: '/tmp' } },
+    )
+    assert.deepEqual(
+      mapPermissionToolCall({
+        kind: 'execute',
+        title: 'Run mcp_persona_19d68ad7_evil',
+        rawInput: { cwd: '/tmp' },
+      }),
+      { toolName: 'Bash', toolInput: { command: 'Run mcp_persona_19d68ad7_evil', description: '' } },
+    )
+    // 2b. Core Persona MCP tools legitimately pass lowercase cwd / file_path under kind: "other" or omitted kind.
+    for (const kind of ['other', undefined]) {
+      const base = kind ? { kind } : {}
+      assert.deepEqual(
+        mapPermissionToolCall({
+          ...base,
+          title: 'Run mcp_persona_19d68ad7_agent_start',
+          rawInput: { machine: 'mbp', cwd: '/repo/app', prompt: 'Investigate' },
+        }),
+        { toolName: 'mcp__persona__agent_start', toolInput: { machine: 'mbp', cwd: '/repo/app', prompt: 'Investigate' } },
+      )
+      assert.deepEqual(
+        mapPermissionToolCall({
+          ...base,
+          title: 'Run mcp_persona_19d68ad7_dispatch_start',
+          rawInput: { cwd: '/repo/app', task: 'run' },
+        }),
+        { toolName: 'mcp__persona__dispatch_start', toolInput: { cwd: '/repo/app', task: 'run' } },
+      )
+      assert.deepEqual(
+        mapPermissionToolCall({
+          ...base,
+          title: 'Run mcp_persona_19d68ad7_a2a_send',
+          rawInput: { to: 'worker-1', cwd: '/repo/app', message: 'ping' },
+        }),
+        { toolName: 'mcp__persona__a2a_send', toolInput: { to: 'worker-1', cwd: '/repo/app', message: 'ping' } },
+      )
+      assert.deepEqual(
+        mapPermissionToolCall({
+          ...base,
+          title: 'Run mcp_persona_19d68ad7_channels_runs',
+          rawInput: { file_path: '/tmp/run.log', limit: 10 },
+        }),
+        { toolName: 'mcp__persona__channels_runs', toolInput: { file_path: '/tmp/run.log', limit: 10 } },
+      )
+    }
+    // 3. kind: "read" / "edit" with file paths must NEVER be overridden by a Run mcp_persona_* title.
+    assert.deepEqual(
+      mapPermissionToolCall({
+        kind: 'read',
+        title: 'Run mcp_persona_19d68ad7_evil',
+        rawInput: { AbsolutePath: '/etc/passwd' },
+      }),
+      { toolName: 'Read', toolInput: { file_path: '/etc/passwd' } },
+    )
+    assert.deepEqual(
+      mapPermissionToolCall({
+        kind: 'edit',
+        title: 'Run mcp_persona_19d68ad7_evil',
+        rawInput: { TargetFile: '/etc/hosts' },
+      }),
+      { toolName: 'Edit', toolInput: { file_path: '/etc/hosts', old_string: '', new_string: '' } },
+    )
+    // 4. Native shell/file fields even under kind: "other" / omitted kind cannot spoof Persona MCP.
+    assert.deepEqual(
+      mapPermissionToolCall({
+        kind: 'other',
+        title: 'Run mcp_persona_19d68ad7_evil',
+        rawInput: { Cwd: '/tmp' },
+      }),
+      { toolName: 'Bash', toolInput: { command: 'Run mcp_persona_19d68ad7_evil', description: '/tmp' } },
+    )
+    assert.deepEqual(
+      mapPermissionToolCall({
+        title: 'Run mcp_persona_19d68ad7_evil',
+        rawInput: { AbsolutePath: '/etc/passwd' },
+      }),
+      { toolName: 'Read', toolInput: { file_path: '/etc/passwd' } },
+    )
+    // 5. Separate persona_a2a MCP server tools must not be mangled into mcp__persona__a2a_<hash>_<tool>.
+    assert.equal(mapToolName('mcp_persona_a2a_19d68ad7_a2a_send'), 'mcp_persona_a2a_19d68ad7_a2a_send')
+    assert.equal(mapToolName('Run mcp_persona_a2a_19d68ad7_a2a_send'), 'Run mcp_persona_a2a_19d68ad7_a2a_send')
+    assert.equal(mapToolName('mcp_persona_a2a_a2a_send'), 'mcp_persona_a2a_a2a_send')
+    assert.deepEqual(
+      mapPermissionToolCall({
+        kind: 'other',
+        title: 'Run mcp_persona_a2a_19d68ad7_a2a_send',
+        rawInput: { to: 'agent-2' },
+      }),
+      { toolName: 'Run mcp_persona_a2a_19d68ad7_a2a_send', toolInput: { to: 'agent-2' } },
+    )
+    // Meanwhile a hashed tool named a2a_send on the persona server itself still normalizes.
+    assert.equal(mapToolName('mcp_persona_19d68ad7_a2a_send'), 'mcp__persona__a2a_send')
   })
 
   it('maps transcript steps into ordered Persona items with paired tool results', () => {
@@ -597,5 +828,132 @@ describe('antigravity transcript and tool mapping', () => {
       assert.equal(next.usage.contextTokens, 8000)
       assert.equal(next.usage.contextWindow, 0)
     }
+  })
+
+  it('emits structured agy_turn_end turn_duration items for completed turns without mutating cached prefixes', () => {
+    const at = '2026-11-25T10:00:00Z'
+    const turn1 = [
+      { step_index: 0, source: 'USER_EXPLICIT', type: 'USER_INPUT', status: 'DONE', created_at: at, content: 'Fix bug' },
+      { step_index: 1, source: 'MODEL', type: 'PLANNER_RESPONSE', status: 'DONE', created_at: at, content: 'Fixed.' },
+    ]
+    // Omitting turnEnded preserves direct-caller behavior; turnEnded: false suppresses trailing turn_duration.
+    assert.equal(stepsToItems(turn1).items.some((it) => it.kind === 'turn_duration'), false)
+    assert.equal(stepsToItems(turn1, { turnEnded: false }).items.some((it) => it.kind === 'turn_duration'), false)
+
+    // With turnEnded: true, emits a structured turn_duration linked to the reply and opening user item.
+    const ended = stepsToItems(turn1, { turnEnded: true, cacheKey: 'turn-end-cache', immutablePrefix: turn1.length })
+    const td = ended.items.at(-1)
+    assert.equal(td.kind, 'turn_duration')
+    assert.equal(td.role, 'system')
+    assert.equal(td.seq, 2)
+    assert.equal(td.ts, at)
+    assert.equal(td.turn_duration.duration_ms, 0)
+    assert.equal(td.turn_duration.source, 'agy_turn_end')
+    assert.equal(td.turn_duration.user_item_id, ended.items[0].id)
+    assert.equal(td.id, `${td.turn_duration.parent_uuid}#turn_duration`)
+
+    // Flipping turnEnded back to false on the same cacheKey must not leak a cached turn_duration.
+    const runningAgain = stepsToItems(turn1, { turnEnded: false, cacheKey: 'turn-end-cache', immutablePrefix: turn1.length })
+    assert.equal(runningAgain.items.some((it) => it.kind === 'turn_duration'), false)
+
+    // Trailing CHECKPOINT notice stays after turn_duration to preserve monotonic seq ordering.
+    const withCheckpoint = [...turn1, { step_index: 2, type: 'CHECKPOINT', created_at: at }]
+    const cpMapped = stepsToItems(withCheckpoint, { turnEnded: true })
+    assert.deepEqual(cpMapped.items.map((it) => [it.seq, it.kind]), [[1, 'text'], [2, 'text'], [2, 'turn_duration'], [3, 'notice']])
+
+    // Open tool calls, tool results, and errors never emit turn_duration even with turnEnded: true.
+    for (const openSteps of [
+      [turn1[0], { step_index: 1, source: 'MODEL', type: 'PLANNER_RESPONSE', status: 'DONE', created_at: at, content: 'Running', tool_calls: [{ name: 'run_command', args: {} }] }],
+      [turn1[0], { step_index: 1, source: 'MODEL', type: 'GENERIC', status: 'DONE', created_at: at, content: 'Output' }],
+      [turn1[0], { step_index: 1, source: 'MODEL', type: 'ERROR_MESSAGE', status: 'DONE', created_at: at, content: 'Boom' }],
+    ]) {
+      assert.equal(stepsToItems(openSteps, { turnEnded: true }).items.some((it) => it.kind === 'turn_duration'), false)
+    }
+
+    // Starting turn 2 keeps turn 1's turn_duration stable while turn 2 stays open until turnEnded: true.
+    const turn2Open = [
+      ...turn1,
+      { step_index: 2, source: 'USER_EXPLICIT', type: 'USER_INPUT', status: 'DONE', created_at: at, content: 'Second' },
+      { step_index: 3, source: 'MODEL', type: 'PLANNER_RESPONSE', status: 'DONE', created_at: at, content: 'Second reply.' },
+    ]
+    const whileRunning = stepsToItems(turn2Open, { turnEnded: false, cacheKey: 'turn-end-cache', immutablePrefix: turn1.length })
+    assert.deepEqual(whileRunning.items.map((it) => [it.seq, it.kind]), [[1, 'text'], [2, 'text'], [2, 'turn_duration'], [3, 'text'], [4, 'text']])
+    const afterDone = stepsToItems(turn2Open, { turnEnded: true, cacheKey: 'turn-end-cache', immutablePrefix: turn2Open.length })
+    const durations = afterDone.items.filter((it) => it.kind === 'turn_duration')
+    assert.equal(durations.length, 2)
+    assert.equal(durations[0].seq, 2)
+    assert.equal(durations[0].turn_duration.user_item_id, afterDone.items[0].id)
+    assert.equal(durations[1].seq, 4)
+    assert.equal(durations[1].turn_duration.user_item_id, afterDone.items[3].id)
+
+    // Autonomous wake turn omits user_item_id while preserving turn 1's turn_duration.
+    const withWake = [
+      ...turn1,
+      { step_index: 2, type: 'SYSTEM_MESSAGE', created_at: at, content: 'Background job finished.' },
+      { step_index: 3, source: 'MODEL', type: 'PLANNER_RESPONSE', status: 'DONE', created_at: at, content: 'Wake summary.' },
+    ]
+    const wakeDone = stepsToItems(withWake, { turnEnded: true })
+    const wakeDurations = wakeDone.items.filter((it) => it.kind === 'turn_duration')
+    assert.equal(wakeDurations.length, 2)
+    assert.equal(wakeDurations[0].turn_duration.user_item_id, wakeDone.items[0].id)
+    assert.equal(wakeDurations[1].turn_duration.user_item_id, undefined)
+  })
+
+  it('maps multi_replace_file_content to MultiEdit and notebook_edit to NotebookEdit with normalized path fields', () => {
+    assert.equal(mapToolName('multi_replace_file_content'), 'MultiEdit')
+    assert.equal(mapToolName('notebook_edit'), 'NotebookEdit')
+
+    const multi = mapPermissionToolCall({
+      name: 'multi_replace_file_content',
+      rawInput: {
+        TargetFile: '/tmp/work/app.go',
+        ReplacementChunks: [{ TargetContent: 'a', ReplacementContent: 'b' }],
+      },
+    })
+    assert.equal(multi.toolName, 'MultiEdit')
+    assert.equal(multi.toolInput.file_path, '/tmp/work/app.go')
+    assert.deepEqual(multi.toolInput.ReplacementChunks, [{ TargetContent: 'a', ReplacementContent: 'b' }])
+
+    const multiTitle = mapPermissionToolCall({
+      name: 'multi_replace_file_content',
+      title: 'File /tmp/work/title.go',
+      rawInput: {},
+    })
+    assert.equal(multiTitle.toolName, 'MultiEdit')
+    assert.equal(multiTitle.toolInput.file_path, '/tmp/work/title.go')
+
+    const nbTarget = mapPermissionToolCall({
+      name: 'notebook_edit',
+      rawInput: { TargetFile: '/tmp/work/analysis.ipynb', new_source: 'print(1)' },
+    })
+    assert.equal(nbTarget.toolName, 'NotebookEdit')
+    assert.equal(nbTarget.toolInput.notebook_path, '/tmp/work/analysis.ipynb')
+
+    const nbDirect = mapPermissionToolCall({
+      name: 'notebook_edit',
+      rawInput: { notebook_path: '/tmp/work/direct.ipynb' },
+    })
+    assert.equal(nbDirect.toolName, 'NotebookEdit')
+    assert.equal(nbDirect.toolInput.notebook_path, '/tmp/work/direct.ipynb')
+  })
+
+  it('workspacePathOf ignores non-strings, remote/UNC file:// hosts, NUL bytes, and malformed URIs while preserving valid local and raw paths', () => {
+    assert.equal(workspacePathOf({ WorkspaceURIs: [undefined, null, '', '   '] }, '/fallback'), '/fallback')
+    assert.equal(workspacePathOf({ WorkspaceURIs: ['file://evil.example/etc/passwd'] }, '/fallback'), '/fallback')
+    assert.equal(workspacePathOf({ WorkspaceURIs: ['file://127.0.0.1/tmp/x'] }, '/fallback'), '/fallback')
+    assert.equal(workspacePathOf({ WorkspaceURIs: ['file:////evil.example/share'] }, '/fallback'), '/fallback')
+    assert.equal(workspacePathOf({ WorkspaceURIs: ['file://\\\\evil.example\\share'] }, '/fallback'), '/fallback')
+    assert.equal(workspacePathOf({ WorkspaceURIs: ['file:///%2f/evil.example/share'] }, '/fallback'), '/fallback')
+    assert.equal(workspacePathOf({ WorkspaceURIs: ['file:///tmp/a%00b'] }, '/fallback'), '/fallback')
+    assert.equal(workspacePathOf({ WorkspaceURIs: ['/tmp/a\0b'] }, '/fallback'), '/fallback')
+    assert.equal(workspacePathOf({ WorkspaceURIs: ['file:///%ZZbad'] }, '/fallback'), '/fallback')
+    assert.equal(workspacePathOf({ WorkspaceURIs: ['file://localhost/tmp/local%20repo'] }, '/fallback'), '/tmp/local repo')
+    assert.equal(workspacePathOf({ WorkspaceURIs: ['FILE:///C:/Users/demo/repo'] }, '/fallback'), 'C:/Users/demo/repo')
+    assert.equal(workspacePathOf({ WorkspaceURIs: ['/tmp/a'] }, '/fallback'), '/tmp/a')
+    assert.equal(workspacePathOf({ WorkspaceURIs: ['C:\\foo'] }, '/fallback'), 'C:\\foo')
+    assert.equal(
+      workspacePathOf({ WorkspaceURIs: [undefined, 'file://attacker.example/secret', 'file:////evil.example/share', 'file:///workspace/ok'] }, '/fallback'),
+      '/workspace/ok',
+    )
   })
 })

@@ -90,7 +90,7 @@ class HubNetworkingTest {
             OkHttpHubConnection(config, HubNetwork("first")).use { connection ->
                 val first = withTimeout(5000) { hellos.receive() }
                 assertEquals("android", (first.getValue("platform").jsonPrimitive.content).zhAny())
-                assertEquals(setOf("endpoints", "ws_notify", "app_ping", "elicitation", AgentMessageHoldFeature, "persona_contracts_v1"),
+                assertEquals(setOf("endpoints", "ws_notify", "app_ping", "elicitation", "approval_mirrors", AgentMessageHoldFeature, "tool_views", "persona_contracts_v1"),
                     first.getValue("features").jsonArray.map { it.jsonPrimitive.content }.toSet())
                 assertEquals(20, first.getValue("heartbeat").jsonObject.getValue("interval").jsonPrimitive.int)
                 withTimeout(5000) { connection.state.first { it == ConnectionState.Online } }

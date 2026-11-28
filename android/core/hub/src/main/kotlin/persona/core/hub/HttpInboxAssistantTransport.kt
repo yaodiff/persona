@@ -26,6 +26,7 @@ import okhttp3.Request
 import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
+import java.util.concurrent.TimeUnit
 
 private fun JsonObjectBuilder.putLarkMentions(mentions: List<LarkMention>) {
     if (mentions.isEmpty()) return
@@ -39,7 +40,7 @@ private fun JsonObjectBuilder.putLarkMentions(mentions: List<LarkMention>) {
 
 class HttpInboxAssistantTransport private constructor(
     override val scope: String,
-    private val request: suspend (String, String, RequestBody?, Boolean) -> Response,
+    private val request: suspend (String, String, RequestBody?, Boolean, Long?) -> Response,
     private val mediaOrigin: () -> HttpUrl,
     private val publicImages: PublicImageReader,
     private val isCurrent: () -> Boolean,
@@ -49,7 +50,9 @@ class HttpInboxAssistantTransport private constructor(
         scope: String, connection: OkHttpHubConnection, publicImages: PublicImageReader = PublicImageReader.shared,
         isCurrent: () -> Boolean = { true },
     ) : this(
-        scope, { path, method, body, buffered -> connection.request(path, method, body, buffered = buffered) },
+        scope, { path, method, body, buffered, readTimeoutSeconds ->
+            connection.request(path, method, body, buffered = buffered, readTimeoutSeconds = readTimeoutSeconds)
+        },
         { connection.activeRoute().endpoint.baseUrl() }, publicImages, isCurrent, HubReplyImages(connection, isCurrent),
     )
 
@@ -65,7 +68,12 @@ class HttpInboxAssistantTransport private constructor(
 
     private fun checkScope() { if (!isCurrent()) throw CancellationException("Pairing changed") }
 
-    private suspend fun json(url: HttpUrl, body: JsonElement? = null, method: String = if (body == null) "GET" else "POST"): JsonObject {
+    private suspend fun json(
+        url: HttpUrl,
+        body: JsonElement? = null,
+        method: String = if (body == null) "GET" else "POST",
+        readTimeoutSeconds: Long? = null,
+    ): JsonObject {
         return withContext(Dispatchers.IO) {
             // Acquire before requesting: queued responses must not occupy the heap either.
             jsonDecodeGate.withPermit {
@@ -73,7 +81,7 @@ class HttpInboxAssistantTransport private constructor(
                 context.ensureActive()
                 checkScope()
                 request(url.apiPath(), method,
-                    body?.toString()?.toRequestBody("application/json".toMediaType()), false).use { response ->
+                    body?.toString()?.toRequestBody("application/json".toMediaType()), false, readTimeoutSeconds).use { response ->
                     BoundedInboxJson.read(response.body) { context.ensureActive(); checkScope() }
                         .also { context.ensureActive(); checkScope() }
                 }
@@ -225,16 +233,19 @@ class HttpInboxAssistantTransport private constructor(
     }
     override suspend fun assistant() = json(url("api", "v1", "assistant"))
     override suspend fun createConversation(main: Boolean) = json(url("api", "v1", "assistant", "conversations"),
-        buildJsonObject { put("prompt", ""); put("main", main) })
+        buildJsonObject { put("prompt", ""); put("main", main) },
+        readTimeoutSeconds = CREATE_CONVERSATION_TIMEOUT_SECONDS)
     override suspend fun createConversation(main: Boolean, launcher: String) = json(url("api", "v1", "assistant", "conversations"),
-        buildJsonObject { put("prompt", ""); put("main", main); put("launcher", launcher) })
+        buildJsonObject { put("prompt", ""); put("main", main); put("launcher", launcher) },
+        readTimeoutSeconds = CREATE_CONVERSATION_TIMEOUT_SECONDS)
     // A space's requests carry `?space=` on the URL too (as the web's do): with it the hub client names no manager, since
     // a space is the default manager's (isAssistantPath).
     override suspend fun assistantIn(space: String) =
         json(url("api", "v1", "assistant").newBuilder().addQueryParameter("space", space).build())
     override suspend fun createConversationIn(space: String) =
         json(url("api", "v1", "assistant", "conversations").newBuilder().addQueryParameter("space", space).build(),
-            buildJsonObject { put("prompt", ""); put("space", space) })
+            buildJsonObject { put("prompt", ""); put("space", space) },
+            readTimeoutSeconds = CREATE_CONVERSATION_TIMEOUT_SECONDS)
     // `?manager=` names the manager for this request alone: the hub client sends no header over it (an empty one is
     // the default, dropped before it goes).
     override suspend fun assistantOf(manager: String?) = json(url("api", "v1", "assistant").pinned(manager))
@@ -247,13 +258,13 @@ class HttpInboxAssistantTransport private constructor(
     override suspend fun createConversationOf(manager: String?, main: Boolean, launcher: String?, via: String?) =
         json(url("api", "v1", "assistant", "conversations").pinned(manager), buildJsonObject {
             put("prompt", ""); put("main", main); launcher?.let { put("launcher", it) }; via?.let { put("via", it) }
-        })
+        }, readTimeoutSeconds = CREATE_CONVERSATION_TIMEOUT_SECONDS)
     override suspend fun createConversationOf(manager: String?, main: Boolean, pick: persona.core.contracts.ModelPick) =
         json(url("api", "v1", "assistant", "conversations").pinned(manager), buildJsonObject {
             put("prompt", ""); put("main", main); put("launcher", pick.launcher)
             pick.model?.takeIf(String::isNotBlank)?.let { put("model", it) }
             pick.effort?.takeIf(String::isNotBlank)?.let { put("effort", it) }
-        })
+        }, readTimeoutSeconds = CREATE_CONVERSATION_TIMEOUT_SECONDS)
     private fun HttpUrl.pinned(manager: String?) = newBuilder().addQueryParameter(ManagerQuery, manager.orEmpty()).build()
     override suspend fun pins() = json(url("api", "v1", "pins"))
     override suspend fun mutes() = json(url("api", "v1", "mutes"))
@@ -409,7 +420,7 @@ class HttpInboxAssistantTransport private constructor(
             path.startsWith("/api/v1/lark/media/") ||
             Regex("/api/v1/lark/messages/[^/]+/media/.+").matches(path) ||
             Regex("/api/v1/avatars/[^/]+/[^/]+").matches(path)) { "Invalid media path" }
-        return request(path + (media.encodedQuery?.let { "?$it" } ?: ""), "GET", null, true).use { response ->
+        return request(path + (media.encodedQuery?.let { "?$it" } ?: ""), "GET", null, true, null).use { response ->
                 checkScope()
                 requireNotNull(response.body).bytes()
             }
@@ -418,17 +429,26 @@ class HttpInboxAssistantTransport private constructor(
     private fun HttpUrl.apiPath() = encodedPath + (encodedQuery?.let { "?$it" } ?: "")
 
     companion object {
-        // Different repositories and pairing scopes can refresh at the same time.
-        private val jsonDecodeGate = Semaphore(1)
+        /** Cold-starting an assistant conversation on a node can exceed the default 15 s HTTP read timeout. */
+        internal const val CREATE_CONVERSATION_TIMEOUT_SECONDS = 45L
 
-        private fun fixedRequest(baseUrl: String, token: String, client: OkHttpClient): suspend (String, String, RequestBody?, Boolean) -> Response {
+        // Different repositories and pairing scopes can refresh at the same time.
+        internal val jsonDecodeGate = Semaphore(1)
+
+        private fun fixedRequest(baseUrl: String, token: String, client: OkHttpClient):
+            suspend (String, String, RequestBody?, Boolean, Long?) -> Response {
             val base = baseUrl.toHttpUrl()
             // Never forward pairing credentials to redirected media or repeat ambiguous writes.
             val http = client.newBuilder().followRedirects(false).followSslRedirects(false)
                 .retryOnConnectionFailure(false).build()
-            return { path, method, body, buffered ->
+            return { path, method, body, buffered, readTimeoutSeconds ->
                 val target = base.hubUrl(path).withRequestManager()
-                http.newCall(Request.Builder().url(target).header("Authorization", "Bearer $token")
+                val caller = if (readTimeoutSeconds != null) {
+                    http.newBuilder().readTimeout(readTimeoutSeconds, TimeUnit.SECONDS).build()
+                } else {
+                    http
+                }
+                caller.newCall(Request.Builder().url(target).header("Authorization", "Bearer $token")
                     .method(method, body).build()).awaitResponse(buffered = buffered).also { response ->
                     if (!response.isSuccessful) throw response.use { HubFailure.from(it) }
                 }

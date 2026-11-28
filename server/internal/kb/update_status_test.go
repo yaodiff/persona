@@ -124,7 +124,7 @@ func TestPersonStatusAutomaticCuration(t *testing.T) {
 			}
 			// Old chat membership must not let an ignored account back into a project.
 			c.People = []string{pid}
-			slug := e.evolveProject("Project", "short", nil, "", c, "Progress", now)
+			slug := e.evolveProject("Project", "short", nil, "", c, true, "Progress", now)
 			project, ok := e.Store.Project(slug)
 			if !ok || slices.Contains(project.People, pid) != (status != "ignored" && status != "self") {
 				t.Fatalf("project association for %q: %+v", status, project)

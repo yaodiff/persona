@@ -42,7 +42,7 @@ const crosswalkFile = ".crosswalk.json"
 // (<data>/chats/.larksync_repair.json).
 const (
 	larkSyncRepairFile    = ".larksync_repair.json"
-	larkSyncRepairVersion = 4
+	larkSyncRepairVersion = 5
 )
 
 // alignNamesEvery is how long the gateway chats' names are kept before they are listed again: a chat the gateway
@@ -437,12 +437,30 @@ func (a *gatewayAligner) alignArchivedLine(id, chatName string, gl gatewayLine) 
 	return found
 }
 
-// The additional format-only match is deliberately stricter than the legacy fingerprint: both exact receipt
-// times, equal attachment counts, a non-empty equivalent body (or matching explicit media-kind placeholder on both
-// sides) and exactly one candidate are required. On unpaired chats (L2), the same known sender is also required; on
-// already-paired crosswalk chats (L1), an unknown sender ("?") may match a non-owner gateway line so bot/app and
-// pre-backfill external-member lines still deduplicate. URLs, URL case, named files and code remain significant.
-// No edit distance, substring match or attachment-only guess is used.
+// withinTimeWindow reports whether srcExact and dst agree in time: when dst has an exact receipt timestamp, both must
+// fall in the same or a neighbouring 2-second bucket; on an already-paired crosswalk chat (L1) whose gateway archive
+// lacks .receipts.json (dst.exact is zero), srcExact must fall within dst's minute widened by one 2-second bucket on
+// each side (the same window withinArchived uses). Unpaired chats (L2) never fall back to minute precision here.
+func withinTimeWindow(srcExact time.Time, dst gatewayLine, paired bool) bool {
+	if !dst.exact.IsZero() {
+		bucket := dst.exact.Unix()/2 - srcExact.Unix()/2
+		return bucket >= -1 && bucket <= 1
+	}
+	if !paired || dst.minute.IsZero() {
+		return false
+	}
+	return !srcExact.Before(dst.minute.Add(-2*time.Second)) && srcExact.Before(dst.minute.Add(time.Minute+2*time.Second))
+}
+
+// The additional format-only match is deliberately stricter than the legacy fingerprint: exact receipt times (or, on an
+// already-paired crosswalk chat whose legacy gateway archive has no .receipts.json, a minute-level window widened by
+// one 2-second bucket on each side), equal attachment counts, a non-empty equivalent body (or matching explicit
+// media-kind placeholder on both sides) and exactly one candidate are required. On unpaired chats (L2), exact receipt
+// times on both sides and the same known sender are required; on already-paired crosswalk chats (L1), an unknown sender
+// ("?") may match a non-owner gateway line when there is a non-empty body (or exact timestamps on both sides) so
+// bot/app and pre-backfill external-member lines still deduplicate without colliding unnamed media-only lines in the
+// same minute. URLs, URL case, named files and code remain significant. No edit distance, substring match or
+// attachment-only guess is used.
 func (a *gatewayAligner) withinFormatted(gw string, src gatewayLine, paired bool) bool {
 	if src.exact.IsZero() {
 		return false
@@ -466,19 +484,18 @@ func (a *gatewayAligner) withinFormatted(gw string, src gatewayLine, paired bool
 	matches := 0
 	for _, day := range alignDays(src.exact, a.s.Zone()) {
 		for _, dst := range a.day(gw, day) {
-			if dst.exact.IsZero() || dst.media != src.media || dst.mediaCount != src.mediaCount {
+			if dst.media != src.media || dst.mediaCount != src.mediaCount {
+				continue
+			}
+			if !withinTimeWindow(src.exact, dst, paired) {
 				continue
 			}
 			dstUnknown := dst.sender == "" || dst.sender == unknownSender
 			senderMatch := !srcUnknown && !dstUnknown && normalizeText(dst.sender) == normalizeText(src.sender)
-			if !senderMatch && paired {
+			if !senderMatch && paired && (!dst.exact.IsZero() || srcNorm != "") {
 				senderMatch = (srcUnknown && dst.sender != ownerSender) || (dstUnknown && src.sender != ownerSender)
 			}
 			if !senderMatch {
-				continue
-			}
-			bucket := dst.exact.Unix()/2 - src.exact.Unix()/2
-			if bucket < -1 || bucket > 1 {
 				continue
 			}
 			dstRaw := dst.formatBody

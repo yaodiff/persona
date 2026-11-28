@@ -5,6 +5,7 @@ import { act, useMemo, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { addQuote, getQuotes, sendDraft, setQuotes } from "../../lib/drafts";
+import { setComposerImages } from "../../lib/composer-images";
 import { recordSent } from "../../lib/send-history";
 import { Composer, type Outgoing } from "./Composer";
 import { t } from "../../i18n";
@@ -81,6 +82,7 @@ beforeEach(() => {
 
 afterEach(() => {
   act(() => root.unmount());
+  setComposerImages(KEY, []);
   host.remove();
   vi.unstubAllGlobals();
 });

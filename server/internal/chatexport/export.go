@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/clitext"
+	"github.com/nwverse/persona/server/internal/exportfile"
 	"github.com/nwverse/persona/server/internal/hubclient"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -61,11 +62,11 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return errors.New(i18n.T(lang, "chatexport.token"))
 	}
-	dest, err := openDestination(*output)
+	dest, err := exportfile.Open(*output)
 	if err != nil {
 		return exportError(lang, err)
 	}
-	defer dest.root.Close()
+	defer dest.Close()
 
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
@@ -95,7 +96,7 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return readError(ctx, lang, err)
 	}
 
-	err = dest.publish(ctx, func(out io.Writer) error {
+	err = dest.Publish(ctx, func(out io.Writer) error {
 		return writeMarkdown(out, lang, document, *work, time.Now().UTC())
 	})
 	if err != nil {

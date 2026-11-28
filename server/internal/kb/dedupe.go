@@ -75,9 +75,17 @@ type dedupeCandidate struct {
 // dedupeCandidates ranks pairs of live, not ignored projects by what they have in common: people (relative to the
 // smaller side), chats, documents, and words of their names and aliases.
 func dedupeCandidates(projects []*Project) []dedupeCandidate {
+	// A project with a parent is locked (protected); one with projects under it is the user's organizing too, and the
+	// pair would likely look alike: neither is asked about (project_tree.go).
+	parents := map[string]bool{}
+	for _, p := range projects {
+		if p.Live() && p.Parent != "" {
+			parents[p.Parent] = true
+		}
+	}
 	var live []*Project
 	for _, p := range projects {
-		if p.Live() && p.Status != "ignored" && !protectedProject(p) {
+		if p.Live() && p.Status != "ignored" && !protectedProject(p) && !parents[p.Slug] {
 			live = append(live, p)
 		}
 	}
@@ -289,6 +297,11 @@ func (e *Engine) mergeProjects(keepSlug, dropSlug, why string, manual bool) erro
 		if protectedProject(keep) || protectedProject(drop) {
 			return errors.New("automatic merge would change a protected project")
 		}
+		for _, p := range e.Store.Projects() {
+			if p.Live() && (p.Parent == keep.Slug || p.Parent == drop.Slug) {
+				return errors.New("automatic merge would change the user's project tree")
+			}
+		}
 		if e.shareProjectSource(keep, drop) {
 			return errors.New("automatic merge would fold separate views of a shared source")
 		}
@@ -435,6 +448,12 @@ func (e *Engine) mergeProjects(keepSlug, dropSlug, why string, manual bool) erro
 		return err
 	}
 	if err := e.excludeBack(keep.Slug, rec.Excluded, true); err != nil {
+		return err
+	}
+	// The projects under drop go under keep (beside keep, when keep is one of them or below one).
+	moves, err := e.moveChildren(drop.Slug, keep.Slug, drop.Parent)
+	rec.Children = moves
+	if err != nil {
 		return err
 	}
 	drop.Status, drop.MergedInto, drop.Merge, drop.Dirty = "merged", keep.Slug, rec, false

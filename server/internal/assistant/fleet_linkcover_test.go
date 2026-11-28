@@ -86,7 +86,7 @@ func (cf *coverFlow) told(t *testing.T, n int) {
 }
 
 func permissionCard(id, session string, at time.Time) proto.Interaction {
-	return proto.Interaction{ID: id, MachineID: "mac", SessionID: session, Kind: proto.IxPermission, ToolName: "Bash",
+	return proto.Interaction{ID: id, MachineID: "mac", SessionID: session, Kind: proto.IxPermission, OutwardWrite: true, ToolName: "Bash",
 		Summary: "npm test", CreatedAt: at.UTC(), ExpiresAt: at.Add(24 * time.Hour).UTC()}
 }
 

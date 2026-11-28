@@ -102,6 +102,6 @@ fun rememberInboxItemBody(slots: ExtensionSlots?, route: InboxItemUiRoute, revis
             item("item-body-error") { JInlineStatus(error.text(), tone = InlineTone.Failed) }
 
         }
-        extensionViewItems("item-body", state, handle, compactGraph = true)
+        extensionViewItems("item-body", state, handle, compactPreview = true)
     }
 }

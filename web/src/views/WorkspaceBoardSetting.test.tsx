@@ -84,7 +84,7 @@ describe("the workflow board switch", () => {
     expect(discoveryCalls()).toBe(0);
     expect(calls.some((c) => c.path === "/api/v1/workspace-board")).toBe(false);
 
-    const open = [...host.querySelectorAll("button")].find((b) => b.textContent === "去设置打开")!;
+    const open = [...host.querySelectorAll("button")].find((b) => b.textContent === "打开设置")!;
     act(() => open.click());
     expect(location.pathname + location.search).toBe("/settings?tab=hub");
   });
@@ -138,8 +138,8 @@ describe("when the hub can't give the switch or the board", () => {
     stubHub((path) => (path === "/api/v1/workspace-board/settings" && failing ? json({ error: "database is down", code: "internal" }, 500) : undefined));
     act(() => root.render(<><AgentGroup /><WorkspaceBoard /></>));
     await flush();
-    expect(host.textContent).not.toContain("正在读取工作流看板的开关");
-    expect(host.textContent).toContain("读不到工作流看板的开关");
+    expect(host.textContent).not.toContain("正在检查工作流看板状态");
+    expect(host.textContent).toContain("无法读取工作流看板状态");
     expect(host.textContent).toContain("HTTP 500");
     expect(host.querySelector('[role="alert"]')).not.toBeNull();
     expect(buttons("重试")).toHaveLength(2); // the page's and Settings'
@@ -149,7 +149,7 @@ describe("when the hub can't give the switch or the board", () => {
     act(() => buttons("重试")[0].click());
     await flush();
     expect(settingReads()).toBe(before + 1);
-    expect(host.textContent).not.toContain("读不到工作流看板的开关");
+    expect(host.textContent).not.toContain("无法读取工作流看板状态");
     expect(host.textContent).toContain("工作流看板未开启"); // the hub answered: off
     expect(host.querySelector('button[role="switch"][aria-label="工作流看板"]')).not.toBeNull();
   });
@@ -160,10 +160,10 @@ describe("when the hub can't give the switch or the board", () => {
     act(() => root.render(<><AgentGroup /><WorkspaceBoard /></>));
     await flush();
     // what to do once, in the title; the body only says why
-    const title = [...host.querySelectorAll("h2")].find((h) => h.textContent === "更新 hub 后才能用工作流看板");
+    const title = [...host.querySelectorAll("h2")].find((h) => h.textContent === "更新 hub 以使用工作流看板");
     expect(title).toBeDefined();
-    expect(title!.nextElementSibling?.textContent).toBe("这个 hub 的版本太旧，或者没开看板存储。");
-    expect(host.textContent).not.toContain("还用不了工作流看板");
+    expect(title!.nextElementSibling?.textContent).toBe("当前 hub 版本过旧，或尚未启用看板存储功能。");
+    expect(host.textContent).not.toContain("暂不支持工作流看板");
     expect(host.textContent).not.toContain("先更新 hub");
     expect(host.textContent).not.toContain("看板暂不可用");
     expect(buttons("重试")).toHaveLength(0); // retrying can't help
@@ -172,12 +172,12 @@ describe("when the hub can't give the switch or the board", () => {
     expect(host.querySelector("select")).toBeNull();
     expect(buttons("已归档")).toHaveLength(0);
     expect(host.querySelector('[role="group"]')).toBeNull();
-    expect(host.textContent).not.toContain("点我切换到自动模式");
+    expect(host.textContent).not.toContain("切换至自动模式");
     const open = buttons("打开 hub 设置")[0]!;
     // Settings: no switch that can't move, and not "read-only device"
     expect(host.querySelector('button[role="switch"]')).toBeNull();
     expect(host.textContent).not.toContain("只读设备");
-    expect(host.textContent).toContain("这个 hub 的版本还没有这个开关");
+    expect(host.textContent).toContain("当前 hub 版本暂不支持此开关");
     act(() => open.click());
     expect(location.pathname + location.search).toBe("/settings?tab=hub");
   });
@@ -209,7 +209,7 @@ describe("when the hub can't give the switch or the board", () => {
     await flush();
     act(() => settleRosterDefault()); // the roster names the default manager, whose pushes count
     await flush();
-    expect(host.textContent).toContain("读不到工作流看板的开关");
+    expect(host.textContent).toContain("无法读取工作流看板状态");
     const reads = settingReads();
     act(() => pushes.get("workspace_board_settings")!({ type: "workspace_board_settings", enabled: true })); // another device turned it on
     await flush();
@@ -224,7 +224,7 @@ describe("when the hub can't give the switch or the board", () => {
     stubHub((path) => (path === "/api/v1/workspace-board/settings" ? json({ enabled: true, can_write: false }) : undefined));
     act(() => root.render(<AgentGroup />));
     await flush();
-    expect(host.textContent).toContain("只读设备不能改这个开关");
+    expect(host.textContent).toContain("只读设备无法修改此设置");
     expect(host.querySelector<HTMLButtonElement>('button[role="switch"]')!.disabled).toBe(true);
   });
 });

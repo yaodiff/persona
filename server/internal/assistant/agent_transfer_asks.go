@@ -207,10 +207,14 @@ func (s *Service) transferPendingAsks(ctx context.Context, t Todo) error {
 func (s *Service) currentSupervisorSignal(g superviseSignal) superviseSignal {
 	if g.Kind != sigAsk {
 		if t, ok := s.todoNow(g.Todo); ok && t.Supervision.assigned() && g.Kind != sigEscalated {
-			if g.To != t.Supervision.Supervisor {
+			to := t.Supervision.Supervisor
+			if g.todoV2Wake() && s.agentSupervised(t) {
+				to = "" // the worker signal goes through leaderRoute to the assigned Agent session
+			}
+			if g.To != to {
 				g.batchTo, g.batchUntil = "", time.Time{}
 			}
-			g.To = t.Supervision.Supervisor
+			g.To = to
 		}
 		return g
 	}

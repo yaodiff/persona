@@ -28,8 +28,11 @@ The extension must be on to save a key: the hub asks the running program to try 
 
 ## The extension
 
-A built-in like the voice extension: registered off (`addVolcExtension`), not registered when a package was installed under the id
-`volc` before. Its program is `personad volc` (and `persona-manager volc`), speaking the extension protocol (RPC on stdin / stdout, the
+A fresh host registers the built-in extension switched off. An existing package installed under the
+ID `volc` keeps its place. Hosts with the built-in provider can preview a signed same-ID successor in
+the official marketplace and roll back to the built-in after the first upgrade. See
+`docs/extensions/extensions.md`, “Moving a built-in provider to the official marketplace”.
+The built-in program is `personad volc` (and `persona-manager volc`), speaking the extension protocol (RPC on stdin / stdout, the
 Go SDK's `ext.Main`) and serving HTTP on its socket. It says the build's version at `initialize`: the hub registered the built-in under
 that version and runs the same executable.
 

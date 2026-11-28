@@ -49,12 +49,13 @@ struct RecordingDayWireTests {
         #expect(WatchSync.phoneDayKeepDaysKey == "recording.phoneDayKeepDays")
     }
 
-    @Test func keepDaysFollowTheTranscriptRetention() {
-        #expect(RecordingDayContract.keepDays(recordingDays: nil) == 7, "7 until the phone knows")
-        #expect(RecordingDayContract.keepDays(recordingDays: 14) == 7)
-        #expect(RecordingDayContract.keepDays(recordingDays: 3) == 3)
-        #expect(RecordingDayContract.keepDays(recordingDays: 1) == 1)
-        #expect(RecordingDayContract.keepDays(recordingDays: 0) == 1 && RecordingDayContract.keepDays(recordingDays: -4) == 1)
+    @Test func keepDaysFollowTheAudioRetentionWithAForeverMaximum() {
+        #expect(RecordingDayContract.keepDays(audioDays: nil) == 7, "7 until the phone knows")
+        #expect(RecordingDayContract.keepDays(audioDays: 14) == 7)
+        #expect(RecordingDayContract.keepDays(audioDays: 3) == 3)
+        #expect(RecordingDayContract.keepDays(audioDays: 1) == 1)
+        #expect(RecordingDayContract.keepDays(audioDays: 0) == 7, "forever still keeps the watch's 7-day maximum")
+        #expect(RecordingDayContract.keepDays(audioDays: -4) == 7)
     }
 
     // MARK: Header
@@ -416,6 +417,31 @@ struct RecordingDayWireTests {
         #expect(defaults.bool(forKey: WatchPhoneCapabilities.rollingKey), "rolling keeps its value")
         #expect(WatchSync.phoneDayKey == WatchPhoneCapabilities.dayKey && WatchSync.phoneDayHubKey == WatchPhoneCapabilities.dayHubKey)
         #expect(WatchSync.phoneDayKeepDaysKey == WatchPhoneCapabilities.keepDaysKey)
+    }
+
+    /// `recordingDay` 0 and absent differ: 0 is a phone that takes day recordings whose user has not agreed to the
+    /// sheet's current version yet, so what the watch already recorded keeps going to it under the agreement it
+    /// started with; absent is a phone from before, which takes nothing.
+    @Test func aPhoneThatHasNotAgreedToThisSheetStillTakesARunningRecording() throws {
+        let name = "watch-day-takes-\(UUID().uuidString)"
+        let defaults = try #require(CountingDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        #expect(!WatchPhoneCapabilities.takesDays(defaults), "a phone from before never sets the key")
+
+        let waiting: [String: Any] = [RecordingDayContract.phoneKey: 0, RecordingDayContract.phoneHubKey: false,
+                                      RecordingDayContract.phoneKeepDaysKey: 7]
+        #expect(WatchPhoneCapabilities.storeDay(waiting, full: true, in: defaults) == 3)
+        #expect(WatchPhoneCapabilities.takesDays(defaults), "0: the phone takes them; its user agreed to an older sheet")
+        #expect(WatchPhoneCapabilities.keepDays(defaults) == 7, "the age limit still follows the phone")
+
+        var agreed = waiting
+        agreed[RecordingDayContract.phoneKey] = RecordingDayContract.version
+        #expect(WatchPhoneCapabilities.storeDay(agreed, full: true, in: defaults) == 1)
+        #expect(WatchPhoneCapabilities.takesDays(defaults))
+
+        // A full context without the day keys (a phone from before, or another phone): nothing goes to it.
+        #expect(WatchPhoneCapabilities.storeDay([:], full: true, in: defaults) == 3)
+        #expect(!WatchPhoneCapabilities.takesDays(defaults))
     }
 
     /// What tells the watch's day transfer to look again (`WatchSync.onDayCapabilities`): any change of the day keys,

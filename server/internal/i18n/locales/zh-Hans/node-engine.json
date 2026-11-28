@@ -3,5 +3,6 @@
   "paseo_unreachable": "Paseo 在运行，但 Persona 连不上它：{reason}",
   "paseo_not_connected": "Paseo 在运行，但 Persona 一直没连上它",
   "paseo_not_connected_why": "Paseo 在运行，但 Persona 一直没连上它：{reason}",
-  "paseo_outdated": "请更新 Paseo：这台电脑上是 {version}，Persona 只在 {minimum} 及以后的版本上测试过"
+  "paseo_outdated": "请更新 Paseo：这台电脑上是 {version}，Persona 只在 {minimum} 及以后的版本上测试过",
+  "orca_incompatible": "这个版本的 Orca 和 Persona 不兼容，请把两边都更新到最新版"
 }

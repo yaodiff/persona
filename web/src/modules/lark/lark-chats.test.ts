@@ -62,7 +62,7 @@ describe("conversation helpers", () => {
   it("tells a signed-out Lark gateway and a hub without Feishu apart", () => {
     expect(listProblem(new ApiError(502, "x", { code: "lark_not_logged_in" })).kind).toBe("not_logged_in");
     expect(listProblem(new ApiError(404, "x", {})).kind).toBe("not_configured");
-    expect(listProblem(new ApiError(502, "boom", {}))).toEqual({ kind: "other", text: expect.stringMatching(/^读不到飞书会话：.*HTTP 502: boom/) });
+    expect(listProblem(new ApiError(502, "boom", {}))).toEqual({ kind: "other", text: expect.stringMatching(/^无法加载飞书会话：.*HTTP 502: boom/) });
   });
 });
 

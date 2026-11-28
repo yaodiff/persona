@@ -32,6 +32,7 @@ export interface AgentLaunch {
   /** Picked in "New agent" for this start only (launcher-models.ts startPicks); none: the launcher's own. */
   model?: string;
   effort?: string;
+  serviceTier?: string;
   /** Keep the launcher's native effort even when Model settings configures this launcher. */
   launcherDefaultEffort?: boolean;
   /** Claude Code's permission mode for this start ("New agent"'s "Permission mode"); none: the launcher's own. */
@@ -75,7 +76,7 @@ export interface AgentLaunch {
 }
 
 /** `open: false` starts it without opening its conversation (Compare runs starts several and opens their page, #8916). */
-export function launchAgent(input: Pick<AgentLaunch, "machineId" | "cwd" | "workspaceId" | "desktopProjectId" | "launcher" | "agentType" | "displayLauncher" | "displayEngine" | "displayModel" | "workSession" | "inlinePrompt" | "model" | "effort" | "launcherDefaultEffort" | "permissionMode" | "host" | "ultracode" | "text" | "nameHint" | "attachments" | "todoId">, options: { open?: boolean } = {}) {
+export function launchAgent(input: Pick<AgentLaunch, "machineId" | "cwd" | "workspaceId" | "desktopProjectId" | "launcher" | "agentType" | "displayLauncher" | "displayEngine" | "displayModel" | "workSession" | "inlinePrompt" | "model" | "effort" | "serviceTier" | "launcherDefaultEffort" | "permissionMode" | "host" | "ultracode" | "text" | "nameHint" | "attachments" | "todoId">, options: { open?: boolean } = {}) {
   const launch: AgentLaunch = { ...input, id: `local-${uuid()}`, phase: "creating", uploaded: {}, ...launchOpIds() };
   putLaunch(launch);
   if (options.open !== false) navigate({ name: "session", mid: launch.machineId, sid: launch.id });
@@ -206,4 +207,3 @@ export function presetPrompt(preset: string | undefined, draft: string): string 
   if (draft.startsWith(p)) return draft;
   return `${p}\n\n${draft.trim()}`;
 }
-

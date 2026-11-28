@@ -42,7 +42,8 @@ func TestBadAgentNames(t *testing.T) {
 
 func TestAgentNameDue(t *testing.T) {
 	now := time.Now()
-	c := proto.Session{SessionID: "s1", Title: "Claude Code", TitleSource: proto.TitleSourcePrompt, Status: proto.StatusWorking, UpdatedAt: now, OutputTokens: 100}
+	c := proto.Session{SessionID: "s1", Title: "Claude Code", TitleSource: proto.TitleSourcePrompt, Status: proto.StatusWorking, UpdatedAt: now}
+	c.SetOutputTokens(100)
 	if !agentNameDue(Settings{}, agentNameRecord{}, c, now) {
 		t.Fatal("fresh defaults must correct a placeholder")
 	}
@@ -65,7 +66,7 @@ func TestAgentNameDue(t *testing.T) {
 	for _, mutate := range []func(*Settings, *agentNameRecord, *proto.Session){
 		func(v *Settings, r *agentNameRecord, c *proto.Session) { off := false; v.AgentAutoNaming = &off },
 		func(v *Settings, r *agentNameRecord, c *proto.Session) { r.Changes = 3 },
-		func(v *Settings, r *agentNameRecord, c *proto.Session) { c.OutputTokens = r.NamedOutput },
+		func(v *Settings, r *agentNameRecord, c *proto.Session) { c.SetOutputTokens(r.NamedOutput) },
 		func(v *Settings, r *agentNameRecord, c *proto.Session) { c.Status = proto.StatusIdle },
 		func(v *Settings, r *agentNameRecord, c *proto.Session) { c.UpdatedAt = now.Add(-time.Hour) },
 		func(v *Settings, r *agentNameRecord, c *proto.Session) { r.NamedAt = now.Add(-time.Hour) },
@@ -106,7 +107,11 @@ func namingFixture(t *testing.T, answer func(http.ResponseWriter, *http.Request)
 	// Different configured defaults prove that the sorting purpose is used, not title processing.
 	f.hello.Models.AI = ai.Config{BaseURL: model.URL, APIKey: "fixture", Model: "processing"}
 	f.hello.Models.TriageAI = &ai.Config{BaseURL: model.URL, APIKey: "fixture", Model: "sorting", ReasoningEffort: "off"}
-	f.sessions["server"] = []proto.Session{{SessionID: "s1", Title: "◐ Claude Code", TitleSource: proto.TitleSourcePrompt, Status: proto.StatusWorking, UpdatedAt: time.Now(), OutputTokens: 123}}
+	f.sessions["server"] = []proto.Session{func() proto.Session {
+		c := proto.Session{SessionID: "s1", Title: "◐ Claude Code", TitleSource: proto.TitleSourcePrompt, Status: proto.StatusWorking, UpdatedAt: time.Now()}
+		c.SetOutputTokens(123)
+		return c
+	}()}
 	f.items = []proto.Item{{Seq: 1, Role: "user", Kind: proto.KindText, Text: "用中文工作，最后用中文汇报。修复 PDF 导出时丢失图片的问题。"}, {Seq: 2, Role: "assistant", Kind: proto.KindText, Text: "正在检查导出图片的路径。"}, {Seq: 3, Role: "user", Kind: proto.KindText, Text: "先保证导出文件里能看到图片。"}}
 	return newTestService(t, f), f, calls
 }
@@ -267,7 +272,7 @@ func TestAgentNamePeriodicRefreshUsesNewOutputAndTotalLimit(t *testing.T) {
 	if !s.agentNamesLocked(context.Background()) {
 		t.Fatal("ledger load")
 	}
-	rec := agentNameRecord{Machine: "server", Session: c.SessionID, Title: "整理导出文档", RawTitle: c.Title, Changes: 1, NamedAt: time.Now().Add(-25 * time.Hour), NamedOutput: c.OutputTokens}
+	rec := agentNameRecord{Machine: "server", Session: c.SessionID, Title: "整理导出文档", RawTitle: c.Title, Changes: 1, NamedAt: time.Now().Add(-25 * time.Hour), NamedOutput: int(c.OutputTokensValue())}
 	if err := s.putAgentNameLocked(context.Background(), key, rec); err != nil {
 		t.Fatal(err)
 	}
@@ -275,7 +280,7 @@ func TestAgentNamePeriodicRefreshUsesNewOutputAndTotalLimit(t *testing.T) {
 	if s.tryAgentName(context.Background(), "server", c, time.Now()) || calls.Load() != 0 {
 		t.Fatal("periodic refresh without new output")
 	}
-	c.OutputTokens++
+	c.SetOutputTokens(int(c.OutputTokensValue()) + 1)
 	f.setSessions("server", c)
 	if !s.tryAgentName(context.Background(), "server", c, time.Now()) || calls.Load() != 1 {
 		t.Fatal("new output did not trigger refresh")
@@ -298,7 +303,7 @@ func TestAgentNameUnchangedResultKeepsConfiguredInterval(t *testing.T) {
 	if !s.agentNamesLocked(context.Background()) {
 		t.Fatal("ledger load")
 	}
-	rec := agentNameRecord{Machine: "server", Session: c.SessionID, Title: "修复 PDF 导出图片", RawTitle: c.Title, Changes: 1, NamedAt: time.Now().Add(-25 * time.Hour), NamedOutput: c.OutputTokens - 1}
+	rec := agentNameRecord{Machine: "server", Session: c.SessionID, Title: "修复 PDF 导出图片", RawTitle: c.Title, Changes: 1, NamedAt: time.Now().Add(-25 * time.Hour), NamedOutput: int(c.OutputTokensValue()) - 1}
 	if err := s.putAgentNameLocked(context.Background(), key, rec); err != nil {
 		t.Fatal(err)
 	}
@@ -310,10 +315,10 @@ func TestAgentNameUnchangedResultKeepsConfiguredInterval(t *testing.T) {
 	s.agentNames.mu.Lock()
 	got := s.agentNames.records[key]
 	s.agentNames.mu.Unlock()
-	if got.Changes != 1 || got.NamedOutput != c.OutputTokens || !got.NamedAt.Equal(now) {
+	if got.Changes != 1 || got.NamedOutput != int(c.OutputTokensValue()) || !got.NamedAt.Equal(now) {
 		t.Fatalf("unchanged name did not advance its cost baseline: %+v", got)
 	}
-	c.OutputTokens++
+	c.SetOutputTokens(int(c.OutputTokensValue()) + 1)
 	c.UpdatedAt = now.Add(2 * time.Hour)
 	v := s.settings(context.Background())
 	if agentNameDue(v, got, c, now.Add(2*time.Hour)) {

@@ -16,7 +16,10 @@ func (n *Node) guardBackendDeletion(path string) error {
 	if n.dir == "" {
 		return nil
 	}
-	control := filepath.Join(n.dir, "task-workspaces")
+	control, err := n.workspaceControlDir("task-workspaces")
+	if err != nil {
+		return err
+	}
 	entries, err := os.ReadDir(control)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
@@ -44,7 +47,8 @@ func (n *Node) guardBackendDeletion(path string) error {
 			if j.State == "removed" && (j.Cleanup == nil || !slices.Contains(j.Cleanup.RetainedPaths, owned)) {
 				continue
 			}
-			if !isInsideOrEqual(target, owned) && !isInsideOrEqual(owned, target) {
+			ownedReal := realPath(owned)
+			if !isInsideOrEqual(target, ownedReal) && !isInsideOrEqual(ownedReal, target) {
 				continue
 			}
 			if id, err := workspaceFileID(owned); err == nil && id == identity {

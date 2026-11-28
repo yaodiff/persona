@@ -5,7 +5,13 @@ import { onDefaultManager, onManagerChoice, shownManager } from "../../lib/manag
 import { providerName, type ModelProvider, type ModelPurpose } from "../../lib/model-config";
 import {
   captureProfileInput,
+  clearModelProfiles,
+  deactivateModelProfile,
+  deleteModelProfile,
   LAUNCHER_MODEL_FIELDS,
+  MAX_MODEL_PROFILES,
+  MAX_PROFILE_DESCRIPTION,
+  MAX_PROFILE_NAME,
   modelProfiles,
   parseProfileChange,
   PROFILE_CATEGORY_IDS,
@@ -22,7 +28,8 @@ import { effortTitle, modeTitle } from "../../lib/session-actions";
 import { onHubEvent } from "../../lib/store";
 import { t } from "../../i18n";
 import { Button, Dialog, Loading, toast } from "../../ui/atoms";
-import { Group, Pill, Row } from "./SettingsParts";
+import { suggestProfileId, validateNewProfile } from "./model-profile-create";
+import { Group, Pill, Row, settingsInputClass } from "./SettingsParts";
 
 // Load the interactive profile editor only when the user chooses Edit, keeping Settings' initial chunk light.
 const ModelProfileEditor = lazyPage(() => import("./ModelProfileEditor").then((m) => m.ModelProfileEditor));
@@ -146,9 +153,18 @@ function ModelProfilesForOwner({
   const [selected, setSelected] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
   const [confirmingApply, setConfirmingApply] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [createName, setCreateName] = useState("");
+  const [createId, setCreateId] = useState("");
+  const [createIdTouched, setCreateIdTouched] = useState(false);
+  const [createDescription, setCreateDescription] = useState("");
+  const [confirmingClearAll, setConfirmingClearAll] = useState(false);
   const [editRevision, setEditRevision] = useState(0);
   const [editSyncKey, setEditSyncKey] = useState(0);
-  const [busyAction, setBusyAction] = useState<"apply" | "rollback" | "save" | "capture" | "capture-apply" | null>(null);
+  const [busyAction, setBusyAction] = useState<
+    "apply" | "rollback" | "save" | "capture" | "capture-apply" | "create" | "deactivate" | "delete" | "clear" | null
+  >(null);
   const busy = useSyncExternalStore(subscribeWrites, () => pendingWrites.has(manager), () => false);
   const token = useRef(getToken()).current;
   const mounted = useRef(false);
@@ -352,6 +368,212 @@ function ModelProfilesForOwner({
     }
   };
 
+  const isUnsupportedRouteError = (e: unknown) =>
+    e instanceof ApiError && (e.status === 404 || e.status === 405);
+
+  const resetCreateForm = () => {
+    setCreateName("");
+    setCreateId("");
+    setCreateIdTouched(false);
+    setCreateDescription("");
+  };
+
+  const openCreate = () => {
+    if (busy) return;
+    clearErrors();
+    setSelected(null);
+    setEditing(false);
+    setConfirmingApply(false);
+    setConfirmingDelete(false);
+    setConfirmingClearAll(false);
+    resetCreateForm();
+    setCreating(true);
+  };
+
+  const openClearAll = () => {
+    if (busy) return;
+    clearErrors();
+    setSelected(null);
+    setEditing(false);
+    setConfirmingApply(false);
+    setConfirmingDelete(false);
+    setCreating(false);
+    setConfirmingClearAll(true);
+  };
+
+  const createProfile = async () => {
+    if (!current() || pendingWrites.has(manager)) return;
+    const existingIds = (data?.profiles ?? []).map((p) => p.id);
+    const check = validateNewProfile(createName, createId, createDescription, existingIds);
+    if (!check.ok) return;
+    pendingWrites.add(manager);
+    setBusyAction("create");
+    writesChanged();
+    invalidateRead();
+    const edit = ++interaction.current;
+    setReadError(""); setActionError(""); setConflict(false);
+    const reqContext = { token, tokenOwner: owner, isAuthContextCurrent: current };
+    try {
+      const result = await saveModelProfile(
+        check.id,
+        captureProfileInput({ name: check.name, description: check.description }, data?.revision ?? 0),
+        manager,
+        reqContext,
+      );
+      if (current()) {
+        setData(result);
+        if (edit === interaction.current) {
+          setCreating(false);
+          resetCreateForm();
+        }
+        toast(t("settings-modelprofiles.created", { name: check.name }), "ok");
+        changed.current();
+      }
+    } catch (e) {
+      if (current() && edit === interaction.current) {
+        if (e instanceof ApiError && e.status === 409) {
+          const fresh = await load();
+          if (current() && edit === interaction.current) {
+            setConflict(!fresh);
+            setActionError(t("settings-modelprofiles.conflict_create"));
+          }
+        } else {
+          setActionError(errorText(e));
+        }
+      }
+    } finally {
+      pendingWrites.delete(manager);
+      if (current()) setBusyAction(null);
+      writesChanged();
+    }
+  };
+
+  const deactivate = async () => {
+    if (!current() || pendingWrites.has(manager)) return;
+    pendingWrites.add(manager);
+    setBusyAction("deactivate");
+    writesChanged();
+    invalidateRead();
+    const edit = ++interaction.current;
+    setReadError(""); setActionError(""); setConflict(false);
+    const reqContext = { token, tokenOwner: owner, isAuthContextCurrent: current };
+    try {
+      const result = await deactivateModelProfile(manager, reqContext);
+      if (current()) {
+        setData(result);
+        if (edit === interaction.current) {
+          setConfirmingApply(false);
+          setConfirmingDelete(false);
+          setEditing(false);
+          setSelected(null);
+        }
+        toast(t("settings-modelprofiles.deactivated"), "ok");
+        changed.current();
+      }
+    } catch (e) {
+      if (current() && edit === interaction.current) {
+        setActionError(isUnsupportedRouteError(e) ? t("settings-modelprofiles.unsupported_deactivate") : errorText(e));
+      }
+    } finally {
+      pendingWrites.delete(manager);
+      if (current()) setBusyAction(null);
+      writesChanged();
+    }
+  };
+
+  const removeProfile = async (target: ModelProfile) => {
+    if (!current() || pendingWrites.has(manager)) return;
+    pendingWrites.add(manager);
+    setBusyAction("delete");
+    writesChanged();
+    invalidateRead();
+    const edit = ++interaction.current;
+    setReadError(""); setActionError(""); setConflict(false);
+    const reqContext = { token, tokenOwner: owner, isAuthContextCurrent: current };
+    try {
+      const result = await deleteModelProfile(target.id, data?.revision, manager, reqContext);
+      if (current()) {
+        setData(result);
+        if (edit === interaction.current) {
+          setConfirmingDelete(false);
+          setConfirmingApply(false);
+          setEditing(false);
+          setSelected(null);
+        }
+        toast(t("settings-modelprofiles.deleted", { name: target.name }), "ok");
+        changed.current();
+      }
+    } catch (e) {
+      if (current() && edit === interaction.current) {
+        if (e instanceof ApiError && e.status === 409) {
+          const fresh = await load();
+          if (current() && edit === interaction.current) {
+            setConflict(!fresh);
+            setActionError(t("settings-modelprofiles.conflict_delete"));
+          }
+        } else if (e instanceof ApiError && e.status === 405) {
+          setActionError(t("settings-modelprofiles.unsupported_delete"));
+        } else if (e instanceof ApiError && e.status === 404) {
+          const fresh = await load();
+          if (current() && edit === interaction.current) {
+            const stillExists = fresh?.profiles.some((p) => p.id === target.id) ?? true;
+            setActionError(stillExists ? t("settings-modelprofiles.unsupported_delete") : errorText(e));
+          }
+        } else {
+          setActionError(errorText(e));
+        }
+      }
+    } finally {
+      pendingWrites.delete(manager);
+      if (current()) setBusyAction(null);
+      writesChanged();
+    }
+  };
+
+  const clearAll = async () => {
+    if (!current() || pendingWrites.has(manager)) return;
+    pendingWrites.add(manager);
+    setBusyAction("clear");
+    writesChanged();
+    invalidateRead();
+    const edit = ++interaction.current;
+    setReadError(""); setActionError(""); setConflict(false);
+    const reqContext = { token, tokenOwner: owner, isAuthContextCurrent: current };
+    try {
+      const result = await clearModelProfiles(data?.revision, manager, reqContext);
+      if (current()) {
+        setData(result);
+        if (edit === interaction.current) {
+          setConfirmingClearAll(false);
+          setConfirmingDelete(false);
+          setConfirmingApply(false);
+          setEditing(false);
+          setSelected(null);
+        }
+        toast(t("settings-modelprofiles.cleared_all"), "ok");
+        changed.current();
+      }
+    } catch (e) {
+      if (current() && edit === interaction.current) {
+        if (e instanceof ApiError && e.status === 409) {
+          const fresh = await load();
+          if (current() && edit === interaction.current) {
+            setConflict(!fresh);
+            setActionError(t("settings-modelprofiles.conflict_clear"));
+          }
+        } else if (isUnsupportedRouteError(e)) {
+          setActionError(t("settings-modelprofiles.unsupported_clear"));
+        } else {
+          setActionError(errorText(e));
+        }
+      }
+    } finally {
+      pendingWrites.delete(manager);
+      if (current()) setBusyAction(null);
+      writesChanged();
+    }
+  };
+
   const reloadForEdit = async () => {
     clearErrors();
     const fresh = await load();
@@ -370,22 +592,42 @@ function ModelProfilesForOwner({
   const closeDialog = () => {
     if (busy) return;
     setConfirmingApply(false);
+    setConfirmingDelete(false);
     setEditing(false);
     setSelected(null);
+    clearErrors();
+  };
+  const closeCreateDialog = () => {
+    if (busy) return;
+    setCreating(false);
+    resetCreateForm();
+    clearErrors();
+  };
+  const closeClearAllDialog = () => {
+    if (busy) return;
+    setConfirmingClearAll(false);
     clearErrors();
   };
   const startEditing = () => {
     clearErrors();
     setConfirmingApply(false);
+    setConfirmingDelete(false);
     setEditRevision(data?.revision ?? 0);
     setEditSyncKey((n) => n + 1);
     setEditing(true);
   };
 
   const error = actionError || readError;
-  const profile = data?.profiles.find((p) => p.id === selected);
-  const activeProfile = data?.active ? data.profiles.find((p) => p.id === data.active) : undefined;
+  const profiles = data?.profiles ?? [];
+  const hasProfiles = profiles.length > 0;
+  const hasRollbacks = Boolean(data?.rollback || (data?.rollbacks?.length ?? 0) > 0);
+  const canClearAll = hasProfiles || hasRollbacks;
+  const existingIds = profiles.map((p) => p.id);
+  const createValidation = validateNewProfile(createName, createId, createDescription, existingIds);
+  const profile = profiles.find((p) => p.id === selected);
+  const activeProfile = data?.active ? profiles.find((p) => p.id === data.active) : undefined;
   const drift = profile ? profileApplyDrift(profile, activeProfile) : null;
+  const dialogOpen = Boolean(profile || creating || confirmingClearAll);
   const tiers = Object.entries(profile?.tiers ?? {}).sort(([a], [b]) => a.localeCompare(b));
   const purposeEntries = Object.entries(profile?.purposes ?? {}).sort(([a], [b]) => {
     const ai = (PROFILE_CATEGORY_IDS as readonly string[]).indexOf(a);
@@ -427,11 +669,35 @@ function ModelProfilesForOwner({
     ? ""
     : editing
       ? t("settings-modelprofiles.edit_title", { name: profile.name })
-      : confirmingApply
-        ? t("settings-modelprofiles.confirm_apply_title", { name: profile.name })
-        : profile.name;
+      : confirmingDelete
+        ? t("settings-modelprofiles.confirm_delete_title", { name: profile.name })
+        : confirmingApply
+          ? t("settings-modelprofiles.confirm_apply_title", { name: profile.name })
+          : profile.name;
 
-  const dialogFooter = !profile || editing ? undefined : confirmingApply ? (
+  const dialogFooter = !profile || editing ? undefined : confirmingDelete ? (
+    <div data-testid="profile-delete-confirm-footer" className="flex w-full flex-col gap-2">
+      {errorBanner}
+      <div className="flex items-center justify-end gap-2">
+        <Button
+          tone="quiet"
+          disabled={busy}
+          onClick={() => { setConfirmingDelete(false); clearErrors(); }}
+        >
+          {t("common.cancel")}
+        </Button>
+        <Button
+          tone="danger"
+          testId="profile-delete-confirm"
+          busy={busyAction === "delete"}
+          disabled={busy}
+          onClick={() => void removeProfile(profile)}
+        >
+          {t("settings-modelprofiles.delete_confirm")}
+        </Button>
+      </div>
+    </div>
+  ) : confirmingApply ? (
     <div data-testid="profile-confirm-footer" className="flex w-full flex-col gap-2">
       {errorBanner}
       <div className="flex flex-col gap-1.5">
@@ -531,38 +797,119 @@ function ModelProfilesForOwner({
   ) : (
     <div className="flex w-full flex-col gap-2">
       {errorBanner}
-      <div className="flex items-center justify-end gap-2">
-        <Button tone="quiet" disabled={busy} onClick={closeDialog}>{t("common.cancel")}</Button>
-        <Button tone="secondary" disabled={busy} onClick={startEditing}>{t("settings-modelprofiles.edit")}</Button>
-        <Button tone="primary" busy={busyAction === "apply"} disabled={busy} onClick={requestApply}>{t("settings-modelprofiles.apply")}</Button>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <Button
+          tone="quiet"
+          className="text-red enabled:hover:text-red"
+          testId="profile-delete-button"
+          disabled={busy}
+          onClick={() => { clearErrors(); setConfirmingDelete(true); }}
+        >
+          {t("settings-modelprofiles.delete")}
+        </Button>
+        <div className="flex items-center gap-2">
+          <Button tone="quiet" disabled={busy} onClick={closeDialog}>{t("common.cancel")}</Button>
+          <Button tone="secondary" disabled={busy} onClick={startEditing}>{t("settings-modelprofiles.edit")}</Button>
+          <Button tone="primary" busy={busyAction === "apply"} disabled={busy} onClick={requestApply}>{t("settings-modelprofiles.apply")}</Button>
+        </div>
       </div>
     </div>
   );
 
+  const groupRight = (canClearAll || hasProfiles) ? (
+    <div className="flex items-center gap-1">
+      {canClearAll && (
+        <Button
+          tone="quiet"
+          size="sm"
+          testId="profile-clear-all-button"
+          disabled={busy}
+          onClick={openClearAll}
+        >
+          {t("settings-modelprofiles.clear_all")}
+        </Button>
+      )}
+      {hasProfiles && (
+        <Button
+          tone="secondary"
+          size="sm"
+          icon="plus"
+          testId="profile-create-button"
+          disabled={busy || profiles.length >= MAX_MODEL_PROFILES}
+          onClick={openCreate}
+        >
+          {t("settings-modelprofiles.new_profile")}
+        </Button>
+      )}
+    </div>
+  ) : undefined;
+
+  const groupFooter = hasProfiles
+    ? (data && !data.active ? `${t("settings-modelprofiles.footer")} ${t("settings-modelprofiles.none_active")}` : t("settings-modelprofiles.footer"))
+    : undefined;
+
   return <>
-    <Group anchor="model-profiles" title={t("settings-modelprofiles.title")}
-      footer={data && !data.active ? `${t("settings-modelprofiles.footer")} ${t("settings-modelprofiles.none_active")}` : t("settings-modelprofiles.footer")}>
-      {data?.profiles.map((p) => (
-        <Row key={p.id} label={p.name} hint={p.description} onClick={() => { setSelected(p.id); setEditing(false); setConfirmingApply(false); clearErrors(); }}>
-          {p.active && <Pill>{t("settings-modelprofiles.active")}</Pill>}
-          {!p.active && p.trial && (
-            <span className="shrink-0 whitespace-nowrap text-submeta text-ink-3">
-              {t("settings-modelprofiles.trial_summary", {
-                days: p.trial.days,
-                dispatches: p.trial.dispatches,
-                would_switch: p.trial.would_switch,
-              })}
-            </span>
-          )}
+    <Group anchor="model-profiles" title={t("settings-modelprofiles.title")} right={groupRight} footer={groupFooter}>
+      {data && !hasProfiles ? (
+        <Row
+          label={t("settings-modelprofiles.empty_title")}
+          hint={t("settings-modelprofiles.empty_hint")}
+          wrapHint
+          stackOnNarrow
+        >
+          <Button
+            tone="primary"
+            size="sm"
+            icon="plus"
+            testId="profile-create-button"
+            disabled={busy}
+            onClick={openCreate}
+          >
+            {t("settings-modelprofiles.create")}
+          </Button>
         </Row>
-      ))}
+      ) : (
+        profiles.map((p) => (
+          <Row key={p.id} label={p.name} hint={p.description} onClick={() => { setSelected(p.id); setEditing(false); setConfirmingApply(false); setConfirmingDelete(false); clearErrors(); }}>
+            {p.active && <Pill>{t("settings-modelprofiles.active")}</Pill>}
+            {!p.active && p.trial && (
+              <span className="shrink-0 whitespace-nowrap text-submeta text-ink-3">
+                {t("settings-modelprofiles.trial_summary", {
+                  days: p.trial.days,
+                  dispatches: p.trial.dispatches,
+                  would_switch: p.trial.would_switch,
+                })}
+              </span>
+            )}
+          </Row>
+        ))
+      )}
+      {data?.active && (
+        <Row
+          label={t("settings-modelprofiles.deactivate_row_title", { name: activeProfile?.name ?? data.active })}
+          hint={t("settings-modelprofiles.deactivate_hint")}
+          wrapHint
+          stackOnNarrow
+        >
+          <Button
+            tone="secondary"
+            size="sm"
+            testId="profile-deactivate-row-button"
+            busy={busyAction === "deactivate"}
+            disabled={busy}
+            onClick={() => void deactivate()}
+          >
+            {t("settings-modelprofiles.deactivate")}
+          </Button>
+        </Row>
+      )}
       {data?.rollback && (
         <Row label={t("settings-modelprofiles.rollback")} hint={data.rollback.to || t("settings-modelprofiles.custom")}>
           <Button tone="quiet" busy={busyAction === "rollback"} disabled={busy} onClick={() => void apply()}>{t("settings-modelprofiles.rollback")}</Button>
         </Row>
       )}
     </Group>
-    {!profile && error && <p role="alert" className="mb-4 text-meta text-red">{error}</p>}
+    {!dialogOpen && error && <p role="alert" className="mb-4 text-meta text-red">{error}</p>}
     <Dialog
       open={!!profile}
       width={editing ? 560 : 480}
@@ -586,10 +933,19 @@ function ModelProfilesForOwner({
             conflict={conflict}
             onSave={(input) => save(profile.id, input)}
             onCapture={() => capture(profile.id, profile, { keepEditing: true })}
+            onDelete={() => { clearErrors(); setEditing(false); setConfirmingDelete(true); }}
             onReload={reloadForEdit}
             onCancel={() => { setEditing(false); clearErrors(); }}
           />
         </Suspense>
+      ) : profile && confirmingDelete ? (
+        <div data-testid="model-profile-delete-confirm" className="flex flex-col gap-3">
+          <p className="text-label leading-relaxed text-ink-2">
+            {profile.active
+              ? t("settings-modelprofiles.confirm_delete_active", { name: profile.name })
+              : t("settings-modelprofiles.confirm_delete_inactive", { name: profile.name })}
+          </p>
+        </div>
       ) : profile && confirmingApply ? (
         <div data-testid="model-profile-apply-confirm" className="flex flex-col gap-3">
           {describedTargetChanges.length > 0 ? (
@@ -636,6 +992,26 @@ function ModelProfilesForOwner({
       ) : profile ? (
         <>
           {profile.description && <p className="mb-3 text-label text-ink-3">{profile.description}</p>}
+          {profile.active && (
+            <div data-testid="model-profile-active-banner" className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-control bg-inset px-3 py-2.5 text-label text-ink-2">
+              <div className="min-w-0 flex-1">
+                <div className="mb-1 flex items-center gap-2">
+                  <Pill>{t("settings-modelprofiles.active")}</Pill>
+                </div>
+                <p className="leading-relaxed">{t("settings-modelprofiles.deactivate_hint")}</p>
+              </div>
+              <Button
+                tone="secondary"
+                size="sm"
+                testId="profile-deactivate-button"
+                busy={busyAction === "deactivate"}
+                disabled={busy}
+                onClick={() => void deactivate()}
+              >
+                {t("settings-modelprofiles.deactivate")}
+              </Button>
+            </div>
+          )}
           <p className="mb-2 text-label text-ink-3">{t("settings-modelprofiles.changes", { count: profile.changes.length })}</p>
           {describedTargetChanges.length > 0 && (
             <ul data-testid="model-profile-changes" className="mb-3 flex flex-wrap gap-1.5">
@@ -796,6 +1172,124 @@ function ModelProfilesForOwner({
           )}
         </>
       ) : null}
+    </Dialog>
+    <Dialog
+      open={creating}
+      width={480}
+      title={t("settings-modelprofiles.create_title")}
+      onClose={closeCreateDialog}
+      footer={
+        <div data-testid="profile-create-footer" className="flex w-full flex-col gap-2">
+          {errorBanner}
+          <div className="flex items-center justify-end gap-2">
+            <Button tone="quiet" disabled={busy} onClick={closeCreateDialog}>
+              {t("common.cancel")}
+            </Button>
+            <Button
+              tone="primary"
+              testId="profile-create-submit"
+              busy={busyAction === "create"}
+              disabled={busy || !createValidation.ok}
+              onClick={() => void createProfile()}
+            >
+              {t("settings-modelprofiles.create")}
+            </Button>
+          </div>
+        </div>
+      }
+    >
+      <div data-testid="model-profile-create-dialog" className="flex flex-col gap-3">
+        <p className="rounded-control bg-inset px-3 py-2.5 text-label leading-relaxed text-ink-2">
+          {t("settings-modelprofiles.create_note")}
+        </p>
+        <label className="block">
+          <span className="mb-1 block text-label font-medium text-ink-2">{t("settings-modelprofiles.name")}</span>
+          <input
+            aria-label={t("settings-modelprofiles.name")}
+            className={settingsInputClass}
+            value={createName}
+            maxLength={MAX_PROFILE_NAME}
+            disabled={busy}
+            placeholder={t("settings-modelprofiles.name_placeholder")}
+            onChange={(e) => {
+              const nextName = e.target.value;
+              setCreateName(nextName);
+              if (!createIdTouched) {
+                setCreateId(nextName.trim() ? suggestProfileId(nextName, existingIds) : "");
+              }
+            }}
+          />
+        </label>
+        <label className="block">
+          <span className="mb-1 block text-label font-medium text-ink-2">{t("settings-modelprofiles.profile_id")}</span>
+          <input
+            aria-label={t("settings-modelprofiles.profile_id")}
+            className={`${settingsInputClass} font-mono`}
+            value={createId}
+            maxLength={32}
+            disabled={busy}
+            spellCheck={false}
+            autoComplete="off"
+            placeholder={t("settings-modelprofiles.profile_id_placeholder")}
+            onChange={(e) => {
+              setCreateId(e.target.value);
+              setCreateIdTouched(true);
+            }}
+          />
+          {!createValidation.ok && createValidation.idError && (createId.trim().length > 0 || createIdTouched) ? (
+            <span role="alert" data-testid="profile-create-id-error" className="mt-1 block text-submeta text-red">
+              {createValidation.idError}
+            </span>
+          ) : (
+            <span className="mt-1 block text-submeta text-ink-3">{t("settings-modelprofiles.profile_id_hint")}</span>
+          )}
+        </label>
+        <label className="block">
+          <span className="mb-1 block text-label font-medium text-ink-2">{t("settings-modelprofiles.description")}</span>
+          <input
+            aria-label={t("settings-modelprofiles.description")}
+            className={settingsInputClass}
+            value={createDescription}
+            maxLength={MAX_PROFILE_DESCRIPTION}
+            disabled={busy}
+            placeholder={t("settings-modelprofiles.description_placeholder")}
+            onChange={(e) => setCreateDescription(e.target.value)}
+          />
+        </label>
+      </div>
+    </Dialog>
+    <Dialog
+      open={confirmingClearAll}
+      width={480}
+      title={t("settings-modelprofiles.confirm_clear_all_title")}
+      onClose={closeClearAllDialog}
+      footer={
+        <div data-testid="profile-clear-all-footer" className="flex w-full flex-col gap-2">
+          {errorBanner}
+          <div className="flex items-center justify-end gap-2">
+            <Button tone="quiet" disabled={busy} onClick={closeClearAllDialog}>
+              {t("common.cancel")}
+            </Button>
+            <Button
+              tone="danger"
+              testId="profile-clear-all-confirm"
+              busy={busyAction === "clear"}
+              disabled={busy}
+              onClick={() => void clearAll()}
+            >
+              {t("settings-modelprofiles.clear_all_confirm")}
+            </Button>
+          </div>
+        </div>
+      }
+    >
+      <div data-testid="model-profile-clear-all-confirm" className="flex flex-col gap-3">
+        <p className="text-label leading-relaxed text-ink-2">
+          {hasProfiles
+            ? t("settings-modelprofiles.confirm_clear_all_body", { count: profiles.length })
+            : t("settings-modelprofiles.confirm_clear_all_rollbacks_only")}
+        </p>
+      </div>
     </Dialog>
   </>;
 }

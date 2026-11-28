@@ -136,6 +136,10 @@ internal fun mergedInteractions(stacks: GroupStacks): InteractionCenter = object
         resolveOutcome(id, resolution, handoffCard = false)
     override suspend fun resolveOutcome(id: String, resolution: Resolution, handoffCard: Boolean) =
         stacks.use(GroupKeys.namespaceOf(id)) { it.repositories.interactions.resolveOutcome(GroupKeys.raw(id), resolution, handoffCard) }
+    override suspend fun resolveOccurrence(interaction: Interaction, resolution: Resolution, handoffCard: Boolean) =
+        stacks.use(GroupKeys.namespaceOf(interaction.id)) {
+            it.repositories.interactions.resolveOccurrence(it.names.rawInteraction(interaction), resolution, handoffCard)
+        }
     override suspend fun replyOwnerApproval(interaction: Interaction, phrase: String) =
         stacks.use(GroupKeys.namespaceOf(interaction.id)) {
             it.repositories.interactions.replyOwnerApproval(it.names.rawInteraction(interaction), phrase)
@@ -236,8 +240,11 @@ internal fun mergedMachineManagement(
     override suspend fun herdr(machineId: String) = routes.on(machineId) { it.herdr(machineId) }
     override suspend fun startHerdr(machineId: String) = routes.on(machineId) { it.startHerdr(machineId) }
     override suspend fun setEngine(machineId: String, engine: String) = routes.on(machineId) { it.setEngine(machineId, engine) }
+    override suspend fun setEngineHosts(machineId: String, hosts: List<String>, default: String) =
+        routes.on(machineId) { it.setEngineHosts(machineId, hosts, default) }
     override suspend fun botmux(machineId: String) = routes.on(machineId) { it.botmux(machineId) }
     override suspend fun setBotmux(machineId: String, on: Boolean) = routes.on(machineId) { it.setBotmux(machineId, on) }
+    override suspend fun setOrcaChatStarts(machineId: String, on: Boolean) = routes.on(machineId) { it.setOrcaChatStarts(machineId, on) }
     override suspend fun claudeSettings(machineId: String) = routes.on(machineId) { it.claudeSettings(machineId) }
     override suspend fun setClaudeSetting(machineId: String, key: String, value: kotlinx.serialization.json.JsonElement) =
         routes.on(machineId) { it.setClaudeSetting(machineId, key, value) }
@@ -490,6 +497,7 @@ internal fun mergedAgentsState(list: List<GroupNames>, states: List<AgentsWiring
         override suspend fun operation(operationId: String, machineId: String) = creation(of(machineId)).operation(operationId)
         // "Follow model configuration" reads the selected group's agent.new purpose.
         override suspend fun newAgentModel() = creations.getOrNull(chosen)?.newAgentModel()
+        override suspend fun newAgentModel(machineId: String) = creation(of(machineId)).newAgentModel(machineId)
         override suspend fun launcherModels(machineId: String, launcher: String, refresh: Boolean) =
             creation(of(machineId)).launcherModels(machineId, launcher, refresh)
         override suspend fun launcherModels(machineId: String, launcher: String, refresh: Boolean, host: String?) =
@@ -502,6 +510,10 @@ internal fun mergedAgentsState(list: List<GroupNames>, states: List<AgentsWiring
         // A computer's catalog workspaces come from the hub that owns it; none when no hub does.
         override suspend fun workspaces(machineId: String) = of(machineId)?.let { creations[it] }?.workspaces(machineId).orEmpty()
         override suspend fun workspaceCatalog(machineId: String) = creation(of(machineId)).workspaceCatalog(machineId)
+        // A computer's worktrees are changed through the hub that owns it.
+        override val worktrees = if (creations.none { it?.worktrees != null }) null else routedWorktreeManagement { machine ->
+            (creation(of(machine)).worktrees ?: throw HubFailure(HubError.NoNetwork)) to machine
+        }
     }
     return AgentsWiringState(
         scope = scope,

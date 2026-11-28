@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="shortcuts_widget_label">Agents</string>
     <string name="shortcuts_widget_description">几个 Agent 需要你、在工作、做完了</string>
+    <string name="shortcuts_ask_widget_description">直接打开与 Persona 的主对话并开始输入</string>
+    <string name="shortcuts_ask_widget_subtitle">主对话</string>
     <string name="shortcuts_approve_title">批准第一个待处理</string>
     <string name="shortcuts_loading">正在看有什么等你…</string>
     <string name="shortcuts_not_paired">还没配对。先打开 Persona，扫 hub 的配对二维码。</string>
@@ -41,4 +44,37 @@
     <string name="shortcuts_new_todo_label">新建待办</string>
     <string name="shortcuts_new_todo_title">用 Persona 新建待办</string>
     <string name="shortcuts_open_session">打开 %1$s</string>
+    <string name="shortcuts_main_chat_widget_label">Persona 主对话</string>
+    <string name="shortcuts_main_chat_widget_description">主对话动态、待你处理事项与快捷提问</string>
+    <string name="shortcuts_main_chat_status_needs_you">等你处理 · %1$d</string>
+    <string name="shortcuts_main_chat_status_thinking">思考中</string>
+    <string name="shortcuts_main_chat_unpaired_hint">打开 Persona 连接你的 hub</string>
+    <string name="shortcuts_main_chat_idle_greeting">随时可以问我。</string>
+    <string name="shortcuts_main_chat_working_fallback">正在处理你的请求…</string>
+    <string name="shortcuts_main_chat_ask_hint">问 Persona…</string>
+    <string name="shortcuts_main_chat_pending_plan">计划等你审批</string>
+    <string name="shortcuts_main_chat_pending_permission">在等你批准</string>
+    <string name="shortcuts_main_chat_pending_question">在问你</string>
+    <string name="shortcuts_main_chat_pending_screen">终端等你处理</string>
+    <string name="shortcuts_main_chat_pending_default">等你处理</string>
+    <string name="shortcuts_main_chat_todo_needs_you">等你处理</string>
+    <string name="shortcuts_main_chat_todo_review">待验收</string>
+    <string name="shortcuts_main_chat_todo_stuck">已卡住</string>
+    <string name="shortcuts_main_chat_todo_working">进行中</string>
+    <string name="shortcuts_main_chat_todo_planned">待开始</string>
+    <string name="shortcuts_widget_configure_title">选择对话</string>
+    <string name="shortcuts_widget_configure_search_hint">搜索对话…</string>
+    <string name="shortcuts_widget_configure_section_main">主对话</string>
+    <string name="shortcuts_widget_configure_section_directions">常驻方向</string>
+    <string name="shortcuts_widget_configure_section_others">其他对话</string>
+    <string name="shortcuts_widget_configure_main_chat">主对话</string>
+    <string name="shortcuts_widget_configure_main_chat_subtitle">始终跟随你的 Persona 主对话</string>
+    <string name="shortcuts_widget_configure_untitled">未命名对话</string>
+    <string name="shortcuts_widget_configure_selected">当前</string>
+    <string name="shortcuts_widget_configure_offline_notice">当前离线，显示本地缓存对话；仍可选择主对话或已缓存对话。</string>
+    <string name="shortcuts_widget_configure_unpaired_notice">尚未配对，可先选择主对话，稍后再连接。</string>
+    <string name="shortcuts_widget_configure_no_matches">没有匹配的对话</string>
+    <string name="shortcuts_widget_configure_no_matches_hint">换个关键词试试，或清空搜索框。</string>
+    <string name="shortcuts_widget_binding_missing_hint">该对话已归档或移除，点击重新选择。</string>
+    <string name="shortcuts_widget_binding_missing_short">已失效 · 点击重选</string>
 </resources>

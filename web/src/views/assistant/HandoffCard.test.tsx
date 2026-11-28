@@ -95,7 +95,7 @@ describe("the hand-off card", () => {
   it("offers nothing to send once a newer suggestion replaced it", () => {
     box.items = [open({ suggestion: { version: 3, kind: "reply", text: "新的", conversation: { machine_id: "server", session_id: "m1" } } })];
     draw(<HandoffCard item={feed} />);
-    expect(host.textContent).toContain("已不是当前建议");
+    expect(host.textContent).toContain("不再是当前建议");
     expect(host.textContent).not.toContain("没有发出");
     expect(host.querySelector('[data-testid="handoff-card"]')?.getAttribute("data-state")).toBe("replaced");
     expect(host.querySelector('[data-testid="handoff-card-confirm"]')).toBeNull();
@@ -187,6 +187,51 @@ describe("the hand-off card", () => {
     expect(host.querySelector("textarea")).toBeNull();
     expect(host.querySelector('[data-testid="handoff-card-confirm"]')?.textContent).toBe("知道了");
   });
+
+  it("shows bound @ mentions in live state and prunes them live when deleted from the draft", () => {
+    const mentions = [{ id: "101", name: "Alice" }, { id: "202", name: "Bob" }];
+    box.items = [open({ suggestion: { version: 2, kind: "reply", text: "@Alice @Bob please sync", mentions, conversation: { machine_id: "server", session_id: "m1" } } })];
+    draw(<HandoffCard item={{ ...feed, body: { ...feed.body, text: "@Alice @Bob please sync", mentions } }} />);
+    const bar = () => host.querySelector('[data-testid="bound-mentions"]');
+    expect(bar()?.textContent).toContain("将 @：");
+    expect(bar()?.textContent).toContain("@Alice");
+    expect(bar()?.textContent).toContain("@Bob");
+
+    const area = host.querySelector("textarea")!;
+    const set = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!;
+    act(() => {
+      set.call(area, "@Alice please sync, and @Charlie");
+      area.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect(bar()?.textContent).toContain("@Alice");
+    expect(bar()?.textContent).not.toContain("@Bob");
+    expect(bar()?.textContent).not.toContain("@Charlie");
+
+    // Prefix collision (@AliceSmith) or @Alice only inside inline code must not keep @Alice bound.
+    act(() => {
+      set.call(area, "@AliceSmith and `@Alice` please sync");
+      area.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect(bar()).toBeNull();
+  });
+
+  it("renders Markdown and bound @ mentions once the reply is sent", () => {
+    const mentions = [{ id: "101", name: "Alice" }];
+    const mdText = "@Alice **Root cause confirmed**: call `fetch_report` and check [docs](https://example.com/doc)";
+    box.items = [open({
+      suggestion: undefined, done_at: "2026-11-18T13:00:00Z", done_by: "replied",
+      suggestion_attempts: [attempted("sent", { text: mdText, mentions })],
+    })];
+    draw(<HandoffCard item={{ ...feed, body: { ...feed.body, text: mdText, mentions } }} />);
+    expect(host.querySelector("strong")?.textContent).toBe("Root cause confirmed");
+    expect(host.querySelector("code")?.textContent).toBe("fetch_report");
+    const link = host.querySelector<HTMLAnchorElement>("a");
+    expect(link?.textContent).toBe("docs");
+    expect(link?.getAttribute("href")).toBe("https://example.com/doc");
+    const bar = host.querySelector('[data-testid="bound-mentions"]');
+    expect(bar?.textContent).toContain("已 @：");
+    expect(bar?.textContent).toContain("@Alice");
+  });
 });
 
 describe("Wrap up chips", () => {
@@ -198,7 +243,7 @@ describe("Wrap up chips", () => {
     await act(async () => chip.click());
     expect(box.handed).toHaveLength(1);
     expect((box.handed[0][0] as InboxItem).id).toBe("lark:f1:100");
-    expect(box.handed[0][1]).toBe("可以收尾了：把最终的总结和回复写回这条收件箱事项。");
+    expect(box.handed[0][1]).toBe("请进行收尾：整理最终总结，并将回复写回这条收件箱事项。");
   });
 
   it("reveals the current pending reply instead of starting another hand-off", async () => {

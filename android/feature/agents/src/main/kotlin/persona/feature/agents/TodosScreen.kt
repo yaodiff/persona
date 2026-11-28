@@ -20,7 +20,9 @@ import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
 import persona.core.domain.tasks.Triage
 import persona.core.domain.tasks.TriageRule
+import persona.core.domain.tasks.TodoRestStatus
 import persona.core.domain.tasks.TriageSection
+import persona.core.domain.tasks.restStatus
 import persona.core.domain.tasks.acceptedAtRest
 import persona.core.domain.tasks.deliveredAwaitingReview
 import persona.core.domain.tasks.shownState
@@ -664,6 +666,7 @@ private fun TodoTriageRow(
     // a failed start waiting on the owner reads open, says why in red, and its checkbox closes it (#3713)
     val finished = !todo.checksAsOpen(triage)
     val state = todo.shownState(sessionLookup)
+    val restStatus = todo.restStatus(sessionLookup, now.toEpochMilli())
     val accepted = triage.rule == TriageRule.Accepted || todo.acceptedAtRest(sessionLookup)
     val urgent = mostUrgentAgent(todo, sessionLookup)
     val lead = remember(todo, sessionLookup) { taskLeadAgent(todo, sessionLookup) }
@@ -727,6 +730,7 @@ private fun TodoTriageRow(
                         finished -> {}
                         // the hub closed it, yet it waits on the owner: not Done (#3713)
                         !todo.startError.isNullOrEmpty() -> JTag(stringResource(R.string.agents_todo_state_didnt_start), Tone.Danger)
+                        restStatus != null -> TodoRestStatusTag(restStatus)
                         else -> JTag(state.label)
                     }
                 }
@@ -747,11 +751,12 @@ private fun TodoTriageRow(
                 } else {
                     // One line of what is going on (iOS TodoRow): why it finished on its own, the most urgent
                     // agent's latest (red while it waits for you), the notes, or that no agent has it yet.
-                    TodoActivityLine(todo, urgent, urgent?.let { cards[it.agent.key] }, startFailed = todo.startError?.takeIf { it.isNotEmpty() })
+                    TodoActivityLine(todo, urgent, urgent?.let { cards[it.agent.key] }, startFailed = todo.startError?.takeIf { it.isNotEmpty() }, suppressNotHanded = restStatus != null)
                     // Done as asked but not live yet (#3306): where it is held, while its agents are not at it again.
                     todo.hold?.takeIf { state != TodoState.Working && state != TodoState.NeedsYou }?.let {
                         TodoHoldLine(it, Modifier.padding(start = Tokens.Space.xxl))
                     }
+                    todo.wait?.let { TodoWaitLine(it, now) }
                     TodoPlanLine(todo, Modifier.padding(start = Tokens.Space.xxl))
                     // A decision held for the next briefing (#4930): nothing was pushed for it, and the row says so.
                     if (todo.ask?.forBriefing == true) Text(stringResource(R.string.agents_todo_for_briefing),
@@ -920,7 +925,7 @@ internal fun mostUrgentSummary(urgent: TodoMostUrgent?, card: Interaction? = nul
 
 /** The open row's line under the title: the auto-done reason, the most urgent agent, the notes, or "Not handed to an agent yet". */
 @Composable
-private fun TodoActivityLine(todo: Todo, urgent: TodoMostUrgent?, card: Interaction?, startFailed: String? = null) {
+private fun TodoActivityLine(todo: Todo, urgent: TodoMostUrgent?, card: Interaction?, startFailed: String? = null, suppressNotHanded: Boolean = false) {
     val palette = PersonaTheme.palette
     val reason = todo.autoDoneReason
     // a failed start waiting on the owner: why it did not start, in red (DESIGN_SYSTEM 5.6)
@@ -935,7 +940,7 @@ private fun TodoActivityLine(todo: Todo, urgent: TodoMostUrgent?, card: Interact
     // Nobody is working on it (#3618): ahead of its agents' last words, which are from before they went; not ahead
     // of a failed start or an agent that waits for the user.
     val orphaned = todo.orphanedLine?.takeIf { reason == null && startFailed == null && !waiting }?.text()
-    val text = reason ?: orphaned ?: summary ?: notes ?: stringResource(R.string.agents_todo_not_handed)
+    val text = reason ?: orphaned ?: summary ?: notes ?: if (suppressNotHanded) return else stringResource(R.string.agents_todo_not_handed)
     Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(Tokens.Space.xs),
@@ -974,3 +979,22 @@ internal val TodoState.label: String @Composable get() = stringResource(when (th
     TodoState.FollowUp -> R.string.agents_todo_state_follow_up
     TodoState.NotStarted -> R.string.agents_todo_state_not_started
 })
+
+internal val TodoRestStatus.label: String @Composable get() = stringResource(when (this) {
+    TodoRestStatus.PrConflicts -> R.string.agents_todo_state_pr_conflicts
+    TodoRestStatus.PrChangesRequested -> R.string.agents_todo_state_pr_changes_requested
+    TodoRestStatus.PrChecksFailed -> R.string.agents_todo_state_pr_checks_failed
+    TodoRestStatus.PrInReview -> R.string.agents_todo_state_pr_in_review
+    TodoRestStatus.PrChecksPending -> R.string.agents_todo_state_pr_checks_pending
+    TodoRestStatus.PrWaitingMerge -> R.string.agents_todo_state_pr_waiting_merge
+    TodoRestStatus.ParkedMergeReview -> R.string.agents_todo_state_parked_merge_review
+    TodoRestStatus.Parked -> R.string.agents_todo_state_parked
+    TodoRestStatus.ConcernTracking -> R.string.agents_todo_state_tracking
+})
+
+@Composable
+internal fun TodoRestStatusTag(rest: TodoRestStatus) = when (rest) {
+    TodoRestStatus.PrConflicts, TodoRestStatus.PrChecksFailed -> JTag(rest.label, Tone.Danger)
+    TodoRestStatus.PrChangesRequested -> JTag(rest.label, Tone.Caution)
+    else -> JTag(rest.label)
+}

@@ -15,8 +15,8 @@
   "model_line": "模型：{model}",
   "models_other": "{count} 个模型",
   "suggestion_line": "建议：{suggestion}",
-  "low_cache": "缓存命中率偏低，本轮较多上下文重新计费",
-  "no_cost": "本轮费用暂不可用，仅显示用量",
-  "persona_cost": "这条回复约 {cost}，按公开价格估算",
-  "persona_title": "这条回复的估算费用"
+  "low_cache": "缓存命中率偏低，本轮有较多上下文重新计费。",
+  "no_cost": "本轮暂无法计算费用，仅显示用量。",
+  "persona_cost": "本条回复费用约 {cost}（按公开价格估算）",
+  "persona_title": "本条回复的估算费用"
 }

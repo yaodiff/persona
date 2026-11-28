@@ -1,10 +1,11 @@
 // On-demand read-only network and proxy connectivity diagnostics panel (#12351).
 // Lazy-loaded via lazyPage from Machines.tsx; never runs background polling.
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { t } from "../../i18n";
 import { api, ApiError, enc, errorText, isAbort, pastHub } from "../../lib/api";
 import { ago } from "../../lib/format";
 import type { Machine } from "../../lib/types";
+import { MachineTool, type MachineToolProps } from "./MachinePicker";
 import { Button, cx, EASE, Spinner } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 
@@ -61,18 +62,17 @@ function classifyUnavailable(err: unknown): UnavailableReason | null {
   return null;
 }
 
-function defaultMachineID(machines: readonly Machine[]): string {
-  return machines.find((m) => m.online)?.id ?? machines[0]?.id ?? "";
+export function NetworkPanel(props: MachineToolProps) {
+  return (
+    <MachineTool {...props}>
+      {(machine) => <Network machine={machine} />}
+    </MachineTool>
+  );
 }
 
-export function NetworkPanel({ machines }: { machines: readonly Machine[] }) {
-  const [selectedId, setSelectedId] = useState<string>(() => defaultMachineID(machines));
-  const selected = useMemo(
-    () => machines.find((m) => m.id === selectedId) ?? machines.find((m) => m.online) ?? machines[0],
-    [machines, selectedId],
-  );
-  const mid = selected?.id ?? "";
-  const online = selected?.online ?? false;
+function Network({ machine }: { machine?: Machine }) {
+  const mid = machine?.id ?? "";
+  const online = !!machine?.online;
 
   const [load, setLoad] = useState<LoadState>({ kind: "loading" });
   const [busy, setBusy] = useState(false);
@@ -123,7 +123,7 @@ export function NetworkPanel({ machines }: { machines: readonly Machine[] }) {
     return () => ctrl.abort();
   }, [mid, online, check]);
 
-  if (!selected) return null;
+  if (!machine) return null;
 
   const report = load.kind === "report" ? load.report : null;
   const okCount = report ? report.probes.filter((p) => p.reachable).length : 0;
@@ -142,7 +142,7 @@ export function NetworkPanel({ machines }: { machines: readonly Machine[] }) {
 
   return (
     <div className="flex flex-col gap-4" data-testid="network-panel" style={{ animation: `fade-up 320ms ${EASE} both` }}>
-      {/* Header & machine selector */}
+      {/* Diagnostic report */}
       <section className="overflow-hidden rounded-card bg-surface shadow-card">
         <div className="flex flex-wrap items-start gap-3 px-4 py-3.5">
           <span className="flex size-9 shrink-0 items-center justify-center rounded-[9px] bg-field text-ink-2">
@@ -158,36 +158,6 @@ export function NetworkPanel({ machines }: { machines: readonly Machine[] }) {
             </Button>
           )}
         </div>
-
-        {machines.length > 1 && (
-          <div
-            className="flex flex-wrap items-center gap-1.5 border-t border-line px-4 py-2.5"
-            role="radiogroup"
-            aria-label={t("machines-network.machine_select_label")}
-          >
-            {machines.map((m) => {
-              const active = m.id === mid;
-              return (
-                <button
-                  key={m.id}
-                  type="button"
-                  role="radio"
-                  aria-checked={active}
-                  onClick={() => setSelectedId(m.id)}
-                  className={cx(
-                    "inline-flex h-7 items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 text-label font-medium transition-colors",
-                    active
-                      ? "bg-inset text-ink shadow-hairline"
-                      : "bg-field text-ink-2 hover:bg-hover hover:text-ink",
-                  )}
-                >
-                  <span className={cx("size-1.5 rounded-full", m.online ? "bg-green" : "bg-ink-3")} aria-hidden />
-                  <span className="max-w-[160px] truncate">{m.name}</span>
-                </button>
-              );
-            })}
-          </div>
-        )}
 
         {/* Body status or summary strip */}
         {!online ? (

@@ -133,6 +133,10 @@ func (h *Manager) feishuCall(ctx context.Context, method string, params json.Raw
 		Events     []botcard.CotEvent `json:"events"`
 		Reason     string             `json:"reason"`
 		ChatID     string             `json:"chat_id"`   // feishu.post / feishu.text: the chat to send into (default: the owner's)
+		Handoff    string             `json:"handoff"`   // feishu.text: a proxy reply (bots_handoff.go)
+		Guest      string             `json:"guest"`     // feishu.text / feishu.cot_create / feishu.guest_end: a guest turn (bots_guest.go)
+		Confirmed  bool               `json:"confirmed"` // feishu.text: the owner approved the draft
+		Outcome    string             `json:"outcome"`   // feishu.handoff_end
 		InThread   bool               `json:"in_thread"` // feishu.post / feishu.text: a reply goes into the parent's thread
 		Exclusive  bool               `json:"exclusive"` // feishu.pin: the bot's other pins in the chat come off
 		CardID     string             `json:"card_id"`   // feishu.card_*: the card entity
@@ -164,6 +168,20 @@ func (h *Manager) feishuCall(ctx context.Context, method string, params json.Raw
 			st.Owner, st.PairedAt = set.Owner.OpenID, set.Owner.At
 			st.Chats = botSendChats(set)
 			st.HomeChat = set.homeChat()
+			for _, chat := range set.TopicChats {
+				if mode := chat.TodoMode.Effective(); mode != assistantwire.TopicAnswerOnly {
+					if st.TopicTodoModes == nil {
+						st.TopicTodoModes = make(map[string]assistantwire.TopicTodoMode)
+					}
+					st.TopicTodoModes[chat.ChatID] = mode
+				}
+				if space := strings.TrimSpace(chat.Space); space != "" {
+					if st.TopicSpaces == nil {
+						st.TopicSpaces = make(map[string]string)
+					}
+					st.TopicSpaces[chat.ChatID] = space
+				}
+			}
 		}
 		if h.cfg != nil {
 			st.PublicURL = h.cfg.PublicURL
@@ -219,6 +237,15 @@ func (h *Manager) feishuCall(ctx context.Context, method string, params json.Raw
 		}
 		return map[string]any{"message_id": id}, err
 	case assistantwire.FeishuText:
+		if a.Guest != "" {
+			return h.guestText(ctx, api, a.Guest, a.ChatID, a.ReplyTo, a.Text, a.FullAnswer)
+		}
+		if a.Handoff != "" {
+			return h.handoffText(ctx, api, set, struct {
+				ChatID, ReplyTo, Text, Handoff string
+				Confirmed, FullAnswer          bool
+			}{a.ChatID, a.ReplyTo, a.Text, a.Handoff, a.Confirmed, a.FullAnswer})
+		}
 		if a.FullAnswer && (!set.SourceReportFullReply || a.ReplyTo == "") {
 			return nil, errBotSourceReply
 		}
@@ -271,6 +298,10 @@ func (h *Manager) feishuCall(ctx context.Context, method string, params json.Raw
 			h.rememberMessageChat(id, firstNonEmpty(parent, chatID))
 		}
 		return map[string]any{"message_id": id}, err
+	case assistantwire.FeishuHandoffEnd:
+		return map[string]any{}, h.endHandoff(ctx, a.Handoff, a.Outcome)
+	case assistantwire.FeishuGuestEnd:
+		return map[string]any{}, h.endGuest(ctx, a.Guest, a.Outcome)
 	case assistantwire.FeishuUpdateCard:
 		return map[string]any{}, api.UpdateCard(ctx, a.MessageID, a.Card)
 	case assistantwire.FeishuCardCreate:
@@ -304,6 +335,9 @@ func (h *Manager) feishuCall(ctx context.Context, method string, params json.Raw
 		}
 		return map[string]any{}, feishuCoded(api.Recall(ctx, a.MessageID))
 	case assistantwire.FeishuCotCreate:
+		if a.Guest != "" {
+			return h.guestCotCreate(ctx, api, a.Guest)
+		}
 		chatID, err := botSendChat(set, a.ChatID)
 		if err != nil {
 			return nil, err

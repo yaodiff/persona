@@ -1,5 +1,5 @@
 {
   "title": "此电脑",
-  "open": "桌面选项和 Persona Link",
-  "hint": "设置 Persona 何时打开，并管理单独安装的 Link，让 Agent 可以在这台电脑上运行。"
+  "open": "桌面选项与 Persona Link",
+  "hint": "设置 Persona 的启动时机，并管理独立安装的 Link，以支持 Agent 在这台电脑上运行。"
 }

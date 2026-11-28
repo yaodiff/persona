@@ -17,7 +17,7 @@ describe("buildTaskIndex", () => {
     expect(x.calls.get("n1#0")).toBe("call1");
     expect(x.descriptions.get("call1")).toBe("构建");
     expect(taskBadge(x.notes.get("call1")!).text).toBe("后台 · 已完成");
-    expect(taskPill(items[2].task!, x.startedAt.get("call1"), items[2].ts)).toEqual({ text: "已完成 · 5 分", tone: "green" });
+    expect(taskPill(items[2].task!, x.startedAt.get("call1"), items[2].ts)).toEqual({ text: "已完成 · 5 分钟", tone: "green" });
   });
 
   it("reads the agent's id from a 2.1.319 receipt, not the word before it", () => {
@@ -50,7 +50,7 @@ describe("buildTaskIndex", () => {
 
 describe("wakeSummary", () => {
   it("reads an older hub's summary", () => {
-    expect(wakeSummary({ id: "n", seq: 1, role: "system", kind: "notice", text: 'Background command "Release" completed (exit code 0)' })).toEqual({ text: "后台命令完成 · Release", failed: false });
+    expect(wakeSummary({ id: "n", seq: 1, role: "system", kind: "notice", text: 'Background command "Release" completed (exit code 0)' })).toEqual({ text: "后台命令已完成 · Release", failed: false });
     expect(wakeSummary({ id: "n", seq: 1, role: "system", kind: "notice", text: 'Background command "lint" failed with exit code 2' }).failed).toBe(true);
   });
   it("takes the hub's line when it read the notification", () => {
@@ -75,8 +75,8 @@ describe("loops", () => {
 
 describe("parseAPIError", () => {
   it("explains common errors", () => {
-    expect(parseAPIError("API Error: 401 {\"type\":\"authentication_error\"} · Please run /login")).toMatchObject({ status: 401, transient: false, reason: "登录过期了，要在电脑上重新 /login" });
-    expect(parseAPIError("API 错误：Overloaded（正在重试）")).toMatchObject({ transient: true, reason: "模型服务太忙，过载了" });
+    expect(parseAPIError("API Error: 401 {\"type\":\"authentication_error\"} · Please run /login")).toMatchObject({ status: 401, transient: false, reason: "登录已过期，请在电脑上重新运行 /login" });
+    expect(parseAPIError("API 错误：Overloaded（正在重试）")).toMatchObject({ transient: true, reason: "模型服务当前过载" });
     const gpu = parseAPIError("API Error: 502 upstream error: Req 202610302115A1B2C3D4 Session 1ebd0000:7e470000 no available GPU pod");
     expect(gpu).toMatchObject({ status: 502, transient: true, requestId: "202610302115A1B2C3D4", session: "1ebd0000:7e470000" });
     expect(parseAPIError("all good")).toBeNull();

@@ -43,6 +43,7 @@ func TestPortDialTrackedBeforeReply(t *testing.T) {
 	node.OnEvent = func(e string, p json.RawMessage) { nodeEvents <- e + " " + string(p) }
 	asked := make(chan devicewire.PortDial, 1)
 	reply := make(chan struct{})
+	const replyJSON = `{"stream_version":1,"future_option":"<&>"}`
 	node.OnRequest = func(ctx context.Context, method string, p json.RawMessage) (any, error) {
 		var dial devicewire.PortDial
 		if method != devicewire.MethodPortDial || json.Unmarshal(p, &dial) != nil {
@@ -51,7 +52,7 @@ func TestPortDialTrackedBeforeReply(t *testing.T) {
 		asked <- dial
 		select {
 		case <-reply:
-			return devicewire.PortDialReply{StreamVersion: dial.StreamVersion}, nil
+			return json.RawMessage(replyJSON), nil
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		}
@@ -60,11 +61,15 @@ func TestPortDialTrackedBeforeReply(t *testing.T) {
 	defer cancel()
 	go func() { _ = manager.Serve(ctx, a) }()
 	go func() { _ = node.Serve(ctx, b) }()
-	callDone := make(chan error, 1)
+	type result struct {
+		out json.RawMessage
+		err error
+	}
+	callDone := make(chan result, 1)
 	go func() {
-		_, err := d.Call(ctx, devicewire.NodeCall{MachineID: "box", Method: devicewire.MethodPortDial,
+		out, err := d.Call(ctx, devicewire.NodeCall{MachineID: "box", Method: devicewire.MethodPortDial,
 			StreamVersion: devicewire.PortStreamHalfCloseV1, Params: json.RawMessage(`{"id":"p1","port":1234}`)})
-		callDone <- err
+		callDone <- result{out, err}
 	}()
 	select {
 	case dial := <-asked:
@@ -84,8 +89,8 @@ func TestPortDialTrackedBeforeReply(t *testing.T) {
 		t.Fatal("new bus did not clean up the pending dial")
 	}
 	close(reply)
-	if err := <-callDone; err != nil {
-		t.Fatal(err)
+	if got := <-callDone; got.err != nil || string(got.out) != replyJSON {
+		t.Fatalf("forwarded port.dial reply = %s, %v, want %s", got.out, got.err, replyJSON)
 	}
 	m.mu.Lock()
 	remaining := len(m.opened.streams)

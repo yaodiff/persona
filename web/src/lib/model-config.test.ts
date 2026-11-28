@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { t } from "../i18n";
 import {
   modelPurpose, modelProviderTitle, modelSummary, providerName, runtimeFallbackText, runtimeLabel,
   type ModelProvider, type ModelPurpose,
@@ -79,6 +80,12 @@ describe("用途配置", () => {
     expect(permissionModesForProvider(withPerm, { id: "launcher.claude", name: "Claude", kind: "launcher", agent: "claude" }, "claude").length).toBeGreaterThan(0);
     expect(permissionModesForProvider(withPerm, { id: "launcher.omp", name: "OMP", kind: "launcher", agent: "omp" }, "omp")).toEqual([]);
     expect(permissionModesForProvider({ ...withPerm, kind: "api" }, { id: "api", name: "API", kind: "api" }, "")).toEqual([]);
+    const restrictedAgy = permissionModesForProvider(withPerm, {
+      id: "launcher.agy", name: "Antigravity", kind: "launcher", agent: "agy",
+      permission_modes: ["default", "acceptEdits", "plan", "bypassPermissions"],
+    }, "agy");
+    expect(restrictedAgy.map((m) => m.id)).toEqual(["default", "acceptEdits", "plan", "bypassPermissions"]);
+    expect(restrictedAgy[0].title).toBe(t("lib-session-actions.mode_default"));
   });
   it("uses server capability candidates and keeps a referenced hidden provider", () => {
     expect(providersFor(purpose, providers).map((p) => p.id)).toEqual(["strong", "other"]);
@@ -259,7 +266,7 @@ describe("后台督办的用途 (#5082)", () => {
     // a hub before #5086 sends none: nothing for Main chat, this page's own sentence for the background supervisor
     expect(purposeDescription(main)).toBe("");
     expect(purposeDescription({ ...main, description: "   " })).toBe("");
-    expect(purposeDescription(supervise)).toContain("跟进并验收");
+    expect(purposeDescription(supervise)).toContain("跟进并审核");
   });
 });
 
@@ -413,5 +420,5 @@ describe("the two meeting uses (#7980)", () => {
 });
 
 describe("退回 CLI", () => {
-  it("says why", () => expect(runtimeFallbackText(" 没有 Node.js 22+ ")).toBe("已退回 CLI：没有 Node.js 22+"));
+  it("says why", () => expect(runtimeFallbackText(" 没有 Node.js 22+ ")).toBe("已回退至 CLI：没有 Node.js 22+"));
 });

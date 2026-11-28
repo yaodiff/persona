@@ -21,7 +21,7 @@ const { failedTagsOver, NOTE_MESSAGE, onWorkerMessage, planClick } = await impor
 const worker = await import("./sw-click");
 const { allowBody, denyBody } = await import("./quick-answers");
 
-const perm: Interaction = { id: "p1", machine_id: "m", session_id: "a", kind: "permission", tool_name: "Bash", tool_input: { command: "go test ./..." } };
+const perm: Interaction = { id: "p1", machine_id: "m", session_id: "a", kind: "permission", tool_name: "Bash", tool_input: { command: "git status" } };
 const ask: Interaction = { id: "q1", machine_id: "m", session_id: "a", kind: "question" };
 const note = (action: string, ix = "p1", over: Record<string, unknown> = {}) => ({ type: "persona.notification", action, ix, url: "/s/m/a", until: Date.now() + 400, ...over });
 const deliver = (data: unknown) => {
@@ -51,6 +51,18 @@ describe("哪张卡、发什么", () => {
     expect(planClick(note("allow"), interactions, Date.now())).toEqual({ ix: perm, allow: true, body: { allow: true } });
     expect(planClick(note("deny"), interactions, Date.now())).toEqual({ ix: perm, allow: false, body: denyBody() });
     expect(planClick(note("allow"), interactions, Date.now())).toEqual({ ix: perm, allow: true, body: allowBody() });
+  });
+
+  it("a notification for A cannot answer same-ID replacement B", () => {
+    const first = { ...perm, created_at: "2026-01-02T03:04:05.000000001Z" };
+    const replacement = { ...perm, created_at: "2026-01-02T03:04:05.000000002Z" };
+    const now = Date.now();
+    expect(planClick(note("allow", "p1", { created_at: first.created_at }), [replacement], now)).toBeUndefined();
+    expect(planClick(note("allow", "p1", { created_at: replacement.created_at }), [replacement], now))
+      .toEqual({ ix: replacement, allow: true, body: { allow: true } });
+    // Notifications posted by an older app retain their legacy ID-only behavior.
+    expect(planClick(note("allow"), [replacement], now))
+      .toEqual({ ix: replacement, allow: true, body: { allow: true } });
   });
 
   it("不是授权卡、页面上没有这张卡、消息来晚了、不认识的消息：不接，交给 worker 打开对话", () => {
@@ -100,16 +112,16 @@ describe("页面收到 worker 的消息", () => {
     deliver(note("allow"));
     answers[0]!({ ok: false, error: "这个请求已经过期，回答没有送到" });
     await settle();
-    expect(posted).toEqual([expect.objectContaining({ title: "没能允许", body: "这个请求已经过期，回答没有送到", url: "/s/m/a" })]);
+    expect(posted).toEqual([expect.objectContaining({ title: "无法允许", body: "这个请求已经过期，回答没有送到", url: "/s/m/a" })]);
     expect(toasts).toEqual([]);
   });
 
-  it("answers a sessionless notification and keeps a failed answer linked to its request", async () => {
+  it("denies a sessionless notification and keeps a failed answer linked to its request", async () => {
     vi.spyOn(document, "hasFocus").mockReturnValue(false);
     const script = { ...perm, id: "script-request", session_id: "", tool_name: "personad_ask" };
     interactions = [script];
-    expect(deliver(note("allow", script.id)).postMessage).toHaveBeenCalledWith(true);
-    expect(answerCard).toHaveBeenCalledWith(script, { allow: true });
+    expect(deliver(note("deny", script.id)).postMessage).toHaveBeenCalledWith(true);
+    expect(answerCard).toHaveBeenCalledWith(script, denyBody());
     answers[0]!({ ok: false, error: "Example connection failure" });
     await settle();
     expect(posted).toEqual([expect.objectContaining({ url: "/requests/script-request" })]);
@@ -158,4 +170,10 @@ describe("页面收到 worker 的消息", () => {
     expect(port.postMessage).toHaveBeenCalledWith(true);
     expect(navigate).toHaveBeenCalledWith("/s/m/a");
   });
+});
+
+it("opens a push for review even from an older Allow notification, and still accepts Deny", () => {
+  const push = { ...perm, tool_input: { command: "git push" } };
+  expect(planClick(note("allow"), [push], Date.now())).toBeUndefined();
+  expect(planClick(note("deny"), [push], Date.now())).toEqual({ ix: push, allow: false, body: denyBody() });
 });

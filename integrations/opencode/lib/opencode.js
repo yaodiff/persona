@@ -19,11 +19,12 @@
 
 import { createHash } from 'node:crypto'
 import { homedir } from 'node:os'
-import { basename, isAbsolute, relative, resolve } from 'node:path'
+import { basename, resolve } from 'node:path'
 import { createRuntime, interactionId, light, page, RpcError, snippet } from '../../runtime-sdk/index.js'
 import { isAssistantDir } from '../../runtime-sdk/lib/identity.js'
 import { contextTokens, fromRow, imageOf, lastText, liveText, loadBlobImage, messageItems, permissionCard, promptWithContext, visibleUserText } from './map.js'
 import { createMcpProxy, extractShellGates, matchShellGate } from './mcp.js'
+import { isMemoryWritePath } from './memory-write.js'
 import { buildLauncher, normalizeModels, PERSONA_EFFORTS, resolveModel } from './models.js'
 
 export const RUNTIME_VERSION = '0.3.0'
@@ -951,17 +952,61 @@ export function createOpencodeHost(deps, options = {}) {
     rt.sessionsChanged(0)
   }
 
-  function isMemoryWrite(root, action, resources) {
+  const MEMORY_EXTRA_LIST_KEYS = ['patterns', 'pattern', 'files', 'paths']
+  const MEMORY_META_DENY_KEYS = ['files', 'paths', 'patch', 'patchText', 'patch_text', 'diff']
+  const MEMORY_META_PATH_KEYS = ['filepath', 'filePath', 'path', 'file_path']
+
+  function collectPathField(val, out) {
+    if (typeof val === 'string') {
+      if (!val) return false
+      out.push(val)
+      return true
+    }
+    if (Array.isArray(val)) {
+      for (let i = 0; i < val.length; i++) {
+        if (!(i in val) || typeof val[i] !== 'string' || !val[i]) return false
+        out.push(val[i])
+      }
+      return true
+    }
+    return false
+  }
+
+  function isMemoryWrite(root, action, data, mode) {
     const a = assistants.get(root)
-    if (!a?.memoryDir || a.mode === 'plan') return false
+    if (!a?.memoryDir || a.mode === 'plan' || mode === 'plan') return false
     if (action !== 'write' && action !== 'edit') return false
-    const file = Array.isArray(resources) && typeof resources[0] === 'string' ? resources[0] : ''
-    if (!file) return false
-    const baseDir = a.cwd || a.memoryDir
-    const target = isAbsolute(file) ? resolve(file) : resolve(baseDir, file)
-    const memRoot = resolve(a.memoryDir)
-    const rel = relative(memRoot, target)
-    return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel)
+    const rawResources = data?.resources
+    if (!Array.isArray(rawResources) || rawResources.length === 0) return false
+    const files = []
+    for (let i = 0; i < rawResources.length; i++) {
+      if (!(i in rawResources) || typeof rawResources[i] !== 'string' || !rawResources[i]) return false
+      files.push(rawResources[i])
+    }
+    for (let i = 0; i < MEMORY_EXTRA_LIST_KEYS.length; i++) {
+      const key = MEMORY_EXTRA_LIST_KEYS[i]
+      if (Object.prototype.hasOwnProperty.call(data, key) && data[key] !== undefined) {
+        if (!collectPathField(data[key], files)) return false
+      }
+    }
+    if (Object.prototype.hasOwnProperty.call(data, 'metadata') && data.metadata !== undefined) {
+      const meta = data.metadata
+      if (!meta || typeof meta !== 'object' || Array.isArray(meta)) return false
+      for (let i = 0; i < MEMORY_META_DENY_KEYS.length; i++) {
+        const key = MEMORY_META_DENY_KEYS[i]
+        if (Object.prototype.hasOwnProperty.call(meta, key) && meta[key] !== undefined) return false
+      }
+      for (let i = 0; i < MEMORY_META_PATH_KEYS.length; i++) {
+        const key = MEMORY_META_PATH_KEYS[i]
+        if (!Object.prototype.hasOwnProperty.call(meta, key) || meta[key] === undefined) continue
+        if (typeof meta[key] !== 'string' || !meta[key]) return false
+        files.push(meta[key])
+      }
+    }
+    for (let i = 0; i < files.length; i++) {
+      if (!isMemoryWritePath(files[i], a.memoryDir, a.cwd)) return false
+    }
+    return true
   }
 
   /** The permission a session asked for: a card on the phone while the opencode dialog waits too; first answer wins. */
@@ -1028,7 +1073,7 @@ export function createOpencodeHost(deps, options = {}) {
         return
       }
       const acceptEditAuto = mode === 'acceptEdits' && (action === 'write' || action === 'edit')
-      if (isMemoryWrite(root, action, resources) || acceptEditAuto || mode === 'bypassPermissions') {
+      if (isMemoryWrite(root, action, data, mode) || acceptEditAuto || mode === 'bypassPermissions') {
         try {
           await ctx.permission.reply({ sessionID: data.sessionID, requestID: data.id, decision: 'once' })
         } catch (err) {

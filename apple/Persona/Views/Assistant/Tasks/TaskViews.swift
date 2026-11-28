@@ -706,11 +706,12 @@ struct MessageCard: View {
                         .font(Theme.Font.body)
                         .lineLimit(2...8)
                 } else {
-                    let draft = text.isEmpty ? (card.draft ?? "") : text
-                    // Sent: what the hub says went out, which may have been edited on another device.
-                    Text(state == .sent ? card.sent ?? draft : draft)
-                        .font(Theme.Font.body)
-                        .foregroundStyle(filed ? .secondary : .primary)
+                    let draft = text.isEmpty ? card.draft : text
+                    if let displayed = state == .sent ? card.sent : draft, !displayed.isEmpty {
+                        Text(displayed)
+                            .font(Theme.Font.body)
+                            .foregroundStyle(filed ? .secondary : .primary)
+                    }
                 }
             }
             .padding(Theme.Space.m)

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bypassNote, bypassRestarts, modeConfirmation, modeMenuItems, pickerIcon } from "./header-mode";
+import { bypassNote, bypassRestarts, leavePlanTo, modeConfirmation, modeMenuItems, pickerIcon } from "./header-mode";
 import { listedModeNow, listedModesOf } from "./session-actions";
 import { t } from "../i18n";
 import type { Session } from "./types";
@@ -122,5 +122,24 @@ describe("Full access by a restart", () => {
     expect(bypassNote(claude("default", { assistant: true }), true)).toBe(t("chat-sessiondialogs.bypass_next_message"));
     expect(bypassRow(claude("default", { assistant: true }), true).detail).toBe(t("chat-sessiondialogs.bypass_next_message"));
     expect(bypassNote(claude("bypassPermissions", { assistant: true }), true)).toBe("");
+  });
+
+  it("omits unavailable Auto for an Antigravity session whose capabilities restrict permission_modes (#17239)", () => {
+    const noAuto = ["default", "acceptEdits", "plan", "bypassPermissions"];
+    const agyAssistant = claude("bypassPermissions", {
+      agent: "agy",
+      assistant: true,
+      source_kind: "runtime",
+      capabilities: { read: true, send: true, modes: true, permission_modes: noAuto },
+    });
+    const agyAgent = claude("acceptEdits", {
+      agent: "agy",
+      source_kind: "runtime",
+      capabilities: { read: true, send: true, modes: true, permission_modes: noAuto },
+    });
+    expect(modeMenuItems(agyAssistant, () => {}, { assistant: true }).map((r) => r.key)).toEqual(noAuto);
+    expect(modeMenuItems(agyAgent, () => {}).map((r) => r.key)).toEqual(noAuto);
+    expect(modeMenuItems(agyAgent, () => {})[0].label).toBe(t("lib-session-actions.mode_default"));
+    expect(leavePlanTo(agyAgent, "auto")).toBe("default");
   });
 });

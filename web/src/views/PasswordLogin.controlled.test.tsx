@@ -6,7 +6,7 @@ import type { NativeLogin, PasswordCredential, PasswordState } from "../lib/pass
 
 const globals = vi.hoisted(() => ({
   passwordApi: vi.fn<(path: string, json?: unknown) => Promise<PasswordState>>(),
-  loginWithPassword: vi.fn<(password: string, native: NativeLogin | null) => Promise<PasswordCredential | { code: string }>>(),
+  loginWithPassword: vi.fn<(password: string, native: NativeLogin | null, options?: { replaces?: boolean }) => Promise<PasswordCredential | { code: string }>>(),
   readNativeLogin: vi.fn<(href: string) => NativeLogin | null>(),
   api: vi.fn<(path: string, init?: { method?: string; json?: unknown; token?: string; signal?: AbortSignal }) => Promise<unknown>>(),
   setPairedToken: vi.fn<(token: string, id?: string) => void>(),
@@ -21,7 +21,8 @@ const globals = vi.hoisted(() => ({
 
 vi.mock("../lib/password", () => ({
   passwordApi: (...args: [path: string, json?: unknown]) => globals.passwordApi(...args),
-  loginWithPassword: (password: string, native: NativeLogin | null) => globals.loginWithPassword(password, native),
+  loginWithPassword: (password: string, native: NativeLogin | null, options?: { replaces?: boolean }) =>
+    globals.loginWithPassword(password, native, options),
   readNativeLogin: (href: string) => globals.readNativeLogin(href),
 }));
 
@@ -248,7 +249,7 @@ describe("PasswordLogin controlled mode", () => {
     // Password login preserves spaces, clears input immediately, persists token, and calls onDone
     await typeValue("  my-pass  ");
     await submitForm();
-    expect(deps.loginWithPassword).toHaveBeenCalledExactlyOnceWith("  my-pass  ", null);
+    expect(deps.loginWithPassword).toHaveBeenCalledExactlyOnceWith("  my-pass  ", null, { replaces: false });
     expect(inputEl().value).toBe("");
     expect(deps.setToken).toHaveBeenCalledExactlyOnceWith("jd_pw", "dev_pw");
     expect(onDone).toHaveBeenCalledOnce();
@@ -624,7 +625,7 @@ describe("PasswordLogin default fallback compatibility", () => {
 
     await typeValue("default-pw");
     await submitForm();
-    expect(globals.loginWithPassword).toHaveBeenCalledWith("default-pw", null);
+    expect(globals.loginWithPassword).toHaveBeenCalledWith("default-pw", null, { replaces: false });
     expect(globals.setToken).toHaveBeenCalledWith("tok_default", "cred_default");
     expect(onDone).toHaveBeenCalledOnce();
 
@@ -812,5 +813,33 @@ describe("PasswordLogin default fallback compatibility", () => {
     expect(localStorage.getItem(UNREVOKED_KEY)).toBeNull();
     expect(globals.setPairedToken).toHaveBeenCalledExactlyOnceWith("jd_fresh_aba", "cred_fresh_aba");
     expect(onDone).toHaveBeenCalledOnce();
+  });
+
+  it("propagates /state replaces capability and resets it across scopeKey changes", async () => {
+    const onDone = vi.fn();
+    const loginSpy = vi.fn(async () => ({ token: "jd_pw", id: "dev_pw", hub_id: "hub-1" }));
+    const passwordApiSpy = vi.fn<() => Promise<PasswordState>>()
+      .mockResolvedValueOnce({ ...enabledState, replaces: true })
+      .mockResolvedValueOnce(enabledState);
+    const deps: PasswordLoginDeps = {
+      passwordApi: passwordApiSpy,
+      loginWithPassword: loginSpy,
+      setToken: vi.fn(),
+    };
+
+    await act(async () => {
+      root.render(<PasswordLogin onDone={onDone} scopeKey="hub-replaces" deps={deps} />);
+    });
+    await typeValue("pw-1");
+    await submitForm();
+    expect(loginSpy).toHaveBeenLastCalledWith("pw-1", null, { replaces: true });
+
+    await act(async () => {
+      root.render(<PasswordLogin onDone={onDone} scopeKey="hub-legacy" deps={deps} />);
+    });
+    await typeValue("pw-2");
+    await submitForm();
+    expect(loginSpy).toHaveBeenLastCalledWith("pw-2", null, { replaces: false });
+    expectNoGlobalCalls();
   });
 });

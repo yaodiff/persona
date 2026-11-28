@@ -162,6 +162,7 @@ func (n *Node) typeAnswer(ctx context.Context, pane, line string, ask shellAsk, 
 	if shellQuestion(shown) != line {
 		return false, nil
 	}
+	ctx = withStartTyping(ctx, pane) // the shell, not an agent, is what reads the answer (Orca: typeGate)
 	if err := n.sendKeys(ctx, pane, c.Keys...); err != nil {
 		return false, err
 	}

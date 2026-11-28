@@ -8,6 +8,7 @@
 import { formatList, t } from "../i18n";
 import { api, enc } from "./api";
 import type { ConnectorPrompt } from "./connectors";
+import type { ScopedAssistantClient } from "./scoped-assistant-api";
 
 // ── wire types (server/internal/channel) ─────────────────
 
@@ -76,7 +77,7 @@ export interface Channel {
 }
 
 export interface ChannelTargetOverride {
-  mode: "topics" | "threads" | (string & {});
+  mode: "topics" | "groups_and_topics" | "threads" | (string & {});
 }
 
 /** GET /api/v1/channels/{id} (channel.Detail). */
@@ -94,8 +95,9 @@ export type ChannelPrompt = ConnectorPrompt;
 
 // ── the hub's interface ──────────────────────────────────
 
-export function channelDetail(id: string): Promise<ChannelDetail> {
-  return api<ChannelDetail>(`/channels/${enc(id)}`);
+export function channelDetail(id: string, client?: ScopedAssistantClient): Promise<ChannelDetail> {
+  const request = client?.request ?? api;
+  return request<ChannelDetail>(`/channels/${enc(id)}`);
 }
 
 export interface ChannelUpdateBody {
@@ -106,8 +108,9 @@ export interface ChannelUpdateBody {
   thread_idle_hours?: number;
 }
 
-export function updateChannel(id: string, body: ChannelUpdateBody): Promise<ChannelDetail> {
-  return api<ChannelDetail>(`/channels/${enc(id)}`, { method: "PUT", json: body });
+export function updateChannel(id: string, body: ChannelUpdateBody, client?: ScopedAssistantClient): Promise<ChannelDetail> {
+  const request = client?.request ?? api;
+  return request<ChannelDetail>(`/channels/${enc(id)}`, { method: "PUT", json: body });
 }
 
 /** Normalizes a channel's thread_mode, falling back to channel_default when absent or unknown. */
@@ -126,12 +129,14 @@ export function isValidThreadIdleHours(hours: number): boolean {
   return Number.isInteger(hours) && hours >= 0 && hours <= MAX_THREAD_IDLE_HOURS;
 }
 
-export function bindChannel(id: string, step: string, values: Record<string, string>): Promise<ChannelPrompt> {
-  return api<ChannelPrompt>(`/channels/${enc(id)}/bind`, { method: "POST", json: { step, values } });
+export function bindChannel(id: string, step: string, values: Record<string, string>, client?: ScopedAssistantClient): Promise<ChannelPrompt> {
+  const request = client?.request ?? api;
+  return request<ChannelPrompt>(`/channels/${enc(id)}/bind`, { method: "POST", json: { step, values } });
 }
 
-export function unbindChannel(id: string): Promise<ChannelDetail> {
-  return api<ChannelDetail>(`/channels/${enc(id)}/binding`, { method: "DELETE" });
+export function unbindChannel(id: string, client?: ScopedAssistantClient): Promise<ChannelDetail> {
+  const request = client?.request ?? api;
+  return request<ChannelDetail>(`/channels/${enc(id)}/binding`, { method: "DELETE" });
 }
 
 export interface ChannelTestResult {
@@ -140,8 +145,9 @@ export interface ChannelTestResult {
   note?: string;
 }
 
-export function testChannel(id: string): Promise<ChannelTestResult> {
-  return api<ChannelTestResult>(`/channels/${enc(id)}/test`, { method: "POST" });
+export function testChannel(id: string, client?: ScopedAssistantClient): Promise<ChannelTestResult> {
+  const request = client?.request ?? api;
+  return request<ChannelTestResult>(`/channels/${enc(id)}/test`, { method: "POST" });
 }
 
 // ── words ────────────────────────────────────────────────
@@ -246,10 +252,15 @@ export function isPolled(p?: ChannelPrompt | null): boolean {
   return !!p && !p.done && (p.kind === "qr" || p.kind === "pair_code" || p.kind === "device_code");
 }
 
-/** Where a channel's settings_url ("settings/connectors/feishu-bot") opens in the settings page: its tab and sub-page. */
-export function settingsTarget(url: string): { tab: string; sub: string | null } | null {
-  const m = /^settings\/([a-z-]+)(?:\/(.+))?$/.exec(url);
-  return m ? { tab: settingsTab(m[1]), sub: m[2] ?? null } : null;
+/** Where a channel's settings_url ("settings/connectors/feishu-bot" or "settings/persona#repositories") opens in the settings page. */
+export function settingsTarget(url: string): { tab: string; sub: string | null; anchor?: string } | null {
+  const hashIdx = url.indexOf("#");
+  const base = hashIdx >= 0 ? url.slice(0, hashIdx) : url;
+  const anchor = hashIdx >= 0 ? url.slice(hashIdx + 1) : "";
+  const m = /^settings\/([a-z-]+)(?:\/(.+))?$/.exec(base);
+  if (!m) return null;
+  if (anchor && !/^[a-z0-9-]+$/i.test(anchor)) return null;
+  return { tab: settingsTab(m[1]), sub: m[2] ?? null, ...(anchor ? { anchor } : {}) };
 }
 
 /** A settings tab by its name now: `plugins` (a hub or a link from before #1844 / #1845) is `extensions`. */

@@ -1,3 +1,5 @@
 {
-  "control_unavailable": "仅查看：Codex App 当前无法接收 Persona 的消息或停止请求。请在电脑上的 Codex App 中继续这个对话。"
+  "control_unavailable": "仅查看：Codex App 当前无法接收 Persona 的消息或停止请求。请在电脑上的 Codex App 中继续这个对话。",
+  "recoverable_resume_or_continue": "Codex App 会话已空闲：可在手机上接管或恢复到 Persona 终端继续，也可以另开新会话继续。",
+  "recoverable_continue_only": "仅查看：当前无法直接接管恢复此 Codex App 会话。可在手机上另开新会话继续，或在电脑上的 Codex App 中打开。"
 }

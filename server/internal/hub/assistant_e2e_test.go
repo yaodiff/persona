@@ -149,7 +149,7 @@ func TestAssistantOverTheBus(t *testing.T) {
 	// ask_user: a card on the phone (its snapshot's interactions); the answer goes back as manager.action.
 	asked := make(chan proto.ToolResult, 1)
 	go func() {
-		asked <- mcp("ask_user", map[string]any{"questions": []map[string]any{{"question": "发吗？", "options": []map[string]string{{"label": "发"}, {"label": "不发"}}}}})
+		asked <- mcp("ask_user", map[string]any{"why_owner": "visible_to_others", "questions": []map[string]any{{"question": "发吗？", "options": []map[string]string{{"label": "发"}, {"label": "不发"}}}}})
 	}()
 	card := app.wait(t, "the question card", func(m map[string]any) bool {
 		ix, _ := m["interaction"].(map[string]any)

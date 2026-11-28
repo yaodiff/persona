@@ -1,7 +1,7 @@
 // The stored `context` of a mail item in the shapes the hub writes (server/internal/assistant/inbox_mail.go
 // readMailBody and mailContext), and what the page shows of them with mail off (#15995).
 import { describe, expect, it } from "vitest";
-import { storedMailText } from "./mail-stored";
+import { storedMailClipping, storedMailText } from "./mail-stored";
 
 const read = (body: string) =>
   `邮箱 me@example.com 收到的未读邮件（共 2 封，下面是最新一封）：\n发件人：Ana <ana@example.com>\n收件人：me@example.com\n抄送：\n时间：2026-11-20T09:00:00Z\n主题：Weekly sync\n\n${body}`;
@@ -34,5 +34,14 @@ describe("storedMailText", () => {
     expect(storedMailText("  ", undefined)).toBe("");
     // read in full, but the mail had no text: the preview, never an empty page with words in the list
     expect(storedMailText(read(""), "p")).not.toBe("");
+  });
+});
+
+describe("storedMailClipping", () => {
+  it("reads the item page's flag as a closed state; anything but a boolean is unknown, never whole", () => {
+    expect(storedMailClipping({ mail_body_truncated: true })).toBe("clipped");
+    expect(storedMailClipping({ mail_body_truncated: false })).toBe("whole");
+    for (const item of [undefined, {}, { mail_body_truncated: undefined }, { mail_body_truncated: null }, { mail_body_truncated: "false" }, { mail_body_truncated: 0 }])
+      expect(storedMailClipping(item), JSON.stringify(item)).toBe("unknown");
   });
 });

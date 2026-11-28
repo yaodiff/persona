@@ -76,6 +76,8 @@ class TerminalViewModel(val key: SessionKey, private val transport: TerminalTran
     private var phone: TerminalSize? = null
     private var wanted = preferences.drive
     private var subscribed = false
+    /** Hub page presence survives an unsupported stream until this page leaves. */
+    private var viewing = false
     private var running = false
     private var unsupported = false
     private var resize: Job? = null
@@ -90,12 +92,13 @@ class TerminalViewModel(val key: SessionKey, private val transport: TerminalTran
     suspend fun run(): Unit = coroutineScope {
         check(!running)
         running = true
+        unsupported = false; retryAt = 0 // a retained page registers again when it becomes visible
         val receiver = launch(start = CoroutineStart.UNDISPATCHED) {
             transport.events.collect { event ->
                 when (event) {
                     is TerminalEvent -> if (event.machineId == key.machineId && event.sessionId == key.sessionId) receive(event)
                     is TerminalControlEvent -> if (event.machineId == key.machineId && event.sessionId == key.sessionId) control(event)
-                    is Hello -> { subscribed = false; unsupported = false; retryAt = 0 }
+                    is Hello -> { subscribed = false; viewing = false; unsupported = false; retryAt = 0 }
                     else -> Unit
                 }
             }
@@ -106,11 +109,13 @@ class TerminalViewModel(val key: SessionKey, private val transport: TerminalTran
                 _state.update { it.copy(online = online, wheel = "terminal_scroll" in transport.features.value,
                     resumable = online && (it.note == TerminalNote.NoTerminal || resumer?.isStopped(key) == true) && resumer?.canResume(key) == true) }
                 if (!online) {
-                    subscribed = false
+                    subscribed = false; viewing = false
                     _state.update { it.copy(control = TerminalControl.Watching, note = TerminalNote.Offline) }
                 } else if ("terminal_stream" in transport.features.value && !unsupported) {
                     if (!subscribed && now >= retryAt) subscribe()
-                } else if (now >= pollAt) {
+                } else {
+                    if (!viewing && now >= retryAt) subscribe()
+                    if (now < pollAt) { delay(250); continue }
                     val version = revision
                     _state.update { it.copy(control = TerminalControl.Watching, streaming = false) }
                     try {
@@ -133,7 +138,7 @@ class TerminalViewModel(val key: SessionKey, private val transport: TerminalTran
             receiver.cancel()
             resize?.cancel(); revision++
             transport.unsubscribe(key)
-            running = false; subscribed = false; appliedPhone = null
+            running = false; subscribed = false; viewing = false; appliedPhone = null
             // The pane goes back to the computer's size: what scrolled off at the phone's size goes with it.
             frames.forgetScrollback()
             TerminalModifiers.Key.entries.forEach { modifiers[it] = ModifierState.OFF }
@@ -273,17 +278,18 @@ class TerminalViewModel(val key: SessionKey, private val transport: TerminalTran
     }
 
     private fun subscribe(force: Boolean = false) {
-        if ("terminal_stream" !in transport.features.value || unsupported) return
-        val drive = wanted && "terminal_control" in transport.features.value
+        val stream = "terminal_stream" in transport.features.value && !unsupported
+        if (!stream && viewing) return
+        val drive = stream && wanted && "terminal_control" in transport.features.value
         val size = if (drive) phone ?: return else null
-        if (transport.subscribe(key, frames.epoch, frames.seq, size, force)) {
-            subscribed = true; appliedPhone = size
+        if (transport.subscribe(key, frames.epoch, frames.seq, size, drive && force)) {
+            viewing = true; subscribed = stream; appliedPhone = size
             _state.update {
                 val control = if (!drive) TerminalControl.Watching
                     else if (it.control == TerminalControl.Active) TerminalControl.Active else TerminalControl.Starting
                 // Taking over and watching by choice say so in the title, not in a notice above the terminal: a notice
                 // coming and going changes the terminal's height, and a driven pane lays itself out again each time.
-                it.copy(streaming = true, control = control, note = null)
+                it.copy(streaming = stream, control = control, note = null)
             }
         }
     }

@@ -1,15 +1,15 @@
 {
-  "busy": "这个 Agent 正忙：在工作、等回答或有后台任务。等它做完再归档。",
-  "close_busy": "这个 Agent 正忙（在工作、等回答、跑循环、有排队消息或在跑服务），现在不能关闭。可以只归档不关闭，或等它做完。",
-  "upgrade": "请更新 hub 的助手才能归档 Agent。",
-  "close_upgrade": "请更新 hub 的助手才能归档并关闭 Agent。",
+  "busy": "该 Agent 正在忙碌（正在工作、等待回复或有后台任务运行），请等任务完成后再归档。",
+  "close_busy": "该 Agent 正在忙碌（正在工作、等待回复、执行循环、有排队消息或运行服务中），暂时无法关闭。你可以仅归档而不关闭，或等它完成后再操作。",
+  "upgrade": "更新 hub 的助手后即可归档会话。",
+  "close_upgrade": "更新 hub 的助手后即可关闭 Agent 并归档其会话。",
   "failed": "归档失败：{error}",
   "undo": "撤销",
   "archived": "已归档「{title}」",
   "archived_closed": "已归档并关闭「{title}」",
-  "archived_not_running": "已归档「{title}」。它没在运行，不用关闭",
-  "archived_still_open": "已归档「{title}」，但它在电脑上还开着：{reason}",
-  "archived_close_unknown": "已归档「{title}」。hub 没说是否已关闭",
+  "archived_not_running": "已归档「{title}」。该会话当时未在运行，无需关闭。",
+  "archived_still_open": "已归档「{title}」，但它在所在电脑上仍处于打开状态：{reason}",
+  "archived_close_unknown": "已归档「{title}」，但 hub 未返回其是否已关闭。",
   "restored": "已恢复「{title}」",
   "restore_failed": "恢复失败：{error}"
 }

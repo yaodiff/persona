@@ -214,6 +214,7 @@ func TestDeployedWorkKeepsPleaseVerifyWithTheVerdictOnTop(t *testing.T) {
 	s.ownerVerifiesAll = true
 	f.judge = `{"changed":"飞书机器人多了任务进展开关","link":"https://hub.example.com/settings?tab=feishu","how":"打开设置看开关"}`
 	agentTurn(s, f, proto.StatusWorking, "", 0)
+	s.setTaskStage(t.Context(), todo.ID, "", "https://github.com/o/r/pull/9")
 	agentTurn(s, f, proto.StatusDone, deployedReply+"\n交付：已上线并实测", 0)
 	waitFor(t, "the 请验收 card", func() bool { a := askOf(s, todo.ID); return a != nil && a.MessageID != "" })
 	card := acceptCardOf(posts())
@@ -223,7 +224,7 @@ func TestDeployedWorkKeepsPleaseVerifyWithTheVerdictOnTop(t *testing.T) {
 	}
 	f.judge = `{"verdict":"done","reason":"已部署"}`
 	agentTurn(s, f, proto.StatusWorking, "", 0)
-	agentTurn(s, f, proto.StatusDone, deployedReply, 0)
+	turnWithRecordedDeployment(t, s, f)
 	waitFor(t, "the review", func() bool { return todoNow(s, todo.ID).Supervision.State == reviewPending })
 	reviewTask(t, s, todo.ID, map[string]any{"verdict": "accepted", "note": "上线了", "checks": completeReviewChecks(todoNow(s, todo.ID))})
 	time.Sleep(6 * testReportDelay)
@@ -387,7 +388,7 @@ func TestRecommendationThatCannotReachTheAgentIsNotTaken(t *testing.T) {
 	f.mu.Lock()
 	f.failSend = errors.New("node down")
 	f.mu.Unlock()
-	if ok, err := s.acceptTryFromBrief(ctx, todo.ID, a.AskedAt.UTC().Format(timeKeyLayout)); ok.taken || err == nil {
+	if ok, err := s.acceptReviewRound(ctx, todo.ID, a.AskedAt.UTC().Format(timeKeyLayout)); ok.taken || err == nil {
 		t.Fatalf("taken while the agent cannot be reached: %v %v", ok, err)
 	}
 	// The web button: 502 with the reason, not 409 "already handled" (the web app toasts it and the button works again).
@@ -614,10 +615,10 @@ func TestAcceptRouteSaysTheRecommendationWasNotTaken(t *testing.T) {
 	}
 }
 
-// The web button's 502 says it in the request's language (whatever the bot's), as its error: a plain error there became
-// the generic "the request did not complete" with the sentence moved to its detail. A reason the hub words itself (an
-// offline computer) reads in that language too, not the default one.
-func TestAcceptRouteNotTakenReadsInTheRequestLanguage(t *testing.T) {
+// The web button's answer says it in the request's language (whatever the bot's): a 502's error, and the reason a
+// recorded decision did not reach its Agent (an offline computer, which the hub words itself, #17431), not the
+// default language.
+func TestAcceptRouteReasonReadsInTheRequestLanguage(t *testing.T) {
 	for _, tc := range []struct {
 		bot, request string
 		want         i18n.Lang
@@ -625,21 +626,31 @@ func TestAcceptRouteNotTakenReadsInTheRequestLanguage(t *testing.T) {
 		{"en", "zh-Hans", i18n.ZhHans},
 		{"zh-Hans", "en", i18n.En},
 	} {
-		s, f, todo, _, _ := conclusionService(t, false)
-		f.mu.Lock()
-		f.hello.Locale = tc.bot
-		f.mu.Unlock()
-		waitsForReview(t, s, f, todo.ID, "两种走法：A 先灰度，B 直接全量。")
-		reviewTask(t, s, todo.ID, map[string]any{"verdict": "needs_user", "reason": "先灰度还是直接全量", "recommend": "先灰度 10%"})
-		a := askOf(s, todo.ID)
-		f.mu.Lock()
-		f.failSend = i18n.Err("assistant-tasks.route_offline")
-		f.mu.Unlock()
-		asked, _ := json.Marshal(a.AskedAt)
-		status, body := serveJSON(t, s, "POST", "/api/v1/todos/"+todo.ID+"/accept", tc.request, `{"asked_at":`+string(asked)+`}`)
-		want := i18n.T(tc.want, "assistant-reports.accept_not_taken", i18n.Args{"error": i18n.T(tc.want, "assistant-tasks.route_offline")})
-		if status != http.StatusBadGateway || body["error"] != want {
-			t.Fatalf("bot %s, request %s: %d %v, want %q", tc.bot, tc.request, status, body, want)
+		for _, offline := range []bool{true, false} {
+			s, f, todo, _, _ := conclusionService(t, false)
+			f.mu.Lock()
+			f.hello.Locale = tc.bot
+			f.mu.Unlock()
+			waitsForReview(t, s, f, todo.ID, "两种走法：A 先灰度，B 直接全量。")
+			reviewTask(t, s, todo.ID, map[string]any{"verdict": "needs_user", "reason": "先灰度还是直接全量", "recommend": "先灰度 10%"})
+			a := askOf(s, todo.ID)
+			f.mu.Lock()
+			f.failSend = errors.New("node down")
+			if offline {
+				f.failSend = i18n.Err("assistant-tasks.route_offline")
+			}
+			f.mu.Unlock()
+			asked, _ := json.Marshal(a.AskedAt)
+			status, body := serveJSON(t, s, "POST", "/api/v1/todos/"+todo.ID+"/accept", tc.request, `{"asked_at":`+string(asked)+`}`)
+			if offline {
+				if want := i18n.T(tc.want, "assistant-tasks.route_offline"); status != http.StatusOK || body["delivered"] != "none" || body["reason"] != want {
+					t.Fatalf("bot %s, request %s: %d %v, want reason %q", tc.bot, tc.request, status, body, want)
+				}
+				continue
+			}
+			if want := i18n.T(tc.want, "assistant-reports.accept_not_taken", i18n.Args{"error": "node down"}); status != http.StatusBadGateway || body["error"] != want {
+				t.Fatalf("bot %s, request %s: %d %v, want %q", tc.bot, tc.request, status, body, want)
+			}
 		}
 	}
 }
@@ -672,10 +683,13 @@ func TestDecisionAnsweredInWordsStaysDecidedWhenTheSendFails(t *testing.T) {
 		t.Fatalf("reply note %q", n)
 	}
 	key := "undelivered|" + a.AskedAt.UTC().Format(time.RFC3339Nano)
+	// digestMu: a digest that took the signal out of pending has marked it sent by the time it lets go (#17838).
+	s.supervise.digestMu.Lock()
 	s.supervise.mu.Lock()
 	g, pending := s.supervise.pending[todo.ID+"|"+sigIdle]
 	told := s.supervise.sent[todo.ID+"|"+sigIdle] == key
 	s.supervise.mu.Unlock()
+	s.supervise.digestMu.Unlock()
 	if !(pending && g.Key == key && strings.Contains(g.Detail, "直接全量") && strings.Contains(g.Detail, "a dialog is open")) && !told {
 		t.Fatalf("supervisor not told: %+v (told %v)", g, told)
 	}
@@ -733,19 +747,19 @@ func TestConclusionVerificationCopyFollowsDeliveryState(t *testing.T) {
 		{"zh live", i18n.ZhHans, &TodoDelivery{State: deliveryLive}, "✅ 做完了：已部署，按下面验收"},
 		{"zh pr", i18n.ZhHans, &TodoDelivery{State: deliveryPR}, "✅ 做完了：停在 PR，未部署，按下面验收"},
 		{"zh merged", i18n.ZhHans, &TodoDelivery{State: deliveryMerged}, "✅ 做完了：已合未部署，按下面验收"},
-		{"zh off", i18n.ZhHans, &TodoDelivery{State: deliveryOff}, "✅ 做完了：已部署但默认关着，按下面验收"},
+		{"zh off", i18n.ZhHans, &TodoDelivery{State: deliveryOff, Gate: "Feature disabled by default"}, "✅ 做完了：已部署但默认关着，按下面验收"},
 		{"zh none", i18n.ZhHans, &TodoDelivery{State: deliveryNone}, "✅ 做完了：请验收结果"},
 		{"zh nil", i18n.ZhHans, nil, "✅ 做完了：请验收结果"},
 		{"en live", i18n.En, &TodoDelivery{State: deliveryLive}, "✅ Done: deployed, check it below"},
 		{"en pr", i18n.En, &TodoDelivery{State: deliveryPR}, "✅ Done: PR open, not deployed yet; check it below"},
 		{"en merged", i18n.En, &TodoDelivery{State: deliveryMerged}, "✅ Done: merged, not deployed yet; check it below"},
-		{"en off", i18n.En, &TodoDelivery{State: deliveryOff}, "✅ Done: deployed, off by default; check it below"},
+		{"en off", i18n.En, &TodoDelivery{State: deliveryOff, Gate: "Feature disabled by default"}, "✅ Done: deployed, off by default; check it below"},
 		{"en none", i18n.En, &TodoDelivery{State: deliveryNone}, "✅ Done: please verify the result below"},
 		{"en nil", i18n.En, nil, "✅ Done: please verify the result below"},
 		{"ja live", i18n.Ja, &TodoDelivery{State: deliveryLive}, "✅ 完了：デプロイ済み。下の手順で確認してください"},
 		{"ja pr", i18n.Ja, &TodoDelivery{State: deliveryPR}, "✅ 完了：PR で停止中・未デプロイ。下の手順で確認してください"},
 		{"ja merged", i18n.Ja, &TodoDelivery{State: deliveryMerged}, "✅ 完了：マージ済み・未デプロイ。下の手順で確認してください"},
-		{"ja off", i18n.Ja, &TodoDelivery{State: deliveryOff}, "✅ 完了：デプロイ済み・既定でオフ。下の手順で確認してください"},
+		{"ja off", i18n.Ja, &TodoDelivery{State: deliveryOff, Gate: "Feature disabled by default"}, "✅ 完了：デプロイ済み・既定でオフ。下の手順で確認してください"},
 		{"ja none", i18n.Ja, &TodoDelivery{State: deliveryNone}, "✅ 完了：結果を確認してください"},
 		{"ja nil", i18n.Ja, nil, "✅ 完了：結果を確認してください"},
 	} {
@@ -796,21 +810,24 @@ func TestConclusionVerificationCopyFollowsDeliveryState(t *testing.T) {
 	}
 
 	// 3. Briefing feed and briefing card
-	facts := s.briefFactsAt(ctx, time.Now(), "")
-	body := s.briefBodyOf(facts, "早报")
-	var row *briefBodyRow
-	for i := range body.Accept {
-		if body.Accept[i].ID == todo.ID {
-			row = &body.Accept[i]
+	t.Run("briefing", func(t *testing.T) {
+		needsBriefingModule(t)
+		facts := s.briefFactsAt(ctx, time.Now(), "")
+		body := s.briefBodyOf(facts, "早报")
+		var row *briefBodyRow
+		for i := range body.Accept {
+			if body.Accept[i].ID == todo.ID {
+				row = &body.Accept[i]
+			}
 		}
-	}
-	if row == nil || row.Verdict != wantVerdict || row.Outcome != "" {
-		t.Fatalf("brief body row = %+v, want verdict=%q outcome=\"\"", row, wantVerdict)
-	}
-	briefCard, _, _ := s.briefCard(facts, "早报", "")
-	if js := briefCard.JSON(); !strings.Contains(js, botcard.EscapeMarkdown(wantVerdict)) || strings.Contains(js, forbidden) {
-		t.Fatalf("brief card verdict mismatch:\n%s", js)
-	}
+		if row == nil || row.Verdict != wantVerdict || row.Outcome != "" {
+			t.Fatalf("brief body row = %+v, want verdict=%q outcome=\"\"", row, wantVerdict)
+		}
+		briefCard, _, _ := s.briefCard(facts, "早报", "")
+		if js := briefCard.JSON(); !strings.Contains(js, botcard.EscapeMarkdown(wantVerdict)) || strings.Contains(js, forbidden) {
+			t.Fatalf("brief card verdict mismatch:\n%s", js)
+		}
+	})
 
 	// 4. Snapshot
 	snap, total := s.snapshotUnaccepted(ctx, s.location(ctx))

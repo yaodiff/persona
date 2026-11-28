@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"cmp"
 	"context"
 	"net/url"
 	"strings"
@@ -15,8 +16,8 @@ import (
 
 // The ask a to-do waits on, on the to-do itself (#2056, docs/assistant/todos.md "Waiting for the owner"): the apps list
 // the to-dos, not the briefing, and a to-do whose conclusion needs the owner's decision is where they show the
-// recommendation and take it with one tap (POST /api/v1/todos/{id}/accept, briefing_feed.go). It is the briefing's
-// `accept[]` row (briefing_feed.go), read from the same book (awaitingAcceptance): a "Please verify" ask, or a supervised
+// recommendation and take it with one tap (POST /api/v1/todos/{id}/accept, todo_accept_route.go). It is the briefing's
+// `accept[]` row (modules/briefing/feed.go), read from the same book (awaitingAcceptance): a "Please verify" ask, or a supervised
 // task's conclusion (conclusion.go). A decision that recommends an option is also pushed with that option, and the
 // push's OK takes it the same way (pushDecision).
 
@@ -35,6 +36,7 @@ import (
 type todoAsk struct {
 	Outcome   string    `json:"outcome,omitempty"`
 	Verdict   string    `json:"verdict"`
+	Summary   string    `json:"summary,omitempty"`
 	Recommend string    `json:"recommend,omitempty"`
 	Link      string    `json:"link,omitempty"`
 	AskedAt   time.Time `json:"asked_at"`
@@ -69,18 +71,33 @@ const (
 	defaultNever = "never"
 )
 
+// todoActiveBlockerView is a persistent active blocker edge attached to a listedTodo under todos_v2.
+type todoActiveBlockerView struct {
+	ID        string `json:"id"`
+	Kind      string `json:"kind"`
+	TargetRef string `json:"target_ref"`
+	State     string `json:"state"`
+	Attempts  int    `json:"attempts,omitempty"`
+}
+
 // listedTodo is a to-do as GET /api/v1/todos lists it: with its ask while one waits (none: no `ask`, which a client that
 // does not know it never reads), and, while it is open and nobody works on it, why (`orphaned`, tasks_orphan.go); on
 // the routes, its view (todo_view_routes.go).
 type listedTodo struct {
 	Todo
-	PrerequisiteBlockers []string                   `json:"prerequisite_blockers,omitzero"`
-	Ask                  *todoAsk                   `json:"ask,omitempty"`
-	DecisionReview       *decisionReview            `json:"decision_review,omitempty"`
-	Orphaned             *TodoOrphan                `json:"orphaned,omitempty"`
-	View                 *assistantwire.TodoSummary `json:"view,omitempty"`
-	RepoGate             *repoGate                  `json:"repo_gate,omitempty"`
-	ItemType             string                     `json:"item_type,omitempty"`
+	readinessWaits         []assistantwire.TodoWait
+	PrerequisiteBlockers   []string                   `json:"prerequisite_blockers,omitzero"`
+	ActiveBlockers         []todoActiveBlockerView    `json:"active_blockers,omitempty"`
+	Ask                    *todoAsk                   `json:"ask,omitempty"`
+	DecisionReview         *decisionReview            `json:"decision_review,omitempty"`
+	Orphaned               *TodoOrphan                `json:"orphaned,omitempty"`
+	View                   *assistantwire.TodoSummary `json:"view,omitempty"`
+	Wait                   *assistantwire.TodoWait    `json:"wait,omitempty"`
+	RepoGate               *repoGate                  `json:"repo_gate,omitempty"`
+	ItemType               string                     `json:"item_type,omitempty"`
+	ChildSummary           *todoChildSummary          `json:"child_summary,omitempty"`
+	EffectiveDirectionID   string                     `json:"effective_direction_id,omitempty"`
+	EffectiveDirectionName string                     `json:"effective_direction_name,omitempty"`
 }
 
 // askEvidenceLink returns raw when it is a valid http(s) URL and not merely the to-do's own /todos/<id> page.
@@ -108,27 +125,70 @@ func isSelfTodoLink(u, web, todoID string) bool {
 	return strings.TrimRight(parsed.EscapedPath(), "/") == selfPath || strings.TrimRight(parsed.Path, "/") == "/todos/"+todoID
 }
 
+// verificationDetails takes the owner's summary and deliverable from the current verification round.
+func (w awaitingAccept) verificationDetails(web, verdict string) (summary, link string) {
+	if w.ask.Conclusion {
+		return "", ""
+	}
+	summary = strings.TrimSpace(w.ask.Reason)
+	var reviewedLink string
+	if r := w.review; r != nil {
+		summary = cmp.Or(summary, strings.TrimSpace(r.Reason), strings.TrimSpace(r.Note))
+		reviewedLink = r.Link
+	}
+	if summary == strings.TrimSpace(verdict) {
+		summary = ""
+	}
+	for _, raw := range []string{reviewedLink, w.ask.Link} {
+		link = askEvidenceLink(raw, web, w.todo)
+		if link == "" {
+			continue
+		}
+		u, _ := url.Parse(link) // askEvidenceLink has validated it.
+		path := strings.TrimRight(u.EscapedPath(), "/")
+		if path == "/todos" && u.Query().Get("id") == w.todo {
+			continue // An older hub linked to a task with a query parameter.
+		}
+		u.RawQuery, u.Fragment, u.ForceQuery = "", "", false
+		target := strings.TrimRight(u.String(), "/")
+		if isSelfTodoLink(target, web, w.todo) || (w.session != "" &&
+			(target == sessionLink(web, w.machine, w.session, false) || (web == "" && path == deeplink.Session(w.machine, w.session)))) {
+			continue
+		}
+		return summary, link
+	}
+	return summary, ""
+}
+
 // todoAsks are the open asks by to-do id, in the request's language: the ones the briefing lists (not passed, not ended,
 // not from before the to-do's latest reopen).
 func (s *Service) todoAsks(ctx context.Context) map[string]todoAsk {
 	l, loc, web := s.botLang(ctx), s.location(ctx), s.webBase(ctx)
 	out := map[string]todoAsk{}
 	for _, w := range s.awaitingAcceptance(ctx) {
-		a := todoAsk{Outcome: w.ask.Outcome, Verdict: verdictText(l, &w.ask, w.delivery), Link: askEvidenceLink(w.ask.Link, web, w.todo), AskedAt: w.ask.AskedAt, Risk: askRisk(&w.ask)}
+		a := todoAsk{Outcome: w.ask.Outcome, Verdict: verdictText(l, &w.ask, w.delivery), AskedAt: w.ask.AskedAt}
+		var agents []TodoAgent
+		if !w.ask.Conclusion {
+			a.Summary, a.Link = w.verificationDetails(web, a.Verdict)
+		} else {
+			a.Link = askEvidenceLink(w.ask.Link, web, w.todo)
+		}
 		if decideAsk(&w.ask) {
 			a.Recommend = w.ask.Recommend
 			if w.ask.OutsideID == "" {
 				if task, ok := s.todoNow(w.todo); ok {
+					agents = task.Agents
 					for _, option := range w.ask.Options {
-						if target := decisionTerminal(task, option.Label); target != nil {
+						if target := decisionTerminal(task, option.Label, w.ask.AskedAt); target != nil {
 							a.Terminal, a.TerminalOption = target, option.Label
 							break
 						}
 					}
-					// A new card keeps the manual control out of its choices. The
-					// reason can still direct the owner to the one bound Agent.
-					if a.Terminal == nil && terminalResumeMention(w.ask.Reason) {
-						a.Terminal = soleDecisionAgent(task, w.ask.AskedAt)
+					if ref := w.ask.ResumeTerminal; a.Terminal == nil && ref != nil {
+						if ag, bound := findActiveLinkedAgent(task, ref.MachineID, ref.SessionID); bound && !ag.LinkedAt.After(w.ask.AskedAt) {
+							target := *ref
+							a.Terminal = &target
+						}
 					}
 				}
 			}
@@ -138,7 +198,7 @@ func (s *Service) todoAsks(ctx context.Context) map[string]todoAsk {
 			a.From, a.Stands, a.Background = w.ask.From, w.ask.Stands, backgroundText(l, loc, &w.ask)
 			a.Suggestion = s.askSuggestion(ctx, w.todo, &w.ask, l)
 			switch {
-			case !w.ask.Deadline.IsZero() && w.ask.Reversible && w.ask.DueAt.IsZero() && a.Recommend != "":
+			case !w.ask.Deadline.IsZero() && w.ask.Reversible && w.ask.DueAt.IsZero() && a.Recommend != "" && !w.ask.manualTerminalRecommendation(agents):
 				d := w.ask.Deadline
 				a.Deadline, a.Default = &d, defaultTaken
 			case w.ask.WhyOwner != "" || !w.ask.Deadline.IsZero():
@@ -150,18 +210,18 @@ func (s *Service) todoAsks(ctx context.Context) map[string]todoAsk {
 				}
 			}
 		}
+		a.Risk = askRisk(&w.ask, agents)
 		out[w.todo] = a
 	}
 	s.addExpiredQuestionAsks(ctx, out)
 	return out
 }
 
-// askRisk is how risky answering ask a is (assistantwire.OwnerAskRisk): open when it cannot be undone or other people
-// will see it (cannotUndo, from its raw deadline, which the list stops showing once the deadline was handled), else
-// safe. The list's ask carries it and the view's decision reads it from there (todo/projection), so whatever answers a
+// askRisk is open when answering requires the owner's terminal, cannot be undone, or is visible to others.
+// cannotUndo uses the raw deadline, including after the list stops showing it. The list's ask carries it and the view's decision reads it from there (todo/projection), so whatever answers a
 // decision, a row or a push about it, can keep this one rule.
-func askRisk(a *acceptAsk) string {
-	if a.OutsideID != "" && !a.Reversible || cannotUndo(a.WhyOwner, a.Deadline, a.Reversible) {
+func askRisk(a *acceptAsk, agents []TodoAgent) string {
+	if a.manualTerminalRecommendation(agents) || a.OutsideID != "" && !a.Reversible || cannotUndo(a.WhyOwner, a.Deadline, a.Reversible) {
 		return assistantwire.OwnerAskRiskOpen
 	}
 	return assistantwire.OwnerAskRiskSafe
@@ -189,18 +249,24 @@ func (s *Service) pushDecision(ctx context.Context, id string) bool {
 // pushDecisionErr is pushDecision that tells a push the hub did not take (the error: it may take it later) from one
 // that is not due (false, nil).
 func (s *Service) pushDecisionErr(ctx context.Context, id string) (bool, error) {
-	return s.pushDecisionAbout(ctx, id, assistantwire.TodoPushDecide)
+	return s.pushDecisionAbout(ctx, id, time.Time{})
 }
 
-// pushDecisionAbout is pushDecisionErr about reason (assistantwire.TodoPushDecide, or TodoPushDecideOverdue for the
-// reminder past its deadline): the hub rings one push per to-do and reason while the decision waits (TodoPushKey), and
-// takes it back once the decision is over (todoPushOver).
-func (s *Service) pushDecisionAbout(ctx context.Context, id, reason string) (bool, error) {
+// pushDecisionAbout sends the current decision, or an overdue reminder for the exact round asked at overdueRound.
+// A direct to-do edit can end the decision after the sweep claimed its deadline.
+func (s *Service) pushDecisionAbout(ctx context.Context, id string, overdueRound time.Time) (bool, error) {
 	a, ok := s.askCopy(id)
 	t, found := s.todoNow(id)
 	if !ok || !found || !decideAsk(&a) || a.Recommend == "" || !a.AcceptedAt.IsZero() ||
 		a.OutsideID == "" && t.Origin == "" || !a.RecheckAt.IsZero() || ownerDecisionReturned(t.Supervision) {
 		return false, nil
+	}
+	reason := assistantwire.TodoPushDecide
+	if !overdueRound.IsZero() {
+		if !a.AskedAt.Equal(overdueRound) || a.DueAt.IsZero() || a.AgentReply != nil || acceptAskEnded(&a, t) || acceptAskStale(&a, t) {
+			return false, nil
+		}
+		reason = assistantwire.TodoPushDecideOverdue
 	}
 	here := s.settings(ctx).MachineID
 	sessionID := t.Origin
@@ -220,7 +286,7 @@ func (s *Service) pushDecisionAbout(ctx context.Context, id, reason string) (boo
 		// The ask and how its push may answer it: the view's (projection), so a notification never offers what the
 		// to-do's row would not answer in place.
 		Todo: &assistantwire.NotifyTodo{ID: id, AskedAt: a.AskedAt, Recommend: a.Recommend, Responses: ownerResponses,
-			Ask: projection.DecisionAskID(a.AskedAt), Lockscreen: projection.Lockscreen(askRisk(&a))},
+			Ask: projection.DecisionAskID(a.AskedAt), Lockscreen: projection.Lockscreen(askRisk(&a, t.Agents))},
 		// One push a to-do and reason while it waits, not one a round (todoPushOver lets the next one ring). The hub
 		// names its card (TodoAskCardID) as the push's card_id, never interaction_id: the iOS app clears a delivered
 		// push whose interaction_id is not in its card list as stale, and a decision is never in that list.
@@ -228,7 +294,7 @@ func (s *Service) pushDecisionAbout(ctx context.Context, id, reason string) (boo
 	for _, o := range a.Options {
 		n.Todo.Options = append(n.Todo.Options, o.Label)
 	}
-	if d := deadlineText(l, s.location(ctx), a.Deadline, a.Reversible, time.Now()); d != "" && a.AgentReply == nil {
+	if d := a.deadlineText(l, s.location(ctx), time.Now(), t.Agents); d != "" && a.AgentReply == nil {
 		n.Body += "\n" + d
 	}
 	// Self-contained (#3804): where it came from and stands, what each option leads to, what waiting costs.
@@ -243,11 +309,12 @@ func (s *Service) pushDecisionAbout(ctx context.Context, id, reason string) (boo
 		n.Title, n.Body = s.redactedNotice(ctx, l, space)
 		n.Todo.Options, n.Todo.Lockscreen = nil, assistantwire.OwnerAskLockscreenOpenOnly
 	}
-	s.noteCard(ctx, cardDecision, n)
-	if _, err := s.hub.NotifyRequest(ctx, NotifyRequest{Notification: n}); err != nil {
+	res, err := s.hub.NotifyRequest(ctx, NotifyRequest{Notification: n})
+	if err != nil {
 		s.logf("task %s: decision push: %v", id, err)
 		return false, err
 	}
+	s.noteCardResult(ctx, decisionCardSource(a.WhyOwner), n, res)
 	return true, nil
 }
 

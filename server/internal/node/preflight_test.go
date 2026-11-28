@@ -193,6 +193,24 @@ func TestPreflightDenied(t *testing.T) {
 	}
 }
 
+func TestPreflightSymlinkLoopHint(t *testing.T) {
+	home, claude, work := preflightHome(t)
+	linkA := filepath.Join(claude, "skills", "loop-a")
+	linkB := filepath.Join(home, "loop-b")
+	symlink(t, linkB, linkA)
+	symlink(t, linkA, linkB)
+	c := pathPreflight(context.Background(), preflightItems(claude, []string{work}), testPreflightEnv(home))
+	if c.Status != DoctorFail {
+		t.Fatalf("status %s: %+v", c.Status, c)
+	}
+	if !strings.Contains(c.Detail, "too many levels of symbolic links") || !strings.Contains(c.Detail, "每个 Claude 启动时") {
+		t.Errorf("detail = %q", c.Detail)
+	}
+	if !strings.Contains(c.Hint, "循环指向") || strings.Contains(c.Hint, "网络盘") {
+		t.Errorf("hint = %q", c.Hint)
+	}
+}
+
 // The words for a Mac: which program gets Full Disk Access depends on what started the node, and which folder to
 // move out of on where the blocked path is.
 func TestPreflightCheckWordsOnAMac(t *testing.T) {

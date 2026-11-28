@@ -1,6 +1,6 @@
 {
   "main": "主对话",
-  "not_started": "主对话还没开始",
+  "not_started": "主对话尚未启动",
   "starting": "主对话 · 启动中…",
   "running": "运行中",
   "proxy": "经 {name} 接入",
@@ -10,5 +10,5 @@
   "last_location": "上次运行于 {location}",
   "interactive": "{harness}（交互式）",
   "print": "{harness}（打印模式）",
-  "print_note": "交互式 Claude Code 没有启动起来：{reason}"
+  "print_note": "交互式 Claude Code 启动失败：{reason}"
 }

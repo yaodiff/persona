@@ -2,7 +2,10 @@ package persona.core.hub
 
 import persona.core.contracts.JsonCodec
 import persona.core.contracts.api.InboxActionsTransport
+import persona.core.contracts.api.InboxItemContext
 import kotlinx.coroutines.CancellationException
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -49,10 +52,15 @@ class HttpInboxActionsTransport(
     }
 
     override suspend fun collectNow() { request() }
-    override suspend fun context(itemId: String): String {
+    override suspend fun context(itemId: String): InboxItemContext {
         val result = JsonCodec.parseToJsonElement(request(itemId)).jsonObject
         val item = result["item"]?.jsonObject ?: result
-        return item["context"]?.jsonPrimitive?.contentOrNull.orEmpty()
+        val text = item["context"]?.jsonPrimitive?.contentOrNull.orEmpty()
+        // `mail_body_truncated` stands beside `context` (#15995). Only a real JSON boolean decides: absent, a string
+        // or a number stays null ("not known"), never false/"whole". A manager envelope nests the item under `item`,
+        // so an envelope-level flag is accepted as a fallback.
+        val truncated = item.wireBoolean("mail_body_truncated") ?: result.wireBoolean("mail_body_truncated")
+        return InboxItemContext(text, truncated)
     }
 
     override suspend fun draft(itemId: String, instruction: String): String {
@@ -68,5 +76,16 @@ class HttpInboxActionsTransport(
     companion object {
         /** Policy for one model completion on the hub; unmeasured. */
         const val DRAFT_READ_TIMEOUT_SECONDS = 120L
+    }
+}
+
+/** A real JSON boolean (`true`/`false` token) only; null when absent, a string, a number or another type. */
+private fun JsonObject.wireBoolean(key: String): Boolean? {
+    val primitive = this[key] as? JsonPrimitive ?: return null
+    if (primitive.isString) return null
+    return when (primitive.content) {
+        "true" -> true
+        "false" -> false
+        else -> null
     }
 }

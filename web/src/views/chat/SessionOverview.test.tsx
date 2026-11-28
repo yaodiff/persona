@@ -193,7 +193,7 @@ describe("SessionOverview Subagents section", () => {
     expect(host.querySelector('[data-subagent-row="local-codex"] [data-subagent-doing]')?.textContent).toBe("Checking types");
 
     // Needs you status shown with attention color
-    expect(host.querySelector('[data-subagent-row="remote-a2a"]')?.textContent).toContain("等你确认");
+    expect(host.querySelector('[data-subagent-row="remote-a2a"]')?.textContent).toContain("待你确认");
 
     // Ended · 5 group is collapsed by default with at most 4 stacked avatars
     const endedToggle = host.querySelector<HTMLButtonElement>("[data-subagents-ended-toggle]")!;

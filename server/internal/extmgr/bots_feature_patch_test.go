@@ -159,7 +159,7 @@ func TestBotFeaturePatchConcurrentCredentials(t *testing.T) {
 		{name: "null", features: `,"features":null`, wantRead: true},
 		{name: "empty", features: `,"features":{}`, wantRead: true},
 		{name: "null member", features: `,"features":{"read_group":null}`, wantRead: true},
-		{name: "explicit full replace", features: `,"features":{"main":false,"cards":false,"all_cards":false,"pushes":false,"sync":false,"agents":true,"reports":false,"board":false,"workbench":false,"only_conclusions":false,"report_steps":false,"answer_new_card":false,"topic_cot":false,"read_group":false}`, wantAgents: true},
+		{name: "explicit full replace", features: `,"features":{"main":false,"cards":false,"all_cards":false,"pushes":false,"sync":false,"agents":true,"reports":false,"board":false,"workbench":false,"only_conclusions":false,"report_steps":false,"answer_new_card":false,"topic_cot":false,"dm_cot":false,"cot_answer":false,"read_group":false}`, wantAgents: true},
 		{name: "validation failure", features: `,"features":{"agents":true}`, newApp: true, validationFail: true, wantRead: true},
 		{name: "credential save failure", features: `,"features":{"agents":true}`, newApp: true, saveFail: true, wantRead: true},
 	} {

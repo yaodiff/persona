@@ -31,7 +31,7 @@ func (i *DevelopmentImage) binary(dir string) string {
 }
 
 func (i *DevelopmentImage) check(dir string) error {
-	if !i.Target.Valid() || !shaPattern.MatchString(i.SHA256) {
+	if !validManagerBuild(i.Target) || !shaPattern.MatchString(i.SHA256) {
 		return errors.New("invalid development manager image")
 	}
 	sum, err := hashFile(i.binary(dir))
@@ -44,7 +44,7 @@ func (i *DevelopmentImage) check(dir string) error {
 // StageDevelopment stores the verified binary separately from the node cache,
 // whose normal pruning must never remove the last working manager.
 func StageDevelopment(dir, binary string, t devicewire.DevelopmentTarget) (*DevelopmentImage, error) {
-	if !t.Valid() {
+	if !validManagerBuild(t) {
 		return nil, errors.New("invalid development manager target")
 	}
 	sum, err := hashFile(binary)
@@ -83,6 +83,12 @@ func DevelopmentTried(dir string, t devicewire.DevelopmentTarget) (bool, error) 
 
 const workerEnv = "PERSONA_DEVELOPMENT_MANAGER_WORKER"
 
+// ErrReloadLauncher is returned after a worker drains and asks its
+// supervisor to follow a replacement of the installed launcher.
+var ErrReloadLauncher = errors.New("manager launcher was replaced")
+
+func validManagerBuild(t devicewire.DevelopmentTarget) bool { return t.Valid() || t.ValidPublished() }
+
 func workerDirectory(dir string, build update.Build) string {
 	work := os.Getenv(workerEnv)
 	name := filepath.Base(work)
@@ -91,6 +97,9 @@ func workerDirectory(dir string, build update.Build) string {
 	}
 	image := DevelopmentImage{Target: devicewire.DevelopmentBuild(build.Commit, build.Version, build.Number)}
 	if !image.Target.Valid() {
+		image.Target = devicewire.PublishedBuild(build.Commit, build.Version, build.Number)
+	}
+	if !validManagerBuild(image.Target) {
 		return ""
 	}
 	exe, err := os.Executable()
@@ -105,11 +114,15 @@ func workerDirectory(dir string, build update.Build) string {
 	return work
 }
 
+// IsUpdateWorker reports whether this process was started by the manager's
+// update supervisor. The supervisor still holds the service's lock.
+func IsUpdateWorker(dir string, build update.Build) bool { return workerDirectory(dir, build) != "" }
+
 // Called after stores opened, the bus handshake succeeded, and the Hub still
 // confirms the running image. Only the trial's parent can promote it.
 func DevelopmentReady(dir string, build update.Build, t devicewire.DevelopmentTarget) error {
 	work := workerDirectory(dir, build)
-	if work == "" || !t.Valid() || build.Commit != t.Commit || build.Version != t.Version || build.Number != t.Build {
+	if work == "" || !validManagerBuild(t) || build.Commit != t.Commit || build.Version != t.Version || build.Number != t.Build {
 		return nil
 	}
 	return update.Save(filepath.Join(work, "ready.json"), t)
@@ -119,7 +132,7 @@ func DevelopmentReady(dir string, build update.Build, t devicewire.DevelopmentTa
 // for a development image, this process supervises the trial. Only a readiness
 // receipt advances Current. Losing the supervisor during a trial therefore
 // leaves service restart pointed at the previous binary.
-func RunDevelopment(ctx context.Context, dir string, build update.Build, log io.Writer, run func(context.Context) error) error {
+func RunDevelopment(ctx context.Context, dir string, build update.Build, log io.Writer, run func(context.Context) error, args ...string) error {
 	if work := workerDirectory(dir, build); work != "" {
 		// The supervisor holds the write end of stdin. Its abrupt exit must
 		// also stop this process, including during an unconfirmed trial.
@@ -131,11 +144,20 @@ func RunDevelopment(ctx context.Context, dir string, build update.Build, log io.
 		}()
 		var next *DevelopmentImage
 		err := run(ctx)
+		if errors.Is(err, ErrReloadLauncher) {
+			return update.Save(filepath.Join(work, "reload.json"), true)
+		}
 		if errors.As(err, &next) {
 			return update.Save(filepath.Join(work, "next.json"), next)
 		}
 		return err
 	}
+	if len(args) == 0 {
+		args = []string{"manager", "run", "--dir", dir}
+	}
+	// The manager points PERSONA_HOME at its own data during run. A worker
+	// must still start with the supervisor's original host environment.
+	env := os.Environ()
 	statePath := developmentStatePath(dir)
 	var s developmentState
 	found, err := update.Load(statePath, &s)
@@ -192,13 +214,16 @@ func RunDevelopment(ctx context.Context, dir string, build update.Build, log io.
 				s = before
 				return err
 			}
-			if old := before.Previous; old != nil && old.Target.Valid() && old.Target != image.Target && (before.Current == nil || old.Target != before.Current.Target) {
+			if old := before.Previous; old != nil && validManagerBuild(old.Target) && old.Target != image.Target && (before.Current == nil || old.Target != before.Current.Target) {
 				_ = os.RemoveAll(filepath.Dir(old.binary(dir)))
 			}
 			return nil
-		})
+		}, env, args)
 		if ctx.Err() != nil {
 			break
+		}
+		if errors.Is(err, ErrReloadLauncher) {
+			return err
 		}
 		if trial && s.Tried == image.Target.Version {
 			fmt.Fprintf(log, "manager update: %s failed startup, returning to the previous program: %v\n", image.Target.Version, err)
@@ -222,7 +247,7 @@ func RunDevelopment(ctx context.Context, dir string, build update.Build, log io.
 	return ctx.Err()
 }
 
-func runDevelopmentImage(ctx context.Context, dir string, image *DevelopmentImage, log io.Writer, trial bool, promote func() error) (*DevelopmentImage, error) {
+func runDevelopmentImage(ctx context.Context, dir string, image *DevelopmentImage, log io.Writer, trial bool, promote func() error, env, args []string) (*DevelopmentImage, error) {
 	if err := image.check(dir); err != nil {
 		return nil, err
 	}
@@ -233,14 +258,14 @@ func runDevelopmentImage(ctx context.Context, dir string, image *DevelopmentImag
 	defer os.RemoveAll(work)
 	child, stop := context.WithCancel(ctx)
 	defer stop()
-	cmd := exec.CommandContext(child, image.binary(dir), "manager", "run", "--dir", dir)
+	cmd := exec.CommandContext(child, image.binary(dir), args...)
 	reader, writer, err := os.Pipe()
 	if err != nil {
 		return nil, err
 	}
 	defer writer.Close()
 	cmd.Stdin = reader
-	cmd.Env = append(os.Environ(), workerEnv+"="+work)
+	cmd.Env = append(env, workerEnv+"="+work)
 	cmd.Stdout, cmd.Stderr = log, log
 	cmd.Cancel = func() error { return cmd.Process.Signal(os.Interrupt) }
 	cmd.WaitDelay = 10 * time.Second
@@ -284,6 +309,10 @@ func runDevelopmentImage(ctx context.Context, dir string, image *DevelopmentImag
 	}
 	if err := <-done; err != nil {
 		return nil, err
+	}
+	var reload bool
+	if found, err := update.Load(filepath.Join(work, "reload.json"), &reload); found && reload && err == nil {
+		return nil, ErrReloadLauncher
 	}
 	var next DevelopmentImage
 	found, err := update.Load(filepath.Join(work, "next.json"), &next)

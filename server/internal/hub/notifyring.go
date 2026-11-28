@@ -41,9 +41,10 @@ type notifyRing struct {
 }
 
 type ringedNotify struct {
-	at   time.Time
-	card string // the interaction it is about ("": none), skipped once that card is resolved
-	msg  []byte // the notify event as it would have gone to the socket, quiet hours applied
+	at         time.Time
+	card       string // the interaction it is about ("": none), skipped once that card is resolved
+	occurrence string // its exact created_at; empty from an older payload keeps ID-only replay
+	msg        []byte // the notify event as it would have gone to the socket, quiet hours applied
 }
 
 func (r *notifyRings) clock() time.Time {
@@ -129,8 +130,15 @@ func (h *Hub) replayNotifyRing(c *client) {
 	d.events = nil
 	for _, e := range kept {
 		if e.card != "" {
-			if _, open := h.pendingInteraction(e.card); !open {
+			ix, open := h.pendingInteraction(e.card)
+			if !open {
 				continue
+			}
+			if e.occurrence != "" {
+				at, err := time.Parse(time.RFC3339Nano, e.occurrence)
+				if err != nil || !ix.CreatedAt.Equal(at) {
+					continue // a retained alert must never acquire a same-ID replacement's buttons
+				}
 			}
 		}
 		c.queue(e.msg)
@@ -160,8 +168,10 @@ func (h *Hub) ringNotify(live map[string]bool, required []string, wantsOn func(d
 		if msg == nil {
 			continue
 		}
-		card, _ := msgIn(d.lang)["interaction_id"].(string)
-		d.add(ringedNotify{at: now, card: card, msg: msg})
+		payload := msgIn(d.lang)
+		card, _ := payload["interaction_id"].(string)
+		occurrence, _ := payload["interaction_created_at"].(string)
+		d.add(ringedNotify{at: now, card: card, occurrence: occurrence, msg: msg})
 		kept++
 	}
 	return kept

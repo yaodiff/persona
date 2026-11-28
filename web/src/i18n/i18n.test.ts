@@ -24,6 +24,8 @@ describe("startI18n", { timeout: 30_000 }, () => {
     const rest = i18nRest();
     expect(rest).toBeInstanceOf(Promise);
     expect(t("common.cancel")).toBe("Cancel");
+    expect(t("agents-archives.restore")).toBe("Restore");
+    expect(startupNamespaces).not.toContain("agents-archives");
     for (const name of ["stopped", "busy", "load_failed", "no_progress", "page_cap", "not_found", "origin_changed", "return", "menu"]) {
       const primary = `chat-chatview.search_${name}`;
       expect(hasKey(primary)).toBe(true);

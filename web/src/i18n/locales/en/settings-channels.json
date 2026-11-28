@@ -21,6 +21,7 @@
   "target_title": "Send messages to",
   "target_footer": "Sending /new in the chat to start a new chat, or /main to go back to the main chat, changes this too.",
   "target_row": "Send to",
+  "target_override_groups_and_topics": "Each group has its own chat, and each topic within a group has a separate chat. Direct messages go to the destination selected above.",
   "target_override_topics": "Group topic routing is on — each topic uses its own chat. \"Send to\" above only applies to messages outside those topics, such as direct or regular chats.",
   "target_override_threads": "Thread routing is on — each thread uses its own chat. \"Send to\" above only applies to messages outside a thread, such as direct or regular chats.",
   "target_override_generic": "Topic or thread routing is on — each topic or thread uses its own chat. \"Send to\" above only applies to direct or regular messages.",

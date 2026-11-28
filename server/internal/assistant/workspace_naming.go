@@ -96,7 +96,7 @@ func (s *Service) namingPreview(ctx context.Context, id string, in namingRequest
 		rows := []repository.TaskRepository{}
 		for _, name := range []string{"web", "api"} {
 			identity, _ := repository.Parse("https://github.com/example/"+name, "")
-			rows = append(rows, repository.TaskRepository{RepoID: name, RequestedRef: repository.RequestedRef{Kind: "branch", Value: "main"}, SourceSnapshot: repository.SourceSnapshot{Identity: identity}})
+			rows = append(rows, repository.TaskRepository{RepoID: name, RequestedRef: repository.RequestedRef{Kind: "default"}, SourceSnapshot: repository.SourceSnapshot{Identity: identity}})
 			if in.Layout == repository.LayoutRoot {
 				break
 			}
@@ -160,21 +160,28 @@ func (s *Service) namingPreview(ctx context.Context, id string, in namingRequest
 		return empty, 0, workspacenaming.Problem{Code: "node_unavailable", Field: "machine_id", Severity: "error"}
 	}
 	if preview.Plan != nil {
-		if err := workspacenaming.CheckPlan(*preview.Plan); err != nil {
+		if err := validateWorkspaceNamingPlan(*preview.Plan, source); err != nil {
 			return empty, 0, err
 		}
-		expected := source
-		if expected.Timezone == "" {
-			expected.Timezone = "UTC"
-		}
-		want, _ := json.Marshal(expected)
-		got, _ := json.Marshal(preview.Plan.Source)
-		if !bytes.Equal(want, got) {
-			return empty, 0, repository.Problem("invalid")
-		}
 	}
+	preview.Describe(source)
 	preview.Sample = sample
 	return preview, revision, nil
+}
+
+func validateWorkspaceNamingPlan(plan workspacenaming.Plan, source workspacenaming.Source) error {
+	if err := workspacenaming.CheckPlan(plan); err != nil {
+		return err
+	}
+	if source.Timezone == "" {
+		source.Timezone = "UTC"
+	}
+	want, _ := json.Marshal(source)
+	got, _ := json.Marshal(plan.Source)
+	if !bytes.Equal(want, got) {
+		return repository.Problem("invalid")
+	}
+	return nil
 }
 
 func (s *Service) workspaceNamingRoutes() {

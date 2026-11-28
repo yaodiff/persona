@@ -6,6 +6,7 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.KeepGeneratedSerializer
 import kotlinx.serialization.json.*
+import persona.core.contracts.api.ExtensionView
 
 @KeepGeneratedSerializer
 @Serializable(with = MachineSystemSerializer::class)
@@ -66,6 +67,19 @@ data class Fold(
     val images: List<FoldImage> = emptyList(),
     /** What the folded items used (#5426). Omitted when none of them carried usage, and from older nodes. */
     val usage: List<TokenUsage> = emptyList(),
+    /** Out-of-band views belonging to folded tool results. */
+    @SerialName("tool_views") val toolViews: List<FoldToolView> = emptyList(),
+    /** The `botmux send` replies folded into this run, in order ([Botmux]); older nodes omit it. */
+    val botmux: List<Botmux> = emptyList(),
+)
+
+/** A connector's declarative view carried with its tool identity in a folded work run. */
+@Serializable
+data class FoldToolView(
+    @SerialName("item_id") val itemId: String? = null,
+    @SerialName("tool_use_id") val toolUseId: String = "",
+    val tool: String = "",
+    val view: ExtensionView? = null,
 )
 
 /**

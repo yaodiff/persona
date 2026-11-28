@@ -25,17 +25,18 @@ import (
 
 // runtimeHub is the hub end of a node under test: the events it got and how it answers interactions.
 type runtimeHub struct {
-	modeSets []proto.ModeSetEvent
-	mu       sync.Mutex
-	events   []string
-	lists    [][]proto.Session
-	items    []json.RawMessage
-	deltas   []json.RawMessage
-	cancels  []string
-	asked    []proto.Interaction
-	resolve  func(proto.Interaction) proto.Resolution
-	nodePeer *rpc.Peer
-	cancel   context.CancelFunc
+	modeSets     []proto.ModeSetEvent
+	mu           sync.Mutex
+	events       []string
+	lists        [][]proto.Session
+	items        []json.RawMessage
+	deltas       []json.RawMessage
+	cancels      []string
+	asked        []proto.Interaction
+	askedOrigins []string
+	resolve      func(proto.Interaction) proto.Resolution
+	nodePeer     *rpc.Peer
+	cancel       context.CancelFunc
 	// drop ends the link from the hub's side: the node's connection closes, as when the hub goes away.
 	drop func()
 	// answer takes the other hub calls (mcp.tools, assistant.context…); handled false: an unexpected call.
@@ -128,10 +129,12 @@ func runtimeNodeTapped(t *testing.T, shared *RuntimeHost, tap io.Writer) (*Node,
 		case "interaction.create":
 			var p struct {
 				Interaction proto.Interaction `json:"interaction"`
+				Origin      string            `json:"origin"`
 			}
 			_ = json.Unmarshal(params, &p)
 			end.mu.Lock()
 			end.asked = append(end.asked, p.Interaction)
+			end.askedOrigins = append(end.askedOrigins, p.Origin)
 			resolve := end.resolve
 			end.mu.Unlock()
 			return resolve(p.Interaction), nil
@@ -342,6 +345,74 @@ func TestRuntimeRenameCapability(t *testing.T) {
 			}
 			if caps := got["rename-child"].Capabilities; caps == nil || caps.Rename == nil || *caps.Rename {
 				t.Fatalf("a sub-Agent's row lists rename: %+v", caps)
+			}
+		})
+	}
+}
+
+// A runtime's sentinel-only update keeps the preceding preview of that same row or subagent.
+// The new revision still applies, and a real empty preview can clear the old one.
+func TestRuntimeBotmuxSentinelPreviews(t *testing.T) {
+	const marker = "BOTMUX_NOTHING_TO_SEND"
+	rh, h, _ := runtimePush(t, 0)
+	push := func(rev int64, text, child string) proto.Session {
+		t.Helper()
+		children := []proto.Subagent{{ID: "other", LastText: "unrelated"}, {ID: "child", LastText: child}}
+		if rev == 2 {
+			slices.Reverse(children)
+		}
+		rows := []proto.Session{{SessionID: "sample", LastText: text, Rev: rev, Subagents: children}}
+		rh.event(h, "runtime.sessions", mustJSON(map[string]any{"sessions": rows}))
+		s := onlyRow(t, rh.reg.appendSessions(nil), "sample")
+		if s.Rev != rev || len(s.Subagents) != 2 {
+			t.Fatalf("got revision %d with %d children, want %d with two children", s.Rev, len(s.Subagents), rev)
+		}
+		return s
+	}
+	s := push(1, marker+"\nfirst words", strings.Repeat(" ", maxRuntimeTaskText)+marker+"\nchild words")
+	if s.LastText != "first words" || s.Subagents[1].LastText != "child words" {
+		t.Errorf("mixed preview after clipping: got %q / %q", s.LastText, s.Subagents[1].LastText)
+	}
+	s = push(2, marker, marker)
+	if s.LastText != "first words" || s.Subagents[0].LastText != "child words" {
+		t.Errorf("sentinel-only update: got %q / %q", s.LastText, s.Subagents[0].LastText)
+	}
+	s = push(3, "", "")
+	if s.LastText != "" || s.Subagents[1].LastText != "" {
+		t.Errorf("empty update: got %q / %q", s.LastText, s.Subagents[1].LastText)
+	}
+}
+
+func TestRuntimeBotmuxSentinelNewOwner(t *testing.T) {
+	rh, h, _ := runtimePush(t, 0)
+	rh.event(h, "runtime.sessions", json.RawMessage(`{"sessions":[{"session_id":"sample","last_text":"first owner's words","subagents":[{"id":"child","last_text":"earlier child"}]}]}`))
+	other := rh.reg.add(nil)
+	other.hello, other.ready = runtimeHello{Runtime: "other"}, true
+	rh.event(other, "runtime.sessions", json.RawMessage(`{"sessions":[{"session_id":"sample","last_text":"BOTMUX_NOTHING_TO_SEND","subagents":[{"id":"child","last_text":"BOTMUX_NOTHING_TO_SEND"}]}]}`))
+	s := onlyRow(t, rh.reg.appendSessions(nil), "sample")
+	if s.SourceInstanceID != "other" || s.LastText != "" || len(s.Subagents) != 1 || s.Subagents[0].LastText != "" {
+		t.Errorf("new owner's preview: got owner %q, text %q, children %+v", s.SourceInstanceID, s.LastText, s.Subagents)
+	}
+}
+
+func TestRuntimeBotmuxSentinelPaneMerges(t *testing.T) {
+	for name, merge := range map[string]func(*Node, *proto.Session){"opencode": (*Node).mergeOpencodeRow, "pi": (*Node).mergePiRow} {
+		t.Run(name, func(t *testing.T) {
+			rh, h, _ := runtimePush(t, 0)
+			n := &Node{runtimes: rh.reg}
+			for _, tc := range []struct{ reported, want string }{
+				{"BOTMUX_NOTHING_TO_SEND", "host words"},
+				{"", "host words"},
+				{"plugin words\nBOTMUX_NOTHING_TO_SEND", "plugin words"},
+			} {
+				rh.event(h, "runtime.sessions", mustJSON(map[string]any{"sessions": []map[string]any{{
+					"session_id": "sample", "last_text": tc.reported, "model": "sample-model", "rev": 2,
+				}}}))
+				s := proto.Session{SessionID: "sample", LastText: "host words"}
+				merge(n, &s)
+				if s.LastText != tc.want || s.Model != "sample-model" || s.Rev != 2 {
+					t.Errorf("report %q: got preview %q, model %q, rev %d; want %q, sample-model, 2", tc.reported, s.LastText, s.Model, s.Rev, tc.want)
+				}
 			}
 		})
 	}
@@ -644,6 +715,23 @@ func TestRuntimeRowListsItsPermissionModes(t *testing.T) {
 	_ = json.Unmarshal(h.got("session.modes")[0], &m)
 	if m["session_id"] != "grok" || m["permission_mode"] != "bypassPermissions" {
 		t.Fatalf("modes %v", m)
+	}
+}
+
+func TestAgyRowPreservesPermissionModesAlongsideClaudeModes(t *testing.T) {
+	n, _ := runtimeNode(t)
+	h := dialRuntime(t, n, map[string]any{
+		"runtime": "agy", "name": "Antigravity", "agent": "agy", "launcher": "agy",
+		"caps": map[string]any{"send": true, "modes": true, "assistant": true},
+	})
+	noAuto := []string{"default", "acceptEdits", "plan", "bypassPermissions"}
+	_ = h.peer.Notify("runtime.sessions", map[string]any{"sessions": []map[string]any{
+		{"session_id": "agy-1", "status": "idle", "agent": "agy", "capabilities": map[string]any{"rewind": false, "permission_modes": noAuto}},
+	}})
+	waitFor(t, "agy row listed", func() bool { _, ok := listed(t, n)["agy-1"]; return ok })
+	got := listed(t, n)["agy-1"].Capabilities
+	if got == nil || got.Modes == nil || !*got.Modes || got.PermissionModes != proto.PermissionModeSetOf(noAuto...) {
+		t.Fatalf("agy caps = %+v, want modes=true and permission_modes=%v", got, noAuto)
 	}
 }
 

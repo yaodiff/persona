@@ -67,33 +67,31 @@ type relay struct {
 	client net.Conn
 	linger time.Duration // after the slot's half-close (zero: halfCloseLinger)
 
-	mu        sync.Mutex
-	up        net.Conn
-	kept      []byte
-	keeping   bool // until the slot's first byte
-	overflow  bool // more than replayLimit was sent before it: no replay
-	clientEOF bool
-	once      sync.Once
-	ended     atomic.Int32 // directions done: the second one closes both
+	mu             sync.Mutex
+	up             net.Conn
+	kept           []byte
+	stoppedKeeping bool // true once the slot answers its first byte or client bytes exceed replayLimit
+	overflow       bool // more than replayLimit was sent before it: no replay
+	closed         bool // true once closeAll has closed client and up
+	clientEOF      bool
+	once           sync.Once
+	ended          atomic.Int32 // directions done: the second one closes both
 }
 
 func (r *relay) fromClient() {
-	r.mu.Lock()
-	r.keeping = true
-	r.mu.Unlock()
 	buf := make([]byte, 32<<10)
 	for {
 		n, err := r.client.Read(buf)
 		if n > 0 {
 			r.mu.Lock()
-			if r.keeping {
+			if !r.stoppedKeeping {
 				if len(r.kept)+n > replayLimit {
-					r.overflow, r.kept = true, nil
-				} else if !r.overflow {
+					r.overflow, r.stoppedKeeping, r.kept = true, true, nil
+				} else {
 					r.kept = append(r.kept, buf[:n]...)
 				}
 			}
-			up, keeping := r.up, r.keeping
+			up, keeping := r.up, !r.stoppedKeeping
 			r.mu.Unlock()
 			if _, werr := up.Write(buf[:n]); werr != nil && !keeping {
 				r.closeAll()
@@ -127,7 +125,7 @@ func (r *relay) toClient(next func() net.Conn) {
 			if first {
 				first = false
 				r.mu.Lock()
-				r.keeping, r.kept = false, nil
+				r.stoppedKeeping, r.kept = true, nil
 				r.mu.Unlock()
 			}
 			if _, werr := r.client.Write(buf[:n]); werr != nil {
@@ -151,22 +149,32 @@ func (r *relay) toClient(next func() net.Conn) {
 		}
 		if first {
 			r.mu.Lock()
-			replay := !r.overflow && replayable(r.kept)
+			replay := !r.closed && !r.overflow && replayable(r.kept)
 			r.mu.Unlock()
 			if replay {
 				if nc := next(); nc != nil {
 					r.mu.Lock()
+					if r.closed || r.overflow || !replayable(r.kept) {
+						r.mu.Unlock()
+						_ = nc.Close()
+						r.closeAll()
+						return
+					}
+					_, werr := nc.Write(r.kept)
+					if werr != nil {
+						r.mu.Unlock()
+						_ = nc.Close()
+						r.closeAll()
+						return
+					}
 					_ = r.up.Close()
 					r.up = nc
-					_, werr := nc.Write(r.kept)
 					eof := r.clientEOF
 					r.mu.Unlock()
-					if werr == nil {
-						if eof {
-							halfClose(nc)
-						}
-						continue
+					if eof {
+						halfClose(nc)
 					}
+					continue
 				}
 			}
 		}
@@ -202,6 +210,7 @@ func (r *relay) closeAll() {
 	r.once.Do(func() {
 		_ = r.client.Close()
 		r.mu.Lock()
+		r.closed = true
 		_ = r.up.Close()
 		r.mu.Unlock()
 	})
@@ -222,17 +231,23 @@ func (e *edge) dialActive(port string, header []byte) (*proc, net.Conn) {
 	defer deadline.Stop()
 	for {
 		e.mu.Lock()
-		gate, p := e.gate, e.active
+		held, gate, p := e.held, e.gate, e.active
 		e.mu.Unlock()
-		select {
-		case <-gate:
-		case <-deadline.C:
-			return nil, nil
-		case <-e.ctx.Done():
-			return nil, nil
+		if held || p == nil {
+			if e.onGateWait != nil {
+				e.onGateWait()
+			}
+			select {
+			case <-gate:
+				continue
+			case <-deadline.C:
+				return nil, nil
+			case <-e.ctx.Done():
+				return nil, nil
+			}
 		}
-		if p == nil {
-			continue
+		if e.ctx.Err() != nil {
+			return nil, nil
 		}
 		path, ok := p.sockets[port]
 		if !ok {
@@ -246,11 +261,14 @@ func (e *edge) dialActive(port string, header []byte) (*proc, net.Conn) {
 			_ = uc.Close()
 		}
 		// The slot is going away (a switch has not held connections back yet) or died: wait for the next one.
+		retry := time.NewTimer(50 * time.Millisecond)
 		select {
-		case <-time.After(50 * time.Millisecond):
+		case <-retry.C:
 		case <-deadline.C:
+			retry.Stop()
 			return nil, nil
 		case <-e.ctx.Done():
+			retry.Stop()
 			return nil, nil
 		}
 	}
@@ -263,34 +281,36 @@ func addrPort(a net.Addr) netip.AddrPort {
 	return netip.AddrPort{}
 }
 
-// hold makes new connections wait (a switch, a slot that died); unhold lets them through to the active slot.
-func (e *edge) hold() {
-	e.mu.Lock()
-	defer e.mu.Unlock()
+func (e *edge) holdLocked() {
 	if !e.held {
 		e.gate, e.held = make(chan struct{}), true
 	}
 }
 
-func (e *edge) unhold() {
-	e.mu.Lock()
-	defer e.mu.Unlock()
+func (e *edge) unholdLocked() {
 	if e.held && e.active != nil {
 		close(e.gate)
 		e.held = false
 	}
 }
 
+// hold makes new connections wait (a switch, a slot that died).
+func (e *edge) hold() {
+	e.mu.Lock()
+	e.holdLocked()
+	e.mu.Unlock()
+}
+
 func (e *edge) setActive(p *proc) {
 	e.mu.Lock()
 	e.active = p
-	if p != nil {
+	if p == nil {
+		e.holdLocked()
+	} else {
 		e.served = p.name
+		e.unholdLocked()
 	}
 	e.mu.Unlock()
-	if p != nil {
-		e.unhold()
-	}
 }
 
 func (e *edge) current() *proc {

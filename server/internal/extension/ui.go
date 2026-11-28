@@ -141,9 +141,10 @@ var (
 // charts and sparks, a row's extra actions, grids and carousels, date, time, multiple choice and multi-line fields,
 // title styles, named colors and more icons (#5464); 7 a section's key for the native stream (#5956), which needs no
 // downgrade; 8 the columns layout, a section's span, icon, link and columns (#9158); 9 a tile's gauge (#9337); 10 a
-// graph (#9727); 11 a scene (#12544); 12 a map (#14730). An app says which it draws (context.ui_version, 1 when it
-// says nothing); the hub leaves out of a View what the app does not know, or draws it with what it knows (Fit).
-const UIVersion = 12
+// graph (#9727); 11 a scene (#12544); 12 a map (#14730); 13 a code's navigate, go to definition. An app says which it
+// draws (context.ui_version, 1 when it says nothing); the hub leaves out of a View what the app does not know, or
+// draws it with what it knows (Fit).
+const UIVersion = 13
 
 // PageSlot says whether placement is the extension's own page: extension_page, or plugin_page as it was called.
 func PageSlot(placement string) bool {
@@ -248,6 +249,10 @@ type SecretProviderItem = wire.SecretProviderItem
 // (docs/extensions/repository-providers.md).
 type RepositoryProviderItem = wire.RepositoryProviderItem
 
+// TextLookupItem is a contribution to text_lookup: a dictionary the apps ask for a word the user taps
+// (docs/extensions/extensions.md "Looking up a word").
+type TextLookupItem = wire.TextLookupItem
+
 // RepositoryLinkLabel is what a repository provider calls one kind of its links (wire.RepositoryLinkKinds), "MR" for a
 // pull_request: it only relabels.
 type RepositoryLinkLabel = wire.RepositoryLinkLabel
@@ -268,6 +273,7 @@ var (
 		"leader.changed":            true,
 		"leader.report":             true,
 		"placement.pending":         true,
+		"lark.messages":             true,
 	}
 
 	// EventScopes are the hub scopes an event needs besides the subscription: only an extension granted the scope
@@ -281,6 +287,7 @@ var (
 		"leader.changed":            ScopeLeadersRead,
 		"leader.report":             ScopeLeadersRead,
 		"placement.pending":         ScopeTasksSchedule,
+		"lark.messages":             ScopeLarkMessagesRead,
 	}
 )
 

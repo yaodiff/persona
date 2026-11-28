@@ -1,7 +1,7 @@
 // Actual-app check: the main conversation's ask_user card above the composer on short and narrow windows.
 // Usage: node web/e2e/ask-card-dock.mjs <web-origin> <artifactDir> [--chromium <executable>]
 // Every hub request and the socket are answered in the browser with invented data; nothing reaches a hub.
-// Checks, at each size: the card's answer row is never under the composer, the Pending entries stay in view, and the
+// Checks, at each size: the card's answer row is never under the composer, the action entries stay in view, and the
 // "Or write your own" field scrolls into view above the answer row once focused.
 import assert from "node:assert/strict";
 import { mkdir, writeFile } from "node:fs/promises";
@@ -20,7 +20,7 @@ await mkdir(output, { recursive: true });
 const AT = "2026-01-01T10:00:00Z";
 const MAIN = "example-main";
 const MACHINE = { id: "example", name: "Computer A", online: true, os: "linux" };
-const SESSION = { machine_id: MACHINE.id, session_id: MAIN, title: "Persona", state: "needs_you", status: "needs_you", cwd: "/example", updated_at: AT, started_by_persona: true, assistant: true, capabilities: { send: true, interrupt: true } };
+const SESSION = { machine_id: MACHINE.id, session_id: MAIN, title: "Persona", state: "needs_you", status: "needs_you", cwd: "/example", updated_at: AT, started_by_persona: true, assistant: true, capabilities: { send: true, interrupt: true, approve: true } };
 const ITEMS = [
   { id: "u1", seq: 1, role: "user", kind: "text", text: "Move the example gateway to a new computer.", ts: AT },
   { id: "a1", seq: 2, role: "assistant", kind: "text", text: "The plan is ready; one thing is yours to decide.", ts: AT },
@@ -72,8 +72,7 @@ try {
     page.on("pageerror", (e) => errors.push(String(e)));
     await page.goto(new URL("/", base).href);
     await page.locator("[data-assistant-actionbar]").waitFor({ timeout: 15_000 });
-    if (!(await page.locator(`[data-card="${ASK.id}"] input`).count())) await page.locator('[data-tray-entry="pending"]').click();
-    const custom = page.locator(`[data-card="${ASK.id}"] input`);
+    const custom = page.locator(`[data-decision-pager] [data-card="${ASK.id}"] input`);
     await custom.waitFor({ timeout: 10_000 });
     await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
     // which of an element's corners and center are its own on screen (not under the composer, another card part or off it)
@@ -87,7 +86,7 @@ try {
           .every(([x, y]) => { const top = document.elementFromPoint(x, y); return Boolean(top && (top === el || el.contains(top))); });
       };
       const send = [...card.querySelectorAll("[data-card-actions] button")].at(-1);
-      const entries = [...document.querySelectorAll("[data-tray-entry]")];
+      const entries = [...document.querySelectorAll("[data-decision-entry], [data-tray-entry]")];
       return { send: own(send), entries: entries.length === 3 && entries.every((e) => own(e, false)), custom: own(card.querySelector("input")) };
     }, ASK.id);
     const first = await seen();
@@ -101,7 +100,7 @@ try {
     result.runs.push(run);
     console.log(JSON.stringify(run));
     assert.ok(first.send, `${name}: the answer row is under something before scrolling`);
-    assert.ok(first.entries, `${name}: the Pending entries are not in view`);
+    assert.ok(first.entries, `${name}: the action entries are not in view`);
     assert.ok(typed.custom && typed.send, `${name}: the own-answer field or the send button is covered after focusing it`);
     assert.ok(await page.locator(`[data-card="${ASK.id}"] [data-card-actions] button`).last().isEnabled(), `${name}: send is not enabled after typing`);
     assert.deepEqual(errors, [], `${name}: page errors`);

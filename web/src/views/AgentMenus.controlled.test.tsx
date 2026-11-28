@@ -122,6 +122,7 @@ let anchor: HTMLButtonElement;
 let root: Root;
 
 const flush = async () => {
+  await act(async () => { await vi.dynamicImportSettled(); }); // NodeMenu comes in a chunk of its own
   for (let i = 0; i < 4; i++) await act(async () => { await Promise.resolve(); });
 };
 

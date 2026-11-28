@@ -192,7 +192,7 @@ func protectedEntity(v any, t *Tagging, current map[string]json.RawMessage, manu
 		raw, _ := json.Marshal(current)
 		_ = json.Unmarshal(raw, &protected)
 		if !manual {
-			for _, field := range append([]string{"pinned", "locked_fields", "locked", "provenance", "excluded"}, protected.LockedFields...) {
+			for _, field := range append([]string{"pinned", "locked_fields", "locked", "provenance", "excluded", "held_off_projects"}, protected.LockedFields...) {
 				key := fieldKey(field)
 				if value, ok := current[key]; ok {
 					incoming[key] = value
@@ -371,7 +371,10 @@ func (e *Engine) unlink(kind, id string, u Update, le linkEdit) error {
 			}
 		}
 		for _, cid := range le.allow["chats"] {
-			if err := chat(cid, func(c *Chat) { taggingInclude(&c.Tagging, "projects", id) }); err != nil {
+			if err := chat(cid, func(c *Chat) {
+				taggingInclude(&c.Tagging, "projects", id)
+				c.HeldOffProjects = false
+			}); err != nil {
 				return err
 			}
 		}

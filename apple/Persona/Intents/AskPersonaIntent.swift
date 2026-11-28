@@ -67,7 +67,8 @@ nonisolated enum AskPersonaFlow {
             return try await waitForAnswer(api, key: SessionKey(machineID: s.machineID, sessionID: s.sessionID), after: 0)
         }
         let last = (try? await api.items(key, beforeSeq: nil, turns: 1).toSeq) ?? 0
-        try await api.send(key, text: text, clientMsgID: UUID().uuidString, via: .intent)
+        let id = UUID()
+        try await api.send(key, text: text, clientMsgID: id.uuidString, via: .intent, opID: id)
         return try await waitForAnswer(api, key: key, after: last ?? 0)
     }
 

@@ -467,11 +467,12 @@ type pageRefreshState struct {
 }
 
 type pageRefreshEntry struct {
-	id      int64
-	state   string // refreshStateChecking, refreshStateNoReading, refreshStateFailed
-	tapAt   time.Time
-	startAt time.Time
-	cancel  context.CancelFunc
+	id       int64
+	state    string // refreshStateChecking, refreshStateNoReading, refreshStateFailed
+	tapAt    time.Time
+	startAt  time.Time
+	watching bool
+	cancel   context.CancelFunc
 }
 
 type pageRefreshSample struct {
@@ -574,6 +575,15 @@ func (s *Service) notePageRefreshStarted(pageID string, runID int64, startAt tim
 	defer rs.mu.Unlock()
 	if cur := rs.active[pageID]; cur != nil && cur.id == runID {
 		cur.startAt = startAt
+	}
+}
+
+func (s *Service) notePageRefreshWatching(pageID string, runID int64) {
+	rs := &s.pages.events.refresh
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	if cur := rs.active[pageID]; cur != nil && cur.id == runID {
+		cur.watching = true
 	}
 }
 
@@ -902,7 +912,9 @@ func (s *Service) runPageRefresh(watchCtx context.Context, pageID, routineID str
 		return
 	}
 	s.notePageRefreshStarted(pageID, runID, startAt)
-	ended, _ := s.waitTurnEnd(watchCtx, sess.MachineID, sess.SessionID)
+	ended, _ := s.waitTurnEndOnReady(watchCtx, sess.MachineID, sess.SessionID, func() {
+		s.notePageRefreshWatching(pageID, runID)
+	})
 	if watchCtx.Err() != nil {
 		return // cleared by pageReadingWritten, pause, or remove
 	}

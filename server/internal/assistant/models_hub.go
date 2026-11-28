@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"github.com/nwverse/persona/server/internal/compat"
 	"net/http"
 	"strings"
 	"time"
@@ -12,6 +11,8 @@ import (
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/bus"
+	"github.com/nwverse/persona/server/internal/buswire"
+	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/quota"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -23,59 +24,91 @@ import (
 
 // modelsRequest answers the hub's models.* calls (bus.go's request); false for any other method.
 func (s *Service) modelsRequest(ctx context.Context, method string, params json.RawMessage) (any, bool, error) {
+	decode := func(out any) error {
+		if len(params) > 0 {
+			if err := json.Unmarshal(params, out); err != nil {
+				return &rpc.Error{Code: bus.CodeInvalidParams, Message: method + ": " + err.Error()}
+			}
+		}
+		return nil
+	}
+	switch method {
+	case assistantwire.MethodExtensionIdentity:
+		return handleAssistantRequest(ctx, assistantwire.ExtensionIdentityMethod, nil, func(context.Context, buswire.None) (assistantwire.ExtensionIdentityResult, error) {
+			return assistantwire.ExtensionIdentityResult{Supported: true}, nil
+		})
+	case assistantwire.MethodModelsUsable:
+		return handleAssistantRequest(ctx, assistantwire.ModelsUsableMethod, decode, s.purposeModelUsability)
+	case assistantwire.MethodModelsLaunchers:
+		return handleAssistantRequest(ctx, assistantwire.ModelsLaunchersMethod, nil, s.gatewayLaunchers)
+	case assistantwire.MethodModelsExtensionComplete: // an extension's model.complete (model_rpc.go)
+		return handleAssistantRequest(ctx, assistantwire.ModelsExtensionCompleteMethod, func(out any) error {
+			if err := json.Unmarshal(params, out); err != nil {
+				return invalidModelParams("no extension")
+			}
+			return nil
+		}, s.extensionComplete)
+	case assistantwire.MethodModelsPurposeComplete: // the manager's own call on a built-in purpose (model_rpc.go)
+		return handleAssistantRequest(ctx, assistantwire.ModelsPurposeCompleteMethod, func(out any) error {
+			return strictModelParams(params, out)
+		}, s.purposeComplete)
+	case assistantwire.MethodModelsLauncherHTTP:
+	default:
+		return nil, false, nil
+	}
 	var p struct {
 		Purpose string         `json:"purpose"`
 		Name    string         `json:"name"`
 		Machine string         `json:"machine"`
 		HTTP    *quota.Request `json:"http"`
 	}
-	switch method {
-	case assistantwire.MethodExtensionIdentity:
-		return map[string]bool{"supported": true}, true, nil
-	case assistantwire.MethodModelsUsable, assistantwire.MethodModelsLauncherHTTP:
-	case assistantwire.MethodModelsLaunchers:
-		return map[string]any{"launchers": s.gatewayLaunchers(ctx)}, true, nil
-	case assistantwire.MethodModelsExtensionComplete: // an extension's model.complete (model_rpc.go)
-		out, err := s.extensionComplete(ctx, params)
-		return out, true, err
-	case assistantwire.MethodModelsPurposeComplete: // the manager's own call on a built-in purpose (model_rpc.go)
-		out, err := s.purposeComplete(ctx, params)
-		return out, true, err
-	default:
-		return nil, false, nil
-	}
-	if len(params) > 0 {
-		if err := json.Unmarshal(params, &p); err != nil {
-			return nil, true, &rpc.Error{Code: bus.CodeInvalidParams, Message: method + ": " + err.Error()}
-		}
-	}
-	if method == assistantwire.MethodModelsUsable {
-		b, err := s.resolveModel(ctx, p.Purpose)
-		if err != nil || !s.modelUsable(ctx, b) {
-			return map[string]any{"usable": false}, true, nil
-		}
-		name := b.Provider
-		for _, v := range s.modelProviders(ctx) {
-			if v.ID == b.Provider {
-				name = cmpOr(v.Name, v.ID)
-				break
-			}
-		}
-		return map[string]any{"usable": true, "provider": name, "model": b.Model}, true, nil
+	if err := decode(&p); err != nil {
+		return nil, true, err
 	}
 	out, err := s.launcherHTTP(ctx, p.Name, p.Machine, p.HTTP)
 	return out, true, err
 }
 
+// handleAssistantRequest binds a handler to its wire descriptor while leaving parameter validation to the caller.
+// A nil decoder lets a parameterless method ignore its input.
+func handleAssistantRequest[P, R any](ctx context.Context, _ buswire.Method[P, R], decode func(any) error, run func(context.Context, P) (R, error)) (any, bool, error) {
+	var p P
+	if decode != nil {
+		if err := decode(&p); err != nil {
+			return nil, true, err
+		}
+	}
+	out, err := run(ctx, p)
+	if err != nil {
+		return nil, true, err
+	}
+	return out, true, nil
+}
+
+func (s *Service) purposeModelUsability(ctx context.Context, p assistantwire.ModelsUsableParams) (assistantwire.ModelsUsableResult, error) {
+	b, err := s.resolveModel(ctx, p.Purpose)
+	if err != nil || !s.modelUsable(ctx, b) {
+		return assistantwire.ModelsUsableResult{}, nil
+	}
+	name := b.Provider
+	for _, v := range s.modelProviders(ctx) {
+		if v.ID == b.Provider {
+			name = cmpOr(v.Name, v.ID)
+			break
+		}
+	}
+	return assistantwire.ModelsUsableResult{Usable: true, Provider: name, Model: b.Model}, nil
+}
+
 // gatewayLaunchers is models.launchers: every launcher with a gateway address, names and addresses only (no key).
-func (s *Service) gatewayLaunchers(ctx context.Context) []assistantwire.GatewayLauncher {
+func (s *Service) gatewayLaunchers(ctx context.Context, _ buswire.None) (assistantwire.ModelsLaunchersResult, error) {
 	out := []assistantwire.GatewayLauncher{}
 	for _, v := range s.launcherViews(ctx) {
 		if v.BaseURL != "" {
 			out = append(out, assistantwire.GatewayLauncher{Name: v.Name, BaseURL: v.BaseURL})
 		}
 	}
-	return out
+	return assistantwire.ModelsLaunchersResult{Launchers: out}, nil
 }
 
 // launcherHTTP is models.launcher_http: without r, where launcher name's gateway is ({base_url, machine}); with r,

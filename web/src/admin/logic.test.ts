@@ -107,8 +107,8 @@ describe("time", () => {
 describe("labels", () => {
   it("says how many changes wait for a restart", () => {
     expect(restartText({ required: false, reasons: [] })).toBe("");
-    expect(restartText({ required: true, reasons: ["a"] })).toBe("有改动要重启 hub 后生效");
-    expect(restartText({ required: true, reasons: ["a", "b"] })).toBe("有 2 项改动重启 hub 后生效");
+    expect(restartText({ required: true, reasons: ["a"] })).toBe("有更改将在重启 hub 后生效");
+    expect(restartText({ required: true, reasons: ["a", "b"] })).toBe("有 2 项更改将在重启 hub 后生效");
   });
   it("groups doctor items by level", () => {
     const g = groupDoctor([
@@ -182,8 +182,8 @@ describe("paths", () => {
     });
     const rows = pathRows(m, mesh());
     expect(rows.map((r) => r.via)).toEqual(["hub", "link", "service"]);
-    expect(rows[0]).toMatchObject({ label: "经成员 hub", hub: "公司", self: false, active: true, rtt: 57, ok: true });
-    expect(rows[1]).toMatchObject({ label: "电脑来连", hub: "这台 hub", self: true, ok: false, error: "refused" });
+    expect(rows[0]).toMatchObject({ label: "经由成员 hub", hub: "公司", self: false, active: true, rtt: 57, ok: true });
+    expect(rows[1]).toMatchObject({ label: "电脑主动连接", hub: "这台 hub", self: true, ok: false, error: "refused" });
     expect(rows[2].rtt).toBeUndefined(); // 0 is "not measured"
     expect(pathRows(machine({}), mesh())).toEqual([]);
   });
@@ -192,7 +192,7 @@ describe("paths", () => {
     expect(rows[0].error).toBeUndefined();
   });
   it("labels every way to a computer", () => {
-    expect(["local", "service", "link", "ssh", "tailcat", "hub"].map(viaLabel)).toEqual(["本机", "hub 来连", "电脑来连", "ssh", "tailcat", "经成员 hub"]);
+    expect(["local", "service", "link", "ssh", "tailcat", "hub"].map(viaLabel)).toEqual(["本机", "hub 主动连接", "电脑主动连接", "ssh", "tailcat", "经由成员 hub"]);
     expect(viaLabel("future")).toBe("future");
     expect(viaLabel(undefined)).toBe("");
   });
@@ -275,13 +275,13 @@ describe("the group", () => {
   it("sends a member's admin to the center, and says when it is unreachable", () => {
     const m = mesh({ role: "member", center: { hub_id: OFFICE, name: "公司", online: true } });
     const n = memberNotice(m)!;
-    expect(n.title).toBe("这台 hub 是组里的成员，组由中心「公司」管理");
-    expect(n.detail).toContain("设备、互联等去中心的管理界面");
+    expect(n.title).toBe("这台 hub 为组成员，由中心 hub「公司」统一管理");
+    expect(n.detail).toContain("设备、互联等设置请前往中心 hub 的管理界面操作");
     expect(n.offline).toBe(false);
-    expect(n.detail).not.toContain("连不上");
+    expect(n.detail).not.toContain("无法连接");
     const off = memberNotice({ ...m, center: { ...m.center, online: false } })!;
     expect(off.offline).toBe(true);
-    expect(off.detail).toContain("中心现在连不上");
+    expect(off.detail).toContain("当前无法连接到中心 hub");
   });
   it("names the center even when the hub did not", () => {
     expect(centerName(mesh({ center: { hub_id: OFFICE, name: "", online: true } }))).toBe("公司");
@@ -291,11 +291,11 @@ describe("the group", () => {
 
 describe("extensions", () => {
   it("says each state", () => {
-    expect(extensionStatus({ status: "running" })).toEqual({ tone: "green", label: "启动" });
-    expect(extensionStatus({ status: "stopped" })).toEqual({ tone: "green", label: "启动" });
-    expect(extensionStatus({ status: "disabled" })).toEqual({ tone: "gray", label: "停用" });
+    expect(extensionStatus({ status: "running" })).toEqual({ tone: "green", label: "已启用" });
+    expect(extensionStatus({ status: "stopped" })).toEqual({ tone: "green", label: "已启用" });
+    expect(extensionStatus({ status: "disabled" })).toEqual({ tone: "gray", label: "已停用" });
     expect([extensionRunNote({ status: "running" }), extensionRunNote({ status: "stopped" }), extensionRunNote({ status: "error" })]).toEqual([
-      "正在运行", "现在没在运行，要用时会自己启动", "",
+      "正在运行", "暂未运行，按需自动启动", "",
     ]);
     expect(extensionStatus({ status: "needs_setup" }).tone).toBe("orange");
     expect(extensionStatus({ status: "incompatible" }).tone).toBe("red");
@@ -322,7 +322,7 @@ describe("extensions", () => {
       extensionRunNote({ status: "error", attached: { online: false, since, error: "连不上" } }),
       extensionRunNote({ status: "stopped", attached: { online: false } }),
       extensionRunNote({ status: "disabled", attached: { online: false } }),
-    ]).toEqual(["独立运行 · 10:42 起在线", "独立运行 · 正在重连，10:42 起离线：连不上", "独立运行 · 10:42 起离线", "独立运行，需要时再连接", ""]);
+    ]).toEqual(["独立运行 · 10:42 起在线", "独立运行 · 正在重连，10:42 起离线：连不上", "独立运行 · 10:42 起离线", "独立运行，按需连接", ""]);
   });
 
   it("checks a source before asking the hub", () => {
@@ -330,7 +330,7 @@ describe("extensions", () => {
     expect(sourceProblem("dir:/opt/extensions/notes")).toBe("");
     expect(sourceProblem("~/extensions/notes.tar.gz")).toBe("");
     expect(sourceProblem("file:relative.tar.gz")).not.toBe("");
-    expect(sourceProblem("http://example.com/p.tar.gz")).toBe("只收 https 链接");
+    expect(sourceProblem("http://example.com/p.tar.gz")).toBe("仅支持 https 链接");
     expect(sourceProblem("https://example.com/p.tar.gz")).toContain("sha256");
     expect(sourceProblem(`https://example.com/p.tar.gz#sha256=${"a".repeat(64)}`)).toBe("");
     expect(sourceProblem("remote:rpc=/run/p.sock,http=/run/p-http.sock")).toBe("");
@@ -342,7 +342,7 @@ describe("extensions", () => {
     expect(uploadProblem({ name: "p.tar.gz", size: 10 }, 100)).toBe("");
     expect(uploadProblem({ name: "p.ZIP", size: 10 }, 100)).toBe("");
     expect(uploadProblem({ name: "p.tar", size: 10 }, 100)).not.toBe("");
-    expect(uploadProblem({ name: "p.tgz", size: 300 << 20 }, 200 << 20)).toBe("包超过 200 MB");
+    expect(uploadProblem({ name: "p.tgz", size: 300 << 20 }, 200 << 20)).toBe("扩展包大小超过 200 MB");
   });
 
   it("offers upgrade and rollback only for installed packages", () => {

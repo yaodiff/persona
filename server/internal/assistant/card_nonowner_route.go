@@ -3,6 +3,7 @@ package assistant
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -14,31 +15,26 @@ import (
 // nonOwnerCardTarget resolves who handles a non-six-class card instead of pushing it to the owner:
 // the task's supervisor when the session belongs to an open supervised to-do, otherwise the main
 // conversation (or the background supervisor when the main conversation itself raised the card).
-// Returns ("", false) when neither a supervisor nor a main conversation is configured.
-func (s *Service) nonOwnerCardTarget(ctx context.Context, machine, sessionID string) (string, bool) {
+// An empty target means no conversation is configured. Standalone means the source session has no open to-do.
+func (s *Service) nonOwnerCardTarget(ctx context.Context, machine, sessionID string) (target string, standalone bool) {
 	cfg := s.settings(ctx)
-	if machine != "" && sessionID != "" {
-		canon := machine
-		if s.devs != nil {
-			canon = s.devs.Canonical(machine)
-		}
-		if t, ok := s.todoOfSession(ctx, canon, sessionID); ok && t.Supervision != nil {
+	if machine != "" && sessionID != "" && s.ensureTodosLoaded(ctx) == nil {
+		t, found := s.todoOfSession(ctx, s.canonical(machine), sessionID)
+		standalone = !found
+		if found && t.Supervision != nil {
 			switch t.Supervision.state(t) {
 			case reviewAccepted, reviewCancelled:
 			default:
 				if sup := s.effectiveSupervisor(ctx, cfg, t); sup != "" && sup != sessionID {
-					return sup, true
+					return sup, false
 				}
 			}
 		}
 	}
-	if cfg.Main == "" {
-		return "", false
+	if cfg.Main != "" && sessionID == cfg.Main && cfg.BackgroundSupervisor != "" && cfg.BackgroundSupervisor != cfg.Main {
+		return cfg.BackgroundSupervisor, false
 	}
-	if sessionID == cfg.Main && cfg.BackgroundSupervisor != "" && cfg.BackgroundSupervisor != cfg.Main {
-		return cfg.BackgroundSupervisor, true
-	}
-	return cfg.Main, true
+	return cfg.Main, standalone
 }
 
 // scheduleFailureTarget resolves who handles a failed scheduled run instead of pushing it to the
@@ -73,69 +69,96 @@ func (s *Service) scheduleFailureTarget(ctx context.Context, t Task) (string, bo
 	return "", false
 }
 
-// handNonOwnerCard intercepts non-six-class interaction cards (agent_permission, agent_question,
-// extension_approval) that were not routed by ask_route or delegable, and hands them to the task's
-// supervisor or the main conversation instead of pushing them to the owner.
-//
-// Cards that genuinely belong to one of the owner's six classes — secrets/forms/elicitations,
-// outward writes (mail_send, comments, etc.), approvals matching userApproval, and unparsed or
-// user-only terminal dialogs (trust folder, delete risk, etc.) — return false so they still reach
-// the owner as before. So do the cards of the assistant's own supervising conversations (the main
-// conversation, the background supervisor, a leader), as askLadder leaves them (supervisorConversation):
-// handed on, such a card was parked where no conversation was woken for it or could hand it up (#15360).
+// handNonOwnerCard gives an internal decision an accountable reviewer and active,
+// durable delivery. The pending interaction owns its answer and expiry; stale
+// relays cannot authorize another occurrence. Owner-only cards stay out of it.
 func (s *Service) handNonOwnerCard(ix proto.Interaction) bool {
+	// Preserve the existing private standalone permission's App-only boundary:
+	// it is neither supervisor-readable nor an alert on another surface.
+	if ix.Private && !secretOrForm(ix) && ix.Kind == proto.IxPermission && s.inputCardSource(ix, false) == cardAgentPermission {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		if _, standalone := s.nonOwnerCardTarget(ctx, ix.MachineID, ix.SessionID); standalone && !s.settings(ctx).supervisorConversation(ix.SessionID) {
+			s.fleet.mu.Lock()
+			p := s.fleet.interactions[ix.ID]
+			if p == nil || p.claimed || !p.ix.CreatedAt.Equal(ix.CreatedAt) {
+				s.fleet.mu.Unlock()
+				return true
+			}
+			p.route, p.ix.Delegating = nil, false
+			shown := p.ix
+			s.fleet.mu.Unlock()
+			s.show(shown)
+			return true
+		}
+	}
+	if !s.internalCard(ix) {
+		return false
+	}
 	src := s.inputCardSource(ix, false)
-	if src != cardAgentPermission && src != cardAgentQuestion && src != cardExtensionApproval {
-		return false
-	}
-	if secretOrForm(ix) {
-		return false
-	}
-	if ix.Kind == proto.IxPermission && userApproval(ix) != "" {
-		return false
-	}
-	if ix.Kind == proto.IxScreen && (!supervisedScreen(ix) || userScreen(ix) != "") {
-		return false
-	}
-
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	cfg := s.settings(ctx)
-	if cfg.supervisorConversation(ix.SessionID) {
+	// Keep the explicit bot write-approval route; supervising read-only approvals
+	// use the same accountable internal route as every other internal source.
+	if src == cardAgentPermission && !cfg.supervisorConversation(ix.SessionID) && ix.Kind == proto.IxPermission && s.nonMainAssistantPermission(ctx, ix) && s.larkModule().AskWanted(ctx, ix) {
 		return false
 	}
-	to, ok := s.nonOwnerCardTarget(ctx, ix.MachineID, ix.SessionID)
-	if !ok {
-		return false
+	to, home := s.internalReviewer(ctx, ix)
+	if to == "" || home == "" {
+		// Legacy node questions outside the five manager-owned sources keep
+		// their manual-session fallback when Assistant has not been configured.
+		if src == cardAgentQuestion && ix.ToolName != "ask_user" {
+			return false
+		}
+		s.workEvent(ix.MachineID, ix.SessionID, "ask_internal_unavailable", map[string]any{"id": ix.ID, "source": src})
+		_ = s.resolveRemembered(ix.ID, proto.Resolution{Dismiss: true, Reason: "internal_reviewer_unavailable"}, false)
+		return true
 	}
-	home := cfg.MachineID
-	if s.devs != nil && home != "" {
-		home = s.devs.Canonical(home)
+	_, standalone := s.nonOwnerCardTarget(ctx, ix.MachineID, ix.SessionID)
+	todo := ""
+	if !cfg.supervisorConversation(ix.SessionID) {
+		if t, found := s.taskOf(ctx, s.canonical(ix.MachineID), ix.SessionID); found && t.Supervision != nil {
+			if state := t.Supervision.state(t); state != reviewAccepted && state != reviewCancelled {
+				todo = t.ID
+			}
+		}
 	}
-
 	s.fleet.mu.Lock()
 	p := s.fleet.interactions[ix.ID]
 	if p == nil || p.claimed || p.told || !p.ix.CreatedAt.Equal(ix.CreatedAt) {
 		s.fleet.mu.Unlock()
-		return false
+		return true // a stale internal announcement must never fall through to an owner push
+	}
+	if p.route != nil {
+		s.fleet.mu.Unlock()
+		return true
 	}
 	now := time.Now()
-	// Parked at askRemindMax with empty todo so askTick never emits a todo-less sigAsk or rings
-	// the owner on timeout, while routedTo still lets the target or main conversation answer it.
+	until := ix.ExpiresAt
+	if standalone && src == cardAgentPermission && !cfg.supervisorConversation(ix.SessionID) {
+		remaining := ix.ExpiresAt.Sub(now)
+		if remaining <= 2*superviseTick {
+			p.ix.Delegating = false
+			shown := p.ix
+			s.fleet.mu.Unlock()
+			s.show(shown)
+			return true
+		}
+		until = now.Add(min(askHoldFor, remaining/2))
+	}
 	p.route = &askRoute{
-		machine:   home,
-		ladder:    []string{to},
-		routedAt:  now,
-		since:     now,
-		held:      now,
-		parked:    true,
-		reminders: askRemindMax,
+		todo:            todo,
+		machine:         home,
+		ladder:          []string{to},
+		routedAt:        now,
+		since:           now,
+		held:            now,
+		standaloneUntil: until,
 	}
 	p.ix.Delegating = true
+	shown := p.ix
 	s.fleet.mu.Unlock()
-
-	shown := ix
-	shown.Delegating = true
 	s.show(shown)
 
 	var b strings.Builder
@@ -153,15 +176,21 @@ func (s *Service) handNonOwnerCard(ix proto.Interaction) bool {
 	if ask := clip(oneLine(noticeAsk(ix)), 300); ask != "" {
 		fmt.Fprintf(&b, "\n%s", ask)
 	}
-	title := cmp.Or(ix.SessionTitle, ix.ToolName, src)
-	if _, kept := s.keepRelayLater(to, relayMsg{
+	msg := relayMsg{
 		From:      src,
-		FromTitle: title,
+		FromTitle: cmp.Or(ix.SessionTitle, ix.ToolName, src),
 		Tool:      src,
 		Text:      b.String(),
 		At:        now.UTC(),
-	}); kept {
+		Internal:  true,
+	}
+	msg.Card = ix.ID
+	if _, err := s.queueRelayDurable(to, msg); err == nil {
+		s.drainAfter(home, to, 0)
 		s.publish(ctx)
+	} else {
+		s.workEvent(ix.MachineID, ix.SessionID, "ask_internal_delivery_failed", map[string]any{"id": ix.ID, "to": to, "reason": "queue_not_durable"})
+		_ = s.resolveRemembered(ix.ID, proto.Resolution{Dismiss: true, Reason: "internal_queue_unavailable"}, false)
 	}
 	s.workEvent(ix.MachineID, ix.SessionID, "ask_routed_nonowner", map[string]any{
 		"to":     to,
@@ -170,4 +199,22 @@ func (s *Service) handNonOwnerCard(ix proto.Interaction) bool {
 		"id":     ix.ID,
 	})
 	return true
+}
+
+var errStandalonePermissionStale = errors.New("the main conversation no longer holds this permission")
+
+func (msg relayMsg) standalonePermission() bool {
+	return msg.Card != "" && (msg.Tool == cardAgentPermission || msg.Tool == cardAgentQuestion || msg.Tool == cardExtensionApproval || msg.Tool == cardToolPermission || msg.Tool == cardAskUser || msg.Tool == cardConfirmOutbound)
+}
+
+// pendingStandalonePermission binds a relay to the same card and route that queued it.
+func (s *Service) pendingStandalonePermission(to string, msg relayMsg, now time.Time) (proto.Interaction, bool) {
+	s.fleet.mu.Lock()
+	defer s.fleet.mu.Unlock()
+	p := s.fleet.interactions[msg.Card]
+	if p == nil || p.claimed || p.route == nil || p.route.at() != to || !p.route.routedAt.Equal(msg.At) ||
+		!now.Before(p.route.standaloneUntil) || !now.Before(p.ix.ExpiresAt) {
+		return proto.Interaction{}, false
+	}
+	return p.ix, true
 }

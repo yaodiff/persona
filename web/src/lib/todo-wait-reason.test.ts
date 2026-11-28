@@ -8,7 +8,7 @@ import { initI18n } from "../i18n";
 import type { Session, WorkState } from "./types";
 import { makeSessionLookup, TODO_STATUS_INFO, TODO_TONE_CLASS, todoStatus, type Todo } from "./todos";
 import { ownerBadge, triage } from "./todo-triage";
-import { statusWord, todoLook, waitOf, waitReason, waitTone, type WaitReason } from "./todo-wait-reason";
+import { statusWord, todoLook, waitOf, waitReason, waitTone, type WaitReason, type LegacyWaitReason } from "./todo-wait-reason";
 import { agentRowLabel, agentRowTone } from "./task-row-status";
 import { stateName, waitName } from "./state-labels";
 import { todoEntry } from "./todo-calendar";
@@ -44,6 +44,13 @@ const tone = (r: WaitReason) => TODO_TONE_CLASS[todoLook({} as Todo, "waiting", 
 beforeAll(() => initI18n("zh-Hans"));
 
 describe("a waiting to-do's reason (#11090)", () => {
+  it("uses a projected kind even when local session and delivery data disagree", () => {
+    const td = todo("wait", "bg", { wait: { kind: "usage_limit" }, delivery: { state: "pr", unblock: "user" } });
+    expect(reason(td)).toBe("usage_limit");
+    expect(waitOf(td, "not_started", undefined)).toBe("usage_limit");
+    expect(todoLook(td, "not_started")).toEqual({ label: waitName("usage_limit"), tone: "idle" });
+  });
+
   it("every case here is a Waiting to-do", () => {
     for (const sid of Object.keys(sessions).filter((k) => k !== "run")) expect(todoStatus(todo("t", sid as keyof typeof sessions), lookup), sid).toBe("waiting");
   });
@@ -115,10 +122,10 @@ describe("a waiting to-do's reason (#11090)", () => {
 
 describe("its words and color", () => {
   it("Waiting on you in the attention color; every other wait in the neutral one", () => {
-    const words: Record<WaitReason, string> = {
+    const words: Record<LegacyWaitReason, string> = {
       owner: "等你", prerequisite: "等前置任务", delivery: "等合入 / 部署", external: "等外部", background: "等后台任务", retry: "等自动重试", unknown: "暂停中（不需要你）",
     };
-    for (const [r, word] of Object.entries(words) as [WaitReason, string][]) {
+    for (const [r, word] of Object.entries(words) as [LegacyWaitReason, string][]) {
       expect(todoLook({} as Todo, "waiting", r).label, r).toBe(word);
       expect(tone(r), r).toBe(r === "owner" ? "text-attention" : "text-ink-3");
       expect(waitTone(r), r).toBe(r === "owner" ? "attention" : "idle");
@@ -173,5 +180,22 @@ describe("the label and the sidebar's badge agree (#11085)", () => {
     const badge = ownerBadge(list, lookup, NOW);
     for (const td of list) expect(reason(td) === "owner", td.id).toBe(badge.has(td.id));
     expect([...badge].sort()).toEqual(["decide", "held"]);
+  });
+});
+
+describe("todoLook for open PRs and concerns without active agents", () => {
+  it("resolves projected pr_merge blockers, fresh PR facts, and concern Tracking with accurate tones", () => {
+    const fresh = new Date(NOW - 60_000).toISOString();
+    const prWait: Todo = {
+      id: "pr-wait", title: "PR wait", created_at: fresh, updated_at: fresh,
+      wait: { kind: "pr_merge", waiting_on: "PR #55", pr_blockers: ["conflicts", "checks_failing"] },
+    };
+    expect(todoLook(prWait, "not_started", undefined, undefined, NOW)).toEqual({ label: "存在合并冲突", tone: "red" });
+    expect(todoLook({ ...prWait, wait: { kind: "pr_merge", waiting_on: "PR #55", pr_blockers: ["changes_requested"] } }, "not_started", undefined, undefined, NOW))
+      .toEqual({ label: "需要修改", tone: "amber" });
+    expect(todoLook({ ...prWait, wait: { kind: "pr_merge", waiting_on: "PR #55" } }, "not_started", undefined, undefined, NOW))
+      .toEqual({ label: "待合入", tone: "idle" });
+    const concern: Todo = { id: "c1", title: "Concern", kind: "concern", created_at: fresh, updated_at: fresh };
+    expect(todoLook(concern, "not_started", undefined, undefined, NOW)).toEqual({ label: "跟进中", tone: "idle" });
   });
 });

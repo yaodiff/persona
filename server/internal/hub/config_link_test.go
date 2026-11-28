@@ -6,6 +6,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -96,6 +97,72 @@ func TestDevicesConfigWebURL(t *testing.T) {
 		if got := h.devicesConfig().WebURL; got != want {
 			t.Errorf("public_url %q: web_url %q, want %q", public, got, want)
 		}
+	}
+}
+
+func TestLinkAdvertiseSeparatesPinnedLinksFromAppDiscovery(t *testing.T) {
+	const web = "https://hub.example.test"
+	const proxy = web + ":443"
+	const direct = web + ":28443"
+	const second = "https://backup.example.test:19443"
+	for _, tc := range []struct {
+		name, override string
+		linkURLs       []string
+		pairURL        string
+		pairPort       int
+		pairAlt        []string
+	}{
+		{"omitted", "", []string{direct, proxy}, web, 19443, []string{direct, proxy}},
+		{"configured", `,"link_advertise":[" https://HUB.example.test:28443/ ","` + direct + `","http://unused.example.test","https://","backup.example.test"]`,
+			[]string{direct, second}, direct, 28443, []string{second}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			body := `{"token":"test-token","public_url":"` + web + `","public":{"tls_listen":":19443","advertise":["` + direct + `"]` + tc.override + `}}`
+			if err := os.WriteFile(filepath.Join(dir, "hub.json"), []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := readConfigFile(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			h := newTestHub(t)
+			h.cfg, h.store = cfg, newPairStore()
+			h.public.mu.Lock()
+			h.public.port, h.public.fp = 19443, "test-pin"
+			h.public.endpoints = collectEndpoints(cfg, 19443, nil, time.Now())
+			h.public.mu.Unlock()
+
+			var appURLs, linkURLs []string
+			for _, e := range h.endpointList() {
+				appURLs = append(appURLs, e.URL)
+			}
+			handover := h.devicesConfig()
+			for _, e := range handover.Endpoints {
+				linkURLs = append(linkURLs, e.URL)
+			}
+			if !slices.Equal(appURLs, []string{direct, proxy}) || handover.WebURL != web {
+				t.Fatalf("app endpoints %v, web URL %q", appURLs, handover.WebURL)
+			}
+			if !slices.Equal(linkURLs, tc.linkURLs) {
+				t.Fatalf("link endpoints %v, want %v", linkURLs, tc.linkURLs)
+			}
+
+			app, err := h.newPairCode(t.Context(), "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if app.URL != web || app.TLSPort != 19443 || !slices.Equal(app.Alt, []string{direct, proxy}) {
+				t.Fatalf("app pairing URL %q, port %d, alternates %v", app.URL, app.TLSPort, app.Alt)
+			}
+			computer, err := h.newPairCode(t.Context(), "laptop")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if computer.URL != tc.pairURL || computer.FP != "test-pin" || computer.TLSPort != tc.pairPort || !slices.Equal(computer.Alt, tc.pairAlt) {
+				t.Fatalf("link pairing URL %q, pin %q, port %d, alternates %v", computer.URL, computer.FP, computer.TLSPort, computer.Alt)
+			}
+		})
 	}
 }
 

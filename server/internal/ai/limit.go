@@ -103,16 +103,23 @@ func IsPaused(err error) bool {
 	return errors.As(err, &p)
 }
 
-// Held is the pause on cfg's connection, nil when requests go out.
+// Held is the pause on cfg's connection or CLI launcher gate, nil when requests go out.
 func Held(cfg Config) *Pause {
-	if !cfg.Configured() || cfg.RunLauncher != "" {
+	if cfg.RunLauncher != "" {
+		return held(runKey(cfg))
+	}
+	if !cfg.Configured() {
 		return nil
 	}
 	key, err := New(cfg).key()
 	if err != nil {
 		return nil
 	}
-	v, ok := gates.Load(gateKeyFor(cfg.API, cfg.BaseURL, key))
+	return held(gateID{httpKey: gateKeyFor(cfg.API, cfg.BaseURL, key)})
+}
+
+func held(key gateID) *Pause {
+	v, ok := gates.Load(key)
 	if !ok {
 		return nil
 	}
@@ -126,22 +133,24 @@ func Held(cfg Config) *Pause {
 	return &p
 }
 
-// gate is one connection's state; every client of the same address and key shares it.
+// gate is shared by clients using the same HTTP credentials and address, or the same CLI tuple.
 type gate struct {
 	host string // for the log
 
-	mu       sync.Mutex
-	held     bool      // from the answer that paused it to the next success
-	pause    Pause     // while held
-	since    time.Time // when it was held
-	putOff   int       // requests not sent while held
-	probing  bool      // the pause is over and one request is finding out, until the upstream answers it
-	strikes  int       // busy answers in a row
-	cap      int       // requests in flight at most, 0 for no cap
-	inflight int
-	out      []time.Time   // when each request in flight went out, the longest out first, for the log (noTurn)
-	fine     int           // successes since the cap last changed
-	wake     chan struct{} // closed on every change, for requests waiting under the cap
+	mu          sync.Mutex
+	held        bool      // from the answer that paused it to the next success
+	pause       Pause     // while held
+	since       time.Time // when it was held
+	putOff      int       // requests not sent while held
+	probing     bool      // the pause is over and one request is finding out, until the upstream answers it
+	strikes     int       // busy answers in a row
+	runTimedOut bool      // the previous eligible CLI run timed out
+	cap         int       // requests in flight at most, 0 for no cap
+	inflight    int
+	out         []time.Time   // when each request in flight went out, the longest out first, for the log (noTurn)
+	fine        int           // successes since the cap last changed
+	wake        chan struct{} // closed on every change, for requests waiting under the cap
+
 	// The requests put off for want of a turn since the last log line about them (noTurn): how many, since when,
 	// and when that line was written.
 	noTurns      int
@@ -155,7 +164,18 @@ type turn struct {
 	at    time.Time
 }
 
-var gates sync.Map // gateKey → *gate
+// Only HTTP gates set httpKey. CLI gates use separate fields so delimiters in names are unambiguous.
+type gateID struct{ httpKey, machine, launcher, model string }
+
+func runKey(cfg Config) gateID {
+	return gateID{machine: cfg.ViaMachine, launcher: cfg.RunLauncher, model: cfg.Model}
+}
+
+var gates sync.Map // gateID → *gate
+
+func gateForRun(cfg Config) *gate {
+	return sharedGate(runKey(cfg), cfg.RunLauncher)
+}
 
 func normalizeGateBase(api, baseURL string) string {
 	switch api {
@@ -179,16 +199,33 @@ func gateKey(baseURL, key string) string {
 }
 
 func gateForAPI(api, baseURL, key string) *gate {
-	k := gateKeyFor(api, baseURL, key)
+	return sharedGate(gateID{httpKey: gateKeyFor(api, baseURL, key)}, baseURL)
+}
+
+func sharedGate(k gateID, host string) *gate {
 	if g, ok := gates.Load(k); ok {
 		return g.(*gate)
 	}
-	host := baseURL
-	if u, err := url.Parse(baseURL); err == nil && u.Host != "" {
-		host = u.Host
+	if k.httpKey != "" {
+		if u, err := url.Parse(host); err == nil && u.Host != "" {
+			host = u.Host
+		}
+	} else {
+		host = runGateHost(k.machine, k.launcher, k.model)
 	}
 	g, _ := gates.LoadOrStore(k, &gate{host: host, wake: make(chan struct{})})
 	return g.(*gate)
+}
+
+func runGateHost(machine, launcher, model string) string {
+	host := launcher
+	if machine != "" {
+		host = machine + "/" + host
+	}
+	if model != "" {
+		host += ":" + model
+	}
+	return host
 }
 
 func gateFor(baseURL, key string) *gate {
@@ -341,12 +378,76 @@ func (p *probeAnswer) RoundTrip(r *http.Request) (*http.Response, error) {
 	return resp, err
 }
 
+// A best-effort call (e.g. three-second tagging) timing out says little about launcher
+// capacity. Sample the remaining execution budget after any wait for a slot. Ten seconds
+// leaves room for setup on normal callers with deadlines of thirty seconds or more.
+const minRunTimeoutBudget = 10 * time.Second
+
+func (g *gate) run(ctx context.Context, r Request, run func(context.Context, Request) (Reply, error)) (reply Reply, err error) {
+	if err := ctx.Err(); err != nil {
+		return Reply{}, err
+	}
+	t, err := g.admit(ctx)
+	if err != nil {
+		if ctx.Err() == context.Canceled {
+			return Reply{}, context.Canceled
+		}
+		return Reply{}, err
+	}
+	deadline, bounded := ctx.Deadline()
+	normalBudget := !bounded || time.Until(deadline) >= minRunTimeoutBudget
+	err = errUnwound // also return the slot and release probe ownership if the callback panics
+	defer func() { err = g.doneRun(t, normalBudget, ctx.Err() == context.Canceled, err) }()
+	if err := ctx.Err(); err != nil {
+		return Reply{}, err
+	}
+	return run(ctx, r)
+}
+
+// Two consecutive full-budget timeouts hold the launcher. After that, a timed-out
+// probe renews the hold immediately. Only the probe can change an existing hold;
+// a timeout already in flight when another run holds it is put off with that hold.
+func (g *gate) doneRun(t turn, normalBudget, canceled bool, err error) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	reason, detail := "", ""
+	if g.held && !t.probe && normalBudget && !canceled && errors.Is(err, context.DeadlineExceeded) {
+		return g.finish(t, false, false, err, ReasonBusy, 0, "repeated launcher timeouts")
+	}
+	if !g.held || t.probe {
+		switch {
+		case canceled || errors.Is(err, context.Canceled):
+			// No observation of launcher capacity.
+		case errors.Is(err, context.DeadlineExceeded):
+			if normalBudget {
+				if g.runTimedOut || t.probe {
+					reason, detail = ReasonBusy, "repeated launcher timeouts"
+				}
+				g.runTimedOut = true
+			}
+		default:
+			g.runTimedOut = false
+		}
+	}
+	return g.finish(t, t.probe, err == nil && !canceled, err, reason, 0, detail)
+}
+
 // done records how a request that went out ended (answered: the upstream said 200) and returns the error for the
 // caller: an answer that holds the connection becomes a PausedError. probe: it is still the one finding out (the
 // gate did not go at its 200, answers).
 func (g *gate) done(t turn, probe, answered bool, err error) error {
+	var reason, detail string
+	var after time.Duration
+	if !answered {
+		reason, after, detail = classify(err)
+	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	return g.finish(t, probe, answered, err, reason, after, detail)
+}
+
+// finish returns the slot and updates the shared backoff and concurrency cap under g.mu.
+func (g *gate) finish(t turn, probe, answered bool, err error, reason string, after time.Duration, detail string) error {
 	g.inflight--
 	for i, at := range g.out {
 		if at.Equal(t.at) {
@@ -376,7 +477,6 @@ func (g *gate) done(t turn, probe, answered bool, err error) error {
 		}
 		return err
 	}
-	reason, after, detail := classify(err)
 	if reason == "" {
 		return err
 	}

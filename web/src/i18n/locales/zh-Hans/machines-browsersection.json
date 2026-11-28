@@ -1,15 +1,15 @@
 {
   "title": "浏览器",
-  "allow": "允许助手用这台的浏览器",
-  "allow_detail": "经 ego lite 打开网页、点按、填表、截图",
-  "offline": "机器离线，连上后才能用",
-  "install_detail": "从 ego 官网下载安装包，核对 Citro Labs 的签名和苹果的公证后装进「应用程序」。",
+  "allow": "允许助手使用这台 Mac 的浏览器",
+  "allow_detail": "通过 ego lite 打开网页、点击、填写表单和截图",
+  "offline": "机器当前离线，重新连接后即可使用",
+  "install_detail": "从 ego 官网下载安装包，校验 Citro Labs 签名与 Apple 公证后安装到「应用程序」。",
   "install": "安装 ego lite",
   "reinstall": "重新安装",
   "open": "打开 ego lite",
-  "recheck": "再检查一次",
-  "turn_on_failed": "打开失败：{error}",
-  "turn_off_failed": "关掉失败：{error}",
+  "recheck": "重新检查",
+  "turn_on_failed": "开启失败：{error}",
+  "turn_off_failed": "关闭失败：{error}",
   "step_done": "已完成",
-  "step_todo": "待做"
+  "step_todo": "待完成"
 }

@@ -2,7 +2,7 @@
   "detail_herdr": "ターミナルのherdr",
   "detail_herdr_core": "デスクトップアプリのターミナル",
   "detail_herdr_both": "ターミナルとデスクトップアプリ両方のセッションを表示",
-  "detail_orca": "Orcaのターミナル",
+  "detail_orca": "Orcaのターミナルとチャット",
   "detail_tern": "Ternのターミナル",
   "detail_rex": "Rexのターミナル",
   "detail_paseo": "Paseoのエージェント",
@@ -28,5 +28,8 @@
   "also_open": "{engines} でも開いています：メッセージはここにだけ送られます",
   "start_in": "開く場所",
   "none": "ターミナルエンジンなし",
-  "list_separator": "、"
+  "list_separator": "、",
+  "detection_stopped": "インストール済み・未起動",
+  "detection_stopped_version": "インストール済み・未起動 · {version}",
+  "detection_incompatible_version": "互換性なし · {version}"
 }

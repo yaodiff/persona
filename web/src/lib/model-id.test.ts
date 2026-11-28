@@ -56,6 +56,6 @@ describe("模型 ID 的规则（和 hub 的 proto.ValidModelID 一样）", () =>
     expect(cleanModelId("  vendor/model-x\n")).toBe("vendor/model-x");
     expect(typedModelProblem("  ")).toBe("");
     expect(typedModelProblem(" vendor/model-x ")).toBe("");
-    expect(typedModelProblem("a b")).toBe("模型 ID 里不能有空格");
+    expect(typedModelProblem("a b")).toBe("模型 ID 不能包含空格");
   });
 });

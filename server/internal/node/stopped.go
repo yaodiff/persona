@@ -101,8 +101,9 @@ func (n *Node) markStopped(s *proto.Session) {
 	s.ReadOnlyReason = stoppedReason
 }
 
-// keptPane is the pane session id's agent left behind: one Persona opened for it (personaTabToken), with no agent in
-// it now. ok false when there is none (the user closed it, or a herdr restart dropped its mark).
+// keptPane is the pane session id's agent left behind: one Persona opened for it (personaTabToken, or the node's own
+// record on Orca: personaTabLocked), with no agent in it now. ok false when there is none (the user closed it, or a
+// herdr restart dropped its mark, or a node restart the node's record).
 func (n *Node) keptPane(id string) (p host.Agent, ok bool) {
 	if !validID(id) {
 		return p, false
@@ -115,7 +116,7 @@ func (n *Node) keptPane(id string) (p host.Agent, ok bool) {
 	}
 	for _, l := range n.layouts {
 		for _, q := range l.panes {
-			if q.PaneID != "" && q.Tokens[personaTabToken] == id && q.Agent == "" && !inUse[q.PaneID] {
+			if q.PaneID != "" && n.personaTabLocked(q) == id && q.Agent == "" && !inUse[q.PaneID] {
 				return q, true
 			}
 		}
@@ -154,11 +155,25 @@ func (n *Node) inKeptTerminal(ctx context.Context, id, cwd string) context.Conte
 	if err != nil || len(names) == 0 || !allShells(names) {
 		return ctx // something else is in front: someone is using it
 	}
-	if dir := paneDir(p); cwd != "" && (dir == "" || filepath.Clean(dir) != filepath.Clean(cwd)) {
+	if cwd != "" && !keptShellIn(launch, paneDir(p), cwd) {
 		return ctx
 	}
 	log.Printf("resume %s: in the terminal it left (%s)", id, p.PaneID)
 	return withAdoptedPane(ctx, &host.Created{SlotID: p.TabID, SpaceID: p.WorkspaceID, Pane: ref}, names)
+}
+
+// keptShellIn: a kept shell whose pane is in dir can run the resume of a session of cwd. claude --resume finds a
+// session by the folder it runs in, so the shell has to be at rest there, except on Orca, which lists a terminal by
+// its worktree and whose start changes to the session's folder itself (orcaHost.Run): there cwd has to be in that
+// worktree.
+func keptShellIn(launch host.Launcher, dir, cwd string) bool {
+	if dir == "" {
+		return false
+	}
+	if _, cds := launch.(*orcaHost); cds {
+		return isInsideOrEqual(orcaLaunchPath(cwd), orcaLaunchPath(dir))
+	}
+	return filepath.Clean(dir) == filepath.Clean(cwd)
 }
 
 // allShells: every program in front of a pane is a shell.
@@ -181,9 +196,9 @@ type finishedTerminal struct {
 }
 
 // closeFinished is the user's "Close finished terminals" (#4754): it closes the terminals stopped agents left — panes
-// Persona opened for a session (personaTabToken) with no agent in them and only shells in front, looked at again now —
-// only those in only (comma-separated pane ids, what the user confirmed) when given. preview lists them and closes
-// nothing. Nothing calls it on a timer.
+// Persona opened for a session (personaTabToken, or the node's record on Orca: personaTabLocked) with no agent in them
+// and only shells in front, looked at again now — only those in only (comma-separated pane ids, what the user
+// confirmed) when given. preview lists them and closes nothing. Nothing calls it on a timer.
 func (n *Node) closeFinished(ctx context.Context, only string, preview bool) (map[string]any, error) {
 	want := map[string]bool{}
 	for _, p := range strings.Split(only, ",") {
@@ -192,8 +207,9 @@ func (n *Node) closeFinished(ctx context.Context, only string, preview bool) (ma
 		}
 	}
 	type cand struct {
-		p host.Agent
-		h host.Host
+		p  host.Agent
+		h  host.Host
+		id string // the session the pane's mark names (personaTabLocked)
 	}
 	var cands []cand
 	n.mu.Lock()
@@ -203,20 +219,46 @@ func (n *Node) closeFinished(ctx context.Context, only string, preview bool) (ma
 	}
 	for _, h := range n.hosts.All() {
 		for _, p := range n.layouts[h.Kind()].panes {
-			if p.PaneID == "" || !validID(p.Tokens[personaTabToken]) || p.Agent != "" || inUse[p.PaneID] || len(want) > 0 && !want[p.PaneID] {
+			id := n.personaTabLocked(p)
+			if p.PaneID == "" || !validID(id) || p.Agent != "" || inUse[p.PaneID] || len(want) > 0 && !want[p.PaneID] {
 				continue
 			}
-			cands = append(cands, cand{p, h})
+			cands = append(cands, cand{p, h, id})
 		}
 	}
 	n.mu.Unlock()
 	closed, kept := []finishedTerminal{}, []finishedTerminal{}
 	for _, c := range cands {
 		func() {
-			t := finishedTerminal{Pane: c.p.PaneID, SessionID: c.p.Tokens[personaTabToken], TabID: c.p.TabID, WorkspaceID: c.p.WorkspaceID}
+			t := finishedTerminal{Pane: c.p.PaneID, SessionID: c.id, TabID: c.p.TabID, WorkspaceID: c.p.WorkspaceID}
 			if !preview {
 				release := n.recovery.lock(t.SessionID)
 				defer release()
+			}
+			st, _ := n.state.get(t.SessionID)
+			if h, ok := c.h.(*orcaHost); ok && st.OrcaTerminal != nil {
+				var closedOrVerified bool
+				var err error
+				if preview {
+					target, _, checkErr := n.orcaStoppedTarget(ctx, h, t.SessionID, t.Pane, st)
+					closedOrVerified, err = target.Handle != "", checkErr
+				} else {
+					unlock := n.typing.lock(t.SessionID)
+					defer unlock()
+					closedOrVerified, err = n.closeStoppedOrca(ctx, h, t.SessionID, t.Pane, st, func() error {
+						return n.saveStopCause(ctx, t.SessionID, proto.StopUser)
+					})
+				}
+				if closedOrVerified {
+					closed = append(closed, t)
+					return
+				}
+				if err == nil {
+					err = orcaTerminalRefusal()
+				}
+				t.Why = err.Error()
+				kept = append(kept, t)
+				return
 			}
 			fg, ok := c.h.(host.ForegroundNamer)
 			org, ok2 := c.h.(host.Organizer)

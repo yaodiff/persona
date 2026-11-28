@@ -95,6 +95,14 @@ func TestTodoBlockersCRUDLifecycleAndCascade(t *testing.T) {
 		t.Fatalf("unexpected byTarget list: %+v", byTarget)
 	}
 
+	byTargetMixed, err := d.ListActiveTodoBlockersByTarget(ctx, "HTTPS://GitHub.COM/Example/Repo/pull/42")
+	if err != nil {
+		t.Fatalf("ListActiveTodoBlockersByTarget mixed-case: %v", err)
+	}
+	if len(byTargetMixed) != 2 || byTargetMixed[0].ID != "blk_1" || byTargetMixed[1].ID != "blk_2" {
+		t.Fatalf("unexpected mixed-case byTarget list: %+v", byTargetMixed)
+	}
+
 	// Increment attempts persists across reads.
 	inc, err := d.IncrementTodoBlockerAttempts(ctx, "blk_3", t1.Add(4*time.Second))
 	if err != nil || inc == nil || inc.Attempts != 2 {
@@ -113,6 +121,15 @@ func TestTodoBlockersCRUDLifecycleAndCascade(t *testing.T) {
 	canc, err := d.CancelTodoBlocker(ctx, "blk_3", cancelledAt)
 	if err != nil || canc == nil || canc.State != TodoBlockerStateCancelled || canc.ResolvedAt == nil {
 		t.Fatalf("CancelTodoBlocker: row=%+v err=%v", canc, err)
+	}
+	if row, err := d.CancelTodoBlocker(ctx, res.ID, cancelledAt); err != nil || row != nil {
+		t.Fatalf("cancel overwrote a resolved row: %+v, %v", row, err)
+	}
+	if row, err := d.ResolveTodoBlocker(ctx, canc.ID, resolvedAt); err != nil || row != nil {
+		t.Fatalf("resolve overwrote a cancelled row: %+v, %v", row, err)
+	}
+	if row, err := d.IncrementTodoBlockerAttempts(ctx, canc.ID, cancelledAt); err != nil || row != nil {
+		t.Fatalf("increment overwrote a cancelled row: %+v, %v", row, err)
 	}
 
 	// Missing id returns nil, nil.

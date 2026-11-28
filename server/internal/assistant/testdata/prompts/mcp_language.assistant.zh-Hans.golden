@@ -15,13 +15,43 @@
   },
   {
     "name": "ask_user",
-    "description": "Ask the user one or more multiple-choice questions on their iPhone (a card in this conversation plus a push notification) and wait for the answers. Use it to confirm anything risky (sending messages / email for them, deleting, changing live systems) or to let them pick between options. AskUserQuestion does not work here; use this. They can also type a free-form answer. Waits up to 2 hours; if the user writes in this conversation instead of picking an option, the question is withdrawn and the tool returns at once, with their message following. If nobody answers in time, the question becomes a to-do that waits for the user's call (in their to-do list and the next briefing), and their answer comes to this conversation later as a new message. With a deadline (each question then recommends one of its options): if nobody answers by it and you marked it reversible, the recommended options are taken by default and recorded on the question's to-do; one that cannot be undone is only reminded again and keeps waiting. With wait false the card goes up the same way but the call returns at once: end the turn without guessing the answer; it comes later as a new message quoting the question and the answer (or saying the card was closed unanswered, or expired and became a to-do). Use wait false only where your instructions say to; a confirmation this same turn needs (approving a message before it is sent) keeps the default. A waiting call holds this turn, so anything else sent to this conversation waits behind it: once such a message waits and the question has been up for a couple of minutes, the call returns without the answer and the card stays up as with wait false; end the turn then.",
+    "description": "Ask multiple-choice questions with explicit decision rights. Use decision_scope=internal for execution choices or recommendations: a designated supervisor is woken and answers as the assistant. Owner decisions require why_owner or owner_action. For a personal unlock, use owner_action=personal_unlock and let the owner act in their own app; never request a password or private key. Owners can also type an answer. Default wait=true holds this turn; a user message withdraws a waiting question, and a queued message can release the turn after two minutes. With wait=false, return at once, end the turn without guessing, and receive one later receipt with the answer, cancellation or expiry, including after restart. Questions wait up to two hours, or until deadline. An unanswered internal question authorizes nothing. Owner deadline defaults require reversible=true and recommend on every question; outward, spending, personal and irreversible actions never take a default.",
     "input_schema": {
       "type": "object",
       "required": [
         "questions"
       ],
       "properties": {
+        "decision_scope": {
+          "type": "string",
+          "enum": [
+            "internal",
+            "owner"
+          ],
+          "description": "Internal execution questions go to a supervisor. Owner questions require why_owner or owner_action. Omitting all decision-right metadata is rejected."
+        },
+        "why_owner": {
+          "type": "string",
+          "enum": [
+            "priority",
+            "acceptance",
+            "only_owner_knows",
+            "visible_to_others",
+            "irreversible"
+          ],
+          "description": "Why this decision requires the owner; omit for internal execution questions"
+        },
+        "owner_action": {
+          "type": "string",
+          "enum": [
+            "personal_unlock",
+            "login",
+            "second_factor",
+            "experience_check",
+            "spending"
+          ],
+          "description": "An action only the owner can perform; never include credentials"
+        },
         "wait": {
           "type": "boolean",
           "description": "default true: hold this turn until the user answers. false: put the card up and return at once; the answer arrives later as a new message in this conversation"
@@ -86,7 +116,7 @@
   },
   {
     "name": "ask_user_withdraw",
-    "description": "Withdraw a pending ask_user question card created by this conversation when it is no longer needed. Only cancels this conversation's own ask_user question; another conversation's card and user-owned approvals, plans or screen dialogs are rejected. Repeated calls on an already-ended card of this conversation are idempotent.",
+    "description": "Withdraw a pending `ask_user` card of this conversation. Other chats' cards and user-owned approvals/plans/dialogs are rejected; already-ended own cards are idempotent.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -94,12 +124,10 @@
       ],
       "properties": {
         "interaction_id": {
-          "type": "string",
-          "description": "the pending ask_user interaction ID (ix_…)"
+          "type": "string"
         },
         "reason": {
-          "type": "string",
-          "description": "optional short reason why the question is no longer needed"
+          "type": "string"
         }
       }
     },
@@ -559,7 +587,7 @@
   },
   {
     "name": "agent_send",
-    "description": "Send what the user asked for to an Agent. A busy Agent may queue it. A stopped Agent needs resume and resume_why when its context is needed. Any stop but the user's allows resume, an unknown one too. User or exit stops need the user's Resume. It must be supervised (give task unless on an open task of yours). A nearly full Agent is compacted first. For unrelated work use agent_start. Unsure: ask_user. An unstarted branch starts on its first message. Only /exit or /quit stops a running Agent and keeps the tab. The owner's controls close another conversation's Agent.\n\nFor dialog_open, retry with dismiss_notice only when Enter alone closes the notice. For permissions and pickers, tell the user or use interaction_answer.\n\nGive task to supervise new work, including done_when in text. More on your existing task keeps its title and updates its criteria. A different title, the user's own to-do or another conversation's task is refused. A failed send creates no task. Omit task for a reply, nudge or decision.\n\nUse `handoff` for an already-stopped to-do you supervise. A node acknowledgement starts its wait for the receiving Agent's result.\n\n`wait_seconds` observes up to 50 seconds after dispatch, appending `Inline observation` JSON: `completed`(this input's `reply`), `question`(pending `interaction_id`), `timeout`/`cancelled`/`unavailable`/`interrupted`/`failed`, with known input/session ids. Observation never answers questions, accepts tasks, resends or cancels work; normal supervision/`task_review` applies. Older nodes may time out rather than return an unrelated reply.",
+    "description": "Send the user's request. Busy Agents may queue it. To keep context after a stop, use resume and resume_why, including for unknown stops. User or exit stops need the owner's Resume. Give task unless the Agent has your open task. Nearly full Agents compact first. Use agent_start for unrelated work, ask_user if unsure. An unused branch starts on first send. Only /exit or /quit stops an Agent and keeps its tab. The owner closes other chats' Agents.\n\nFor dialog_open, retry with dismiss_notice only when Enter alone closes the notice. For permissions and pickers, tell the user or use interaction_answer.\n\nGive task to supervise new work, including done_when in text. More on your existing task keeps its title and updates its criteria. A different title, the user's own to-do or another conversation's task is refused. A failed send creates no task. Omit task or use null for a reply, nudge or decision. Blank fields count as omitted.\n\nUse `handoff` for your stopped to-do. A node ack starts its result wait. Resume a stopped Agent onto its own open to-do with `todo_id` (never `task`).\n\n`wait_seconds` observes up to 50s after dispatch. `Inline observation` JSON: `completed` (this input's `reply`), `question` (pending `interaction_id`), `timeout`/`cancelled`/`unavailable`/`interrupted`/`failed`, known input/session ids. It never answers questions, accepts tasks, resends or cancels work. Normal supervision via `task_review` applies. Older nodes may time out rather than return an unrelated reply.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -582,6 +610,10 @@
         "text": {
           "type": "string"
         },
+        "inbox_item": {
+          "type": "string",
+          "description": "Inbox ID to link to the task. Omit to skip linking."
+        },
         "resume": {
           "type": "boolean",
           "description": "resume this stopped agent with its context, text as its first message"
@@ -589,6 +621,10 @@
         "resume_why": {
           "type": "string",
           "description": "shown to the user"
+        },
+        "todo_id": {
+          "type": "string",
+          "description": "with resume: the stopped Agent's open unassigned to-do to re-link; omit for task adoption"
         },
         "dismiss_notice": {
           "type": "boolean",
@@ -660,6 +696,53 @@
         }
       }
     }
+  },
+  {
+    "name": "agent_modes",
+    "description": "Change a running coding Agent's model, effort, or permission mode via `session.modes` (use `agent_switch` to change launcher). Give `model`, `effort`, and/or `permission_mode`. Permission-mode changes need owner phone approval; read-only tasks, pending approvals, assistant chats, stopped, or unsupported sessions are refused.",
+    "input_schema": {
+      "type": "object",
+      "required": [
+        "machine",
+        "session_id"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "machine": {
+          "type": "string"
+        },
+        "session_id": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "effort": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+            "ultra"
+          ]
+        },
+        "permission_mode": {
+          "type": "string",
+          "enum": [
+            "default",
+            "acceptEdits",
+            "plan",
+            "auto",
+            "bypassPermissions"
+          ]
+        }
+      }
+    },
+    "defer_loading": true
   },
   {
     "name": "agent_switch",
@@ -784,7 +867,7 @@
   },
   {
     "name": "agent_start",
-    "description": "Start a new agent on one of the user's computers, in a project directory, with a first prompt. Use for real development work instead of doing it here. Check machines_list before choosing a machine. Returns the new session id. When the launcher failed its last health check on that machine, the agent starts on a machine where it works (a directory under the home moves to that home) and the answer says so. Claude-family launchers and Paseo providers with Auto Accept always start in bypassPermissions. TRAE CLI and omp take no effort setting.\n\nThe launcher decides the agent: Claude Code's starts Claude Code; pi or cursor (or one listed as that agent) starts pi or the Cursor CLI in a herdr pane with the model you give; agy starts the Antigravity CLI on the computer's companion when connected, else in a pane. Those three take no permission mode and no ultracode; their effort is their own.\n\nFor parallel work needing its own checkout, give `worktree.branch`: Persona uses the machine's engine (herdr or Orca) to create and list it under the workspace containing `cwd`, then starts the agent there. Never tell the agent to run `git worktree add`: that hides it from Orca and the app. Existing branches are checked out; new ones start at that workspace's HEAD. A branch checked out elsewhere is refused.\n\nWhen the agent needs credentials the user keeps in a secret provider (a token in 1Password, say), give `secret_env`: each environment variable it should have, with the reference its value comes from (such as `op://vault/item/field`), never the secret itself. The user approves the hand-off on a card on iPhone or the web before anything starts, and the values reach only that agent's environment, for this run: you never see them, and the answer lists each variable as granted, declined, expired or failed. Only Claude Code agents on a computer this manager connects take them. Tell the agent the variables exist; never ask it to print them.\n\nGive `ultracode: true` for a large task: one that spans many files or needs checking from several angles (design, tests, review). Claude Code then runs every substantial step as a multi-agent workflow: slower and costlier: off for small work. Do not write the word \"ultracode\" into the prompt instead. Claude Code agents only (2.1.284 or later): any other agent, an older Claude Code or a node too old for it starts without it, and the answer says so. Once Claude Code confirms it, agents_list shows `ultracode=on`. An organization policy may keep some conversations read-only: a call from such a conversation is refused with the policy's reason. Do not retry; follow the refusal.\n\n`wait_seconds` observes up to 50 seconds after dispatch, appending `Inline observation` JSON: `completed`(this input's `reply`), `question`(pending `interaction_id`), `timeout`/`cancelled`/`unavailable`/`interrupted`/`failed`, with known input/session ids. Observation never answers questions, accepts tasks, resends or cancels work; normal supervision/`task_review` applies. Older nodes may time out rather than return an unrelated reply.",
+    "description": "Start a new agent on one of the user's computers, in a project directory, with a first prompt. Use for real development work instead of doing it here. Check machines_list before choosing a machine. Returns the new session id. When the launcher failed its last health check on that machine, the agent starts on a machine where it works (a directory under the home moves to that home) and the answer says so. Claude-family launchers and Paseo providers with Auto Accept always start in bypassPermissions. TRAE CLI takes model and effort overrides. Omp takes no effort setting.\n\nThe launcher decides the agent: Claude Code's starts Claude Code; pi or cursor (or one listed as that agent) starts pi or the Cursor CLI in a herdr pane with the model you give; agy starts the Antigravity CLI on the computer's companion when connected, else in a pane. Those three take no permission mode and no ultracode; their effort is their own.\n\nFor parallel work needing its own checkout, give `worktree.branch`: Persona uses the machine's engine (herdr or Orca) to create and list it under the workspace containing `cwd`, then starts the agent there. Never tell the agent to run `git worktree add`: that hides it from Orca and the app. Existing branches are checked out; new ones start at that workspace's HEAD. A branch checked out elsewhere is refused.\n\nClaude Code only: `secret_env` maps variable names to secret references (e.g. `op://vault/item/field`), never values. The owner approves before launch; values reach only this Agent on a connected computer. The receipt lists the grant status. Tell the Agent the names, never ask it to print values.\n\nGive `ultracode: true` for a large task: one that spans many files or needs checking from several angles (design, tests, review). Claude Code then runs every substantial step as a multi-agent workflow: slower and costlier: off for small work. Do not write the word \"ultracode\" into the prompt instead. Claude Code agents only (2.1.284 or later): any other agent, an older Claude Code or a node too old for it starts without it, and the answer says so. Once Claude Code confirms it, agents_list shows `ultracode=on`. An organization policy may keep some conversations read-only: a call from such a conversation is refused with the policy's reason. Do not retry; follow the refusal.\n\n`wait_seconds` observes up to 50 seconds after dispatch, appending `Inline observation` JSON: `completed`(this input's `reply`), `question`(pending `interaction_id`), `timeout`/`cancelled`/`unavailable`/`interrupted`/`failed`, with known input/session ids. Observation never answers questions, accepts tasks, resends or cancels work; normal supervision/`task_review` applies. Older nodes may time out rather than return an unrelated reply.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -870,6 +953,13 @@
           "type": "string",
           "description": "Explicit effort; omit for tier/purpose default."
         },
+        "model_aliases": {
+          "type": "object",
+          "description": "New Claude Code terminal session only: sonnet_model, haiku_model, opus_model, fable_model, subagent_model → concrete IDs; omitted inherit.",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
         "model": {
           "type": "string",
           "description": "Explicit model id or alias the agent takes; omit for the tier or purpose default."
@@ -879,7 +969,7 @@
   },
   {
     "name": "agent_supervise",
-    "description": "主对话或方向主管可收编没有进行中任务的 Agent。省略 role 即为 worker；leader 需要 done_when，不能使用工作信任电脑。它可用 task_plan 分派直属 worker，用 task_review 验收；worker 不能继续派活。已有任务用 task_scope 调整验收条件或预计用时，用 agent_transfer 转交其他对话的任务。",
+    "description": "主对话或方向主管可收编无进行中任务的 Agent。leader 需 done_when 和非工作信任电脑。改范围用 task_scope，移交用 agent_transfer。",
     "input_schema": {
       "type": "object",
       "required": [
@@ -897,12 +987,31 @@
         },
         "title": {
           "type": "string",
-          "description": "Chinese task title, under 20 characters; empty: Agent title"
+          "description": "Chinese title under 20 chars. Defaults to Agent title."
         },
         "role": {
           "type": "string",
           "enum": [
             "leader"
+          ]
+        },
+        "work_mode": {
+          "type": "string",
+          "enum": [
+            "execute",
+            "research",
+            "coordinate"
+          ],
+          "description": "Default execute."
+        },
+        "completion_mode": {
+          "type": "string",
+          "enum": [
+            "inherit",
+            "draft",
+            "ready",
+            "landed",
+            "verified"
           ]
         },
         "done_when": {
@@ -1056,7 +1165,7 @@
   },
   {
     "name": "interaction_answer",
-    "description": "Answer another agent's card for the user when they said what to answer or told you to decide: each question by its own wording with an option label it offers (multi-select: an array); no free text (use agent_send). A card a 督办 message handed you is yours: answer a question or terminal dialog (an option's label or number), or allow/deny a permission, plan or dialog's Yes/No with allow, giving reason; kept as the task's decision, not the user's. You may always deny permissions/plans. Forms, secrets, allowing a message/reply as the user, spending or deletion, and folder-trust/Bypass Permissions dialogs are the user's: ask_escalate. Never other approvals or assistant questions.",
+    "description": "Answer a card handed to you as supervisor or internal reviewer. Use exact machine/session_id/interaction_id from the wake-up; maintenance session_id may be empty. Internal cards may belong to assistant chats; never answer your own. Questions use offered labels (arrays for multi-select), terminal dialogs use labels/numbers, permissions/plans use allow and reason. The answer is the assistant's and becomes a task decision. Secrets/forms, outward messages, spending, irreversible and trust/Bypass approvals need the owner (ask_escalate for task cards). Other assistant cards stay unavailable.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -1148,7 +1257,7 @@
   },
   {
     "name": "inbox_suggest",
-    "description": "Submit the event’s recap and one suggestion (replaces any earlier one). Nothing goes out until the user confirms; the program executes it verbatim. `kind`: `reply` — message in the user's voice ready to send (no 【…】 blanks; omit unknowns and explain in `note`; Feishu sheet/Base `changes`: ref, field, listed value); `agent` — new Agent instruction in `text` (`machine`, `cwd` optional); `handoff` — hand to an existing eligible conversation on this manager (main, active leader, or linked task) with `machine`, `session`, and `text` as the note (processing chat only; refuses archived, unknown, or other-manager targets); `todo` — to-do title in `text` (action-led, no chat/people names), `due` only for an explicit deadline (`2006-01-02` all day or RFC 3339 with offset; omit if unsure and note why; confirming files the row); `conclusion` — dealt with, `text` conclusion, `outcome` `fyi` or `done`. `handback: true` returns confirmation here as an instruction for user judgment. `note`: 1–2 sentences on findings/evidence. `recap`: background, progress, blockers (≤600 chars) every time. `title` (no chat/person names) and `summary` (1 sentence on state and who waits) every time; source-titled items (mail, docs, PRs/issues) ignore `title`. `related`: ids of related items in other chats/sources. `recap` without `kind` creates no suggestion and may include `title`, `summary`, and `follow`. `follow` (valid only without `kind`) waits on the other side: `who` (empty = other side's reply), `next`, `check_at` (RFC 3339 with zone) or `check_in` (`30m`, `4h`, `2d`; default `24h`, clamped 30m–14d). `reported`: `{text, by}` records one completed external action unobserved by the program (never plans; `by` `agent`|`assistant`, default `assistant`; one line ≤120 chars; refused on filed items; deduped against latest). Call at end of turn. In a handed-off chat (context names event id), pass `item` to write back (also shown as a card); refuses unhanded or filed items.",
+    "description": "Submit the event’s recap and one suggestion (replaces any earlier one). Nothing goes out until the user confirms; the program executes it verbatim. `kind`: `reply` — message in the user's voice ready to send (no 【…】 blanks; omit unknowns and explain in `note`; to really `@` someone in a connector that supports mentions such as Feishu, pass `mentions` as `[{\"id\":\"\u003cverified user id\u003e\",\"name\":\"\u003cexact display name\u003e\"}]` from the source's search/member tool and write `@name` verbatim in `text` — `@name` without `mentions` is ordinary text; Feishu sheet/Base `changes`: ref, field, listed value); `agent` — new Agent instruction in `text` (`machine`, `cwd` optional); `handoff` — hand to an existing eligible conversation on this manager (main, active leader, or linked task) with `machine`, `session`, and `text` as the note (processing chat only; refuses archived, unknown, or other-manager targets); `todo` — to-do title in `text` (action-led, no chat/people names), `due` only for an explicit deadline (`2006-01-02` all day or RFC 3339 with offset; omit if unsure and note why; confirming files the row); `conclusion` — dealt with, `text` conclusion, `outcome` `fyi` or `done`. `handback: true` returns confirmation here as an instruction for user judgment. `note`: 1–2 sentences on findings/evidence. `recap`: background, progress, blockers (≤600 chars) every time. `title` (no chat/person names) and `summary` (1 sentence on state and who waits) every time; source-titled items (mail, docs, PRs/issues) ignore `title`. `related`: ids of related items in other chats/sources. `recap` without `kind` creates no suggestion and may include `title`, `summary`, and `follow`. `follow` (valid only without `kind`) waits on the other side: `who` (empty = other side's reply), `next`, `check_at` (RFC 3339 with zone) or `check_in` (`30m`, `4h`, `2d`; default `24h`, clamped 30m–14d). `reported`: `{text, by}` records one completed external action unobserved by the program (never plans; `by` `agent`|`assistant`, default `assistant`; one line ≤120 chars; refused on filed items; deduped against latest). Call at end of turn. In a handed-off chat (context names event id), pass `item` to write back (also shown as a card); refuses unhanded or filed items.",
     "input_schema": {
       "type": "object",
       "properties": {
@@ -1246,6 +1355,26 @@
           "type": "array",
           "items": {
             "type": "string"
+          }
+        },
+        "mentions": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "name"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            }
           }
         },
         "changes": {
@@ -1393,6 +1522,43 @@
     "defer_loading": true
   },
   {
+    "name": "message_send",
+    "description": "Send Lark text (default bot), not via CLI/ask_user. Use a revocable channel/chat/scenario/identity grant or owner approval. Repository grants do not apply. If bot cannot send, report it without changing identity. Reuse idempotency_key on retries. Check destination after uncertain delivery. Other approvals stay.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "channel": {
+          "type": "string",
+          "enum": [
+            "larkcli"
+          ]
+        },
+        "target": {
+          "type": "string",
+          "description": "oc_ chat ID; resolve read-only."
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Maximum 16000 UTF-8 bytes."
+        },
+        "idempotency_key": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        }
+      },
+      "required": [
+        "channel",
+        "target",
+        "text",
+        "idempotency_key"
+      ],
+      "additionalProperties": false
+    },
+    "defer_loading": true
+  },
+  {
     "name": "kb_search",
     "description": "Search the knowledge base: summaries and metadata of chats, people, projects, docs, meetings, events, recordings (with their minutes and any transcript still retained), topics (curated knowledge points: how something works, what was decided and why, the steps and pitfalls), project timelines, the notes directories the user added (hits with an absolute path) and, with messages=true, the full message archive (newest days first). All words must match. Hits come in the order the files are read, not by relevance, so a broad search can fill the limit with chats: give kind to search one kind only, the entries whose name matches first, then as kb_list ranks them. A past meeting (its decisions, what is still open, who does what) is kind=recordings: found by its title, the calendar event's title, its minutes or any transcript still retained; then kb_get it. Transcripts expire before minutes: never promise a trimmed recording's full transcript.",
     "input_schema": {
@@ -1431,7 +1597,7 @@
   },
   {
     "name": "kb_list",
-    "description": "List knowledge-base entities of one kind ranked by importance (P0 first), relevance to the user, recency: projects (short = a feature / launch, long = a team mission), chats, people, docs, meetings, events, recordings (the user's phone / watch recordings; newest first, saying which have meeting minutes, which are all-day recordings with a day recap and its state, and which transcripts have expired), topics (knowledge points curated by subject out of the timelines and chats: concepts, decisions with their reasons, practices, pitfalls, facts, open questions; the biggest first). Transcripts stay for recording_days (14 days by default), minutes and recaps for minutes_days (forever by default). Meetings, events and recordings show when they started, in the user's time zone. Optional tag filter.",
+    "description": "List knowledge-base entities of one kind ranked by importance (P0 first), relevance to the user, recency: projects (short = a feature / launch, long = a team mission), chats, people, docs, meetings, events, recordings (the user's phone / watch recordings; newest first, saying which have meeting minutes, which are all-day recordings with a day recap and its state, and which transcripts have expired), topics (knowledge points curated by subject out of the timelines and chats: concepts, decisions with their reasons, practices, pitfalls, facts, open questions; the biggest first). Transcripts stay for recording_text_days, minutes and recaps for minutes_days (both forever by default). Meetings, events and recordings show when they started, in the user's time zone. Optional tag filter.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -1463,7 +1629,7 @@
   },
   {
     "name": "kb_get",
-    "description": "Read one entity: its metadata (links to people / chats / projects, tags), compressed context (summary.md), a project's timeline, a chat's messages of the last 7 days, a recording's meeting minutes, or an all-day recording's day recap (the day's timeline, meetings, suggested to-dos), with each action item's state (suggested, or its to-do's) and its timestamped transcript while still retained (phone/watch recordings, text only), a meeting's / event's recordings, a topic's knowledge points by subtopic (each with its kind, reason and the entries it came from). Transcripts expire after recording_days (14 days by default); minutes and recaps stay for minutes_days (forever by default). id from kb_list / kb_search (a project also by name). A project lists its 20 most relevant people and a count (all: meta.json).",
+    "description": "Read one entity: its metadata (links to people / chats / projects, tags), compressed context (summary.md), a project's timeline, parent, sub-projects and milestones, a chat's messages of the last 7 days, a recording's meeting minutes, or an all-day recording's day recap (the day's timeline, meetings, suggested to-dos), with each action item's state (suggested, or its to-do's) and its timestamped transcript while still retained (phone/watch recordings, text only), a meeting's / event's recordings, a topic's knowledge points by subtopic (each with its kind, reason and the entries it came from). Transcripts stay for recording_text_days, minutes and recaps for minutes_days (both forever by default). id from kb_list / kb_search (a project also by name). A project lists its 20 most relevant people and a count (all: meta.json).",
     "input_schema": {
       "type": "object",
       "required": [
@@ -1492,7 +1658,7 @@
   },
   {
     "name": "kb_update",
-    "description": "Write settled facts to the KB. Projects: edit name, project_kind (short|long), status, goal, my_role, aliases, chats/people, code dirs (`\u003cmachine\u003e:\u003cpath\u003e`, linking Agents), timeline log or summary; merge_into folds duplicates, unmerge reverses it, with no other changes in that call. Annotate chats, people, docs, meetings, events, recordings (phone-owned content; tags, pinned and projects only) and topics (name, note, aliases, tags only). Explicit tags override automatic ones. remove_* (ids) permanently unlinks only that link; other updates proceed. Change project_mode/source_urls only at the user's direction: reference-only keeps pointers and aliases but leaves details at the source; full in a separate call restores detail writes.",
+    "description": "Write settled facts to the KB. Projects: the fields below (dirs: `\u003cmachine\u003e:\u003cpath\u003e`, linking Agents); merge_into folds a duplicate, unmerge reverses it, each alone in its call. Other kinds take annotations; recordings (phone-owned) only tags, pinned, projects; topics only name, note, aliases, tags. Explicit tags beat automatic ones. remove_* (ids) unlinks only that link, for good. At the user's word only: parent (\"\" = top level); milestone adds (no id), edits or removes (id, remove) a flag; its result has the undo. project_mode/source_urls: reference-only keeps pointers and aliases, details stay at the source; full, alone, restores detail writes.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -1519,11 +1685,40 @@
         },
         "merge_into": {
           "type": "string",
-          "description": "projects only: fold this project into the target (slug or name)"
+          "description": "projects: fold into this target (slug or name)"
         },
         "unmerge": {
           "type": "boolean",
-          "description": "projects only: undo the merge that folded this project into another"
+          "description": "projects: undo its merge"
+        },
+        "parent": {
+          "type": "string"
+        },
+        "milestone": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            },
+            "target": {
+              "type": "string",
+              "description": "YYYY-MM-DD"
+            },
+            "state": {
+              "type": "string",
+              "enum": [
+                "open",
+                "accepted",
+                "not_accepted"
+              ]
+            },
+            "remove": {
+              "type": "boolean"
+            }
+          }
         },
         "name": {
           "type": "string"
@@ -1880,7 +2075,7 @@
   },
   {
     "name": "model_profiles_list",
-    "description": "List profiles, active profile, drift, rollback previews and audit events. Model settings only, never credentials.",
+    "description": "List saved profiles, active profile, drift, rollback previews and audit events.",
     "input_schema": {
       "type": "object",
       "properties": {},
@@ -1889,13 +2084,13 @@
   },
   {
     "name": "model_profile_get",
-    "description": "Inspect a profile. Edit bindings with persona_settings model_profiles.bindings, tiers with model_profiles.tiers, or capture with model_profile_capture. Saving does not apply purposes/launchers.",
+    "description": "Inspect a saved profile. Edit its bindings or tiers with persona_settings.",
     "input_schema": {
       "type": "object",
       "properties": {
         "id": {
           "type": "string",
-          "description": "Profile id from model_profiles_list"
+          "description": "Saved profile ID"
         }
       },
       "additionalProperties": false,
@@ -1907,13 +2102,13 @@
   },
   {
     "name": "model_profile_switch",
-    "description": "Switch atomically to a profile by id; inspect first. Saves a rollback point and affects new model calls/Agent starts, not running work.",
+    "description": "Inspect first. Apply a profile to future model calls and Agent starts. Saves a rollback point.",
     "input_schema": {
       "type": "object",
       "properties": {
         "id": {
           "type": "string",
-          "description": "Profile id from model_profiles_list"
+          "description": "Saved profile ID"
         }
       },
       "additionalProperties": false,
@@ -1925,7 +2120,7 @@
   },
   {
     "name": "model_profile_rollback",
-    "description": "Undo the latest profile switch, restoring touched model settings only. Inspect the preview first; another rollback may redo it.",
+    "description": "Preview and undo the latest switch's model changes. The last rollback can redo a switch.",
     "input_schema": {
       "type": "object",
       "properties": {},
@@ -1935,19 +2130,39 @@
   },
   {
     "name": "model_profile_capture",
-    "description": "Capture current model fields into a profile with phone approval; does not apply them.",
+    "description": "With phone approval, save current model fields into a profile.",
     "input_schema": {
       "type": "object",
       "properties": {
         "id": {
           "type": "string",
-          "description": "Existing profile id from model_profiles_list"
+          "description": "Saved profile ID"
         }
       },
       "additionalProperties": false,
       "required": [
         "id"
       ]
+    },
+    "defer_loading": true
+  },
+  {
+    "name": "model_profile_deactivate",
+    "description": "With owner approval, turn off the active profile and keep current model settings.",
+    "input_schema": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false
+    },
+    "defer_loading": true
+  },
+  {
+    "name": "model_profile_clear",
+    "description": "With owner approval, delete all saved profiles and rollback history. Keep current model settings.",
+    "input_schema": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false
     },
     "defer_loading": true
   },
@@ -2249,7 +2464,7 @@
   },
   {
     "name": "conversations_switch",
-    "description": "Switch Assistant conversations to another launcher/model; preview first unless confirmed. Busy items queue until turn end without interruption or synthetic messages. Execution saves original settings and returns a batch ID. `restore_batch_id` restores completed items exactly; `batch_id` reads status. Independent changes are refused.",
+    "description": "Switch Assistant chats to another launcher/model; preview first unless confirmed. Busy chats queue at turn end without interruption. Execution saves originals and returns a batch ID; `restore_batch_id` restores completed items; `batch_id` reads status.",
     "input_schema": {
       "type": "object",
       "properties": {
@@ -2260,40 +2475,31 @@
           },
           "minItems": 1,
           "maxItems": 50,
-          "uniqueItems": true,
-          "description": "IDs from conversations_list"
+          "uniqueItems": true
         },
         "machine_id": {
-          "type": "string",
-          "description": "Assistant machine; defaults to current"
+          "type": "string"
         },
         "launcher": {
-          "type": "string",
-          "description": "target launcher"
+          "type": "string"
         },
         "model": {
-          "type": "string",
-          "description": "target model; empty uses launcher default"
+          "type": "string"
         },
         "effort": {
-          "type": "string",
-          "description": "target effort; empty uses launcher default"
+          "type": "string"
         },
         "permission_mode": {
-          "type": "string",
-          "description": "target mode; empty preserves each conversation's mode"
+          "type": "string"
         },
         "preview": {
-          "type": "boolean",
-          "description": "read-only; no batch, queue, or confirmation"
+          "type": "boolean"
         },
         "restore_batch_id": {
-          "type": "string",
-          "description": "batch to restore; excludes forward fields"
+          "type": "string"
         },
         "batch_id": {
-          "type": "string",
-          "description": "batch status; use alone"
+          "type": "string"
         }
       }
     },
@@ -2489,7 +2695,7 @@
   },
   {
     "name": "task_plan",
-    "description": "Use task_plan for code, repo research and multi-step work (one task per independent piece). Check machines_list, KB, agents_list and preferences for editable choices and one-line reasons. Main/lead plans start at once; elsewhere read-only, user_requested and preapproved kinds do; others and owner_step wait for 开始. Queued receipt means dispatched; check to-do outcome and use agent_send.\n\nExplicit machine keeps fixed (default, refuses unavailable launchers) or flexible (moves portable work on failed health checks, explain why). Omit machine for automatic placement with optional placement_constraints. Planning leads own their tasks; main owns its own and receives needs_user escalations. Main may pick a lead; agent_transfer persists ownership. Incompatible leads need supervision_policy first. Check returned supervisor and similar work. Pass todo_id for caller's unassigned to-do (Lark topic, split, failed start).\n\nStarted tasks keep a hub brief (owner request or started_why). Give goal, done_when, out_of_bounds: writable needs done_when (PR/Issue defaults to merged+closed unless PR/draft-only); read-only needs goal. Omit expect_minutes for auto estimate; positive overrides. Use continues+continues_why to continue, task_retry for failed starts, task_scope+scope_revision for approved changes.\n\nEdits need readonly=false and write permission; replace read-only Codex with writable for fixes, or use agent_send when permissions match. readonly=true adds read-only constraint. Claude-family and companion agy use bypassPermissions; Codex uses plan unless assistant.readonly_mode=prompt; pi/cursor refuse readonly. Set role=worker, or leader for direct workers via restricted task_plan/task_review.\n\nResolve repository via repositories_list (repository_get when useful); an explicit repository URL or path takes precedence. Saved bindings are references only; never infer machine/cwd. Non-repository tasks need no lookup (not a mandatory dispatch preflight). Closing terminal on acceptance is owner-only.\n\nSaved workspace naming plan on existing todo: {\"backend\":{\"operation_id\":\"\u003cid\u003e\"}}. Multi-repo container: {\"container\":{\"selected_repo_ids\":[...]}} (or operation_id with todo_id). Optional host picks enabled engine; selected repos must be ready.\n\nWorkspace: \"new\" isolates checkout; {\"new\":{\"branch\":\"task/my-change\"}} names branch; {\"existing\":\"\u003ccwd or id\u003e\",\"queue\":true} picks one (queue:true or owner in after queues FIFO, else busy refuses); \"none\" creates nothing. Omitted: readonly=none; writable Git follows assistant.task_workspace_preference, busy cwd uses new. Explicit existing never switches silently. Reusing explicit new branch needs clean checkout, no live Agent/owner. Engine owns creation; never run git worktree add. Default branch: task/\u003ctodo id\u003e. Failed creation starts no Agent; workspaces stay after acceptance. Follow org read-only refusals.\n\n`wait_seconds` observes up to 50 seconds after dispatch, appending `Inline observation` JSON: `completed`(this input's `reply`), `question`(pending `interaction_id`), `timeout`/`cancelled`/`unavailable`/`interrupted`/`failed`, with known input/session ids. Observation never answers questions, accepts tasks, resends or cancels work; normal supervision/`task_review` applies. Older nodes may time out rather than return an unrelated reply. Only an immediately dispatchable single-task plan waits; approval cards and multi-task plans return immediately.",
+    "description": "Plan multi-step work. Check machines_list, KB, agents_list and preferences. Main/lead, readonly, user_requested and preapproved tasks start now. Others and owner_step need 开始. Queued means dispatched. Reuse suitable Agents via agent_send. Keep reminders and events separate.\n\nAn explicit machine is fixed by default. Use flexible for portable work or omit machine for automatic placement. Leads own their tasks and escalate needs_user to main. Main can select a lead (agent_transfer persists). Use supervision_policy for incompatible leads. Match open issue or PR work with continues, todo_id or distinct_from. Other duplicate hints are advisory.\n\nWritable tasks need done_when and read-only tasks need goal. Set completion_mode for draft or review-ready delivery. Use continues and continues_why to carry work on, task_retry for failed starts and task_scope with scope_revision for scope changes.\n\nEdits need readonly=false and write permission. With readonly, Claude/agy uses bypassPermissions, Codex uses plan unless assistant.readonly_mode=prompt, and pi/cursor refuse. A leader can plan and review direct workers.\n\nUse repositories_list or repository_get when needed. An explicit repository URL or path takes precedence. Set machine and cwd separately from bindings. Non-repository tasks need no lookup (not a mandatory dispatch preflight). Only the owner can close terminals on acceptance.\n\nPass todo_id with a saved backend or container operation_id. Repositories for a new container must be ready. Host selects an enabled engine.\n\nWorkspace new isolates and can name a branch (default task/\u003ctodo id\u003e). Existing needs a clean, unused checkout. Queue waits FIFO if requested or the owner waits. Scratch uses a managed isolated dir (omit cwd). None creates nothing. Omit for none on readonly or the writable default (new if busy). Engine setup failure stops dispatch. Acceptance keeps workspaces. Respect org read-only refusals.\n\n`wait_seconds` observes up to 50 seconds after dispatch. Inline observation includes `completed` with this input's `reply`, `question` with a pending `interaction_id`, or `timeout`/`cancelled`/`unavailable`/`interrupted`/`failed`. Observation records known input and session ids. Observation never answers questions, accepts tasks, resends or cancels work. Normal supervision and `task_review` apply. Older nodes may time out rather than return an unrelated reply. Only an immediately dispatchable single task waits.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -2524,6 +2730,20 @@
                 "required": [
                   "cwd"
                 ]
+              },
+              {
+                "type": "object",
+                "required": [
+                  "workspace"
+                ],
+                "properties": {
+                  "workspace": {
+                    "type": "string",
+                    "enum": [
+                      "scratch"
+                    ]
+                  }
+                }
               },
               {
                 "type": "object",
@@ -2627,20 +2847,21 @@
               },
               "cwd": {
                 "type": "string",
-                "description": "Abs or ~/ dir, unless workspace.backend/container supplies it."
+                "description": "Abs or ~/ dir; omit for scratch/backend/container."
               },
               "workspace": {
                 "type": [
                   "string",
                   "object"
                 ],
-                "description": "workspace policy; omit for default; existing: path or workspace id",
+                "description": "policy; existing: path/id",
                 "oneOf": [
                   {
                     "type": "string",
                     "enum": [
                       "new",
-                      "none"
+                      "none",
+                      "scratch"
                     ]
                   },
                   {
@@ -2746,6 +2967,13 @@
                 "type": "string",
                 "description": "model id/alias; empty: launcher default"
               },
+              "model_aliases": {
+                "type": "object",
+                "description": "Claude Code IDs: sonnet_model, haiku_model, opus_model, fable_model, subagent_model.",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              },
               "permission": {
                 "type": "string",
                 "enum": [
@@ -2769,9 +2997,33 @@
                 "type": "boolean",
                 "description": "large tasks only (Claude Code 2.1.284+ multi-agent); small: false; never in prompt/title"
               },
+              "multi_issue_report": {
+                "type": "boolean",
+                "description": "Only for a report investigating several issues; requires a findings list before park or close."
+              },
               "readonly": {
                 "type": "boolean",
                 "description": "true only for read-only tasks; false for authorized edits. Adds「本任务只读：不改项目文件、不提交、不对外写入」when true"
+              },
+              "work_mode": {
+                "type": "string",
+                "enum": [
+                  "execute",
+                  "research",
+                  "coordinate"
+                ],
+                "description": "New task only. Defaults to research for readonly and execute otherwise."
+              },
+              "completion_mode": {
+                "type": "string",
+                "enum": [
+                  "inherit",
+                  "draft",
+                  "ready",
+                  "landed",
+                  "verified"
+                ],
+                "description": "New task. Inherit uses assistant settings. Draft is a draft artifact, ready is for review, landed is merged or published, verified is confirmed live."
               },
               "user_requested": {
                 "type": "boolean",
@@ -2812,7 +3064,7 @@
               },
               "continues": {
                 "type": "string",
-                "description": "Original todo id; reuses todo/brief, stops prior Agents, reopens if closed."
+                "description": "Original todo id (needs continues_why); reuses todo/brief, stops prior Agents, reopens if closed."
               },
               "scope_revision": {
                 "type": "string",
@@ -2821,6 +3073,27 @@
               "continues_why": {
                 "type": "string",
                 "description": "With continues: one-line replacement reason."
+              },
+              "distinct_from": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "todo_id",
+                    "reason"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "todo_id": {
+                      "type": "string"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  }
+                },
+                "description": "new tasks only: explain each conflicting open todo. Reasons stay in the brief"
               },
               "started_why": {
                 "type": "string",
@@ -2849,7 +3122,7 @@
                   "human",
                   "autonomous"
                 ],
-                "description": "Optional: human or autonomous."
+                "description": "Optional to-do audience."
               },
               "direction_id": {
                 "type": "string",
@@ -2872,7 +3145,7 @@
               },
               "inbox_item": {
                 "type": "string",
-                "description": "Handed-off Inbox ID or 'none'; links without filing/replying."
+                "description": "Inbox ID or 'none' to skip. Omit for strong-match inference outside continuations. Never files or replies."
               },
               "tier": {
                 "type": "string",
@@ -2921,7 +3194,7 @@
   },
   {
     "name": "task_review",
-    "description": "accepted closes after delivery_gate (default merged: park verified open PRs; linked issues must close). user_check keeps task/Agent open until owner Pass and routes feedback there. If opted in at Start, accepted done cleans the idle tab unless user_check; report closed/skipped/pending, never close tabs yourself. rework caps stalled/low-ROI churn at 2 rounds (external_input/substantive_new: 10 total); accept with a note over low-ROI edge/style nitpicks. Replace stopped Agents via agent_start. Use parked with evidence for external waits; needs_user if only the owner can contact, approve, or trigger work.\n\nFor accepted (outcome=done), list each done_when once in checks (met=true, nonblank evidence), even with user_check; outcome=cannot, cancelled and criteria-free tasks keep prior rules. Other verdicts may omit checks and keep progress. Report each criterion met/not_met/dropped, then also_done. Judge the scoped brief over handovers/Agent claims; uncovered scope needs needs_user, user_check, or a linked follow-up to-do—never chat text alone.\n\nGive accepted outcome/reason/link; pass direct PR/MR/doc URL in link for needs_user when available. The hub sends conclusion cards and passes verification unless user_check. needs_user defaults to recommend at 24h/deadline; irreversible/visible_to_others only remind. Recheck at 24h. “You decide”, “This isn't what I asked for” and “Tell me the background first” return to supervision. Clarify without repeating or acting irreversibly/externally.\n\nA non-main reviewer of another supervisor's task may only accept/cancel; send gaps via agent_send. A leader's needs_user reaches main too. Cancel only duplicates/unwanted tasks; their Agents close/archive and cards end.",
+    "description": "accepted closes after delivery_gate (default merged: park verified open PRs; linked issues must close). user_check keeps the task and Agent open until owner Pass; the acceptance guards still apply. If opted in at Start, accepted done cleans the idle tab unless user_check; report closed/skipped/pending, never close tabs yourself. Rework caps stalled/low-ROI churn at 2 rounds (external_input/substantive_new: 10 total). Replace stopped Agents via agent_start. Park external waits with evidence.\n\nFor accepted (outcome=done), list each done_when once in checks (met=true, nonblank evidence); put extra work in also_done. Outcome=cannot, cancelled and criteria-free tasks keep prior rules. For uncovered scope or outstanding Closeout Missing/Waiting, use needs_user, or record the outstanding text in deferred_scope with an open linked follow_up_todo_id. For findings, confirm each disposition with verdict=findings before acceptance, including user_check.\n\nGive accepted outcome/reason/link; pass direct PR/MR/doc URL in link for needs_user when available. The hub sends conclusion cards and passes verification unless user_check. needs_user can default to recommend at 24h/deadline; irreversible/visible_to_others only remind. Recheck at 24h. can_wait needs low cost, nobody blocked today and no deadline within 12h. “You decide”, “This isn't what I asked for” and “Tell me the background first” return to supervision. Clarify without repeating or acting irreversibly/externally.\n\nA non-main reviewer of another supervisor's task may only accept/cancel; send gaps via agent_send. A leader's needs_user reaches main too. Cancel duplicates/unwanted tasks. Viewing alone permits untouched cancellation.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -2940,8 +3213,56 @@
             "rework",
             "needs_user",
             "parked",
-            "cancelled"
+            "cancelled",
+            "findings"
           ]
+        },
+        "findings_review": {
+          "type": "object",
+          "description": "verdict=findings: omit to read; supply the displayed version to confirm and record dispositions without moving task state.",
+          "required": [
+            "version"
+          ],
+          "properties": {
+            "version": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "dispositions": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "id"
+                ],
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "follow_up_todo_id": {
+                    "type": "string",
+                    "description": "Supervised to-do with the exact next action in done_when."
+                  },
+                  "needs_user_todo_id": {
+                    "type": "string",
+                    "description": "Child to-do with a needs_user card whose reason is the exact next action."
+                  },
+                  "wait_target": {
+                    "type": "string",
+                    "description": "A single finding may match the park evidence's target."
+                  },
+                  "done_evidence": {
+                    "type": "string",
+                    "description": "Evidence that this finding was resolved."
+                  },
+                  "owner_drop_decision_id": {
+                    "type": "string",
+                    "description": "Owner's manual decision, question 'Drop investigation finding \u003cid\u003e?', choice 'Drop', with reason."
+                  }
+                }
+              }
+            }
+          }
         },
         "rework_kind": {
           "type": "string",
@@ -3079,6 +3400,15 @@
         "user_check": {
           "type": "boolean",
           "description": "accepted only: user must inspect result (e.g. UI change); shows \"Please verify\" card awaiting \"Pass\" instead of auto-passing; default false"
+        },
+        "deferred_scope": {
+          "type": "string",
+          "maxLength": 600,
+          "description": "accepted: quote outstanding Closeout text or describe deferred scope in the owner's language"
+        },
+        "follow_up_todo_id": {
+          "type": "string",
+          "description": "Open follow-up for deferred_scope, linked through part_of or after"
         },
         "reversible": {
           "type": "boolean",
@@ -3245,7 +3575,7 @@
   },
   {
     "name": "task_scope",
-    "description": "Change what a supervised task is to do, or what done means, after it started (its todo id). The brief is never rewritten: this adds a brief-log entry (what changed and why), applies the new done_when/expect_minutes, restarts overdue, estimate_due only on a new estimate; the owner reads it in the next digest. It is the only way done_when changes after start (agent_supervise and agent_send on a task use the same log). Give done_when as the whole list after the change: a criterion you leave out is logged as dropped and named in the completion report. A change adding an owner-only step (deploying, merging, releasing, public sends/comments, deleting, spending, production changes) not in the original task is refused unless the owner's own message started this turn: ask first (ask_user, or task_review needs_user), then call again. Only its supervisor may call it; the Agent is not told — send the change with agent_send. estimate_due/overdue: revise expect_minutes here, but a finished task past the settle window with no owner card is refused: give task_review first (accepted/rework/cancelled; needs_user or accepted+user_check if the owner must act); chat-only asks never reach Needs you.",
+    "description": "The supervisor can change criteria, modes or the estimate. This log preserves the original brief and records changes and reasons for the owner's next digest, including criteria edits via agent_supervise or agent_send. Give the full done_when list. Removed criteria appear at completion. For an owner-only step, ask via ask_user or task_review needs_user and retry in the owner's reply turn. Notify the Agent via agent_send. Scope resets overdue. A new estimate also resets estimate_due. A finished task past the settle window without an owner card needs task_review first. Use needs_user or accepted with user_check when the owner must act.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -3258,6 +3588,10 @@
           "type": "string",
           "description": "the task's todo id (todo_…)"
         },
+        "inbox_item": {
+          "type": "string",
+          "description": "Inbox ID to link to the existing task and its Agents. Omit to skip linking."
+        },
         "change": {
           "type": "string",
           "description": "what changes, in one sentence the owner can read (Chinese), e.g. 「不再要求灰度验证，改为只在测试环境验证」"
@@ -3265,6 +3599,26 @@
         "why": {
           "type": "string",
           "description": "why, in one sentence (Chinese)"
+        },
+        "work_mode": {
+          "type": "string",
+          "enum": [
+            "execute",
+            "research",
+            "coordinate"
+          ],
+          "description": "New work mode. Omit to keep the current mode."
+        },
+        "completion_mode": {
+          "type": "string",
+          "enum": [
+            "inherit",
+            "draft",
+            "ready",
+            "landed",
+            "verified"
+          ],
+          "description": "Omit to keep it. Inherit uses the assistant's delivery gate."
         },
         "done_when": {
           "type": "array",
@@ -3285,7 +3639,7 @@
   },
   {
     "name": "task_decided",
-    "description": "Record the owner's needs_user choice; main chat or supervisor only. Quote their words and exact option; never guess. told_agent=true means already delivered (also direct Agent chat): record only. Otherwise send and record. Both settle the ask.",
+    "description": "Record the owner's needs_user choice or user_check Pass (\"Pass\"); main chat or supervisor only. Quote their words and exact option; never guess. told_agent=true records only (already relayed); false also sends. Both settle the ask.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -3316,7 +3670,7 @@
   },
   {
     "name": "task_start_screen",
-    "description": "Read the last 30 lines of the terminal tab a task's agent did not start in, while its computer keeps that tab (a 督办 message says until when): the question the tab's shell waits on, or where the agent's own screen stopped. Only for a task of this conversation whose start is being remedied; what it shows stays here, it is not kept with the task.",
+    "description": "Read the last 30 lines of a failed startup's kept tab while the start is being remedied. A supervision message says how long the tab is kept. Only the main conversation or the task's current supervising conversation may read it. See what stopped the shell or Agent. The screen stays in this conversation.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -3337,7 +3691,7 @@
   },
   {
     "name": "task_start_keys",
-    "description": "Type into the terminal tab a task's agent did not start in, while its computer keeps that tab and no agent runs there: text as is (no enter, at most 32 characters), then keys by name (\"enter\", \"esc\", \"ctrl+c\", \"y\", \"n\", \"up\", \"down\"…, at most 8). Use it to answer the question the tab's shell waits on, or to get past where the agent's screen stopped; read the tab first with task_start_screen and again after. The keys, the text and your reason are kept with the task's history. It starts nothing: start the agent again with task_retry.",
+    "description": "Answer a failed startup's shell or Agent prompt in its kept terminal tab while no Agent runs there. Only the main conversation or the task's current supervising conversation may act. Read the tab with task_start_screen before and after. Send up to 32 characters without Enter, then up to 8 named keys (enter, esc, ctrl+c, y, n, up, down). The keys, text and reason go in the task history. Use task_retry to start again.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -3372,7 +3726,7 @@
   },
   {
     "name": "task_retry",
-    "description": "Start a failed task's agent again: in its kept tab (once task_start_keys answered what stopped it), else in a new tab, reopening it; with launcher, on that launcher of the same computer and workspace. At most 3 retries; the hub never retries itself. Returns at once; the outcome comes as a 督办 message. Only this conversation's tasks; reason goes in their history.",
+    "description": "Retry a failed task in its kept tab after clearing the blocker, or reopen it in a new tab. An optional launcher uses the same computer and workspace. The main conversation may retry any task. Other conversations may retry only tasks they supervise. Up to 3 manual retries. Returns at once. Look for the result in supervision. The task history records the reason.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -3832,7 +4186,7 @@
   },
   {
     "name": "todo_create",
-    "description": "Record requested/agreed work or reminders immediately, without confirmation; execute via task_plan. Open title/due duplicates return existing to-dos but refuse bindings: use todo_repositories_get/set. Short title in the user's language; details in notes. In leader chats: record that direction's work; task_plan dispatches, todo_complete finishes unassigned work. Bindings save atomically; IDs/catalog_revision from repositories_list. No files or task progress changes.",
+    "description": "Record agreed work or reminders now; run work via task_plan. Open title/due duplicates return the existing to-do; edit its bindings via todo_repositories_get/set. Leader chats record work in their direction and complete unassigned work via todo_complete. Bindings are atomic, using repositories_list IDs and revision. No file or progress changes. A result naming an active related Agent means reuse it, not a new dispatch.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -3846,6 +4200,10 @@
         "notes": {
           "type": "string",
           "description": "Details."
+        },
+        "topic_message_id": {
+          "type": "string",
+          "description": "Lark message ID supplied in the current prompt."
         },
         "due": {
           "type": "string",
@@ -4263,7 +4621,7 @@
   },
   {
     "name": "decisions_query",
-    "description": "memory[] page 1: tag words match text/subjects/facet/categories (AND, ignore case). by/trust/non-active status: memory_omitted=ledger_filters; retry tag alone. scope=ledger-only",
+    "description": "memory[] full scan: tag ranks all-term matches first, backfilling partial/rank hits. by/trust/non-active: memory_omitted=ledger_filters; retry tag alone. scope=ledger-only",
     "input_schema": {
       "type": "object",
       "properties": {

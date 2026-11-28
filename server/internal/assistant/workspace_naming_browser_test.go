@@ -24,7 +24,7 @@ func TestWorkspaceNamingBrowserHarness(t *testing.T) {
 	if os.Getenv("WORKSPACE_NAMING_QA") != "1" {
 		t.Skip("opt-in isolated browser fixture")
 	}
-	database, err := db.Open(t.Context(), newDatabase(t), db.ManagerSet)
+	database, err := db.Open(t.Context(), newMigratedDatabase(t, db.ManagerSet), db.ManagerSet)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -328,7 +328,10 @@ func (m *Machine) directWorks(ctx context.Context) error {
 	if host == "" {
 		host = m.cfg.ID
 	}
-	return exec.CommandContext(ctx, "ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", host, "true").Run()
+	if err := validateSSHHost(host); err != nil {
+		return err
+	}
+	return exec.CommandContext(ctx, "ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "--", host, "true").Run()
 }
 
 // deployTailcat sends the hub's node build over tailcat: the node installs it over itself and exits, and its

@@ -4,7 +4,7 @@
 import { useSidebarUsageShown } from "../lib/sidebar-usage";
 import { type ComponentType, useEffect, useRef, useState } from "react";
 import { t as tr } from "../i18n";
-import { isBalanceAccount, liveAccounts, remainingTone, selectSidebarUsageAccounts, sourceNames, tightestRemaining, usePinnedUsageAccounts, useUsageWindows, type RemainingTone, type UnconnectedProvider, type UsageAccount } from "../lib/usage-windows";
+import { isBalanceAccount, isHistoricalCodexReading, liveAccounts, protectReserve, remainingPercent, remainingTone, selectSidebarUsageItems, sidebarWindowTitle, sourceNames, tightestRemaining, usePinnedUsageAccounts, useUsageWindows, type RemainingTone, type UnconnectedProvider, type UsageAccount } from "../lib/usage-windows";
 import { cx } from "../ui/atoms";
 import { lazyDialog } from "./LazyOverlay";
 
@@ -39,8 +39,8 @@ export function UsageBars({ accounts, unconnected = EMPTY_UNCONNECTED, now = Dat
   const triggerRef = useRef<HTMLButtonElement>(null);
   const pinnedIds = usePinnedUsageAccounts();
   const live = liveAccounts(accounts, now);
-  const { bars: top, balances } = selectSidebarUsageAccounts(live, pinnedIds);
-  const notices = !top.length && !balances.length ? live.filter((a) => !isBalanceAccount(a) && a.windows.length === 0 && Boolean(a.notice?.trim() || a.headline?.trim())).slice(0, 2) : [];
+  const { items } = selectSidebarUsageItems(live, pinnedIds);
+  const notices = !items.length ? live.filter((a) => !isBalanceAccount(a) && a.windows.length === 0 && Boolean(a.notice?.trim() || a.headline?.trim())).slice(0, 2) : [];
 
   useEffect(() => {
     if (!open) return;
@@ -58,7 +58,9 @@ export function UsageBars({ accounts, unconnected = EMPTY_UNCONNECTED, now = Dat
     };
   }, [open]);
 
-  if (!top.length && !balances.length && !notices.length && !unconnected.length) return null;
+  const showHistorical = !items.length && live.some(isHistoricalCodexReading);
+  if (!items.length && !notices.length && !unconnected.length && !showHistorical) return null;
+  const barCount = items.reduce((n, item) => n + (item.kind === "balance" ? 0 : 1), 0);
   return (
     <div ref={ref} className="relative shrink-0 px-2.5 pb-2.5 pt-1" data-usage-bars>
       <UsagePopover open={open} accounts={live} unconnected={unconnected} anchor={triggerRef.current} onClose={() => setOpen(false)} />
@@ -71,31 +73,37 @@ export function UsageBars({ accounts, unconnected = EMPTY_UNCONNECTED, now = Dat
         title={tr("usage.title")}
         className="touch-hit flex w-full flex-col gap-1.5 rounded-control px-2.5 py-2 text-left shadow-hairline transition-colors hover:bg-hover"
       >
-        {top.map((a) => {
-          const { remaining, reserve } = tightestRemaining(a);
+        {items.map((item) => {
+          if (item.kind === "balance") return <BalanceRow key={item.key} a={item.account} />;
+          const a = item.account;
+          const w = item.kind === "window" ? item.window : undefined;
+          const { remaining, reserve } = w
+            ? { remaining: remainingPercent(w.used_percent), reserve: protectReserve(w.protect_percent) ?? 0 }
+            : tightestRemaining(a);
           const tone = remainingTone(remaining, reserve);
+          const name = w ? sidebarWindowTitle(a, w) : a.name;
+          const fullName = w ? `${name} ${w.label}` : a.name;
           const from = sourceNames(a);
-          const title = [from.length ? tr("usage.sources_title", { sources: from.join(" · ") }) : "", a.stale ? tr("usage.stale_title") : ""].filter(Boolean).join(" · ");
+          const title = [w ? fullName : "", from.length ? tr("usage.sources_title", { sources: from.join(" · ") }) : "", a.stale ? tr("usage.stale_title") : ""].filter(Boolean).join(" · ");
           return (
-            <span key={a.id} className={cx("flex flex-col gap-1", a.stale && "opacity-60")} title={title || undefined}>
+            <span key={item.key} data-usage-window={w ? item.key : undefined} className={cx("flex flex-col gap-1", a.stale && "opacity-60")} title={title || undefined}>
               <span className="flex items-baseline gap-2">
-                <span className={ROW_NAME}>{a.name}</span>
+                <span className={ROW_NAME}>{name}</span>
+                {w && <span className="shrink-0 whitespace-nowrap text-submeta text-ink-3">{w.label}</span>}
                 <span className={cx(ROW_VALUE, a.stale ? "text-ink-2" : TONE_TEXT[tone])}>{tr("usage.left_short", { percent: shown(remaining) })}</span>
               </span>
-              <StripMeter remaining={remaining} barClass={TONE_BG[tone]} label={tr("usage.remaining_label", { name: a.name, percent: shown(remaining) })} />
+              <StripMeter remaining={remaining} barClass={TONE_BG[tone]} label={tr("usage.remaining_label", { name: fullName, percent: shown(remaining) })} />
             </span>
           );
         })}
-        {balances.map((a) => (
-          <BalanceRow key={a.id} a={a} />
-        ))}
+        {showHistorical && <span className="text-left text-xs text-ink-2">{tr("usage.codex_local_reading")}</span>}
         {notices.map((a) => (
           <span key={a.id} data-usage-notice-strip={a.id} className={cx("flex items-baseline gap-2", a.stale && "opacity-60")}>
             <span className={ROW_NAME}>{a.name}</span>
             <span className="min-w-0 max-w-[55%] truncate text-submeta text-ink-3">{a.notice?.trim() || a.headline?.trim()}</span>
           </span>
         ))}
-        {unconnected.slice(0, Math.max(1, 4 - top.length)).map((p) => (
+        {unconnected.slice(0, Math.max(0, 4 - barCount)).map((p) => (
           <span key={`_${p.id}`} data-usage-unconnected={p.id} className="flex items-baseline gap-2 text-xs text-ink-3">
             <span className="min-w-0 flex-1 truncate">{p.title}</span>
             <span className="shrink-0">{tr("usage.not_connected")}</span>

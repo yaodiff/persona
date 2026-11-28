@@ -1,4 +1,5 @@
 import CryptoKit
+import PersonaWire
 import SwiftUI
 #if canImport(WatchConnectivity)
 import WatchConnectivity
@@ -42,17 +43,24 @@ extension AppModel {
         #endif
         for paired in registry.hubs where paired.deviceID == nil {
             let old = paired.config
-            guard let t = try? await APIClient(config: old).createToken(name: UIDevice.current.name, kind: Self.credentialKind), t.role == "full" else { continue }
+            let hubID = paired.hubID
+            let replaces = await Task.detached { PreviousDeviceCredentials.lookup(.device, hubID: hubID, url: old.url) }.value
+            guard let t = try? await APIClient(config: old).createToken(name: UIDevice.current.name, kind: Self.credentialKind, replaces: replaces), t.role == "full" else { continue }
             adoptDeviceToken(hub: paired.id, old: old.token, token: t.token, deviceID: t.id)
         }
         #if canImport(WatchConnectivity)
         if WatchSync.shared.watchAppInstalled {
             for g in registry.groups {
-                guard let primary = registry.primary(g),
-                      let t = try? await DeviceCredentialTrade.issueWatchToken(for: primary, api: APIClient(config: primary.config)),
+                guard let primary = registry.primary(g) else { continue }
+                let hubID = primary.hubID
+                let url = primary.config.url
+                let priorWatch = await Task.detached { PreviousDeviceCredentials.lookup(.watch, hubID: hubID, url: url) }.value
+                guard let t = try? await DeviceCredentialTrade.issueWatchToken(for: primary, api: APIClient(config: primary.config), replaces: priorWatch),
                       let updated = DeviceCredentialTrade.watchRegistry(registry, expected: primary, token: t) else { continue }
                 registry = updated
                 saveRegistry(updated)
+                let newWatchID = t.id
+                Task.detached { PreviousDeviceCredentials.record(newWatchID, slot: .watch, hubID: hubID, url: url) }
             }
         }
         #endif
@@ -71,6 +79,11 @@ extension AppModel {
             registry = r
             saveRegistry(r)
             buildLinks()
+            if let paired = r.hubs.first(where: { $0.id == id }) {
+                let hubID = paired.hubID
+                let url = paired.config.url
+                Task.detached { PreviousDeviceCredentials.record(deviceID, slot: .device, hubID: hubID, url: url) }
+            }
         }
         for link in links where !link.isDemo { link.live.renewCredential(from: old, to: token) }
     }
@@ -90,13 +103,82 @@ extension AppModel {
     }
 }
 
+/// Device-local memory of the last credential ID this device (and its paired watch) held at each hub.
+/// Stored in Keychain with `thisDeviceOnly` so re-pairing after an offline sign-out, reinstall, or in-place
+/// re-pair sends `replaces` and avoids leaving duplicate entries in Settings › Devices.
+nonisolated enum PreviousDeviceCredentials {
+    enum Slot: String, Sendable { case device, watch }
+
+    private static let account = "previous-device-ids"
+    private static let lock = NSLock()
+    static let defaultKeychain = KeychainAccess(
+        read: { Keychain.read(account: $0) },
+        write: { Keychain.save($0, account: $1, thisDeviceOnly: true) },
+        delete: { Keychain.delete(account: $0) }
+    )
+
+    static func keys(_ slot: Slot, hubID: String?, url: URL) -> [String] {
+        var out: [String] = []
+        if let hubID, !hubID.isEmpty { out.append("\(slot.rawValue):hub:\(hubID)") }
+        if let urlKey = HubAddressInput.key(url) { out.append("\(slot.rawValue):url:\(urlKey)") }
+        return out
+    }
+
+    static func lookup(_ slot: Slot, hubID: String?, url: URL, _ kc: KeychainAccess = defaultKeychain) -> String? {
+        let ks = keys(slot, hubID: hubID, url: url)
+        guard !ks.isEmpty else { return nil }
+        return lock.withLock {
+            let map = load(kc)
+            for key in ks {
+                if let id = map[key], !id.isEmpty { return id }
+            }
+            return nil
+        }
+    }
+
+    static func record(_ id: String, slot: Slot, hubID: String?, url: URL, _ kc: KeychainAccess = defaultKeychain) {
+        guard !id.isEmpty else { return }
+        let ks = keys(slot, hubID: hubID, url: url)
+        guard !ks.isEmpty else { return }
+        lock.withLock {
+            var map = load(kc)
+            for key in ks { map[key] = id }
+            save(map, kc)
+        }
+    }
+
+    static func clear(_ slot: Slot, hubID: String?, url: URL, _ kc: KeychainAccess = defaultKeychain) {
+        let ks = keys(slot, hubID: hubID, url: url)
+        guard !ks.isEmpty else { return }
+        lock.withLock {
+            var map = load(kc)
+            var changed = false
+            for key in ks where map.removeValue(forKey: key) != nil { changed = true }
+            if changed { save(map, kc) }
+        }
+    }
+
+    private static func load(_ kc: KeychainAccess) -> [String: String] {
+        guard case .found(let data) = kc.read(account),
+              let decoded = try? JSONDecoder().decode([String: String].self, from: data) else { return [:] }
+        return decoded
+    }
+
+    private static func save(_ map: [String: String], _ kc: KeychainAccess) {
+        if map.isEmpty { kc.delete(account); return }
+        guard let data = try? JSONEncoder().encode(map) else { return }
+        _ = kc.write(data, account)
+    }
+}
+
 /// Trading a pairing token for the device's own (pure, for the tests).
 nonisolated enum DeviceCredentialTrade {
     /// Token listings expose ids, not hashes: a legacy watch token cannot safely be matched by name.
-    /// Issue an answer-only replacement; never revoke an unidentified old token or a raced new token.
-    static func issueWatchToken(for primary: PairedHub, api: APIClient) async throws -> APIClient.NewToken? {
+    /// Issue an answer-only replacement; when a prior watch credential ID is known, pass it in `replaces`.
+    static func issueWatchToken(for primary: PairedHub, api: APIClient, replaces: String? = nil) async throws -> APIClient.NewToken? {
         guard primary.watch?.url != primary.config.url || primary.watchDeviceID == nil else { return nil }
-        let token = try await api.createToken(name: "Apple Watch", kind: "watch")
+        let prior = primary.watchDeviceID ?? replaces
+        let token = try await api.createToken(name: "Apple Watch", kind: "watch", replaces: prior)
         guard token.role == "answer", !token.id.isEmpty, !token.token.isEmpty else { throw URLError(.cannotParseResponse) }
         return token
     }
@@ -157,11 +239,71 @@ nonisolated enum DeviceCredentialTrade {
     }
 }
 
+/// Grouping and ordering for Settings › Devices, shared with web and Android (pure, for the tests).
+nonisolated enum DeviceGroupKind: String, CaseIterable, Hashable, Sendable {
+    case devices, browsers, links, integrations
+}
+
+nonisolated enum DeviceGroups {
+    struct Section: Identifiable, Hashable, Sendable {
+        var kind: DeviceGroupKind
+        var tokens: [APIClient.DeviceToken]
+        var id: DeviceGroupKind { kind }
+    }
+
+    static func kind(of token: APIClient.DeviceToken) -> DeviceGroupKind {
+        if token.role == "scoped" { return .integrations }
+        if token.kind == "web" { return .browsers }
+        if token.kind == "link" { return .links }
+        if token.kind == "phone" || token.kind == "watch" || (token.kind == "other" && token.role == "full") {
+            return .devices
+        }
+        return .integrations
+    }
+
+    static func group(
+        tokens: [APIClient.DeviceToken],
+        current: String?,
+        online: Set<String>
+    ) -> (sections: [Section], revoked: [APIClient.DeviceToken]) {
+        var buckets: [DeviceGroupKind: [APIClient.DeviceToken]] = [:]
+        var revoked: [APIClient.DeviceToken] = []
+        for token in tokens {
+            if token.revokedAt != nil {
+                revoked.append(token)
+            } else {
+                buckets[kind(of: token), default: []].append(token)
+            }
+        }
+        let byActivity: (APIClient.DeviceToken, APIClient.DeviceToken) -> Bool = { a, b in
+            if a.id == b.id { return false }
+            let aCur = a.id == current, bCur = b.id == current
+            if aCur != bCur { return aCur }
+            let aOn = online.contains(a.id), bOn = online.contains(b.id)
+            if aOn != bOn { return aOn }
+            let ta = a.lastSeen ?? a.createdAt ?? .distantPast
+            let tb = b.lastSeen ?? b.createdAt ?? .distantPast
+            if ta != tb { return ta > tb }
+            return a.id < b.id
+        }
+        let sections = DeviceGroupKind.allCases.compactMap { k -> Section? in
+            guard var items = buckets[k], !items.isEmpty else { return nil }
+            items.sort(by: byActivity)
+            return Section(kind: k, tokens: items)
+        }
+        revoked.sort { ($0.revokedAt ?? .distantPast) > ($1.revokedAt ?? .distantPast) }
+        return (sections, revoked)
+    }
+}
+
 /// Settings › Devices: every device with its own credential, revocable one by one.
 struct DevicesView: View {
     @Environment(AppModel.self) private var model
     @State private var tokens: [APIClient.DeviceToken] = []
+    @State private var groups: [DeviceGroups.Section] = []
+    @State private var revoked: [APIClient.DeviceToken] = []
     @State private var current: String?
+    @State private var online: Set<String> = []
     /// Per credential, how the hub pushes to its device (#5998); empty from an older hub.
     @State private var push: [String: APIClient.PushRoute] = [:]
     /// Which device takes the phone tools' calls, and the choices it lists (`PhonePrimaryChoices`); nil from an older hub.
@@ -191,10 +333,16 @@ struct DevicesView: View {
             } footer: {
                 Text("Give another phone, Mac or browser a one-time pairing code, without going to the hub machine.")
             }
-            Section {
-                ForEach(tokens.filter { $0.revokedAt == nil }) { t in row(t) }
-            } footer: {
-                Text("Each device has its own credentials. If you lose one, revoke just that one; the others keep working. A watch can only view and answer; it can't change settings or start and stop agents.")
+            ForEach(Array(groups.enumerated()), id: \.element.id) { index, section in
+                Section {
+                    ForEach(section.tokens) { t in row(t) }
+                } header: {
+                    Text(groupTitle(section.kind))
+                } footer: {
+                    if index == groups.count - 1 {
+                        Text("Each device has its own credentials. If you lose one, revoke just that one; the others keep working. A watch can only view and answer; it can't change settings or start and stop agents.")
+                    }
+                }
             }
             if PhonePrimaryChoices.isShown(phone) {
                 Section {
@@ -212,7 +360,6 @@ struct DevicesView: View {
                     Text("When Persona needs your phone (your location, Health, reminders), it asks this device first. If it can't be reached, another of your devices answers and Persona says which. Automatic uses the device you used most recently.")
                 }
             }
-            let revoked = tokens.filter { $0.revokedAt != nil }
             if !revoked.isEmpty {
                 Section(String(localized: "section.revoked", defaultValue: "Revoked")) {
                     ForEach(revoked) { t in row(t).foregroundStyle(.secondary) }
@@ -270,9 +417,28 @@ struct DevicesView: View {
     private static let upgradeNote = String(localized: "After the hub updates, this iPhone switches to its own credentials automatically.")
     private static let revokeSelfNote = String(localized: "This iPhone disconnects right away. Scan the code again to pair.")
 
+    private func groupTitle(_ kind: DeviceGroupKind) -> String {
+        switch kind {
+        case .devices: String(localized: "Devices")
+        case .browsers: String(localized: "Browsers")
+        case .links: String(localized: "Computers")
+        case .integrations: String(localized: "Integrations")
+        }
+    }
+
+    private func icon(for t: APIClient.DeviceToken) -> String {
+        switch t.kind {
+        case "watch": Theme.Icon.watch
+        case "phone": Theme.Icon.phone
+        case "web": Theme.Icon.web
+        case "link": Theme.Icon.laptop
+        default: Theme.Icon.credentials
+        }
+    }
+
     private func row(_ t: APIClient.DeviceToken) -> some View {
         HStack(spacing: Theme.Space.m) {
-            ThemedIcon(t.kind == "watch" ? Theme.Icon.watch : t.kind == "phone" ? Theme.Icon.phone : Theme.Icon.laptop)
+            ThemedIcon(icon(for: t))
                 .scaledFrame(width: Theme.Size.icon)
                 .foregroundStyle(Theme.accent)
             VStack(alignment: .leading, spacing: Theme.Space.xxs) {
@@ -280,7 +446,11 @@ struct DevicesView: View {
                     Text(t.name).lineLimit(1)
                 } chips: {
                     if t.id == current { Chip(text: String(localized: "This Device"), look: .outline) }
+                    if t.revokedAt == nil, t.id != current, online.contains(t.id) {
+                        Chip(text: String(localized: "Online"), look: .tint(Theme.positive))
+                    }
                     if t.role == "answer" { Chip(text: String(localized: "Answer Only")) }
+                    if t.role == "scoped" { Chip(text: String(localized: "Scoped Access")) }
                 }
                 Text(detail(t)).font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(1)
                 if t.revokedAt == nil, let route = push[t.id] { DevicePushLine(route: route) }
@@ -338,7 +508,9 @@ struct DevicesView: View {
         guard let api = model.api else { return }
         do {
             let r = try await api.deviceTokens()
-            (tokens, current, push) = (r.tokens, r.current, r.push ?? [:])
+            let onlineSet = Set(r.online ?? [])
+            let grouped = DeviceGroups.group(tokens: r.tokens, current: r.current, online: onlineSet)
+            (tokens, current, online, push, groups, revoked) = (r.tokens, r.current, onlineSet, r.push ?? [:], grouped.sections, grouped.revoked)
             apply(phone: savingPhone ? phone : r.phone) // a save on its way answers for itself
         } catch {
             model.show(error)

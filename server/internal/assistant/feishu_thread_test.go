@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/channel"
 	"github.com/nwverse/persona/server/internal/db"
@@ -29,8 +30,11 @@ const (
 // conversation c1x1x1) and a machine "box" with one agent (agent01).
 type threadEnv struct {
 	*todoEnv
-	features  FeishuFeatures
-	publicURL string // the hub's web address the status carries ("" for none)
+	features    FeishuFeatures
+	publicURL   string // the hub's web address the status carries ("" for none)
+	topicModes  map[string]assistantwire.TopicTodoMode
+	topicSpaces map[string]string
+	chats       []string
 }
 
 func newThreadEnv(t *testing.T, st Store) *threadEnv {
@@ -41,11 +45,14 @@ func newThreadEnv(t *testing.T, st Store) *threadEnv {
 func withFeishuThread(env *todoEnv) *threadEnv {
 	t := env.t
 	t.Helper()
-	e := &threadEnv{todoEnv: env, features: FeishuFeatures{Main: true, Agents: true, Cards: true}}
+	e := &threadEnv{todoEnv: env, features: FeishuFeatures{Main: true, Agents: true, Cards: true},
+		topicModes: map[string]assistantwire.TopicTodoMode{testChat: assistantwire.TopicAlwaysTodo},
+		chats:      []string{"oc_private", testChat}}
 	setSettings(t, e.s, func(v *Settings) { v.MachineID, v.Main = "server", "m1" })
 	empty := func(json.RawMessage) (any, error) { return map[string]any{}, nil }
 	e.f.answerApp(AppFeishu, FeishuStatusGet, func(json.RawMessage) (any, error) {
-		return FeishuStatus{Ready: true, Enabled: true, Owner: "ou_owner", PairedAt: time.Unix(100, 0), Features: e.features, PublicURL: e.publicURL}, nil
+		return FeishuStatus{Ready: true, Enabled: true, Owner: "ou_owner", PairedAt: time.Unix(100, 0), Features: e.features,
+			PublicURL: e.publicURL, Chats: e.chats, TopicTodoModes: e.topicModes, TopicSpaces: e.topicSpaces}, nil
 	})
 	e.f.answerApp(AppFeishu, FeishuReact, func(json.RawMessage) (any, error) { return map[string]any{"reaction_id": "r1"}, nil })
 	e.f.answerApp(AppFeishu, FeishuPost, func(json.RawMessage) (any, error) { return map[string]any{"message_id": "om_post"}, nil })

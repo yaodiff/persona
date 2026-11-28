@@ -8,7 +8,7 @@ function previewAgent(data:Record<string,Object>):string {
   const label=Wire.text(data,'agent_label').trim(),launcher=Wire.text(data,'launcher').trim();
   const id=(agent || label || launcher).toLowerCase();
   if (id==='codex' || id==='openai') return 'Codex';
-  if (id==='traex') return 'TRAEX';
+  if (id==='traex') return 'TRAE CLI';
   if (['claude','claude-code','claude code'].includes(id)) return 'Claude';
   if (id==='paseo' && (!label || label.toLowerCase()===id)) return launcher.toLowerCase()===id ? '' : launcher;
   return label || agent || launcher;

@@ -93,20 +93,20 @@ func withRequestLang(r *http.Request) *http.Request {
 }
 
 // channelList is every channel as the app sees it: the hub's list with what is the assistant's filled in.
-func (s *Service) channelList(ctx context.Context) ([]channel.View, error) {
+func (s *Service) channelList(ctx context.Context, v2 bool) ([]channel.View, error) {
 	list, err := s.channelsFresh(ctx)
 	if err != nil {
 		return nil, err
 	}
 	out := make([]channel.View, len(list))
 	for i, v := range list {
-		out[i] = s.filledChannel(ctx, v)
+		out[i] = s.filledChannel(ctx, v, v2)
 	}
 	return out, nil
 }
 
 // filledChannel is v with its target, and a plugin channel's features.
-func (s *Service) filledChannel(ctx context.Context, v channel.View) channel.View {
+func (s *Service) filledChannel(ctx context.Context, v channel.View, v2 bool) channel.View {
 	switch {
 	case v.ID == channel.Feishu:
 		t := s.feishuChannelTarget(ctx)
@@ -123,7 +123,7 @@ func (s *Service) filledChannel(ctx context.Context, v channel.View) channel.Vie
 		if pref.Target != nil {
 			t = *pref.Target
 		}
-		threadMode := pref.ThreadMode.Normalized()
+		threadMode := channelRoutingMode(v, pref.ThreadMode, v2)
 		threadIdleHours := pref.ThreadIdleHours
 		features := channel.PluginFeatures(s.botLang(ctx), v.Capabilities, pref.Features)
 		c.mu.Unlock()
@@ -149,8 +149,8 @@ func (s *Service) conversationTitle(ctx context.Context, machine, session string
 	return conversationName(c, s.settings(ctx).Main)
 }
 
-func (s *Service) channelView(ctx context.Context, id string) (channel.View, bool, error) {
-	list, err := s.channelList(ctx)
+func (s *Service) channelView(ctx context.Context, id string, v2 bool) (channel.View, bool, error) {
+	list, err := s.channelList(ctx, v2)
 	if err != nil {
 		return channel.View{}, false, err
 	}
@@ -163,7 +163,8 @@ func (s *Service) channelView(ctx context.Context, id string) (channel.View, boo
 }
 
 func (s *Service) channelDetail(ctx context.Context, id string) (channel.Detail, bool, error) {
-	v, ok, err := s.channelView(ctx, id)
+	v2 := s.integrationsV2On(ctx)
+	v, ok, err := s.channelView(ctx, id, v2)
 	if err != nil || !ok {
 		return channel.Detail{}, ok, err
 	}
@@ -188,18 +189,20 @@ func (s *Service) channelDetail(ctx context.Context, id string) (channel.Detail,
 	}
 	ov, hasOverrides := c.overrides[id], c.hasOverrides
 	c.mu.Unlock()
-	if !d.ReadOnly && d.Source != channel.SourceMarket && d.Target != nil {
-		if v.Source == channel.SourcePlugin && v.Installed && s.integrationsV2On(ctx) {
-			if d.ThreadMode == channel.ThreadModePerGroupAndTopic || d.ThreadMode == channel.ThreadModePerTopic {
+	// A reported map without an override for this channel explicitly suppresses the hint.
+	if !d.ReadOnly && d.Source != channel.SourceMarket && d.Target != nil && (!hasOverrides || ov != nil) {
+		if v.Source == channel.SourcePlugin && v.Installed && v2 {
+			switch d.ThreadMode {
+			case channel.ThreadModePerGroupAndTopic:
+				d.TargetOverride = &channel.TargetOverride{Mode: channel.TargetOverrideGroupsAndTopics}
+			case channel.ThreadModePerTopic:
 				d.TargetOverride = &channel.TargetOverride{Mode: channel.TargetOverrideTopics}
 			}
 		} else {
 			switch {
-			case hasOverrides:
-				if ov != nil {
-					cp := *ov
-					d.TargetOverride = &cp
-				}
+			case ov != nil:
+				cp := *ov
+				d.TargetOverride = &cp
 			case v.Source == channel.SourcePlugin && v.Installed && v.Capabilities.Threads:
 				d.TargetOverride = &channel.TargetOverride{Mode: channel.TargetOverrideThreads}
 			}

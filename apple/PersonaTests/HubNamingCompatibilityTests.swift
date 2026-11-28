@@ -121,8 +121,8 @@ import PersonaWire
         let old = hub.client
         var new = hub.client
         new.personaNaming = true
-        try await old.send(SessionKey(machineID: "m1", sessionID: "s1"), text: text)
-        try await new.send(SessionKey(machineID: "m1", sessionID: "s1"), text: text)
+        try await old.send(SessionKey(machineID: "m1", sessionID: "s1"), text: text, clientMsgID: UUID().uuidString)
+        try await new.send(SessionKey(machineID: "m1", sessionID: "s1"), text: text, clientMsgID: UUID().uuidString)
         let requests = hub.sent("POST", "/api/v1/sessions/m1/s1/messages")
         let first = try JSONSerialization.jsonObject(with: #require(requests.first?.body)) as? [String: Any]
         let second = try JSONSerialization.jsonObject(with: #require(requests.last?.body)) as? [String: Any]

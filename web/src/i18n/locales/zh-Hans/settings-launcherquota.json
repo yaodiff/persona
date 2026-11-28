@@ -2,10 +2,10 @@
   "title": "额度",
   "title_gateway": "额度 · {gateway}",
   "refresh": "刷新额度",
-  "loading": "正在读取额度…",
-  "unavailable": "读不到额度",
-  "key_usage": "这个 Key 的用量",
-  "unlimited": "这个 Key 没有设额度上限。",
+  "loading": "正在加载额度…",
+  "unavailable": "无法获取额度",
+  "key_usage": "当前 Key 用量",
+  "unlimited": "此 Key 未设置额度上限。",
   "by_model": "按模型 {count}",
   "used_percent": "{label} 已用 {percent}%"
 }

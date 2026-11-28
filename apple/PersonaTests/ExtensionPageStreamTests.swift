@@ -343,10 +343,11 @@ import PersonaWire
         let previous = LiveConnection.makeLocal; defer { LiveConnection.makeLocal = previous }
         let socket = Socket(); let (connection, page) = setup(socket); defer { page.close(); connection.disconnect() }
         socket.snapshot()
-        var resolved: [String] = []
+        var resolved: [Interaction] = []
         page.resolveHostConfirmation = { resolved.append($0) }
-        func host(_ id: String, session: String = "session", confirm: String = "Confirm saved action") {
-            socket.emit(#"{"type":"interaction","interaction":{"id":"\#(id)","machine_id":"","session_id":"\#(session)","kind":"permission","tool_name":"extension.ui","tool_input":{"id":"callback","confirm":"\#(confirm)"},"summary":"\#(confirm)"}}"#)
+        func host(_ id: String, session: String = "session", confirm: String = "Confirm saved action",
+                  createdAt: String = "2026-01-02T03:04:05.000000001Z") {
+            socket.emit(#"{"type":"interaction","interaction":{"id":"\#(id)","machine_id":"","session_id":"\#(session)","kind":"permission","created_at":"\#(createdAt)","tool_name":"extension.ui","tool_input":{"id":"callback","confirm":"\#(confirm)"},"summary":"\#(confirm)"}}"#)
         }
         let unconfirmed = try page.freeze(savedAction(page), values: [:])
         let noConsent = Task { try? await page.perform(unconfirmed) }
@@ -361,8 +362,10 @@ import PersonaWire
         host("changed-consent", confirm: "Different consent")
         #expect(resolved.isEmpty)
         host("saved-consent"); host("saved-consent")
+        host("saved-consent", createdAt: "2026-01-02T03:04:05.000000002Z")
         for _ in 0..<10 where resolved.isEmpty { await Task.yield() }
-        #expect(resolved == ["saved-consent"])
+        #expect(resolved.map(\.id) == ["saved-consent"])
+        #expect(resolved.first?.createdAtWire == "2026-01-02T03:04:05.000000001Z")
         socket.delta(); socket.receipt(confirmed.interaction.eventId)
         #expect(try await consent.value?.toast == "Once")
     }

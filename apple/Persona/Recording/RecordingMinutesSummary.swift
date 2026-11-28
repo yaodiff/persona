@@ -28,22 +28,43 @@ struct RecordingMinutesSummary: View {
         }
     }
 
-    /// The four cards (#5026), as they were.
+    /// The four cards (#5026), with Disagreements (#16728) between Decisions and Open Questions when present.
     @ViewBuilder private var cards: some View {
         // The recording's name: the minutes' own title shows only when it says something else.
         let title = summary.title.flatMap { $0 == entry.displayTitle ? nil : $0 }
         let updates = RecordingMinutesUpdates.shows(entry, model, synced: synced)
-        if title != nil || summary.facts != nil || summary.attendees != nil || summary.cards.isEmpty || updates {
+        let empty = summary.cards.isEmpty && summary.debates.isEmpty
+        if title != nil || summary.facts != nil || summary.attendees != nil || empty || updates {
             Section {
-                MinutesHeaderCard(title: title, facts: summary.facts, attendees: summary.attendees, empty: summary.cards.isEmpty) {
+                MinutesHeaderCard(title: title, facts: summary.facts, attendees: summary.attendees, empty: empty) {
                     if updates { RecordingMinutesUpdates(entry: entry, model: model, synced: synced, boxed: true) }
                 }
             }
         }
-        ForEach(summary.cards) { card in
-            Section {
-                MinutesCard(card: card, recording: entry.id, offered: summary.offered, addable: summary.addable,
-                            asking: model.asking, add: add, show: show)
+        if summary.debates.isEmpty {
+            ForEach(summary.cards) { card in
+                Section {
+                    MinutesCard(card: card, recording: entry.id, offered: summary.offered, addable: summary.addable,
+                                asking: model.asking, add: add, show: show)
+                }
+            }
+        } else {
+            ForEach([RecordingMinutesCards.Kind.points, .decisions], id: \.self) { kind in
+                if let card = summary.cards.first(where: { $0.kind == kind }) {
+                    Section {
+                        MinutesCard(card: card, recording: entry.id, offered: summary.offered, addable: summary.addable,
+                                    asking: model.asking, add: add, show: show)
+                    }
+                }
+            }
+            MinutesDebatesSections(debates: summary.debates, recording: entry.id, show: show, byWidth: false)
+            ForEach([RecordingMinutesCards.Kind.open, .actions], id: \.self) { kind in
+                if let card = summary.cards.first(where: { $0.kind == kind }) {
+                    Section {
+                        MinutesCard(card: card, recording: entry.id, offered: summary.offered, addable: summary.addable,
+                                    asking: model.asking, add: add, show: show)
+                    }
+                }
             }
         }
     }
@@ -525,6 +546,164 @@ struct MinutesContext: View {
             }
         }
         .accessibilityElement(children: .combine)
+    }
+}
+
+/// The Disagreements section (#16728, docs/assistant/meeting-minutes.md "Disagreements (#16728)",
+/// docs/design/DESIGN_SYSTEM.md "Minutes cards (#5026)"): a section heading over the first card, then one card per
+/// disagreement. Reused by `RecordingMinutesOverview` (after the summary card, before the first topic),
+/// `RecordingMinutesSummary` (after Decisions, before Open Questions), and `MeetingPage` after mode (`minutesBoxed`).
+struct MinutesDebatesSections: View {
+    var debates: [RecordingMinutesCards.Debate]
+    var recording: UUID
+    var show: (Double) -> Void
+    /// True in the summary-card layout (`MinutesItemLayout`), false in the legacy cards' layout.
+    var byWidth: Bool
+
+    var body: some View {
+        ForEach(debates) { debate in
+            if debate.id == debates.first?.id {
+                Section {
+                    MinutesDebateCard(debate: debate, recording: recording, show: show, byWidth: byWidth).id(debate.says)
+                } header: {
+                    MinutesDebatesHeading()
+                }
+            } else {
+                Section {
+                    MinutesDebateCard(debate: debate, recording: recording, show: show, byWidth: byWidth).id(debate.says)
+                }
+            }
+        }
+    }
+}
+
+/// The Disagreements section heading: icon (hidden from VoiceOver) and title, no count (contract principle 3).
+private struct MinutesDebatesHeading: View {
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
+            ThemedIcon(Theme.Icon.disagreement).font(Theme.Font.heading).foregroundStyle(Theme.accent)
+                .accessibilityHidden(true)
+            // `Color.primary`: a section header's `.primary` is its own secondary gray.
+            Text("Disagreements").font(Theme.Font.heading).foregroundStyle(Color.primary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .textCase(nil)
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isHeader)
+        .accessibilityIdentifier("minutes-debates-heading")
+    }
+}
+
+/// One disagreement card: its question (a VoiceOver heading), its status as a text chip (omitted when unknown; never
+/// color alone), one row per position reusing `MinutesItemRow` (stance, optional speaker, time chip jumping to the
+/// transcript and inline context), and for a settled disagreement an inset outcome well with the hub-linked decision
+/// when `outcome.decision` is valid. Supports both List sections and `minutesBoxed` via `.minutesCard()`.
+struct MinutesDebateCard: View {
+    var debate: RecordingMinutesCards.Debate
+    var recording: UUID
+    var show: (Double) -> Void
+    var byWidth: Bool
+    @State private var open: Set<String> = []
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Theme.Space.m) {
+            header
+            ForEach(debate.positions) { position in
+                if position.id != debate.positions.first?.id { Divider() }
+                MinutesItemRow(item: position, recording: recording, open: open.contains(position.id),
+                               toggle: { toggle(position.id) }, show: show, mark: .point(Theme.accent), byWidth: byWidth) {
+                    EmptyView()
+                }
+                .transition(.opacity)
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("minutes-debate-position")
+            }
+            if let outcome = debate.outcome {
+                outcomeBox(outcome)
+            }
+        }
+        .minutesCard()
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("minutes-\(debate.id)")
+    }
+
+    private var header: some View {
+        VStack(alignment: .leading, spacing: Theme.Space.xs) {
+            Text(debate.question).font(Theme.Font.heading)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityAddTraits(.isHeader)
+                .accessibilityIdentifier("minutes-debate-question")
+            if let status = debate.status, let label = debate.statusLabel {
+                Chip(text: label, look: statusLook(status), compact: true)
+                    .accessibilityIdentifier("minutes-debate-status")
+            }
+        }
+    }
+
+    private func statusLook(_ status: RecordingMinutes.Debate.Status) -> Chip.Look {
+        switch status {
+        case .open: .tint(Theme.softTint(Theme.caution), text: Theme.cautionText)
+        case .settled: .tint(Theme.positive)
+        }
+    }
+
+    private func outcomeBox(_ outcome: RecordingMinutesCards.DebateOutcome) -> some View {
+        VStack(alignment: .leading, spacing: Theme.Space.xs) {
+            HStack(alignment: .firstTextBaseline, spacing: Theme.Space.xs) {
+                ThemedIcon(Theme.Icon.decided)
+                    .font(Theme.Font.captionStrong)
+                    .foregroundStyle(Theme.positive)
+                    .accessibilityHidden(true)
+                Text("Outcome")
+                    .font(Theme.Font.captionStrong)
+                    .foregroundStyle(.secondary)
+            }
+            .accessibilityElement(children: .combine)
+            MinutesItemRow(item: outcome.item, recording: recording, open: open.contains(outcome.item.id),
+                           toggle: { toggle(outcome.item.id) }, show: show, byWidth: byWidth) {
+                if let label = outcome.decisionLabel {
+                    if let decisionAt = outcome.decisionAt {
+                        Button { show(decisionAt) } label: {
+                            decisionLinkLabel(label)
+                        }
+                        .buttonStyle(.plain)
+                        .tapTargetHeight()
+                        .accessibilityIdentifier("minutes-debate-decision")
+                    } else {
+                        decisionLinkLabel(label)
+                            .accessibilityIdentifier("minutes-debate-decision")
+                    }
+                }
+            }
+        }
+        .padding(Theme.Space.m)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.Fill.well, in: .rect(cornerRadius: Theme.Radius.control, style: .continuous))
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("minutes-debate-outcome")
+    }
+
+    private func decisionLinkLabel(_ text: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: Theme.Space.xs) {
+            ThemedIcon(Theme.Icon.decision)
+                .font(Theme.Font.caption)
+                .foregroundStyle(Theme.accent)
+                .accessibilityHidden(true)
+            Text(text)
+                .font(Theme.Font.caption)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.leading)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func toggle(_ id: String) {
+        var next = open
+        let opening = next.insert(id).inserted
+        if !opening { next.remove(id) }
+        withAnimation(reduceMotion ? nil : (opening ? Theme.Motion.reveal : Theme.Motion.conceal)) { open = next }
     }
 }
 #endif

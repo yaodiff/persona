@@ -159,7 +159,7 @@ func triageAnswerJSON(sc triageScenario) string {
 
 // TestTriageScenariosAreWellFormed keeps the cases honest without a model: names are unique, states are ones the
 // hub gives, no reply is decided from its closeout before the model, a request a case expects is one the hub keeps
-// (copied from the reply, an explicit request), and a model answering as the case expects leaves the hub with that
+// (copied from the reply), and a model answering as the case expects leaves the hub with that
 // state after its own rules (a red-line next step keeps the wait the user's, an agent it names must be one it knows).
 func TestTriageScenariosAreWellFormed(t *testing.T) {
 	scenarios := loadTriageScenarios(t)
@@ -186,8 +186,8 @@ func TestTriageScenariosAreWellFormed(t *testing.T) {
 				if !onlyUser || sc.NoQuestion {
 					t.Fatal("a question is for a case that wants blocked/user only, and asks something")
 				}
-				if !strings.Contains(sc.Reply, sc.Question) || !explicitUserRequest(sc.Question) {
-					t.Fatalf("question %q: the hub keeps only an explicit request copied from the reply", sc.Question)
+				if strings.TrimSpace(sc.Question) == "" || !strings.Contains(sc.Reply, sc.Question) {
+					t.Fatalf("question %q must be copied from the reply", sc.Question)
 				}
 			}
 			if sc.Link != "" && (!onlyUser || !strings.Contains(sc.Reply, sc.Link) || !httpsLink(sc.Link)) {
@@ -228,17 +228,20 @@ func TestTriageScenariosAreWellFormed(t *testing.T) {
 	}
 }
 
-// judgeTriageWith asks the model with the turn as read, keeps only an explicit request copied from the whole reply
-// (not the clipped one the model reads), and says the wait is the approved step only when there is one.
-func TestJudgeTriageWith(t *testing.T) {
-	ask := "Which one should I use?"
-	long := ask + strings.Repeat(" more detail", 400) // past the clip: the model reads its first and last 1500 runes
+// judgeTriageWith asks the model with the turn as read, grounds its questions in the whole reply, and says the
+// wait is the approved step only when there is one.
+func TestTriageJudgeModelInput(t *testing.T) {
+	ask := "I'll need your pick between the two palettes."
+	long := strings.Repeat("Before. ", 200) + ask + strings.Repeat(" After.", 250)
 	j := triageJudgeInput{System: prompts.AgentTriage{Owner: "Alex"}, Reply: long, Lang: i18n.En,
 		Input: prompts.AgentTriageInput{Now: "2026-11-10 10:00 Tue", Agent: "Copy", Machine: "mac", Reply: clipMiddleRunes(long, 1500)}}
+	if strings.Contains(j.Input.Reply, ask) {
+		t.Fatal("the request must sit outside the model's clipped reply")
+	}
 	m := &cannedJSON{answer: `{"phase":"blocked","on":"user","line":"Pick a draft","questions":[` +
 		`{"question":"` + ask + `","options":[{"label":"A"},{"label":"B"}]},` +
 		`{"question":"Shall I ship it?","options":[{"label":"Yes"},{"label":"No"}]},` +
-		`{"question":"more detail","options":[{"label":"Yes"},{"label":"No"}]}],` +
+		`{"question":""},{"question":" \t\n"}],` +
 		`"wait":{"what":"x","then":"push","approved":true}}`}
 	w, same, err := judgeTriageWith(context.Background(), m, j)
 	if err != nil {
@@ -247,7 +250,6 @@ func TestJudgeTriageWith(t *testing.T) {
 	if m.calls != 1 || m.system != prompts.RenderAgentTriage(j.System) || m.user != prompts.RenderAgentTriageInput(j.Input) {
 		t.Fatalf("the model was asked %d times with system %q user %q", m.calls, m.system, m.user)
 	}
-	// Made up ("Shall I ship it?" is not in the reply) and not a request ("more detail") are dropped.
 	if triageState(w) != "blocked/user" || len(w.Questions) != 1 || w.Questions[0].Question != ask {
 		t.Fatalf("got %+v", w)
 	}

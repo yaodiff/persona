@@ -1,0 +1,97 @@
+{
+  "agentCards": [
+    {
+      "agentId": "persona_harmony_agent",
+      "name": "Persona",
+      "description": "Personal AI assistant for everyday questions, to-do lists, knowledge search, meeting notes, health tracking, and workflow status confirmations.",
+      "type": "APP",
+      "version": "1.0.0",
+      "capabilities": {
+        "streaming": true,
+        "pushNotifications": false,
+        "stateTransitionHistory": true
+      },
+      "defaultInputModes": [
+        "text/plain",
+        "application/json",
+        "text/uri-list"
+      ],
+      "defaultOutputModes": [
+        "text/plain",
+        "application/json"
+      ],
+      "skills": [
+        {
+          "id": "ask_persona",
+          "name": "Ask Persona",
+          "description": "Ask your personal Persona assistant questions with multi-turn context and streaming replies.",
+          "tags": ["assistant", "qa", "chat", "personal"],
+          "examples": [
+            "Ask Persona to summarize today's priorities",
+            "问 Persona 帮我整理今天的重点事项"
+          ]
+        },
+        {
+          "id": "check_status_and_approvals",
+          "name": "Status & Confirmations",
+          "description": "Check running tasks, review pending confirmation requests, and open items in Persona.",
+          "tags": ["status", "approvals", "workflow", "notifications"],
+          "examples": [
+            "Check Persona status",
+            "查看 Persona 任务状态和待确认事项"
+          ]
+        },
+        {
+          "id": "manage_todos",
+          "name": "To-Do Management",
+          "description": "Quickly capture new to-dos and notes into Persona's To-dos list.",
+          "tags": ["todo", "tasks", "reminder", "productivity"],
+          "examples": [
+            "Add a to-do: prepare weekly review",
+            "新建待办：整理本周复盘"
+          ]
+        },
+        {
+          "id": "search_knowledge",
+          "name": "Knowledge Search",
+          "description": "Search your personal knowledge base for notes, projects, and meeting minutes.",
+          "tags": ["knowledge", "notes", "search", "docs"],
+          "examples": [
+            "Search knowledge: quarterly roadmap",
+            "搜索知识库：季度规划"
+          ]
+        },
+        {
+          "id": "delegate_agent_task",
+          "name": "Send Task to Agent",
+          "description": "Send a task instruction to an active Agent session on one of your paired devices.",
+          "tags": ["agent", "task", "workflow"],
+          "examples": [
+            "Send to agent: run unit tests on the current branch",
+            "交给 Agent：运行当前分支的单元测试"
+          ]
+        },
+        {
+          "id": "track_health_and_meetings",
+          "name": "Health & Meeting Notes",
+          "description": "Log daily water intake in Persona Health or jump straight into meeting recording.",
+          "tags": ["health", "water", "meetings", "recording"],
+          "examples": [
+            "Log 250 ml of water",
+            "记喝水 250 毫升"
+          ]
+        }
+      ],
+      "category": "productivity",
+      "iconUrl": "$media:startIcon",
+      "appInfo": {
+        "bundleName": "com.example.persona.harmony",
+        "moduleName": "entry",
+        "abilityName": "PersonaAgentExtensionAbility",
+        "deviceTypes": [
+          "phone"
+        ]
+      }
+    }
+  ]
+}

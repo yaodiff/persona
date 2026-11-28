@@ -86,13 +86,13 @@ func TestWorkCardsInLanguage(t *testing.T) {
 	}
 }
 
-// A plan's push reads in the user's language.
+// A real owner-step plan's push reads in the user's language.
 func TestPlanPushInLanguage(t *testing.T) {
 	s, f := newTaskService(t)
 	f.mu.Lock()
 	f.hello.Locale = "en"
 	f.mu.Unlock()
-	if _, err := s.toolTaskPlan(context.Background(), "conv1", planArgs(false)); err != nil {
+	if _, err := s.toolTaskPlan(context.Background(), "conv1", planArgsWithStep(t, ownerStepMoney)); err != nil {
 		t.Fatal(err)
 	}
 	if p := f.pushed(); len(p) != 1 || p[0].Title != "Something is waiting for you to start" {

@@ -1,9 +1,9 @@
 {
   "quote": "引用",
-  "summary_edit": "要改的内容 · {label}",
+  "summary_edit": "待修改内容 · {label}",
   "summary_single": "上下文 · {label}",
   "summary_many_other": "上下文 · {count} 项",
   "empty": "空",
-  "no_content": "没有内容",
+  "no_content": "无内容",
   "open_url": "打开 {url}"
 }

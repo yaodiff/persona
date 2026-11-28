@@ -74,17 +74,40 @@ public struct ScrollRecord: Equatable, Sendable {
 /// Records out of a byte stream that may arrive in any pieces (the helper's socket): whole ones as they complete, the
 /// rest kept for the next piece.
 public struct ScrollRecordReader: Sendable {
+    private static let maxRetainedCapacity = 4096
     private var pending: [UInt8] = []
 
     public init() {}
 
     public mutating func push<C: Collection>(_ bytes: C) throws -> [ScrollRecord] where C.Element == UInt8 {
-        pending += bytes
+        let originalCount = pending.count
+        pending.append(contentsOf: bytes)
         var out: [ScrollRecord] = []
-        while pending.count >= ScrollRecord.size {
-            out.append(try ScrollRecord.decode(pending.prefix(ScrollRecord.size)))
-            pending.removeFirst(ScrollRecord.size)
+        var offset = 0
+        do {
+            while pending.count - offset >= ScrollRecord.size {
+                out.append(try ScrollRecord.decode(pending[offset ..< offset + ScrollRecord.size]))
+                offset += ScrollRecord.size
+            }
+        } catch {
+            pending.removeSubrange(originalCount ..< pending.count)
+            compactPending(from: 0)
+            throw error
         }
+        compactPending(from: offset)
         return out
+    }
+
+    private mutating func compactPending(from offset: Int) {
+        if offset == pending.count {
+            pending.removeAll(keepingCapacity: pending.capacity <= Self.maxRetainedCapacity)
+        } else if pending.capacity > Self.maxRetainedCapacity {
+            var compact: [UInt8] = []
+            compact.reserveCapacity(pending.count - offset)
+            compact.append(contentsOf: pending[offset...])
+            pending = compact
+        } else if offset > 0 {
+            pending.removeFirst(offset)
+        }
     }
 }

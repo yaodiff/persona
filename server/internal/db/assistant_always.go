@@ -75,3 +75,19 @@ func (d *DB) RevokeAlways(ctx context.Context, session, hash string) error {
 	_, err := d.pool.Exec(ctx, `DELETE FROM assistant_always WHERE session_id = $1 AND key_hash = $2`, session, hash)
 	return err
 }
+
+// CopyAlways copies stored "Always allow in this conversation" grants from fromSession to toSession,
+// preserving tool names and timestamps without overwriting existing grants on toSession or changing
+// fromSession. Returns the number of grants newly added to toSession.
+func (d *DB) CopyAlways(ctx context.Context, fromSession, toSession string) (int, error) {
+	if fromSession == "" || toSession == "" || fromSession == toSession {
+		return 0, nil
+	}
+	tag, err := d.pool.Exec(ctx, `INSERT INTO assistant_always (session_id, key_hash, tool_name, created_at)
+		SELECT $2::text, key_hash, tool_name, created_at FROM assistant_always WHERE session_id = $1::text
+		ON CONFLICT (session_id, key_hash) DO NOTHING`, fromSession, toSession)
+	if err != nil {
+		return 0, err
+	}
+	return int(tag.RowsAffected()), nil
+}

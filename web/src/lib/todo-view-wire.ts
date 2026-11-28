@@ -98,8 +98,8 @@ export function parseTodoReason(raw: string): TodoReason | UnknownTodoReason {
  * unknown, and draws no line for that. TodoLine.key itself stays a string: a timeline entry's line takes the keys of
  * spec/fixtures/todo-rounds/README.md.
  */
-export type TodoLineKey = "failed_start" | "agent_asks" | "interrupted" | "decision" | "decision_default" | "cannot" | "awaits_reply" | "working" | "persona_working" | "starting" | "background" | "parked" | "finished" | "accepted" | "deployed" | "pr_open" | "usage_limit" | "run_waits" | "finished_seen" | "completed" | "canceled" | "reported" | "superseded" | "someday";
-export const TODO_LINE_KEYS: readonly TodoLineKey[] = ["failed_start", "agent_asks", "interrupted", "decision", "decision_default", "cannot", "awaits_reply", "working", "persona_working", "starting", "background", "parked", "finished", "accepted", "deployed", "pr_open", "usage_limit", "run_waits", "finished_seen", "completed", "canceled", "reported", "superseded", "someday"];
+export type TodoLineKey = "failed_start" | "agent_asks" | "interrupted" | "stopped_unfinished" | "decision" | "decision_default" | "cannot" | "awaits_reply" | "working" | "persona_working" | "starting" | "background" | "parked" | "finished" | "accepted" | "deployed" | "pr_open" | "usage_limit" | "run_waits" | "finished_seen" | "completed" | "canceled" | "reported" | "superseded" | "someday";
+export const TODO_LINE_KEYS: readonly TodoLineKey[] = ["failed_start", "agent_asks", "interrupted", "stopped_unfinished", "decision", "decision_default", "cannot", "awaits_reply", "working", "persona_working", "starting", "background", "parked", "finished", "accepted", "deployed", "pr_open", "usage_limit", "run_waits", "finished_seen", "completed", "canceled", "reported", "superseded", "someday"];
 
 /** A TodoLineKey this app does not know, kept as it came. */
 export interface UnknownTodoLineKey {

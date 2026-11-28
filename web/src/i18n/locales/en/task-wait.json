@@ -1,4 +1,7 @@
 {
+  "kind_pr_merge": "PR merge",
+  "kind_agent": "Agent",
+  "deadline": "Deadline: {time}",
   "kind_todo_handoff": "Waiting for",
   "handoff_deadline": "Result due by {time}",
   "kind_person_reply": "Reply",

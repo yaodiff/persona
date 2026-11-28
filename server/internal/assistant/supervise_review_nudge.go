@@ -28,12 +28,18 @@ func (s *Service) signalPendingReviewNudge(ctx context.Context, t Todo, agents [
 	if ctx.Err() != nil || v == nil || t.DoneAt != nil || v.state(t) != reviewPending {
 		return
 	}
+	slaHours := s.settings(ctx).todosV2PendingReviewSLAHours()
+	if slaHours <= 0 {
+		return
+	}
+	escalateAfter := time.Duration(slaHours) * time.Hour
+	nudgeAfter := min(pendingReviewNudgeAfter, escalateAfter/2)
 	since := cardlessSince(t)
 	if since.IsZero() {
 		return
 	}
 	age := now.Sub(since)
-	if age < pendingReviewNudgeAfter || age >= pendingReviewEscalateAfter {
+	if age < nudgeAfter || age >= escalateAfter {
 		return
 	}
 	if a, readable, ok := s.askCopyReadable(t.ID); !readable {

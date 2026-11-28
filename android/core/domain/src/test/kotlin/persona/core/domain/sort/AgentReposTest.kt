@@ -6,6 +6,7 @@ import persona.core.contracts.AgentState
 import persona.core.contracts.JsonCodec
 import persona.core.contracts.Machine
 import persona.core.contracts.Session
+import persona.core.contracts.api.AgentWorkspace
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -60,6 +61,73 @@ class AgentReposTest {
         assertEquals("repo/machine-a//code/app", repo.id)
         assertEquals(listOf("app*", "fix-a", "fix-b", "fix-c"), (repo.worktrees.map { it.name + if (it.main) "*" else "" }).zhAny())
         assertEquals("tree/machine-a//home/me/.paseo/worktrees/1a2b/fix-a\u0000/code/app", repo.worktrees[1].id)
+    }
+
+    @Test fun aRemovedHerdrTreeStaysInTheMainCheckoutsSection() {
+        val machine = Machine("machine-a", "Computer", online = true, home = "/home/me")
+        val rows = listOf(
+            session("main", "/code/app", repoRoot = "/code/app"),
+            session("removed", "/home/me/.herdr/worktrees/app/fix-login"),
+        )
+        val projection = buildAgentList(rows, listOf(machine), settings = byRepo)
+        assertEquals(1, projection.machines.single().repoCount)
+        assertEquals(setOf("main", "removed"), projection.groups.single().rows.map { it.session.sessionId }.toSet())
+    }
+
+    @Test fun knownGitPlacementWinsButAmbiguousHomeFoldersStaySeparate() {
+        val rows = listOf(
+            session("local", "/code/app"),
+            session("other", "/other/app"),
+            session("removed", "/home/me/.herdr/worktrees/app/removed"),
+        )
+        val homes = mapOf("machine-a" to "/home/me")
+        assertEquals(3, agentRepos(rows, homes = homes).size)
+        val known = placed("known", "/home/me/.herdr/worktrees/app/known", "/code/app",
+            "/home/me/.herdr/worktrees/app/known", "known")
+        val repositories = agentRepos(rows, homes = homes, knownRows = rows + known)
+        assertEquals(setOf("local", "removed"), repositories.single { it.path == "/code/app" }.members.map { it.session.sessionId }.toSet())
+        assertEquals(listOf("other"), repositories.single { it.path == "/other/app" }.members.map { it.session.sessionId })
+        val conflicting = known.copy(session = known.session.copy(sessionId = "conflict", repoRoot = "/other/app"))
+        assertEquals(3, agentRepos(rows, homes = homes, knownRows = rows + known + conflicting).size)
+        val searchable = rows.map { it.copy(session = it.session.copy(title = "pick ${it.session.title}")) }
+        val machine = Machine("machine-a", "Computer", online = true, home = "/home/me")
+        val projection = buildAgentList(searchable + known, listOf(machine), settings = byRepo.copy(query = "pick"))
+        assertEquals(2, projection.machines.single().repoCount)
+        assertTrue(projection.groups.any { it.rows.map { row -> row.session.sessionId }.toSet() == setOf("local", "removed") })
+    }
+
+    @Test fun aLoneHerdrWorkspaceKeepsItsMarksOnTheRepositoryHeading() {
+        val workspace = AgentWorkspace(
+            machineId = "machine-a", source = "herdr", sourceId = "workspace-notes", title = "notes",
+            cwd = "/code/notes", pinnedAt = "2026-11-16T10:00:00Z", available = false,
+        )
+        val agent = session("agent", workspace.cwd, state = "working").let {
+            it.copy(session = it.session.copy(spaceKind = "herdr", spaceId = workspace.sourceId))
+        }
+        val list = buildAgentList(listOf(agent), machines, settings = byRepo.copy(workspaces = listOf(workspace)))
+        val heading = list.groups.single()
+        assertEquals(RepoLevel.Repository, heading.repo)
+        assertEquals(workspace.sourceId, heading.workspace?.sourceId)
+        assertEquals(listOf("agent"), heading.rows.map { it.session.sessionId })
+        assertTrue(heading.worktree?.pinned == true)
+        assertTrue(heading.worktree?.offline == true)
+    }
+
+    @Test fun aCatalogMainCheckoutComesFirstOnlyWhenTheFolderEstablishesIt() {
+        val main = AgentWorkspace(machineId = "machine-a", source = "herdr", sourceId = "main", title = "z-checkout", cwd = "/code/app")
+        val linked = main.copy(sourceId = "linked", title = "a-tree", cwd = "/home/me/.herdr/worktrees/app/a-tree")
+        val rows = listOf(main, linked).map { workspace ->
+            session(workspace.sourceId, workspace.cwd, repoRoot = "/code/app").let {
+                it.copy(session = it.session.copy(spaceKind = "herdr", spaceId = workspace.sourceId))
+            }
+        }
+        val trees = agentRepos(rows, listOf(linked, main)).single().worktrees
+        assertEquals(listOf("main", "linked"), trees.map { it.workspace?.sourceId })
+        assertTrue(trees.first().main)
+        val ownProject = main.copy(projectId = "project")
+        assertFalse(agentRepos(listOf(rows.first()), listOf(ownProject)).single().worktrees.single().main)
+        assertTrue(agentRepos(listOf(rows.first()), listOf(ownProject.copy(projectPath = main.cwd))).single().worktrees.single().main)
+        assertFalse(agentRepos(listOf(rows.first()), listOf(main.copy(isMain = false))).single().worktrees.single().main)
     }
 
     @Test fun theMainCheckoutComesFirstThenTreesByName() {

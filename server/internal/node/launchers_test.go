@@ -130,12 +130,27 @@ func TestHelperAndAliasesTogether(t *testing.T) {
 	}
 }
 
-// No helper, no alias that starts claude: plain claude, as before.
-func TestNoLaunchersMeansClaude(t *testing.T) {
-	list := listFrom(t, `alias ll="ls -l"`)
-	list = withoutInstalledWorkAgents(list)
-	if len(list) != 1 || list[0].Name != "claude" {
-		t.Fatalf("got %v", list)
+// A leftover shell wrapper does not make the built-in Claude launcher available without its executable.
+func TestBuiltinClaudeRequiresExecutable(t *testing.T) {
+	for _, sh := range []struct {
+		name string
+		run  func(*testing.T, string, string, string) string
+	}{{"zsh", asNodeIn}, {"bash", asBashIn}} {
+		t.Run(sh.name, func(t *testing.T) {
+			home := t.TempDir()
+			bin := filepath.Join(home, "bin")
+			defs := `export PATH="$HOME/bin:$PATH"
+claude() { command claude "$@"; }`
+			list, _, _, _ := mergeLaunchers(sh.run(t, home, defs, launcherScript))
+			if _, ok := byName(list)["claude"]; ok {
+				t.Fatalf("advertised Claude with only a shell wrapper: %v", list)
+			}
+			writeScript(t, filepath.Join(bin, "claude"), "#!/bin/sh\nexit 1\n", 0o755)
+			list, _, _, _ = mergeLaunchers(sh.run(t, home, defs, launcherScript))
+			if _, ok := byName(list)["claude"]; !ok {
+				t.Fatalf("missing installed Claude: %v", list)
+			}
+		})
 	}
 }
 
@@ -156,7 +171,7 @@ func TestCodexOnTheMachineIsALauncher(t *testing.T) {
 	}
 	list, codex, _, _ := mergeLaunchers(asNodeIn(t, home, `alias ll="ls -l"`, launcherScript))
 	list = withoutInstalledWorkAgents(list)
-	if len(list) != 2 || list[0].Name != "claude" || list[1].Name != "codex" || list[1].Agent != "codex" || len(codex["codex"]) != 1 {
+	if len(list) != 1 || list[0].Name != "codex" || list[0].Agent != "codex" || len(codex["codex"]) != 1 {
 		t.Fatalf("got %v, codex %v", list, codex)
 	}
 }
@@ -241,7 +256,7 @@ func TestWorkAgentsOnPathAreLaunchers(t *testing.T) {
 	for _, l := range list {
 		got = append(got, l.Name+"="+l.Agent)
 	}
-	want := []string{"claude=", "pi=pi", "agy=agy"}
+	want := []string{"pi=pi", "agy=agy"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("launchers %v, want %v", got, want)
 	}
@@ -252,7 +267,7 @@ func TestWorkAgentsOnPathAreLaunchers(t *testing.T) {
 func TestMergeLaunchersLeavesLauncherDefaultModelsEmpty(t *testing.T) {
 	rec := func(words ...string) string { return strings.Join(words, "\x1f") + "\x1f\x1e" }
 	parts := []string{"", rec("cx-plain", "codex") + rec("cx-explicit", "codex", "--model", "gpt-explicit"),
-		"/usr/bin/codex", "/usr/bin/traex", "/usr/bin/omp", "/usr/bin/pi", "/usr/bin/cursor-agent", "/usr/bin/agy", "", ""}
+		"/usr/bin/codex", "/usr/bin/traex", "/usr/bin/omp", "/usr/bin/pi", "/usr/bin/cursor-agent", "/usr/bin/agy", "", "", "/usr/bin/claude"}
 	list, _, _, _ := mergeLaunchers(launcherBegin + strings.Join(parts, "\x1d") + launcherEnd)
 	models := byName(list)
 	for _, name := range []string{"claude", "codex", "cx-plain", "traex", "omp", "pi", "cursor", "agy"} {
@@ -265,6 +280,20 @@ func TestMergeLaunchersLeavesLauncherDefaultModelsEmpty(t *testing.T) {
 	}
 	if l := models[traexAgent]; l.Agent != traexAgent || l.DisplayName != "TRAE CLI" {
 		t.Errorf("TRAE CLI launcher kind or display name changed: %+v", l)
+	}
+	wantDisplay := map[string]string{
+		"claude":   "Claude Code",
+		"codex":    "Codex",
+		"omp":      "Oh My Pi",
+		"pi":       "",
+		"cursor":   "Cursor",
+		"agy":      "Antigravity CLI",
+		"cx-plain": "",
+	}
+	for name, want := range wantDisplay {
+		if got := models[name].DisplayName; got != want {
+			t.Errorf("%s display name = %q, want %q", name, got, want)
+		}
 	}
 }
 

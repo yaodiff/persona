@@ -2,7 +2,7 @@
 // Not in node-health.ts: Home is on the first screen and needs only this, while node-health.ts builds its check and
 // feature labels with t() as it loads, which would put that module and its words on every first screen.
 import { t } from "../i18n";
-import { machineDeployment } from "./machine-deploy";
+import { supportsDeployment } from "./machine-connection-state";
 import type { Machine } from "./types";
 
 export type ConnectionFailureKind = "auth" | "unreachable" | "timeout" | "version";
@@ -35,11 +35,10 @@ export function classifyConnection(m: Machine): ConnectionFailure | null {
     };
   }
   if (VERSION.test(text) || m.node_mismatch) {
-    const d = machineDeployment(m);
     return {
       kind: "version",
       title: t("node-health.version_title"),
-      next: d.supported ? t("node-health.version_next_deploy") : t("node-health.version_next_local"),
+      next: supportsDeployment(m) ? t("node-health.version_next_deploy") : t("node-health.version_next_local"),
     };
   }
   if (TIMEOUT.test(text)) {

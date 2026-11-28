@@ -5,8 +5,9 @@ extension UnavailableLauncher {
     var title: String {
         let trimmed = displayName?.trimmingCharacters(in: .whitespacesAndNewlines)
         let label = trimmed?.isEmpty == false ? trimmed : nil
-        if kind != "api", let cli = Launcher.traeCLITitle(name: name, source: nil, agent: agent, baseURL: nil, displayName: label) {
-            return cli
+        if kind != "api" {
+            return Launcher.traeCLITitle(name: name, source: nil, agent: agent, baseURL: nil, displayName: label)
+                ?? Launcher.builtinTitle(name: name, displayName: label)
         }
         return label ?? name
     }

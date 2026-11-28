@@ -73,6 +73,25 @@ func TestWithdrawTakesCardsBackInOnePush(t *testing.T) {
 	}
 }
 
+func TestWithdrawPayloadNamesTheResolvedOccurrence(t *testing.T) {
+	h, f, open := withdrawHub(t, "withdraw")
+	ix := card("ix_occurrence")
+	ix.CreatedAt = time.Date(2026, 11, 25, 2, 3, 4, 123456789, time.UTC)
+	h.notifyInteraction("", ix, "notebook", false)
+	f.wait(t, 1)
+	reportResolvedAt(t, h, ix.ID, ix.CreatedAt)
+	got := f.wait(t, 2)
+	p := open(got[1])
+	cards, _ := p["resolved_interactions"].([]any)
+	if len(cards) != 1 {
+		t.Fatalf("withdrawal has no occurrence-bound entries: %v", p)
+	}
+	entry, _ := cards[0].(map[string]any)
+	if entry["id"] != ix.ID || entry["created_at"] != ix.CreatedAt.Format(time.RFC3339Nano) {
+		t.Fatalf("withdrawal occurrence = %v, want %s", entry, ix.CreatedAt.Format(time.RFC3339Nano))
+	}
+}
+
 // One withdrawal push a device a minute (here 400 ms): what comes between waits and goes together.
 func TestWithdrawAtMostOnceAMinute(t *testing.T) {
 	h, f, open := withdrawHub(t, "withdraw")
@@ -173,11 +192,11 @@ func TestWithdrawOnlyWhereTheCardWent(t *testing.T) {
 	p.withdraw("ix_b")
 	p.withdrawals.mu.Lock()
 	defer p.withdrawals.mu.Unlock()
-	if q := p.withdrawals.queue["ipad"]; q == nil || !slices.Equal(q.ids, []string{"ix_b"}) {
+	if q := p.withdrawals.queue["ipad"]; q == nil || !slices.Equal(q.cards, []withdrawCard{{ID: "ix_b"}}) {
 		t.Fatalf("ipad queue %+v", q)
 	}
 	if q := p.withdrawals.queue["phone"]; q != nil {
-		t.Fatalf("phone was told about a card it never got: %+v", q.ids)
+		t.Fatalf("phone was told about a card it never got: %+v", q.cards)
 	}
 	for _, q := range p.withdrawals.queue {
 		q.timer.Stop()

@@ -35,6 +35,7 @@ beforeEach(() => {
 });
 afterEach(async () => {
   act(() => root.unmount());
+  await act(async () => { await vi.dynamicImportSettled(); });
   host.remove();
   await initI18n("zh-Hans");
 });

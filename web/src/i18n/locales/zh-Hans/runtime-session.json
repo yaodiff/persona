@@ -1,6 +1,6 @@
 {
-  "unsupported": "这个 hub 暂不支持精确读取会话详情，已有缓存会保留。",
-  "invalid_lookup": "hub 没有返回指定的会话，已忽略其他会话的数据。",
-  "missing": "这个会话已不可用，仍可阅读已缓存的对话。",
-  "metadata_unavailable": "这个旧版 hub 没有此会话的详情缓存，仍可打开对话。"
+  "unsupported": "当前 hub 暂不支持精确读取会话详情，已保留现有缓存信息。",
+  "invalid_lookup": "hub 未返回所请求的会话，已忽略无关数据。",
+  "missing": "此会话已不可用，你仍可查看已缓存的对话内容。",
+  "metadata_unavailable": "此旧版 hub 没有该会话的详情缓存，但对话内容仍可正常查看。"
 }

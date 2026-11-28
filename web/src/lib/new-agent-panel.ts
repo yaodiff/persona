@@ -117,7 +117,8 @@ export function newAgentPanel({ launchers, listOf, choice, configured, runs, tie
     }
     // a list that couldn't be read says why, with Retry; the launcher still starts with its default, and Claude Code and
     // Codex still take a typed ID (the old picker's "Enter model ID…" beside the error)
-    if (list === undefined && e.error) p.error = e.error;
+    if (e.error) p.error = e.error;
+    if (e.loading) p.loading = true;
     // the efforts a start on it takes: its models' own, all of them for a model whose levels nobody lists, except on a
     // launcher that lists its permission modes (Paseo's other providers, #8261), which takes only what its model lists
     const terminal = terminalOmp(agent, l);
@@ -225,7 +226,7 @@ export function newAgentPill(o: { launchers: Launcher[]; runs: string; list: Mod
   const model = !runs ? o.fallback : named || (list !== undefined ? (d ? modelName(d) : fallback) : undefined);
   const out: PillSetup & { loading: boolean; failed: boolean } = {
     engine: agentId(providerAgent(agent, runs)),
-    provider: l ? providerTitle(l) : runs,
+    provider: runs ? providerTitle(l ?? { name: runs }) : "",
     loading: list === undefined && Boolean(e.loading),
     failed: list === undefined && Boolean(e.error),
   };

@@ -16,10 +16,92 @@ import (
 	"github.com/coder/websocket"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/bus"
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
+
+func TestDeviceBusInvalidParams(t *testing.T) {
+	for _, tc := range []struct {
+		method, params, message string
+	}{
+		{devicewire.MethodConnected, `{"machine_id":1}`, "devices.connected: json: cannot unmarshal number into Go struct field Connected.machine_id of type string"},
+		{devicewire.MethodConnectorCred, `{"machine_id":1}`, "json: cannot unmarshal number into Go struct field ConnectorCred.machine_id of type string"},
+		{devicewire.MethodConnectorCred, `{"machine_id":"box","fp":1}`, "json: cannot unmarshal number into Go struct field ConnectorCred.fp of type string"},
+		{devicewire.MethodConnectorPaired, `{"machine_id":1}`, "json: cannot unmarshal number into Go struct field ConnectorCred.machine_id of type string"},
+		{devicewire.MethodRename, `{"machine_id":1}`, "devices.rename: json: cannot unmarshal number into Go struct field Rename.machine_id of type string"},
+		{devicewire.MethodRequest, `{"machine_id":1}`, "devices.request: json: cannot unmarshal number into Go struct field NodeCall.machine_id of type string"},
+	} {
+		_, err := busMethods[tc.method](nil, t.Context(), nil, json.RawMessage(tc.params))
+		var re *rpc.Error
+		if !errors.As(err, &re) || re.Code != bus.CodeInvalidParams || re.Message != tc.message {
+			t.Errorf("%s %s = %v, want invalid_params with %q", tc.method, tc.params, err, tc.message)
+		}
+	}
+}
+
+func TestDeviceRequestReplyKeepsLegacyWire(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		reply any
+		want  string
+	}{
+		{"nil", nil, `null`},
+		{"raw nil", json.RawMessage(nil), `null`},
+		{"raw JSON", json.RawMessage(` { "z": "<&>", "a": [1, 2] } `), `{"z":"<&>","a":[1,2]}`},
+		{"struct", assistantwire.ViewCheckResponse{Reason: "<&>"}, `{"reason":"<&>"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			driver, hub := net.Pipe()
+			defer driver.Close()
+			defer hub.Close()
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			client, server := rpc.New("m", driver), rpc.New("h", hub)
+			server.OnRequest = func(context.Context, string, json.RawMessage) (any, error) {
+				return deviceRequestReply(tc.reply, nil)
+			}
+			go func() { _ = client.Serve(ctx, driver) }()
+			go func() { _ = server.Serve(ctx, hub) }()
+			got, err := buswire.Call(ctx, client, devicewire.RequestMethod, devicewire.NodeCall{})
+			if err != nil || string(got) != tc.want {
+				t.Fatalf("devices.request reply = %s, %v, want %s", got, err, tc.want)
+			}
+		})
+	}
+}
+
+func TestDeviceRequestReleasesScope(t *testing.T) {
+	h := newTestHub(t)
+	m := newMachine(h, MachineConfig{ID: "box"})
+	h.fleet.mu.Lock()
+	h.byID[m.cfg.ID] = m
+	h.fleet.mu.Unlock()
+	c := &busConn{}
+	request := devicewire.NodeCall{MachineID: m.cfg.ID, Method: assistantwire.MethodViewCheck, Request: "view-check"}
+	params, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := requestKey(c, request.Request)
+	h.requestEnded(key, true)
+	out, err := busMethods[devicewire.MethodRequest](h, t.Context(), c, params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if raw, err := rpc.Marshal(out); err != nil || string(raw) != `{}` {
+		t.Fatalf("view check reply = %s, %v, want {}", raw, err)
+	}
+	h.devices.mu.Lock()
+	_, pending := h.devices.reqs[key]
+	_, ended := h.devices.reqEnded[key]
+	h.devices.mu.Unlock()
+	if pending || ended {
+		t.Fatalf("view check left request state after replying: pending %v, ended before request %v", pending, ended)
+	}
+}
 
 // The computers are the manager's (devices_link.go): a hub whose manager connects its machine; the apps' lists, calls,
 // pushes and streams go through the manager as before; while the manager is gone the machine is offline and its routes

@@ -1,8 +1,8 @@
 {
   "busy": "This agent is busy: it is working, waiting for an answer or has background work. Archive it once it is done.",
   "close_busy": "This agent is busy (working, waiting, a loop, queued messages or a server), so it can't be closed now. Archive it without closing, or wait until it is done.",
-  "upgrade": "Update the hub's assistant to archive agents.",
-  "close_upgrade": "Update the hub's assistant to archive and close agents.",
+  "upgrade": "Update the hub's assistant to archive sessions.",
+  "close_upgrade": "Update the hub's assistant to close agents and archive their sessions.",
   "failed": "Couldn't archive: {error}",
   "undo": "Undo",
   "archived": "Archived “{title}”",

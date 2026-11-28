@@ -6,6 +6,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/assistant/repository"
+	"github.com/nwverse/persona/server/internal/assistantwire"
 )
 
 // The kind reads evidence first, then what the work is asked to deliver, never a word that only names what is read,
@@ -103,7 +106,7 @@ func startPlanTask(t *testing.T, s *Service, args json.RawMessage) Todo {
 	return onlyTodo(s)
 }
 
-// A writable verification task whose only code words sit in a conditional criterion starts general; its goal is read.
+// Without delivery evidence, new execute tasks start general regardless of the words in their criteria.
 func TestTaskStageKindAtStart(t *testing.T) {
 	s, _ := newTaskService(t)
 	todo := startPlanTask(t, s, planTaskArgs(false, "Check the rule with real data", "Check the new rule against real data",
@@ -113,9 +116,48 @@ func TestTaskStageKindAtStart(t *testing.T) {
 		t.Fatalf("verification kind = %s", got)
 	}
 	s2, _ := newTaskService(t)
-	code := startPlanTask(t, s2, planTaskArgs(false, "Login crash", "Fix the login crash", "PR merged with a regression test"))
-	if got := todoNow(s2, code.ID).StageKind; got != "code" {
-		t.Fatalf("fix kind = %s", got)
+	unbound := startPlanTask(t, s2, planTaskArgs(false, "Login crash", "Fix the login crash", "PR merged with a regression test"))
+	if brief, ok := s2.briefOfTodo(unbound.ID); !ok || brief.WorkModeNow != assistantwire.WorkModeExecute || unbound.StageKind != "general" {
+		t.Fatalf("unbound task = %s, brief = %+v", unbound.StageKind, brief)
+	}
+}
+
+func TestTaskStageKindUsesRepositoryAndCurrentMode(t *testing.T) {
+	ctx := t.Context()
+	st := newMemRepoStore()
+	s, _ := newQuietServiceOn(t, st)
+	todo, err := s.newTodo(ctx, "Prepare the artifact", "", "conv1", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.SetTodoRepositories(ctx, todo.ID, repository.SetInput{Repositories: []repository.TaskInput{{RepoID: "repo_o_r"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.putTaskBrief(ctx, briefRecord{
+		taskContract: taskContract{WorkMode: assistantwire.WorkModeExecute},
+		Goal:         todo.Title,
+		DoneWhen:     []string{"The artifact is ready"},
+	}, todo.ID); err != nil {
+		t.Fatal(err)
+	}
+	s.restage(ctx, todo.ID, nil)
+	if got := todoNow(s, todo.ID).StageKind; got != "code" {
+		t.Fatalf("execute with a repository = %q, want code", got)
+	}
+	for _, mode := range []assistantwire.WorkMode{assistantwire.WorkModeResearch, assistantwire.WorkModeCoordinate, assistantwire.WorkModeExecute} {
+		if _, err := runJSON(t, s, "conv1", "task_scope", map[string]any{
+			"todo_id": todo.ID, "change": "Update the work mode", "why": "The required work changed",
+			"work_mode": mode, "done_when": []string{"Fix and merge the PR"},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		want := "general"
+		if mode == assistantwire.WorkModeExecute {
+			want = "code"
+		}
+		if got := todoNow(s, todo.ID).StageKind; got != want {
+			t.Fatalf("%s with a repository = %q, want %s", mode, got, want)
+		}
 	}
 }
 
@@ -130,6 +172,9 @@ func TestTaskStageKindKeepsReadonly(t *testing.T) {
 	}
 	if !s.todoStages(ctx)[todo.ID].Readonly {
 		t.Fatalf("stage record = %+v, want readonly kept", s.todoStages(ctx)[todo.ID])
+	}
+	if brief, ok := s.briefOfTodo(todo.ID); !ok || brief.WorkModeNow != assistantwire.WorkModeResearch {
+		t.Fatalf("read-only brief = %+v, want research", brief)
 	}
 	if _, _, err := s.updateSupervision(ctx, todo.ID, func(v *Supervision) bool {
 		v.DoneWhen = []string{"Fix the crash and open a PR"}

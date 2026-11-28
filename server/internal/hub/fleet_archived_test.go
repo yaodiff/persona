@@ -288,7 +288,7 @@ func TestArchivedApartAnswersAsTheWholeList(t *testing.T) {
 	place := sessionlist.Place{Machine: "box", Key: "w9"}
 	counted := map[sessionlist.Place]sessionlist.PlaceCount{place: {}}
 	for _, a := range []*archivedHub{whole, split} {
-		if got := a.h.spaceNames(map[string]bool{"box": true}, counted)[place]; got != "Archived space" {
+		if got := a.h.spaceAttrs(map[string]bool{"box": true}, counted)[place].name; got != "Archived space" {
 			t.Fatalf("space name %q", got)
 		}
 	}

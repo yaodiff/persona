@@ -47,6 +47,8 @@ class UsageCalendarIntegrationTest {
             UsageDay(date = "2026-11-17", input = 10, cacheWrite = 20, cacheRead = 40, output = 80),
         ))
         override suspend fun usageHours(days: Int) = UsageHours(zone = "Asia/Shanghai")
+        override suspend fun usageProjects(): UsageProjects? = null
+        override suspend fun usageProjectDetail(key: String): UsageProjectDetail = error("not used")
     }
 
     @Test fun theRealHomeOpensTheUsageDetailsRoute() {

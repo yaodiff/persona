@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -16,7 +17,7 @@ import (
 
 func externalSourceHTTPFixture(t *testing.T) (*Service, *repositorystore.Store) {
 	t.Helper()
-	database, err := db.Open(t.Context(), newDatabase(t), db.ManagerSet)
+	database, err := db.Open(t.Context(), newMigratedDatabase(t, db.ManagerSet), db.ManagerSet)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,5 +167,80 @@ func TestExternalSourceHTTPLookupReturnsRepositoryRole(t *testing.T) {
 	after, err := store.TodoRepositories(t.Context(), "todo_source")
 	if err != nil || after.Revision != set.Revision {
 		t.Fatalf("lookup changed repository revision: %+v, %v", after, err)
+	}
+}
+
+func TestExternalSourceHTTPSummaryIncludeDone(t *testing.T) {
+	s, store := externalSourceHTTPFixture(t)
+	ctx := t.Context()
+	created := time.Date(2025, time.January, 1, 0, 0, 0, 0, time.UTC)
+	for _, fixture := range []struct {
+		todo db.TodoRow
+		link string
+	}{
+		{db.TodoRow{ID: "open_recent", Title: "Prepare release", CreatedAt: created, UpdatedAt: created.Add(2 * time.Hour)}, "https://github.com/example/web/issues/17"},
+		{db.TodoRow{ID: "open_older", Title: "Write notes", CreatedAt: created, UpdatedAt: created.Add(time.Hour)}, "https://github.com/example/web/issues/5"},
+		{db.TodoRow{ID: "completed", Title: "Check the draft", CreatedAt: created, UpdatedAt: created.Add(3 * time.Hour), DoneAt: new(created.Add(3 * time.Hour))}, "https://github.com/example/web/issues/3"},
+	} {
+		if err := store.CreateTodo(ctx, fixture.todo); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := store.ImportTodoRepositoryLinks(ctx, fixture.todo.ID, []string{fixture.link}, "explicit"); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	type match struct {
+		ID    string `json:"target_id"`
+		Title string `json:"target_title"`
+		Done  *bool  `json:"target_done"`
+	}
+	open := []match{{ID: "open_recent", Title: "Prepare release"}, {ID: "open_older", Title: "Write notes"}}
+	all := append(append([]match(nil), open...), match{ID: "completed", Title: "Check the draft", Done: new(true)})
+	const endpoint = assistantwire.ExternalBindingsPath + "/summary"
+	for _, tc := range []struct {
+		name, query string
+		want        []match
+		omitted     *int
+	}{
+		{"default", "", open, new(1)},
+		{"false", "?include_done=false", open, new(1)},
+		{"zero", "?include_done=0", open, new(1)},
+		{"true", "?include_done=true", all, nil},
+		{"one", "?include_done=1", all, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := placeDo(s, "", http.MethodGet, endpoint+tc.query, "")
+			var got struct {
+				Bindings         []match `json:"bindings"`
+				OmittedDoneCount *int    `json:"omitted_done_count"`
+				TotalCount       int     `json:"total_count"`
+			}
+			if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &got) != nil {
+				t.Fatalf("summary: %d %s", w.Code, w.Body)
+			}
+			if !reflect.DeepEqual(got.Bindings, tc.want) || !reflect.DeepEqual(got.OmittedDoneCount, tc.omitted) || got.TotalCount != len(tc.want) {
+				t.Fatalf("summary: %s, want bindings %+v and total %d", w.Body, tc.want, len(tc.want))
+			}
+		})
+	}
+
+	for _, tc := range []struct {
+		name, value, code string
+	}{
+		{"invalid", "yes", "invalid_include_done"},
+		{"empty", "", "invalid_include_done"},
+		{"repeated", "true&include_done=false", "invalid_include_done"},
+		{"malformed", "%zz", "invalid_external_query"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := placeDo(s, "", http.MethodGet, endpoint+"?include_done="+tc.value, "")
+			var got struct {
+				Code string `json:"code"`
+			}
+			if w.Code != http.StatusBadRequest || json.Unmarshal(w.Body.Bytes(), &got) != nil || got.Code != tc.code {
+				t.Fatalf("invalid include_done: %d %s, want 400 with %q", w.Code, w.Body, tc.code)
+			}
+		})
 	}
 }

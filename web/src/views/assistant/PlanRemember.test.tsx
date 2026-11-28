@@ -35,7 +35,7 @@ afterEach(async () => {
 
 it("names each writable task's computer and folder once, with its subfolders", () => {
   const line = rememberScope([task(), task({ title: "又一个" }), task({ machine: "m2", cwd: "/opt/app" }), task({ cwd: "/docs", readonly: true })], machines);
-  expect(line).toBe(`以后在${formatList(["「工作机」的 /home/me/src/tool", "「家里」的 /opt/app"])} 及其子目录里改文件的任务直接开`);
+  expect(line).toBe(`今后在${formatList(["「工作机」的 /home/me/src/tool", "「家里」的 /opt/app"])} 及其子目录中修改文件的任务将直接启动`);
   expect(line).not.toContain("/docs");
 });
 
@@ -48,5 +48,5 @@ it("offers nothing to remember when every task only reads (those start without a
 it("draws the scope next to the card's checkbox", async () => {
   await act(async () => root.render(<PlanCard plan={plan([task({ cwd: "/home/me/src/tool/cli" })])} />));
   const label = [...host.querySelectorAll("label")].find((l) => l.querySelector("input[type=checkbox]"));
-  expect(label?.textContent).toBe("以后在「工作机」的 /home/me/src/tool/cli 及其子目录里改文件的任务直接开");
+  expect(label?.textContent).toBe("今后在「工作机」的 /home/me/src/tool/cli 及其子目录中修改文件的任务将直接启动");
 });

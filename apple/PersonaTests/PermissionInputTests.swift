@@ -81,5 +81,29 @@ struct PermissionAlwaysScopeTests {
         codex.alwaysHonored = true
         codex.alwaysLabel = nil
         #expect(codex.offersAlways && labels(codex).contains(String(localized: "Always Approve")))
+        #expect(codex.alwaysScopeDetail == nil)
+
+        var agyWrite = Interaction(id: "ix_agy", machineID: "computer", sessionID: "antigravity-1", kind: .permission,
+                                   toolName: "Write", agent: "antigravity", alwaysKeys: ["tool:Edit(//workspace/docs/**)"],
+                                   alwaysHonored: true)
+        #expect(agyWrite.offersAlways)
+        #expect(agyWrite.alwaysScopeDetail == String(localized: "All file edits in this directory in this conversation"))
+        #expect(BUIPermissionForm.choices(agyWrite).first(where: { $0.label == String(localized: "Always Approve") })?.detail == agyWrite.alwaysScopeDetail)
+        agyWrite.toolName = "Bash"
+        agyWrite.alwaysKeys = ["tool:Bash"]
+        #expect(agyWrite.alwaysScopeDetail == String(localized: "All commands in this conversation"))
+    }
+
+    @Test func noHandBackDecodesAndRoundTripsWithoutChangingOlderCards() throws {
+        let headlessRaw = Data(#"{"id":"ix_hb","machine_id":"computer","session_id":"chat","kind":"permission","tool_name":"Bash","no_hand_back":true}"#.utf8)
+        let headless = try JSONDecoder().decode(Interaction.self, from: headlessRaw)
+        #expect(headless.noHandBack == true)
+        let encoded = try JSONEncoder().encode(headless)
+        let decoded = try JSONDecoder().decode(Interaction.self, from: encoded)
+        #expect(decoded.noHandBack == true)
+
+        let legacyRaw = Data(#"{"id":"ix_legacy","machine_id":"computer","session_id":"chat","kind":"permission","tool_name":"Bash"}"#.utf8)
+        let legacy = try JSONDecoder().decode(Interaction.self, from: legacyRaw)
+        #expect(legacy.noHandBack == nil)
     }
 }

@@ -16,10 +16,30 @@ import (
 
 // ---- the nodes ----
 
-// managedNodeCalls is the new-connection configuration callback: the providers in the machine's scope
-// (launchers.catalog), or for a node from before the catalog the same with their secrets (launchers.managed). A failed
-// read sends nothing.
+// nodeConnectCalls is the new-connection configuration callback (devices.Options.NodeCalls): the node's own settings
+// (node.configure: Antigravity idle compaction and the sessions with cards waiting, agyNodeConfigureCall; the BotMux
+// Owner Union ID, botmuxOwnerNodeCall), then its providers (managedNodeCalls). A read that fails holds back only its
+// own call. A computer waiting to be confirmed gets nothing.
+func (s *Service) nodeConnectCalls(ctx context.Context, machine string) []devicewire.NodeCall {
+	providers := s.managedNodeCalls(ctx, machine)
+	if len(providers) == 0 && s.machinePending(ctx, machine) {
+		return nil
+	}
+	var calls []devicewire.NodeCall
+	if cfgCall, ok := s.agyNodeConfigureCall(ctx, machine); ok {
+		calls = append(calls, cfgCall)
+	}
+	if ownerCall, ok := s.botmuxOwnerNodeCall(ctx, machine); ok {
+		calls = append(calls, ownerCall)
+	}
+	return append(calls, providers...)
+}
+
+// managedNodeCalls is a new connection's provider configuration (nodeConnectCalls): the providers in the machine's
+// scope (launchers.catalog), or for a node from before the catalog the same with their secrets (launchers.managed). A
+// failed read sends nothing.
 func (s *Service) managedNodeCalls(ctx context.Context, machine string) []devicewire.NodeCall {
+	s.invalidateLauncherListCache(machine)
 	if s.machinePending(ctx, machine) {
 		return nil
 	}
@@ -131,6 +151,7 @@ func (s *Service) pushManaged(ctx context.Context, machine string) {
 
 // pushNodeLaunchers publishes a confirmed snapshot while the caller holds models.mu.
 func (s *Service) pushNodeLaunchers(ctx context.Context, machine string, stored []storedLauncher, keys []machineKey) {
+	s.invalidateLauncherListCache(machine)
 	for _, d := range s.devices(ctx) {
 		if !d.Online || (machine != "" && d.ID != machine) || s.machinePending(ctx, d.ID) {
 			continue
@@ -276,7 +297,7 @@ func (s *Service) zshrcLaunchers(ctx context.Context, refresh bool, only ...stri
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				res, err := s.listLaunchers(ctx, d)
+				res, err := s.listLaunchersWith(ctx, d, launcherListReadOpts{bypassRead: refresh})
 				mu.Lock()
 				defer mu.Unlock()
 				state := LauncherSync{Machine: d.ID, Name: d.Name, State: "ok"}

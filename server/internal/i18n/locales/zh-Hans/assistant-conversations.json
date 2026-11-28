@@ -8,6 +8,7 @@
   "relay_delivery_failed": "消息未能送达",
   "supervision_delivery_failed": "此对话无法接收任务跟进指令。请打开任务查看最新状态和报告。这台电脑上支持的启动器：{launchers}。",
   "supervision_delivery_refused": "此对话拒收了一条任务跟进消息，不会再自动重发。请打开任务查看最新状态和报告。",
+  "supervision_delivery_unconfirmed": "一条任务跟进消息经多次核验仍未在对话中确认送达，Persona 已清理卡住的队列项以免阻塞后续更新。请打开任务查看是否有遗漏进展。",
   "supervision_reviewer_required": "请先选择 Claude Code 或 Codex 督办对话，再启动此任务。",
   "started_on": "运行配置为 {run}。",
   "pick_save_failed": "无法为后续对话保存模型选择：{error}",

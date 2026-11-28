@@ -100,6 +100,17 @@ class NotificationExecutionTest {
         assertEquals(mapOf("target" to "terminal", "machine" to "machine & test", "session" to "session/分支"), parameters)
     }
 
+    @Test fun staleNotificationOccurrenceCannotAnswerItsReplacement() = runBlocking {
+        val original = request.copy(createdAt = "2030-01-01T00:00:00.000000001Z")
+        val replacement = original.copy(createdAt = "2030-01-01T00:00:00.000000002Z")
+        val center = Center(original).apply { remote = replacement }
+        val executor = NotificationActionExecutor(center, { error("A stale occurrence must not be claimed") }, { now })
+        assertEquals(NotificationActionResult.Gone, executor.execute(original.id, "allow", null, { false },
+            createdAt = original.createdAt))
+        assertEquals(1, center.refreshes)
+        assertEquals(0, center.writes)
+    }
+
     @Test fun staleNotificationChoiceCannotSubmitAfterAnIrreversibleRefresh() = runBlocking {
         val card = request.copy(kind = "question", questions = listOf(
             Question("Continue?", options = listOf(QuestionOption("Continue"))),
@@ -117,6 +128,18 @@ class NotificationExecutionTest {
         val center = Center(request).apply { remote = handoff }
         val executor = NotificationActionExecutor(center, { error("A hand-off must not be claimed") }, { now })
         assertEquals(NotificationActionResult.Invalid, executor.execute(request.id, "allow", null, { false }))
+        assertEquals(1, center.refreshes)
+        assertEquals(0, center.writes)
+    }
+
+    @Test fun staleNotificationChoiceCannotSubmitAfterScreenDialogBecomesMultiSelect() = runBlocking {
+        val single = request.copy(
+            kind = "screen",
+            dialog = ScreenDialog(options = listOf(DialogOption("1", "Alpha"), DialogOption("2", "Beta")), multi = false),
+        )
+        val center = Center(single).apply { remote = single.copy(dialog = single.dialog?.copy(multi = true)) }
+        val executor = NotificationActionExecutor(center, { error("A multi-select screen dialog must not be claimed") }, { now })
+        assertEquals(NotificationActionResult.Invalid, executor.execute(single.id, "option.1", null, { false }))
         assertEquals(1, center.refreshes)
         assertEquals(0, center.writes)
     }

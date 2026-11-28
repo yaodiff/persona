@@ -107,9 +107,10 @@ struct SessionRefreshTests {
         #expect(clock.asked.count == 1)
     }
 
-    /// An Agents list in sight reads every hint as before (the window's length is zero then), and one that comes into
-    /// sight lets a read waiting for its window go at once (docs/apple/ios-state.md "Timely").
-    @Test func aListInSightReadsAsHintsComeAndComingIntoSightReleasesTheWait() async throws {
+    /// A zero-length window reads every hint as it comes, and `releaseHintWindow` lets a read waiting for a window go at
+    /// once (docs/apple/ios-state.md "Timely"). An Agents list in sight has its own short window
+    /// (`SessionHintsInSightTests`, #16758).
+    @Test func aZeroWindowReadsAsHintsComeAndAReleaseLetsTheWaitGo() async throws {
         let clock = FakeClock()
         var reads = 0
         let list = SessionListModel<Row>(id: { $0.id }, removalID: { $0 }, fetch: { _, _, _ in
@@ -118,17 +119,17 @@ struct SessionRefreshTests {
         }, counts: { _ in counts() }, waitForHints: {}, hintWindow: clock.window())
         defer { list.cancel(); clock.cancel() }
         await list.load()
-        clock.length = .zero // in sight
+        clock.length = .zero
         for i in 1...3 {
             list.invalidate(revision: "h\(i)")
             try await waitForRefreshTest { reads == 1 + i }
         }
         #expect(clock.asked.isEmpty)
-        clock.length = HintWindow.length // out of sight: the next hint inside the window waits
+        clock.length = HintWindow.length // the next hint inside the window waits
         list.invalidate(revision: "h4")
         try await waitForRefreshTest { clock.sleeping == 1 }
         #expect(reads == 4)
-        list.releaseHintWindow() // in sight again
+        list.releaseHintWindow() // an Agents list came into sight
         try await waitForRefreshTest { reads == 5 }
     }
 

@@ -1,16 +1,16 @@
 {
-  "state_both": "脚本和联网已打开",
-  "state_scripts": "已打开脚本，联网仍禁用",
-  "state_network": "已打开联网，脚本仍禁用",
-  "state_none": "已禁用脚本和联网",
-  "local_hint": "页面引用的同目录文件（图片、样式、字体、脚本）经 hub 读出来放进页面；隔离框本身仍不联网",
-  "loaded_one": "从那台电脑读入了 {count} 个同目录的文件",
-  "loaded_other": "从那台电脑读入了 {count} 个同目录的文件",
-  "missing_one": "{count} 个读不到",
-  "missing_other": "{count} 个读不到",
+  "state_both": "已开启脚本和联网",
+  "state_scripts": "已开启脚本，联网保持关闭",
+  "state_network": "已开启联网，脚本保持关闭",
+  "state_none": "已关闭脚本和联网",
+  "local_hint": "页面引用的同目录文件（图片、样式、字体、脚本）会通过 hub 读取并注入页面，沙箱本身仍保持离线。",
+  "loaded_one": "已从该电脑读取 {count} 个同目录文件",
+  "loaded_other": "已从该电脑读取 {count} 个同目录文件",
+  "missing_one": "{count} 个无法读取",
+  "missing_other": "{count} 个无法读取",
   "scripts": "脚本",
   "network": "联网",
   "reload": "重新加载",
-  "loading_local_one": "正在读入同目录的文件 · {count} 个",
-  "loading_local_other": "正在读入同目录的文件 · {count} 个"
+  "loading_local_one": "正在读取同目录文件 · {count} 个",
+  "loading_local_other": "正在读取同目录文件 · {count} 个"
 }

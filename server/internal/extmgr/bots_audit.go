@@ -27,10 +27,35 @@ const (
 	auditBotTopicChatRemoved = "bot_topic_chat_removed"
 	// {chat_id}: the group chat that is the home topic group now (/topics home, or the app's list).
 	auditBotTopicHome = "bot_topic_home"
+	// {chat_id, space}: the domain space bound to a topic group (/topics space, or the app's list).
+	auditBotTopicSpace = "bot_topic_space"
 	// {chat_id}: the owner's "@bot /ai …" was taken from a group chat that is not opted in (#6146). Never the words.
 	auditBotAITaken = "bot_ai_taken"
 	// {chat_id}: the owner's "@bot /read …" was taken from a group chat (#11803). Never the words.
 	auditBotReadTaken = "bot_read_taken"
+
+	// {off, direct_chats, blocked_chats, launcher}: the proxy-reply policy, only when it changes. Never a message.
+	auditBotHandoffPolicy = "bot_handoff_policy"
+	// {chat_id, handoff_id, delivery, anchored}: a handoff was taken. Never the question or the names.
+	auditBotHandoffTaken = "bot_handoff_taken"
+	// {chat_id, reason}: a handoff was refused, blocked or switched off.
+	auditBotHandoffRefused = "bot_handoff_refused"
+	// {chat_id, handoff_id, confirmed}: the bot posted the reply.
+	auditBotHandoffPosted = "bot_handoff_posted"
+	// {chat_id, handoff_id, outcome}: a handoff ended without a post.
+	auditBotHandoffEnded = "bot_handoff_ended"
+
+	// {mode, allowed_users, allowed_chats, blocked_users, blocked_chats, guest_tools, per_chat_hourly}: ids and tool
+	// names only, when the policy changes. Never a label, never a message.
+	auditBotGroupPolicy = "bot_group_policy_changed"
+	// {chat_id, guest_id, mode, in_thread}: a non-owner's @bot was taken. Never the words or the name.
+	auditBotGuestTriggered = "bot_guest_triggered"
+	// {chat_id, guest_id}: the bot posted the guest's reply.
+	auditBotGuestPosted = "bot_guest_posted"
+	// {chat_id, guest_id, outcome}: a guest turn ended without a post.
+	auditBotGuestEnded = "bot_guest_ended"
+	// {chat_id, reason}: a trigger refused by a limit; at most one per chat per ten minutes.
+	auditBotGuestRefused = "bot_guest_refused"
 )
 
 // botRecord is an audit record of the bot's, written once its lock is let go.

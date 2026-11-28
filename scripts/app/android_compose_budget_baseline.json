@@ -1,0 +1,52 @@
+{
+  "functions": {
+    "android/app/src/main/java/persona/android/ui/Root.kt::PersonaShell": {
+      "effects": 20,
+      "lines": 1177,
+      "remembers": 113
+    },
+    "android/feature/agents/src/main/kotlin/persona/feature/agents/AgentsScreen.kt::AgentsScreen": {
+      "lines": 836,
+      "remembers": 47
+    },
+    "android/feature/agents/src/main/kotlin/persona/feature/agents/TodoDetailScreen.kt::TodoDetailScreen": {
+      "lines": 533
+    },
+    "android/feature/agents/src/main/kotlin/persona/feature/agents/TodosScreen.kt::TodosScreen": {
+      "remembers": 33
+    },
+    "android/feature/assistant/src/main/kotlin/persona/feature/assistant/AssistantScreen.kt::AssistantScreen": {
+      "effects": 19,
+      "lines": 1009,
+      "remembers": 60
+    },
+    "android/feature/chat/src/main/kotlin/persona/feature/chat/ChatComposer.kt::ChatComposer": {
+      "lines": 512
+    },
+    "android/feature/chat/src/main/kotlin/persona/feature/chat/ChatLinkHost.kt::ChatLinkHost": {
+      "remembers": 37
+    },
+    "android/feature/chat/src/main/kotlin/persona/feature/chat/ChatScreen.kt::ChatPage": {
+      "lines": 960,
+      "remembers": 71
+    },
+    "android/feature/inbox/src/main/kotlin/persona/feature/inbox/InboxScreen.kt::InboxScreen": {
+      "lines": 676,
+      "remembers": 44
+    },
+    "android/feature/inbox/src/main/kotlin/persona/feature/inbox/LarkScreen.kt::LarkConversationScreen": {
+      "remembers": 43
+    },
+    "android/feature/settings/src/main/kotlin/persona/feature/settings/ModelProfilesScreen.kt::ModelProfileEditorPage": {
+      "lines": 449
+    },
+    "android/feature/settings/src/main/kotlin/persona/feature/settings/PairingScreen.kt::PairingScreen": {
+      "lines": 404,
+      "remembers": 36
+    },
+    "android/feature/settings/src/main/kotlin/persona/feature/settings/SettingsScreen.kt::SettingsContent": {
+      "remembers": 34
+    }
+  },
+  "version": 1
+}

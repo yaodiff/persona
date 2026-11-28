@@ -2,6 +2,7 @@ package larksyncwire
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"time"
 
@@ -109,6 +110,11 @@ const (
 	// senders and mentioned users (open_id or app_id -> name), so a member who left a group or a bot another message
 	// mentioned is still named.
 	SenderNamesCursor = "sender_names"
+	// SenderNamesProgressCursor is the per-binding cursor key holding how far the sender-name backfill got: each
+	// large group's member list position, and the lookups that already found nothing (retried after a week), so the
+	// backfill runs in rounds that each have their own budget and resume where the last one stopped. Opaque to the
+	// manager; an older hub ignores it.
+	SenderNamesProgressCursor = "sender_names:progress"
 )
 
 // Canonical-key prefixes: one piece of content has one key whichever bot, account or entry point read it.
@@ -418,6 +424,47 @@ type OpenID string
 // ChatID is a Feishu/Lark chat_id (oc_…) in the sync contract.
 type ChatID string
 
+// MessageID is a Feishu/Lark message_id (om_…) in the sync contract.
+type MessageID string
+
+// MessageType is a Feishu/Lark message msg_type in the sync contract (for example "text", "post", "image", "file",
+// or "interactive"). Unknown platform msg_type values pass through unchanged.
+type MessageType string
+
+// Common Feishu/Lark message types handled by user sync.
+const (
+	MessageTypeText        MessageType = "text"
+	MessageTypePost        MessageType = "post"
+	MessageTypeImage       MessageType = "image"
+	MessageTypeFile        MessageType = "file"
+	MessageTypeMedia       MessageType = "media"
+	MessageTypeAudio       MessageType = "audio"
+	MessageTypeInteractive MessageType = "interactive"
+	MessageTypeSystem      MessageType = "system"
+)
+
+// EventLarkMessages is the extension event emitted after a sync round commits new messages to the outbox.
+const EventLarkMessages = "lark.messages"
+
+// MessageEventItem is one message's metadata inside event.lark.messages: strictly no message body, display names,
+// or attachment contents; extensions read bodies within their own permissions.
+type MessageEventItem struct {
+	ChatID       ChatID      `json:"chat_id"`
+	MessageID    MessageID   `json:"message_id"`
+	SenderOpenID OpenID      `json:"sender_open_id,omitempty"`
+	At           time.Time   `json:"at,omitzero"`
+	Type         MessageType `json:"type,omitempty"`
+}
+
+// MessagesEvent is one paginated batch of newly synced Lark message metadata emitted as event.lark.messages.
+type MessagesEvent struct {
+	Binding  string             `json:"binding"`
+	Page     int                `json:"page"`
+	Pages    int                `json:"pages"`
+	Total    int                `json:"total"`
+	Messages []MessageEventItem `json:"messages"`
+}
+
 // NameResolveRequest describes the unnamed senders and chats a binding's sender-name backfill wants to resolve.
 type NameResolveRequest struct {
 	// OpenIDs are unique human sender open_ids to look up.
@@ -437,6 +484,8 @@ type NameResolveRequest struct {
 	SampleChats map[string]string
 	// NameBook is the binding's stored SenderNamesCursor value: names learned before, for senders nothing else names.
 	NameBook string
+	// Progress is the binding's stored SenderNamesProgressCursor value ("" for a first round).
+	Progress string
 }
 
 // NameResolveResult holds display names resolved for senders and unnamed p2p chats.
@@ -445,6 +494,14 @@ type NameResolveResult struct {
 	UserNames map[string]string
 	// P2PChatNames maps p2p chat_id -> peer display name.
 	P2PChatNames map[string]string
+	// Partial is true when the round's budget ran out before every lookup was tried: not a failure, the next round
+	// resumes from Progress.
+	Partial bool
+	// Progress is the new SenderNamesProgressCursor value to store, returned with or without an error ("" when
+	// nothing is left to remember).
+	Progress string
+	// NameBook is the name book with the names this round learned ("" when unchanged).
+	NameBook string
 }
 
 // ChatNameResolver is optionally implemented by a Syncer (alongside NameResolver) to resolve sender display names
@@ -499,4 +556,55 @@ type Provider struct {
 type RegisterOptions struct {
 	UserScopes []string
 	AppID      string
+}
+
+// Settings keys for the Lark user sync (db.SealedSettings re-seals the *_enc fields on key rotation).
+const (
+	SettingPrefs    = "bots.feishu.sync"
+	SettingBots     = "bots.feishu.sync.bots"
+	SettingBindings = "bots.feishu.sync.bindings"
+	SettingAccounts = "bots.feishu.sync.accounts"
+)
+
+// Sealed setting field names re-sealed by key rotation (db.SealedSettings).
+var (
+	SealedPrefsFields    = []string{"registration_device_enc"}
+	SealedBotsFields     = []string{"secret_enc", "registration_device_enc"}
+	SealedBindingsFields = []string{"access_token_enc", "refresh_token_enc", "auth_verifier_enc", "auth_device_enc"}
+)
+
+// OutboxRow is one row of the lark_sync_outbox table: a chat batch (OutboxChat) or a document (OutboxDoc), its
+// payload the JSON the connector hands the knowledge base as it is. db.LarkSyncOutbox aliases this type.
+type OutboxRow struct {
+	Seq          int64
+	Kind         OutboxKind
+	CanonicalKey string
+	Payload      OutboxPayload
+	CreatedAt    time.Time
+}
+
+// OutboxKind is what an outbox row carries: a chat batch or a document, the only two the sync writes
+// (db.CommitLarkSyncRun refuses any other).
+type OutboxKind string
+
+// Outbox kinds (db.LarkSyncChat / db.LarkSyncDoc alias these).
+const (
+	OutboxChat OutboxKind = "chat"
+	OutboxDoc  OutboxKind = "doc"
+)
+
+// OutboxPayload is a row's payload as stored: the JSON of a connectorwire.ChatBatch for OutboxChat, of a kbwire.Item
+// for OutboxDoc, handed to the knowledge base exactly as it was written.
+type OutboxPayload json.RawMessage
+
+// Store keeps what the sync's runs read and hand over (Postgres tables lark_sync_cursors, lark_sync_index and
+// lark_sync_outbox). A manager whose store does not implement it leaves the sync unavailable.
+type Store interface {
+	LarkSyncCursors(ctx context.Context, binding string) (map[string]string, error)
+	DeleteLarkSyncCursors(ctx context.Context, binding string) error
+	LarkSyncIndex(ctx context.Context, keys []string) (map[string]IndexRecord, error)
+	CommitLarkSyncRun(ctx context.Context, binding string, cursors map[string]string, recs []IndexRecord, outbox []OutboxRow) error
+	LarkSyncOutboxAfter(ctx context.Context, kind OutboxKind, after int64, limit int) ([]OutboxRow, error)
+	LarkSyncDocsSince(ctx context.Context, since time.Time) ([]OutboxRow, error)
+	PruneLarkSyncOutbox(ctx context.Context, before time.Time) (int64, error)
 }

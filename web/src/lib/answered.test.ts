@@ -24,7 +24,7 @@ describe("answerLines", () => {
 
   it("计划、授权、终端对话框、交回电脑", () => {
     expect(answerLines({ ...base, kind: "plan" }, { approve: true, mode: "acceptEdits" })[0].answer).toBe("批准，允许编辑");
-    expect(answerLines({ ...base, kind: "plan" }, { approve: false, feedback: "先写测试" })[0].answer).toBe("打回：先写测试");
+    expect(answerLines({ ...base, kind: "plan" }, { approve: false, feedback: "先写测试" })[0].answer).toBe("退回：先写测试");
     expect(answerLines({ ...base, kind: "permission" }, { allow: true, always: true })[0].answer).toBe("总是允许");
     expect(answerLines({ ...base, kind: "permission" }, { allow: false })[0].answer).toBe("拒绝");
     const screen: Interaction = { ...base, kind: "screen", dialog: { options: [{ key: "1", label: "Yes" }, { key: "2", label: "No" }] } };
@@ -76,6 +76,6 @@ describe("endedText", () => {
   it("按结局说明回答为什么没送到", () => {
     expect(endedText("expired")).toContain("过期");
     expect(endedText("cancelled")).toContain("撤回");
-    expect(endedText(undefined)).toContain("已经结束");
+    expect(endedText(undefined)).toContain("已结束");
   });
 });

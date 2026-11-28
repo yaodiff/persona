@@ -135,6 +135,11 @@ func (s *Service) toolKB(ctx context.Context, name string, args json.RawMessage)
 			review.Reset()
 		}
 		fmt.Fprintf(&b, "Path: %s\n\nmeta.json:\n%s%s\n", d.Path, meta, folded)
+		if a.Kind == kb.KindProject {
+			if t, ok := e.ProjectTreeOf(d.ID); ok {
+				b.WriteString(projectTreeText(t))
+			}
+		}
 		if d.Summary != "" {
 			fmt.Fprintf(&b, "\nsummary.md:\n%s\n", d.Summary)
 		}
@@ -181,10 +186,10 @@ func (s *Service) toolKB(ctx context.Context, name string, args json.RawMessage)
 		switch {
 		case a.Kind != kb.KindRecording || json.Unmarshal(d.Meta, &trimmed) != nil || trimmed.At == nil:
 		case trimmed.Kind == kb.RecordingDay:
-			fmt.Fprintf(&b, "\ntranscript.md: expired %s (assistant.recording_days); only the recap above is kept, until "+
+			fmt.Fprintf(&b, "\ntranscript.md: expired %s (assistant.recording_text_days); only the recap above is kept, until "+
 				"assistant.minutes_days after the day (0 means forever, the default), and it can't be written again.\n", trimmed.At.In(s.location(ctx)).Format("2006-01-02"))
 		default:
-			fmt.Fprintf(&b, "\ntranscript.md: expired %s (assistant.recording_days); only the minutes above are kept, until "+
+			fmt.Fprintf(&b, "\ntranscript.md: expired %s (assistant.recording_text_days); only the minutes above are kept, until "+
 				"assistant.minutes_days after the meeting (0 means forever, the default), and they can't be made again.\n", trimmed.At.In(s.location(ctx)).Format("2006-01-02"))
 		}
 		switch {
@@ -217,6 +222,10 @@ func (s *Service) toolKB(ctx context.Context, name string, args json.RawMessage)
 			}
 		}
 		ignored := kb.UserUnsupported(a.Kind, a.UserUpdate)
+		var undo *kb.UserUpdate
+		if a.Kind == kb.KindProject {
+			undo = e.TreeUndo(a.ID, a.UserUpdate)
+		}
 		id, err := e.ApplyUser(a.Kind, a.ID, a.UserUpdate)
 		if err != nil {
 			return "", err
@@ -227,6 +236,9 @@ func (s *Service) toolKB(ctx context.Context, name string, args json.RawMessage)
 		out := "Saved " + a.Kind + "/" + id + "."
 		for _, f := range ignored { // said, so the model does not take a dropped field for written
 			out += "\nNot saved: " + f.Field + " (" + f.Reason + ")."
+		}
+		if a.Kind == kb.KindProject && (a.Parent != nil || a.Milestones != nil || a.Milestone != nil) {
+			out += projectTreeSaved(e, id, undo)
 		}
 		return out, nil
 	}
@@ -312,6 +324,31 @@ func (s *Service) toolInteractionAnswer(ctx context.Context, self string, args j
 		Reason        string          `json:"reason"`
 	}
 	_ = json.Unmarshal(args, &a)
+	if ix, ok := s.pendingIx(strings.TrimSpace(a.InteractionID)); ok && s.activeInternalCard(ix) {
+		todo, routed := s.routedTo(ix.ID, self, s.isMain(ctx, self))
+		if !routed || self == ix.SessionID {
+			return "", errors.New("this internal interaction was not handed to you")
+		}
+		if ix.MachineID != a.Machine || ix.SessionID != a.SessionID || !time.Now().Before(ix.ExpiresAt) {
+			return "", errors.New("internal interaction source changed or expired")
+		}
+		if ix.Kind == proto.IxPermission {
+			return s.answerApprovalCard(ctx, self, ix, a.Allow, a.Reason)
+		}
+		if ix.Kind == proto.IxScreen {
+			return s.answerScreenCard(ctx, self, ix, a.Answers, a.Allow, a.Reason)
+		}
+		answers, err := interactionAnswers(ix, a.Answers)
+		if err != nil {
+			return "", err
+		}
+		if err := s.resolveRemembered(ix.ID, proto.Resolution{Answers: answers, AnsweredBy: proto.AnsweredByAssistant, Reason: a.Reason}, false); err != nil {
+			return "", err
+		}
+		s.askAnswered(ctx, todo, self, ix, answers, a.Reason)
+		s.workEvent(ix.MachineID, ix.SessionID, "ask_supervisor_answered", map[string]any{"by": self, "card": ix.ID, "kind": ix.Kind})
+		return "Answered as the designated supervisor.", nil
+	}
 	am, c, err := s.findAgent(ctx, a.Machine, a.SessionID)
 	if err != nil {
 		return "", err
@@ -388,7 +425,7 @@ func (s *Service) answerApprovalCard(ctx context.Context, self string, ix proto.
 		return "", errors.New("allow is required for a permission or plan card: true allows the tool (approves the plan), false denies it")
 	}
 	if *allow {
-		if why := userApproval(ix); why != "" {
+		if why := userApproval(ix); why != "" && !(s.internalCard(ix) && s.inputCardSource(ix, false) == cardConfirmOutbound) {
 			return "", fmt.Errorf("interaction %s %s: only the user decides it; hand it to them with ask_escalate (todo_id %s), with your recommendation", ix.ID, why, todo)
 		}
 	}
@@ -407,6 +444,9 @@ func (s *Service) answerApprovalCard(ctx context.Context, self string, ix proto.
 		verb = "Rejected the plan"
 	case !*allow:
 		verb = "Denied"
+	}
+	if todo == "" {
+		return fmt.Sprintf("%s for the agent. The agent sees that the assistant answered.", verb), nil
 	}
 	return fmt.Sprintf("%s for the agent, as its supervisor: kept as task %s's decision (yours, not the user's), and the agent sees it was not the user's answer.", verb, todo), nil
 }

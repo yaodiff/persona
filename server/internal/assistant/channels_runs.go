@@ -242,8 +242,8 @@ func (s *Service) startChannelRun(r *channel.Run) {
 }
 
 // startChannelRunForBinding records the run only if the binding that sent its message is still current.
-// A nil generation is for callers whose channel does not use the plugin binding lifecycle.
-func (s *Service) startChannelRunForBinding(r *channel.Run, generation *uint64) {
+// A nil binding is for callers outside the plugin binding lifecycle.
+func (s *Service) startChannelRunForBinding(r *channel.Run, binding *threadBindingRef) {
 	if r.MachineID == "" || r.SessionID == "" {
 		s.logf("channels: %s: no conversation to follow", r.ID)
 		return
@@ -251,7 +251,7 @@ func (s *Service) startChannelRunForBinding(r *channel.Run, generation *uint64) 
 	c := &s.chans
 	c.mu.Lock()
 	s.loadChannelStateLocked(context.Background())
-	if generation != nil && c.generation[r.Channel] != *generation {
+	if binding != nil && !c.bindings.isCurrent(*binding) {
 		c.mu.Unlock()
 		return
 	}
@@ -262,7 +262,7 @@ func (s *Service) startChannelRunForBinding(r *channel.Run, generation *uint64) 
 		// (or another topic), nor the other way round.
 		if o.Channel == r.Channel && o.MachineID == r.MachineID && o.SessionID == r.SessionID && !c.answering[o.ID] && !o.Recalled &&
 			o.Ext["chat"] == r.Ext["chat"] && o.Ext["thread"] == r.Ext["thread"] && o.Ext["clarify"] == "" && r.Ext["clarify"] == "" &&
-			o.Ext[readChatKey] == "" && r.Ext[readChatKey] == "" { // a /read is answered under its own message, alone
+			o.Ext[assistantwire.FeishuReadChatKey] == "" && r.Ext[assistantwire.FeishuReadChatKey] == "" { // a /read is answered under its own message, alone
 			folded = append(folded, o)
 			r.Fold(o)
 			continue
@@ -384,10 +384,7 @@ func (s *Service) forgetChannelTurns(id string) error {
 		c.mu.Unlock()
 		return errChannelsUnread
 	}
-	if c.generation == nil {
-		c.generation = map[string]uint64{}
-	}
-	c.generation[id]++
+	c.bindings.invalidate(id)
 	delete(c.lastEnded, id)
 	c.list = nil
 	c.st.Runs = slices.DeleteFunc(c.st.Runs, func(r *channel.Run) bool { return r.Channel == id })

@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "routine.schema.json",
+  "title": "Scheduled routine facts",
+  "description": "A host routine requests briefing material from an enabled, granted contribution. Each answer is a snapshot for the requested date.",
+  "x-side": "plugin",
+  "x-methods": {
+    "routine_facts.collect": {"from": "hub", "params": "RoutineFactsParams", "result": "RoutineFactsResult"}
+  },
+  "$defs": {
+    "RoutineFactsParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "contribution": {"$ref": "manifest.schema.json#/$defs/RoutineContributionID"},
+        "date": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$", "description": "Calendar date in the routine's time zone."},
+        "language": {"type": "string", "enum": ["en", "zh-Hans", "ja"]}
+      },
+      "required": ["contribution", "date", "language"]
+    },
+    "RoutineReportSection": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "title": {"type": "string", "minLength": 1, "maxLength": 80},
+        "body": {"type": "string", "minLength": 1, "maxLength": 1600, "description": "Plain text. The host owns report layout."}
+      },
+      "required": ["title", "body"]
+    },
+    "RoutineFactsResult": {
+      "description": "A read-only snapshot. Return an empty object when the contribution has nothing for this date.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "facts": {"type": "array", "maxItems": 4, "items": {"type": "string", "minLength": 1, "maxLength": 280}},
+        "sections": {"type": "array", "maxItems": 2, "items": {"$ref": "#/$defs/RoutineReportSection"}}
+      }
+    }
+  }
+}

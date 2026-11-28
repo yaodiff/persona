@@ -382,7 +382,7 @@ func TestDeltaChangesAndFilteredExit(t *testing.T) {
 	}
 }
 
-func TestDeltaAddedDistinguishesCreationFromFilterEntrance(t *testing.T) {
+func TestDeltaAddedMarksCreationsAndFilterEntrants(t *testing.T) {
 	var i Index
 	a := testItem("a", 1)
 	i.Replace("batch", []Item{a})
@@ -400,8 +400,8 @@ func TestDeltaAddedDistinguishesCreationFromFilterEntrance(t *testing.T) {
 		t.Fatalf("updated row = %+v", second)
 	}
 	entered := mustQuery(t, &i, Options{Since: baseline, State: "idle"})
-	if got := sessionIDs(entered); !reflect.DeepEqual(got, []string{"a"}) || len(entered.Added) != 0 {
-		t.Fatalf("filter entrance is not creation = %+v", entered)
+	if got := sessionIDs(entered); !reflect.DeepEqual(got, []string{"a"}) || !reflect.DeepEqual(entered.Added, []string{"a"}) {
+		t.Fatalf("filter entrant should be marked added = %+v", entered)
 	}
 	full := mustQuery(t, &i, Options{})
 	if len(full.Added) != 0 {

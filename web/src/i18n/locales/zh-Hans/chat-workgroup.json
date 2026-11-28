@@ -1,14 +1,14 @@
 {
-  "load_failed": "没能取回这段过程",
+  "load_failed": "无法加载这些步骤",
   "retry": "重试",
-  "loading_steps_other": "正在取 {count} 条",
-  "run_clock": "从上一条消息或工作开始算起，到下一条消息、工作结束或当前时刻。",
-  "exchange_clock": "从本轮对话开始算起，到最后一次活动；运行中则算到当前时刻。",
-  "summary_reads_other": "读 {count} 个文件",
+  "loading_steps_other": "正在加载 {count} 个步骤",
+  "run_clock": "从上一条消息或任务开始计时，直至下一条消息、任务结束或当前时刻。",
+  "exchange_clock": "从本轮对话开始计时，直至最后一次活动（若仍在运行，则计至当前时刻）。",
+  "summary_reads_other": "读取 {count} 个文件",
   "summary_edits_other": "编辑 {count} 处",
   "summary_cmds_other": "运行 {count} 条命令",
   "summary_searches_other": "搜索 {count} 次",
-  "summary_agents_other": "{count} 个子代理",
+  "summary_agents_other": "{count} 个子 Agent",
   "summary_other_other": "{count} 项操作",
   "summary_sep": "、",
   "live_steps_other": "已执行 {count} 步",
@@ -16,5 +16,5 @@
   "cluster_search_other": "连续搜索 {count} 次",
   "cluster_command_other": "连续运行 {count} 条命令",
   "cluster_running": "进行中",
-  "cluster_error": "含错误"
+  "cluster_error": "包含错误"
 }

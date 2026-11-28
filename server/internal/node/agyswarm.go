@@ -44,7 +44,7 @@ func (n *Node) agySwarmWorkers(conversation string) []agySwarmWorker {
 	if !validID(conversation) {
 		return nil
 	}
-	brain, err := agyBrain(n.agyDataRoot(), conversation)
+	brain, err := agyBrain(n.agyRootFor(conversation), conversation)
 	if err != nil {
 		return nil
 	}

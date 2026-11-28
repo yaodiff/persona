@@ -1,7 +1,7 @@
 {
-  "video_unplayable": "这个浏览器放不了这个视频",
-  "audio_unplayable": "这个浏览器放不了这个音频",
-  "video_hint": "可能是 HEVC 或 MKV 这类编码，Safari 或下载到本机再看。",
-  "audio_hint": "这种编码浏览器不支持，下载到本机再听。",
+  "video_unplayable": "当前浏览器无法播放此视频",
+  "audio_unplayable": "当前浏览器无法播放此音频",
+  "video_hint": "该视频可能采用 HEVC 或 MKV 格式，建议改用 Safari 打开，或下载到本地观看。",
+  "audio_hint": "当前浏览器不支持此音频格式，请下载到本地播放。",
   "download": "下载"
 }

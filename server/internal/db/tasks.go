@@ -113,6 +113,17 @@ func (d *DB) TaskPlansQueued(ctx context.Context, since time.Time) ([]TaskPlanRo
 	return scanTaskPlans(rows)
 }
 
+// TaskPlansQueuedForTodo reads the started plans with a queue for this exact execution binding.
+func (d *DB) TaskPlansQueuedForTodo(ctx context.Context, todoID string) ([]TaskPlanRow, error) {
+	rows, err := d.pool.Query(ctx, `SELECT id, conversation, tasks, state, created_at, updated_at FROM task_plans
+		WHERE state = 'started' AND jsonb_path_exists(tasks, '$[*] ? (@.todo_id == $id && exists(@.queue))',
+			jsonb_build_object('id', $1::text))`, todoID)
+	if err != nil {
+		return nil, err
+	}
+	return scanTaskPlans(rows)
+}
+
 func scanTaskPlans(rows pgx.Rows) ([]TaskPlanRow, error) {
 	defer rows.Close()
 	var out []TaskPlanRow

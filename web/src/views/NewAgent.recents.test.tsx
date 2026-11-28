@@ -25,6 +25,7 @@ const launched = vi.hoisted(() => [] as Record<string, unknown>[]);
 vi.mock("../lib/new-agent", async (original) => ({ ...(await original<typeof import("../lib/new-agent")>()), launchAgent: (input: Record<string, unknown>) => { launched.push(input); return "local-1"; } }));
 
 import { NewAgent } from "./NewAgent";
+import { t } from "../i18n";
 import { resetModelListsForTests } from "../lib/session-models";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -141,6 +142,21 @@ describe("New agent's first message for Codex (#4961)", () => {
   });
 });
 
+it("uses the preset computer with its own saved folder when only the computer was selected", async () => {
+  localStorage.setItem("new.cwd.studio", "/projects/notes");
+  await open("machine-only", { machineId: "studio" });
+  expect(machineChip("Studio").className).toContain("bg-ink");
+  expect(folder()).toBe("/projects/notes");
+  expect(launched).toHaveLength(0);
+});
+
+it("keeps an unavailable preset computer selected until the user chooses another one", async () => {
+  await open("offline-target", { machineId: "nas", cwd: "/projects/notes" });
+  expect(machineChip("NAS").className).toContain("bg-ink");
+  expect(button(t("newagent.start"))!.disabled).toBe(true);
+  expect(launched).toHaveLength(0);
+});
+
 describe("New agent's recent setups (#2134)", () => {
   it("shows no section before anything started, and remembers a start with the model and effort it sent", async () => {
     await open();
@@ -173,7 +189,7 @@ describe("New agent's recent setups (#2134)", () => {
     await open();
     expect(cards()).toHaveLength(2);
     expect(lines(card("notes-app"))).toEqual(["notes-app · Studio", "work · sonnet · 完全访问 · XHigh"]);
-    expect(lines(card("app"))).toEqual(["app · MacBook", "claude"]);
+    expect(lines(card("app"))).toEqual(["app · MacBook", "Claude Code"]);
     act(() => card("notes-app").click());
     await flush();
     expect(machineChip("Studio").className).toContain("bg-ink");
@@ -202,11 +218,11 @@ describe("New agent's recent setups (#2134)", () => {
   it("a card on the same computer fills it in place", async () => {
     seed([setup({ cwd: "/code/other", launcher: "codex", model: "gpt-5.5", agent_type: "codex" })]);
     await open();
-    expect(lines(card("other"))).toEqual(["other · MacBook", "codex · gpt-5.5"]);
+    expect(lines(card("other"))).toEqual(["other · MacBook", "Codex · gpt-5.5"]);
     act(() => card("other").click());
     await flush();
     expect(folder()).toBe("/code/other");
-    expect(pill().title).toBe("Codex · Codex 5.5 · codex");
+    expect(pill().title).toBe("Codex · Codex 5.5");
     expect(pill().querySelector("[data-pill-engine]")!.getAttribute("data-pill-engine")).toBe("codex");
     expect(card("other").getAttribute("aria-pressed")).toBe("true");
     expect(launched).toHaveLength(0);
@@ -220,10 +236,10 @@ describe("New agent's recent setups (#2134)", () => {
       setup({ machine: "studio", launcher: "claude", model: "sonnet" }),
     ]);
     await open();
-    expect(pill().title).toBe("Claude Code · Default · claude"); // the Mac has no recent setup: the default
+    expect(pill().title).toBe("Claude Code · Default"); // the Mac has no recent setup: the default
     act(() => machineChip("Studio").click());
     await flush();
-    expect(pill().title).toBe("Claude Code · Opus 5.5 · claude");
+    expect(pill().title).toBe("Claude Code · Opus 5.5");
     await pick("model:work\ndefault");
     expect(pill().title).toBe("Claude Code · Default · work");
     act(() => machineChip("MacBook").click());
@@ -235,7 +251,7 @@ describe("New agent's recent setups (#2134)", () => {
     localStorage.setItem("new.launcher.mac", "claude");
     seed([setup({ model: "sonnet" })]);
     await open();
-    expect(pill().title).toBe("Claude Code · Sonnet 5 · claude");
+    expect(pill().title).toBe("Claude Code · Sonnet 5");
   });
 
   it("an offline computer's card is dimmed, says so, and can't be picked", async () => {
@@ -244,7 +260,7 @@ describe("New agent's recent setups (#2134)", () => {
     expect(cards()).toHaveLength(1); // a computer the hub no longer lists has none
     const offline = card("backup");
     expect(offline.disabled).toBe(true);
-    expect(lines(offline)).toEqual(["backup · NAS", "codex · gpt-5.5 · 离线"]);
+    expect(lines(offline)).toEqual(["backup · NAS", "Codex · gpt-5.5 · 离线"]);
     act(() => offline.click());
     await flush();
     expect(machineChip("MacBook").className).toContain("bg-ink");

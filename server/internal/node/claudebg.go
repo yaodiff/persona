@@ -182,6 +182,13 @@ func (n *Node) claudeSessions(procs []claudeProc, seen map[string]bool, livePane
 				status = proto.StatusDone
 			}
 		}
+		// Its turn ended on the app's end-of-turn question to the owner, marked blocked: it waits on them (#16406).
+		endAsk := ""
+		if source == proto.SourceClaudeDesktop && (status == proto.StatusIdle || status == proto.StatusDone) {
+			if endAsk = endOfTurnAsk(p); endAsk != "" {
+				status = proto.StatusBlocked
+			}
+		}
 		s := proto.Session{
 			SessionID: id, Cwd: c.Cwd, Status: status, Agent: "claude", Title: m.title, SourceKind: source,
 			Model: n.shownModel(id, m.model), LastText: snippet(m.lastText), UpdatedAt: lastUsed(m, st), Rev: st.Size(), AgentSurface: m.surface,
@@ -198,6 +205,7 @@ func (n *Node) claudeSessions(procs []claudeProc, seen map[string]bool, livePane
 			s.Capabilities.Interrupt = true
 		}
 		pluginPerms := n.ccPluginPermissionsCapable(id, c.pid)
+		pluginPassedOver := n.ccPluginClassicPassedOver(id, c.pid)
 		if s.Capabilities != nil && pluginPerms {
 			s.Capabilities.Approve = true
 		}
@@ -230,6 +238,9 @@ func (n *Node) claudeSessions(procs []claudeProc, seen map[string]bool, livePane
 				s.AttentionReason = n.dialogOn(id, pane)
 			}
 		}
+		if endAsk != "" && s.AttentionReason == "" {
+			s.AttentionReason = endAsk // the owner answers it with a message, which reaches it through its inbox
+		}
 		hasActiveCard := n.activeAsks.active(id) || n.ccPlugins.hasActivePermission(id)
 		hasPublishedAsk := s.Capabilities != nil && s.Capabilities.Send && s.PaneID == "" && n.cx.hasOutsideAsk(id)
 		if hasActiveCard || hasPublishedAsk {
@@ -239,7 +250,9 @@ func (n *Node) claudeSessions(procs []claudeProc, seen map[string]bool, livePane
 			s.Capabilities.Approve = true
 		}
 		if status == proto.StatusBlocked && s.AttentionReason == "" && !hasActiveCard {
-			if source == proto.SourceClaudeDesktop && pluginPerms {
+			if pluginPassedOver {
+				s.AttentionReason = proto.AttentionClaudePluginPassedOver
+			} else if source == proto.SourceClaudeDesktop && pluginPerms {
 				s.AttentionReason = proto.AttentionClaudeDesktopComputer
 			} else {
 				s.AttentionReason = proto.AttentionClaudeComputer // no dialog read from a pane (yet)
@@ -269,7 +282,14 @@ func (n *Node) claudeSessions(procs []claudeProc, seen map[string]bool, livePane
 		}
 		s.ModelFallback = m.modelFallback
 		s.Activity, s.ActivityAt = m.activityOf()
-		s.PermissionMode, s.Effort = n.currentModes(id, m)
+		var level string
+		var observedAt time.Time
+		if source == proto.SourceClaudeDesktop {
+			if observed, pid := n.ccPlugins.observedEffort(id); pid != 0 && pid == c.pid {
+				level, observedAt = observed.Level, time.UnixMilli(observed.AtMS)
+			}
+		}
+		s.PermissionMode, s.Effort = n.currentModesWithEffort(id, m, level, observedAt)
 		m.turnErr.set(&s)
 		if status == proto.StatusWorking || status == proto.StatusBlocked {
 			s.Queued = m.queue

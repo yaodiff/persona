@@ -3,6 +3,10 @@ package persona.platform.phonetools
 import org.junit.Assert.*
 import org.junit.Test
 import persona.core.contracts.api.PhoneToolResult
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
+import kotlin.concurrent.thread
 
 class PhoneToolResultOutboxTest {
     @Test fun aResultThatSendsImmediatelyIsNotHeld() {
@@ -104,5 +108,144 @@ class PhoneToolResultOutboxTest {
             true
         }
         assertEquals(0, executions)
+    }
+
+    /** A newer result for the same call_id that sends immediately must clear any older held entry so flush never replays it. */
+    @Test fun aSuccessfulLiveSendClearsAnyPreviouslyHeldResultForTheSameCallId() {
+        val outbox = PhoneToolResultOutbox()
+        val uncertain = PhoneToolResult.text("uncertain")
+        val concrete = PhoneToolResult.text("concrete")
+        val other = PhoneToolResult.text("other")
+        assertFalse(outbox.send("c1", uncertain) { false })
+        assertFalse(outbox.send("c2", other) { false })
+        assertEquals(2, outbox.size())
+
+        assertTrue(outbox.send("c1", concrete) { true })
+        assertEquals(1, outbox.size())
+
+        val flushed = mutableListOf<Pair<String, PhoneToolResult>>()
+        outbox.flush { id, r -> flushed += id to r; true }
+        assertEquals(listOf("c2" to other), flushed)
+    }
+
+    /** Concurrent sends for the same call_id must not let an older call overwrite or drop a newer result. */
+    @Test fun concurrentOutOfOrderSendsPreserveNewestOutcomeForCallId() {
+        val outbox = PhoneToolResultOutbox()
+        val older = PhoneToolResult.text("older")
+        val newer = PhoneToolResult.text("newer")
+
+        fun runInterleaved(callId: String, workerOutcome: Boolean, whileInFlight: () -> Unit) {
+            val entered = CountDownLatch(1)
+            val release = CountDownLatch(1)
+            val workerError = AtomicReference<Throwable?>(null)
+            val workerResult = AtomicReference<Boolean?>(null)
+            val t = thread {
+                try {
+                    workerResult.set(outbox.send(callId, older) {
+                        entered.countDown()
+                        assertTrue(release.await(5, TimeUnit.SECONDS))
+                        workerOutcome
+                    })
+                } catch (error: Throwable) {
+                    workerError.set(error)
+                }
+            }
+            try {
+                assertTrue(entered.await(5, TimeUnit.SECONDS))
+                whileInFlight()
+            } finally {
+                release.countDown()
+                t.join(5_000)
+            }
+            assertFalse("worker thread did not terminate", t.isAlive)
+            workerError.get()?.let { throw it }
+            assertEquals(workerOutcome, workerResult.get())
+        }
+
+        // Case 1: older fails after newer already succeeded live -> must not re-queue older.
+        runInterleaved("c1", workerOutcome = false) {
+            assertTrue(outbox.send("c1", newer) { true })
+        }
+        assertEquals(0, outbox.size())
+
+        // Case 2: older fails after newer failed and queued -> queue must keep newer, not older.
+        runInterleaved("c2", workerOutcome = false) {
+            assertFalse(outbox.send("c2", newer) { false })
+        }
+        val flushed2 = mutableListOf<PhoneToolResult>()
+        outbox.flush { _, r -> flushed2 += r; true }
+        assertEquals(listOf(newer), flushed2)
+
+        // Case 3: older succeeds after newer failed and queued -> must not drop newer's queued entry.
+        runInterleaved("c3", workerOutcome = true) {
+            assertFalse(outbox.send("c3", newer) { false })
+        }
+        val flushed3 = mutableListOf<PhoneToolResult>()
+        outbox.flush { _, r -> flushed3 += r; true }
+        assertEquals(listOf(newer), flushed3)
+
+        // Case 4: older fails after newer failed, queued, and was delivered by flush() -> must not re-queue older.
+        val flushed4 = mutableListOf<PhoneToolResult>()
+        runInterleaved("c4", workerOutcome = false) {
+            assertFalse(outbox.send("c4", newer) { false })
+            outbox.flush { _, r -> flushed4 += r; true }
+        }
+        assertEquals(listOf(newer), flushed4)
+        assertEquals(0, outbox.size())
+    }
+
+    /** close() racing with in-flight sends (whether they succeed or fail) must leave the outbox empty. */
+    @Test fun closeRacingWithInFlightSendsLeavesOutboxEmpty() {
+        for (workerOutcome in listOf(true, false)) {
+            val outbox = PhoneToolResultOutbox()
+            val entered = CountDownLatch(1)
+            val release = CountDownLatch(1)
+            val workerError = AtomicReference<Throwable?>(null)
+            val workerResult = AtomicReference<Boolean?>(null)
+            val t = thread {
+                try {
+                    workerResult.set(outbox.send("c1", PhoneToolResult.text("r")) {
+                        entered.countDown()
+                        assertTrue(release.await(5, TimeUnit.SECONDS))
+                        workerOutcome
+                    })
+                } catch (error: Throwable) {
+                    workerError.set(error)
+                }
+            }
+            try {
+                assertTrue(entered.await(5, TimeUnit.SECONDS))
+                outbox.close()
+            } finally {
+                release.countDown()
+                t.join(5_000)
+            }
+            assertFalse("worker thread did not terminate", t.isAlive)
+            workerError.get()?.let { throw it }
+            assertEquals(workerOutcome, workerResult.get())
+            assertEquals(0, outbox.size())
+            var flushedAny = false
+            outbox.flush { _, _ -> flushedAny = true; true }
+            assertFalse(flushedAny)
+        }
+    }
+
+    /** If a newer result for the same call_id is queued while flush is sending the older one, flush keeps the newer entry. */
+    @Test fun flushPreservesNewerReplacementQueuedDuringSend() {
+        val outbox = PhoneToolResultOutbox()
+        val same = PhoneToolResult.text("result")
+        assertFalse(outbox.send("c1", same) { false })
+        var queuedReplacement = false
+        val flushed = mutableListOf<PhoneToolResult>()
+        outbox.flush { id, r ->
+            flushed += r
+            if (!queuedReplacement) {
+                queuedReplacement = true
+                assertFalse(outbox.send(id, same) { false })
+            }
+            true
+        }
+        assertEquals(listOf(same, same), flushed)
+        assertEquals(0, outbox.size())
     }
 }

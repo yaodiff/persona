@@ -21,7 +21,7 @@ describe("replyModelName", () => {
     expect(replyModelName(OPUS)).toBe("Opus 5.5");
     expect(replyModelName(SONNET)).toBe("Sonnet 4.5");
     expect(replyModelName("claude-opus-5-5[1m]")).toBe("Opus 5.5 1M");
-    expect(replyModelName("gpt-6.1-sol")).toBe("6.1 Sol"); // as the model lists name a raw GPT id
+    expect(replyModelName("gpt-6.1-sol")).toBe("GPT-6.1 Sol"); // as the model lists name a raw GPT id
     expect(replyModelName("glm-5.1")).toBe("glm-5.1");
   });
 

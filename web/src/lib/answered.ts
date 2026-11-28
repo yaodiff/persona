@@ -45,6 +45,7 @@ export function answerLines(ix: Interaction, r: Resolution): AnswerLine[] {
   if (r.answered_by === "assistant" && ix.kind !== "question") return [{ label: "", answer: t("lib-answered.by_assistant") }];
   switch (ix.kind) {
     case "question": {
+      if (r.cancel === true) return [{ label: "", answer: t("lib-answered.question_closed") }];
       const answers = (r.answers ?? {}) as Record<string, unknown>;
       return (ix.questions ?? []).map((q) => ({ label: q.question, answer: shownAnswer(q, str(answers[q.question])) || t("lib-answered.unanswered") }));
     }

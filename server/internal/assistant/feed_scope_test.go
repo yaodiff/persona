@@ -64,6 +64,7 @@ func TestAssistantViewToAnExtension(t *testing.T) {
 func TestConversationFeedToAnExtension(t *testing.T) {
 	const told, summary, renew, notice = "Resting heart rate was 48 all week", "Logged the new prescription",
 		"Bring the old passport", "The morning run was skipped"
+	const providerSection = "Private notes from the briefing provider"
 	const formAnswer, clinicDraft, officeDraft = "The renewal form", "About your sleep clinic", "Thanks, see you on Monday"
 	health := identity.HealthDir("/home/owner")
 	todoStores(t, func(t *testing.T, e *todoEnv, _ *db.DB) {
@@ -100,9 +101,11 @@ func TestConversationFeedToAnExtension(t *testing.T) {
 		feed("conv1", feedRouted, hidden, map[string]string{"text": told, "machine_id": "server", "session_id": "h1"})
 		feed("conv1", feedReceipt, hidden, map[string]string{"state": "done", "summary": summary, "machine_id": "server", "session_id": "h1"})
 		feed("conv1", feedReport, hidden, map[string]string{"kind": "progress", "text": scopeReport})
+		feed("conv1", feedNotice, hidden, noticeBody{Text: "A private task's launcher changed"})
 		feed("conv1", feedAnswered, hidden, answeredBody{Question: scopeAsk, Answer: scopeAnswer})
 		feed("conv1", feedMessage, "inbox_clinic", MessageCard{TodoID: hidden, Source: "mail", Chat: "Clinic", Text: clinicDraft, Draft: clinicDraft})
 		feed("conv1", feedRouted, shown, map[string]string{"text": renew, "machine_id": "server", "session_id": "s1"})
+		feed("conv1", feedNotice, shown, noticeBody{Text: "A shared task's launcher changed"})
 		feed("conv1", feedAnswered, shown, answeredBody{Question: "Which form do you need?", Answer: formAnswer})
 		feed("conv1", feedMessage, "inbox_office", MessageCard{TodoID: shown, Source: "mail", Chat: "Passport office", Text: officeDraft, Draft: officeDraft})
 		plan("plan_shown", PlanTask{Title: "Renew the passport", TodoID: shown, Cwd: "/home/owner/forms"})
@@ -112,13 +115,17 @@ func TestConversationFeedToAnExtension(t *testing.T) {
 		feed("conv1", feedBrief, "routine_morning", map[string]any{"title": "Morning", "waiting": []map[string]string{{"id": "ix_sleep", "title": scopeAsk}}})
 		feed("conv1", feedToday, "2026-11-19", map[string]any{"date": "2026-11-19", "done": []map[string]string{{"title": "Chart the readings"}}})
 		feed("conv1", feedNotice, "", noticeBody{Text: notice})
+		// Even an otherwise visible ref must not make another provider's report readable.
+		if _, err := e.s.appendFeedOnce(ctx, routineContributionNoticePrefix+"fixture", "conv1", feedNotice, shown, noticeBody{Text: providerSection}); err != nil {
+			t.Fatal(err)
+		}
 		feed("h0", feedRouted, hidden, map[string]string{"text": told, "machine_id": "server", "session_id": "h1"})
 		if w := e.doAs(roleExtension, "GET", "/api/v1/todos/"+hidden, ""); w.Code != http.StatusNotFound {
 			t.Fatalf("the to-do is hidden from the to-do routes: %d", w.Code)
 		}
 
-		words := []string{told, summary, scopeReport, scopeAsk, scopeAnswer, formAnswer, clinicDraft, hidden, "Chart the readings",
-			health, "Sort the sleep diary", "plan_hidden", "plan_in_space", "routine_morning", `"today"`}
+		words := []string{providerSection, told, summary, scopeReport, scopeAsk, scopeAnswer, formAnswer, clinicDraft, hidden, "Chart the readings",
+			health, "Sort the sleep diary", "plan_hidden", "plan_in_space", "routine_morning", "A private task's launcher changed", `"today"`}
 		for _, q := range []string{"", "?paginate=1"} {
 			path := "/api/v1/assistant/conversations/conv1/feed" + q
 			device := e.must("GET", path, "").Body.Bytes()
@@ -132,7 +139,7 @@ func TestConversationFeedToAnExtension(t *testing.T) {
 				t.Fatalf("%s: %d %s", path, w.Code, w.Body)
 			}
 			noneOf(t, "an extension's "+path, w.Body.Bytes(), append(slices.Clone(words), "Sleep log")...)
-			for _, want := range []string{shown, renew, notice, "plan_shown"} {
+			for _, want := range []string{shown, renew, notice, "plan_shown", "A shared task's launcher changed"} {
 				if !bytes.Contains(w.Body.Bytes(), []byte(want)) {
 					t.Errorf("%s: an extension does not read %q: %s", path, want, w.Body)
 				}

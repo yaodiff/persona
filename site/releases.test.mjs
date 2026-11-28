@@ -220,6 +220,35 @@ test("a new release replaces the old copy after it expires, without a site deplo
   assert.equal((await (await get()).json()).latest, "v0.4.0");
 });
 
+test("a timed-out release refresh serves the stale copy", async (t) => {
+  let stalled = false;
+  const edge = fakeEdge((_, { signal }) => ({
+    ok: true,
+    async json() {
+      signal?.throwIfAborted();
+      return [release(stalled ? "v0.4.0" : "v0.3.0")];
+    },
+  }));
+  t.after(edge.restore);
+  t.mock.method(AbortSignal, "timeout", (ms) => {
+    assert.equal(ms, 8000);
+    return stalled
+      ? AbortSignal.abort(new DOMException("simulated timeout", "TimeoutError"))
+      : new AbortController().signal;
+  });
+  const now = Date.now();
+  t.mock.method(Date, "now", () => stalled ? now + FRESH_MS + 1000 : now);
+  assert.equal((await (await get()).json()).latest, "v0.3.0");
+
+  stalled = true;
+  const response = await get();
+  assert.equal(response.status, 200);
+  const data = await response.json();
+  assert.equal(data.stale, true);
+  assert.equal(data.latest, "v0.3.0");
+  assert.equal(edge.calls.length, 2);
+});
+
 test("the route is GET / HEAD only, and no package path is served by the Worker", async (t) => {
   const edge = fakeEdge(() => Response.json([release("v0.3.0")]));
   t.after(edge.restore);

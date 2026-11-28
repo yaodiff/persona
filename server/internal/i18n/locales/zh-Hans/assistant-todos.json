@@ -1,4 +1,11 @@
 {
+  "close_active_refused": "不能关闭待办 {id}。用户在 Agent「{agent}」里有未完成的要求（{activity}）。",
+  "latest_owner_message": "用户在该会话最近的原话：「{message}」",
+  "close_active_choices": "可以用 task_scope 把要求写进完成标准，让 Agent 收尾或停掉监听，或者用 needs_user 问用户。",
+  "close_active_confirm": "Agent「{agent}」还挂着监听、定时或后台任务。仍然把「{title}」标为完成吗？",
+  "accept_active_confirm": "Agent「{agent}」还挂着监听、定时或后台任务。仍然验收通过并关闭「{title}」吗？",
+  "latest_agent_message": "你在该 Agent 会话里最近说：「{message}」。",
+  "close_not_confirmed": "Agent 还挂着监听、定时或后台任务。确认后才能关闭待办。",
   "remind_subtitle": "待办提醒",
   "remind_body": "到点了",
   "remind_due": "截止 {when}",
@@ -13,5 +20,11 @@
   "not_found": "这个待办已不存在",
   "round_not_found": "待办对话里的这一段已经不在了",
   "agent_not_listed": "这台电脑还没有列出这个 Agent，请稍后再试。",
-  "images_forbidden": "此设备无法读取待办图片"
+  "not_told_yet": "暂时无法确认这个待办，请稍后再试。",
+  "machine_not_found": "这台电脑不在 hub 的电脑里。",
+  "machine_offline": "这台电脑现在没有连上，等它回来后再试。",
+  "images_forbidden": "此设备无法读取待办图片",
+  "reorganize_requires_v2": "请先在实验室中开启「新版待办与任务」，再重新整理待办。",
+  "topology_changed": "待办有更新。请刷新待办列表后重试。",
+  "split_children_changed": "这次拆分生成的部分待办已移动或删除。请刷新待办列表，再尝试拆分。"
 }

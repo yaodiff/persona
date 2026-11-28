@@ -44,6 +44,8 @@ describe("Persona is the front door (#1239)", () => {
     expect(sidebarActiveKey({ name: "home" }, "main")).toBe("home");
     expect(sidebarActiveKey({ name: "machine", mid: "mac" }, "main")).toBe("machines");
     expect(sidebarActiveKey({ name: "session", mid: "mac", sid: "s" }, "main")).toBe("s:mac/s");
+    expect(sidebarActiveKey({ name: "terminal" }, "main")).toBe("terminal");
+    expect(sidebarActiveKey({ name: "terminal", mid: "mac", id: "pane:w1:p2" }, "main")).toBe("term:mac/pane:w1:p2");
   });
 
   it("keeps the row of the page an Agent's page was opened from, a drill-down (#12055, #9971)", () => {

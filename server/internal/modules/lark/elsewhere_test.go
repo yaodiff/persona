@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/channel"
+	"github.com/nwverse/persona/server/internal/proto"
 )
 
 // Asking from any group (elsewhere.go, #6146): a request opens a topic in the home topic group and a to-do bound to it.
@@ -48,6 +49,7 @@ func elsewhereHub(t *testing.T) (*Service, *fakeHub) {
 	s := newTestService(t, f)
 	s.setLarkTiming("topic_lookup_wait", time.Nanosecond)
 	s.ch().main = "m1"
+	s.ch().sessions["server"] = []proto.Session{{SessionID: "m1"}}
 	return s, f
 }
 

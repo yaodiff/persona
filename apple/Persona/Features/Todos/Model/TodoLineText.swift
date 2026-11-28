@@ -103,6 +103,11 @@ nonisolated enum TodoLineText {
             }
         case TodoLineKey.interrupted:
             said = Said(lead: words("\(run ?? words("An Agent [To-dos Line]")) stopped before it finished [To-dos Line]"), tone: .needs)
+        case TodoLineKey.stoppedUnfinished:
+            // A run that stopped short with no follow-up for an hour (#9823): said as an interrupted one, then what its
+            // closeout says it waits on or misses, when the hub sends that.
+            said = Said(lead: words("\(run ?? words("An Agent [To-dos Line]")) stopped before it finished [To-dos Line]"),
+                        rest: arg("text"), tone: .needs)
         case TodoLineKey.decision:
             said = Said(lead: arg("text") ?? words("A decision for you [To-dos Line]"),
                         rest: arg("recommend").map { words("\($0) recommended [To-dos Line]") }, tone: .needs)

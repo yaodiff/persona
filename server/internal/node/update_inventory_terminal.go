@@ -18,19 +18,37 @@ type updateTerminalSource struct {
 
 // Only an explicit remote resume binds a terminal to the already observed
 // app-server. A title, cwd, historical session or default daemon is not a binding.
-// Other CLI forms remain unsupported rather than guessing their flag semantics.
+// Two forms are accepted: `codex resume --remote <endpoint> <thread>`, and the one
+// Persona's own Codex start writes (codex_start.go), `codex --remote <endpoint>
+// [--no-alt-screen] resume <thread>`, word for word. Other CLI forms remain
+// unsupported rather than guessing their flag semantics.
 func updateRemoteResume(args []string) (endpoint, thread string) {
+	if len(args) >= 5 && progName(args[0]) == "codex" && args[1] == "--remote" {
+		endpoint, rest := args[2], args[3:]
+		if rest[0] == "--no-alt-screen" {
+			rest = rest[1:]
+		}
+		if len(rest) != 2 || rest[0] != "resume" || !validID(rest[1]) || !updateRemoteEndpoint(endpoint) {
+			return "", ""
+		}
+		return endpoint, rest[1]
+	}
 	if len(args) < 2 || progName(args[0]) != "codex" || args[1] != "resume" {
 		return "", ""
 	}
 	f := flag.NewFlagSet("resume", flag.ContinueOnError)
 	f.SetOutput(io.Discard)
 	f.StringVar(&endpoint, "remote", "", "")
-	if err := f.Parse(args[2:]); err != nil || f.NArg() != 1 || !validID(f.Arg(0)) ||
-		!strings.HasPrefix(endpoint, "unix://") && !strings.HasPrefix(endpoint, "ws://") {
+	if err := f.Parse(args[2:]); err != nil || f.NArg() != 1 || !validID(f.Arg(0)) || !updateRemoteEndpoint(endpoint) {
 		return "", ""
 	}
 	return endpoint, f.Arg(0)
+}
+
+// updateRemoteEndpoint: a local app-server endpoint a remote resume may name (the inventory then requires it to be a
+// configured, observed one).
+func updateRemoteEndpoint(endpoint string) bool {
+	return strings.HasPrefix(endpoint, "unix://") || strings.HasPrefix(endpoint, "ws://")
 }
 
 // Host status is display evidence only. The activity belongs to a configured

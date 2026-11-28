@@ -404,7 +404,10 @@ func TestAgyPanePagesAndFullItems(t *testing.T) {
 		items[3].ToolName != "Read" || string(items[3].ToolInput) != `{"file_path":"sample.txt"}` {
 		t.Fatalf("planner page: %+v", page)
 	}
-	results, _ := agyTestItems(t, n, agyTestRow, map[string]any{"from_seq": 4, "through_seq": 5})
+	results, rangePage := agyTestItems(t, n, agyTestRow, map[string]any{"from_seq": 4, "through_seq": 5})
+	if rangePage["history"] == "" || rangePage["history"] != page["history"] || rangePage["from_seq"] != 3 || rangePage["to_seq"] != 5 || rangePage["more"] != false {
+		t.Fatalf("range span: %+v (page history=%v)", rangePage, page["history"])
+	}
 	if len(results) != 2 || results[0].Kind != "tool_result" || results[0].Text != "sample.txt\n" ||
 		results[0].ToolUseID != items[2].ToolUseID || results[1].ToolUseID != items[3].ToolUseID ||
 		results[1].Text != "Read failed" || !results[1].IsError {

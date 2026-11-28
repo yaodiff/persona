@@ -5,7 +5,7 @@
 // A session's Side sessions panel (#7944, lib/side-panel.ts) is the same layout over its side sessions: their strip in the
 // panel's order, and the chosen side's own conversation, landed at a search hit's message when a link asked for one.
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
-import { sessionTitle, stateOf } from "../../lib/format";
+import { sessionTitle, activityOf, stateOf } from "../../lib/format";
 import { agentLabel } from "../../lib/mentions";
 import { STATE_LABEL, stateName } from "../../lib/state-labels";
 import { getSession, useStore } from "../../lib/store";
@@ -44,7 +44,7 @@ export function workerHint(w: Session, awaiting: boolean, finished = false): str
 
 /** A pill's state word: Awaiting your reply (#5096) and Just finished (#9751) over the seen state they stand on. */
 function pillState(w: Session, awaiting: boolean, finished: boolean): string {
-  const st = stateOf(w);
+  const st = w.view ? stateOf(w) : activityOf(w);
   if (st === "idle" && awaiting) return stateName("awaits_reply");
   if (st === "idle" && finished) return stateName("just_finished");
   return STATE_LABEL[st];
@@ -204,7 +204,7 @@ function SessionStrip({ members: workers, shown, controls, onPick, words, hint, 
       >
         {workers.map((w, i) => {
           const on = i === at;
-          const st = stateOf(w);
+          const st = w.view ? stateOf(w) : activityOf(w);
           const awaiting = awaitsReply(w, mutes);
           const finished = justFinished(w, mutes);
           return (

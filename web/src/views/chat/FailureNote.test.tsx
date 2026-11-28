@@ -4,7 +4,8 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Session } from "../../lib/types";
-import { FailureNote, showsFailureNote } from "./FailureNote";
+import { FailureNote } from "./FailureNote";
+import { showsFailureNote } from "./failure-note-state";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -60,7 +61,7 @@ describe("FailureNote", () => {
     const note = host.querySelector<HTMLElement>('[data-testid="chat-failure"]')!;
     expect(note.hasAttribute("data-error-notice")).toBe(true);
     expect(note.getAttribute("role")).toBe("status");
-    expect(note.className).toContain("border border-line bg-surface");
+    expect(note.className).toContain("bg-surface p-3 shadow-card");
     expect(note.className).not.toContain("bg-red-tint");
     // its actions are the notice's 28 px buttons with a finger-sized target, on one line each
     for (const id of ["chat-failure-retry", "chat-failure-lark"]) {

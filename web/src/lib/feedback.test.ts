@@ -4,9 +4,9 @@ import { FeedbackGate, FOLD_MS, isOfflineError } from "./feedback";
 describe("FeedbackGate: errors while the hub is out of reach", () => {
   it("turns them into one calm line at most every few seconds", () => {
     const g = new FeedbackGate();
-    expect(g.pass("已处理失败：连不上 hub", "error", "hub", 0)).toEqual({ text: "连不上 hub，刚才的操作没有生效", tone: "info" });
-    expect(g.pass("发送失败：连不上 hub", "error", "hub", 1_000)).toBeNull();
-    expect(g.pass("发送失败：连不上 hub", "error", "network", FOLD_MS + 1)).toEqual({ text: "没有网络，刚才的操作没有生效", tone: "info" });
+    expect(g.pass("已处理失败：无法连接 hub", "error", "hub", 0)).toEqual({ text: "无法连接 hub，刚才的操作未能生效", tone: "info" });
+    expect(g.pass("发送失败：无法连接 hub", "error", "hub", 1_000)).toBeNull();
+    expect(g.pass("发送失败：无法连接 hub", "error", "network", FOLD_MS + 1)).toEqual({ text: "无网络连接，刚才的操作未能生效", tone: "info" });
   });
 
   it("keeps an error that has nothing to do with the hub as it is, red, while offline too", () => {
@@ -14,14 +14,14 @@ describe("FeedbackGate: errors while the hub is out of reach", () => {
     expect(g.pass("请输入数字", "error", "hub", 0)).toEqual({ text: "请输入数字", tone: "error" });
     expect(g.pass("复制失败", "error", "network", 100)).toEqual({ text: "复制失败", tone: "error" });
     // and it does not use up the calm line: the next offline failure still says so
-    expect(g.pass("发送失败：连不上 hub", "error", "hub", 200)).toEqual({ text: "连不上 hub，刚才的操作没有生效", tone: "info" });
+    expect(g.pass("发送失败：无法连接 hub", "error", "hub", 200)).toEqual({ text: "无法连接 hub，刚才的操作未能生效", tone: "info" });
     // the caller can say so explicitly
     expect(g.pass("保存失败", "error", "hub", FOLD_MS + 300, true)?.tone).toBe("info");
   });
 
   it("knows the texts of a request that never reached the hub", () => {
-    expect(isOfflineError("连不上 hub")).toBe(true);
-    expect(isOfflineError("已处理失败：连不上 hub")).toBe(true);
+    expect(isOfflineError("无法连接 hub")).toBe(true);
+    expect(isOfflineError("已处理失败：无法连接 hub")).toBe(true);
     expect(isOfflineError("HTTP 502")).toBe(false);
     expect(isOfflineError("HTTP 500")).toBe(false);
     expect(isOfflineError("名字重复")).toBe(false);

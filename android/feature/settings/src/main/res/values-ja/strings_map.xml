@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="settings_ext_map">地図</string>
+    <string name="settings_ext_map_expand">地図を開く</string>
+    <string name="settings_ext_map_zoom_in">拡大</string>
+    <string name="settings_ext_map_zoom_out">縮小</string>
+    <string name="settings_ext_map_reset">地図をリセット</string>
+    <string name="settings_ext_map_route">ルート %1$d</string>
+    <string name="settings_ext_map_minutes">%1$d 分</string>
+    <string name="settings_ext_map_meters">%1$d m</string>
+    <string name="settings_ext_map_kilometers">%1$s km</string>
+</resources>

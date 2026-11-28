@@ -91,6 +91,9 @@ func (s *Service) pagedFeed(ctx context.Context, conversation string, since time
 		raw, _ := json.Marshal(c)
 		next = base64.RawURLEncoding.EncodeToString(raw)
 	}
+	for i, item := range items {
+		items[i] = readTaskNotice(item)
+	}
 	s.settleCards(ctx, items)
 	s.fileCards(ctx, items)
 	return items, next, nil

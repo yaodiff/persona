@@ -1098,7 +1098,7 @@ func triageUsableOf(t *testing.T, s *Service) bool {
 	if !ok || err != nil {
 		t.Fatalf("models.usable: %v %v", ok, err)
 	}
-	return out.(map[string]any)["usable"].(bool)
+	return out.(assistantwire.ModelsUsableResult).Usable
 }
 
 func TestSessionLauncherTypes(t *testing.T) {

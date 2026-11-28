@@ -70,8 +70,8 @@ extension Interaction {
     /// Describe the actual remembered rule, not just the command or file in this request.
     var alwaysScopeDetail: String? {
         if let alwaysLabel, !alwaysLabel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return alwaysLabel }
-        guard agentName == nil else { return nil }
         let keys = alwaysKeys ?? []
+        guard agentName == nil || !keys.isEmpty else { return nil }
         if !keys.isEmpty, keys.allSatisfy({ $0.hasPrefix("tool:Read(") && $0.hasSuffix("/**)") }) {
             return String(localized: "All reads in this directory in this conversation")
         }
@@ -569,7 +569,7 @@ struct InteractionPanel: View {
                     .buttonStyle(.plain)
                     .accessibilityLabel("View plan full screen")
                 }
-                if interaction.toolName != "ask_user" {
+                if interaction.toolName != "ask_user" && interaction.noHandBack != true {
                     Menu {
                         Button { Task { await model.resolve(interaction, .dismissed) } } label: {
                             Label("Handle in Terminal on Computer", systemImage: Theme.Icon.machine)
@@ -1419,8 +1419,8 @@ struct AgentPermissionForm: View {
             Button {
                 Task { await model.resolve(interaction, Resolution(allow: true, always: true)) }
             } label: {
-                if let always = interaction.alwaysLabel, !always.isEmpty {
-                    Text("Always Approve · \(always)").lineLimit(1).minimumScaleFactor(0.8)
+                if let always = interaction.alwaysLabel, !always.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Text("Always Approve · \(always)").lineLimit(2).minimumScaleFactor(0.8)
                 } else {
                     Text("Always Approve").lineLimit(1).minimumScaleFactor(0.8)
                 }
@@ -1428,6 +1428,13 @@ struct AgentPermissionForm: View {
             .font(Theme.Font.caption)
             .frame(maxWidth: .infinity)
             .accessibilityIdentifier("codex-always")
+            if (interaction.alwaysLabel ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+               let scope = interaction.alwaysScopeDetail {
+                Text(scope)
+                    .font(Theme.Font.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         reasonRow
     }
@@ -2441,8 +2448,7 @@ struct BUIPermissionForm: View {
         if interaction.agentName != nil {
             var c = [ApprovalQuestion.Choice(String(localized: "Approve [Interaction Views 905819]"))]
             if interaction.offersAlways {
-                let always = interaction.alwaysLabel.flatMap { $0.isEmpty ? nil : $0 }
-                c.append(ApprovalQuestion.Choice(String(localized: "Always Approve"), detail: always))
+                c.append(ApprovalQuestion.Choice(String(localized: "Always Approve"), detail: interaction.alwaysScopeDetail))
             }
             c.append(ApprovalQuestion.Choice(String(localized: "Deny")))
             return c

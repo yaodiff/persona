@@ -60,6 +60,7 @@ import { Button, copyText, cx, Menu, type MenuItem } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { Segmented } from "../assistant/parts";
 import { CleanDialog, InstallDialog, OffloadDialog, PurgeDialog, RestoreDialog, sumBytes, TrashDialog } from "./UsageMapDialogs";
+import { cacheTitle, cleanupStatusText, LegacyCacheRecovery } from "./LegacyCacheRecovery";
 import { UsageMapChannel, type Ribbon } from "./UsageMapChannel";
 import { UsageMapCloud, type CloudState } from "./UsageMapCloud";
 import { cloudMenu, localMenu, refusalText } from "./UsageMapMenu";
@@ -243,6 +244,7 @@ export function UsageMap({ machine, focus, pollMs = 1000 }: { machine: Machine; 
 
   /** The overview again (each answer replaces it; the folders opened so far are put back in). */
   const mergeOverview = useCallback((r: UsageReport) => {
+    setFailure(null);
     setVolume(r.volume);
     if (r.home) setHome(r.home);
     setPartial(r.partial);
@@ -724,7 +726,11 @@ export function UsageMap({ machine, focus, pollMs = 1000 }: { machine: Machine; 
       const r = await cleanup(mid, nodes.map((n) => n.cache_id!));
       setDialog(null);
       setSelection((s) => s.filter((id) => !nodes.some((n) => n.id === id)));
-      setNotice({ text: t("machines-alerts.freed", { size: bytesBin(r.freed_bytes) }) });
+      setNotice({
+        text: t("machines-alerts.freed", { size: bytesBin(r.freed_bytes) }),
+        items: r.items.map(item => ({ key: item.id, tone: item.status === "cleaned" ? "ok" : "warn",
+          text: `${cacheTitle(item.id)} · ${cleanupStatusText(item.status, item.error)}` })),
+      });
       void refreshAfter(nodes.map((n) => n.path!), false);
     } catch (e) {
       setDialogError(usageFailure(e).text);
@@ -953,6 +959,8 @@ export function UsageMap({ machine, focus, pollMs = 1000 }: { machine: Machine; 
         </p>
       )}
 
+      {!tree && (failure?.kind === "node_outdated" || failure?.kind === "hub_outdated") && <LegacyCacheRecovery machine={machine} />}
+
       {started && !tree && !failure && <p className="mt-3 text-meta text-ink-3" data-testid="usage-scanning">{t("machines-usagemap.scan_scanning")}</p>}
 
       {headline && (
@@ -1016,7 +1024,7 @@ export function UsageMap({ machine, focus, pollMs = 1000 }: { machine: Machine; 
               )}
             </div>
 
-            <div className="relative mt-2" style={{ height: stacked ? geo.cloud.y + Math.max(geo.cloud.h, hasCloudSide ? 72 : 0) : geo.rowH }} onKeyDown={(e) => e.key === "Escape" && menu && setMenu(null)}>
+            <div className="relative mt-2" style={stacked && hasCloudSide ? { paddingTop: geo.cloud.y } : { height: geo.rowH }} onKeyDown={(e) => e.key === "Escape" && menu && setMenu(null)}>
               <div className="absolute top-0 left-0">
                 <UsageTreemap
                   side="local"
@@ -1060,7 +1068,7 @@ export function UsageMap({ machine, focus, pollMs = 1000 }: { machine: Machine; 
                 />
               </div>
               {hasCloudSide && (
-                <div className="absolute" style={{ left: geo.cloud.x, top: geo.cloud.y, width: geo.cloud.w }}>
+                <div className={stacked ? undefined : "absolute"} style={{ left: geo.cloud.x, top: geo.cloud.y, width: geo.cloud.w }}>
                   {stacked && <CloudCrumbs root={cloudRoot} trail={cloudTrailNodes} filter={cloudFilter} onTrail={(ids) => setCloudTrail(ids)} onClearFilter={() => setCloudFilter(null)} chip={chip} />}
                   <UsageMapCloud
                     states={cloudStates}

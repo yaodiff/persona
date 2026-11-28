@@ -548,13 +548,27 @@ export function createPiHost(deps, options = {}) {
     }
   }
 
+  function piA2APropertySchema(Type, property) {
+    if (property.type === 'boolean') return Type.Boolean()
+    if (property.type === 'integer' || property.type === 'number') {
+      const opts = {}
+      if (property.minimum !== undefined) opts.minimum = property.minimum
+      if (property.maximum !== undefined) opts.maximum = property.maximum
+      const arg = Object.keys(opts).length > 0 ? opts : undefined
+      const builder = property.type === 'integer' ? Type.Integer : Type.Number
+      if (typeof builder === 'function') return builder.call(Type, arg)
+      return typeof Type.Unsafe === 'function' ? Type.Unsafe({ ...property }) : { ...property }
+    }
+    return Type.String(property.enum ? { enum: property.enum } : undefined)
+  }
+
   function piA2ATools(Type, track) {
     return a2aTools.map(({ name, description, input }) => ({
       name,
       label: name,
       description,
       parameters: Type.Object(Object.fromEntries(Object.entries(input.properties).map(([key, property]) => {
-        const schema = property.type === 'boolean' ? Type.Boolean() : Type.String(property.enum ? { enum: property.enum } : undefined)
+        const schema = piA2APropertySchema(Type, property)
         return [key, input.required.includes(key) ? schema : Type.Optional(schema)]
       }))),
       executionMode: 'sequential',

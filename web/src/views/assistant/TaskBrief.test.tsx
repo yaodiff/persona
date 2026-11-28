@@ -48,10 +48,10 @@ describe("the brief on the plan card (#3822)", () => {
   it("folded, shows the owner's words with the date and one line that counts the rest", () => {
     const html = renderToStaticMarkup(<PlanBrief brief={brief} title="Fix the sign-in crash" />);
     expect(html).toContain('data-brief-asked="owner"');
-    expect(html).toContain(`你在 ${formatDate(at)} 说：`);
+    expect(html).toContain(`你于 ${formatDate(at)} 提出：`);
     expect(html).toContain("Please fix the sign-in crash before Friday");
     expect(html).toContain("line-clamp-2"); // long words are held to two lines, the rest on demand
-    expect(html).toContain("2 条验收标准 · 约 30 分钟 · 1 条不能做");
+    expect(html).toContain("2 条验收标准 · 约 30 分钟 · 1 条禁止事项");
     // the goal, the criteria and what is out of bounds are behind the one control
     expect(html).not.toContain("The sign-in page no longer crashes in landscape");
     expect(html).not.toContain("The fix is merged");
@@ -59,7 +59,7 @@ describe("the brief on the plan card (#3822)", () => {
     expect(html.match(/aria-expanded="false"/g)).toHaveLength(1);
   });
   it("counts only what the brief has", () => {
-    expect(briefSummary(brief)).toBe("2 条验收标准 · 约 30 分钟 · 1 条不能做");
+    expect(briefSummary(brief)).toBe("2 条验收标准 · 约 30 分钟 · 1 条禁止事项");
     expect(briefSummary({ ...brief, out_of_bounds: undefined, expect_minutes: 150 })).toBe("2 条验收标准 · 约 2.5 小时");
     expect(briefSummary({ ...brief, done_when: [], criteria: [], out_of_bounds: [], expect_minutes: 0 })).toBe("");
     // nothing to open: no control
@@ -70,7 +70,7 @@ describe("the brief on the plan card (#3822)", () => {
     const html = renderToStaticMarkup(<PlanBrief brief={{ ...brief, request: undefined, started_by: "leader", reason: "The earlier agent stopped" }} title="x" />);
     expect(html).toContain('data-brief-asked="leader"');
     expect(html).toContain(`${formatDate(at)} 由负责人对话发起：The earlier agent stopped`);
-    expect(html).not.toContain("你在");
+    expect(html).not.toContain("你于");
   });
   it("says hours for long work", () => {
     expect(expectText(45)).toBe("约 45 分钟");
@@ -83,17 +83,17 @@ describe("the brief on the task's page (#3822)", () => {
   it("says a reconstructed brief is one and labels the hand-over prompt", () => {
     const old: Todo = { ...todo, brief: { ...brief, request: undefined, started_by: "unknown", reconstructed: true, handover: "You are taking over a session that stopped: carry on from its branch." } };
     const html = renderToStaticMarkup(<TaskBriefPanel todo={old} />);
-    expect(html).toContain("事后补建：当初的原话没有记录");
+    expect(html).toContain("事后补建：未记录原始需求内容");
     expect(html).toContain("交接提示词");
     expect(html).toContain("You are taking over a session that stopped");
-    expect(html).not.toContain("你在");
+    expect(html).not.toContain("你于");
   });
   it("marks work past its clock while it is open, in words and a mark", () => {
     const late: Todo = { ...todo, brief: { ...brief, overdue_at: "2026-11-05T12:00:00Z" } };
     const html = renderToStaticMarkup(<TaskBriefPanel todo={late} />);
     expect(html).toContain('data-testid="brief-overdue"');
     expect(html).toContain("已超时");
-    expect(html).toContain(`${formatDate("2026-11-05T12:00:00Z")} 起已超过预计用时`);
+    expect(html).toContain(`自 ${formatDate("2026-11-05T12:00:00Z")} 起已超出预计用时`);
     expect(renderToStaticMarkup(<TaskBriefPanel todo={{ ...late, done_at: at }} />)).not.toContain("brief-overdue");
   });
   it("leaves the criteria and the time to the review box when the task has one", () => {
@@ -122,21 +122,21 @@ describe("the brief on the task's page (#3822)", () => {
     expect(html).toContain("范围变更");
     expect(html).toContain("No screenshots needed");
     expect(html).toContain("原因：No screen changed");
-    expect(html).toContain("去掉：Screenshots attached");
+    expect(html).toContain("移除：Screenshots attached");
     expect(html).toContain("新增：The changelog has a line");
-    expect(html).toContain("预计用时改为：约 3 小时");
-    expect(html).toContain("经你同意");
+    expect(html).toContain("预计用时更新为：约 3 小时");
+    expect(html).toContain("已获你批准");
     expect(html.match(/data-testid="brief-scope"/g)).toHaveLength(1);
-    expect(html).toContain("谁做过");
-    expect(html).toContain("停下原因：Its computer went offline");
-    expect(html).toContain("停下原因：The model service kept failing");
+    expect(html).toContain("经手记录");
+    expect(html).toContain("停止原因：Its computer went offline");
+    expect(html).toContain("停止原因：The model service kept failing");
     expect(html).toContain("当前任务");
-    expect(html).toContain("还在进行");
+    expect(html).toContain("仍在进行中");
     expect(html.match(/<li data-lineage-current/g)).toHaveLength(1);
     expect(html).toContain('data-open-todo="todo_1"');
     expect(html).toContain('data-open-todo="todo_2"');
-    expect(html).toContain("接手自");
-    expect(html).toContain("由新卡接手");
+    expect(html).toContain("承接自");
+    expect(html).toContain("后续由");
   });
 });
 
@@ -147,8 +147,8 @@ describe("what a finished task's result adds to its criteria (#3822)", () => {
     const html = renderToStaticMarkup(<BriefResultExtras dropped={extras.dropped} alsoDone={extras.alsoDone} />);
     expect(html.match(/data-criterion-state=/g)).toHaveLength(1);
     expect(html).toContain('data-criterion-state="dropped"');
-    expect(html).toContain("已去掉：No screen changed after all");
-    expect(html).toContain("另外做了");
+    expect(html).toContain("已移除：No screen changed after all");
+    expect(html).toContain("额外完成");
     expect(html).toContain("Removed a dead flag");
     // met, not met and not checked are the criteria list's own (the supervision ledger's): not said a second time
     expect(html).not.toContain("The fix is merged");

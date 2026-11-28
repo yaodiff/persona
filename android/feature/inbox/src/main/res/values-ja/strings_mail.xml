@@ -110,5 +110,6 @@
         <item quantity="other">%dバイト</item>
     </plurals>
     <string name="inbox_mail_module_off">ハブのマシンでメールがオフのため、メールの全文と添付ファイルは読み込めません。Persona が保存していたテキストを表示しています。</string>
+    <string name="inbox_mail_module_off_clipped">ハブのマシンでメールがオフのため、メールの全文と添付ファイルは読み込めません。Persona が保存していたテキストを表示しています。このテキストは途中までです。</string>
     <string name="inbox_mail_stored_empty">このメールのテキストは保存されていません。</string>
 </resources>

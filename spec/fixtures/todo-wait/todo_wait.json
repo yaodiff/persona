@@ -1,0 +1,573 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "name": "parked_person_reply_with_contact",
+      "input": {
+        "now": "2026-11-18T10:00:00Z",
+        "todo": {
+          "id": "todo_wait_reply",
+          "title": "Confirm venue booking",
+          "created_at": "2026-11-17T08:00:00Z",
+          "updated_at": "2026-11-18T09:00:00Z",
+          "origin": "conv_main",
+          "agents": [],
+          "supervision": {
+            "supervisor": "conv_main",
+            "state": "parked",
+            "updated_at": "2026-11-18T09:00:00Z",
+            "reviews": [
+              {"at": "2026-11-18T09:00:00Z", "verdict": "parked"}
+            ],
+            "parked": {
+              "reason": "Waiting for Alex to confirm the room quote",
+              "until": "2026-11-20T18:00:00Z",
+              "waiting_on": "someone_else",
+              "evidence": {
+                "kind": "person_reply",
+                "target": "Alex",
+                "wake": "Alex replies in the email thread",
+                "contact": {
+                  "channel": "email",
+                  "sender": "Persona",
+                  "sent_at": "2026-11-18T08:45:00Z",
+                  "url": "https://mail.example.com/threads/venue-42",
+                  "request": "Asked whether the conference room is open on Nov 25",
+                  "status": "sent"
+                }
+              }
+            }
+          }
+        }
+      },
+      "expected": {
+        "wait": {
+          "kind": "person_reply",
+          "waiting_on": "Alex",
+          "reason": "Waiting for Alex to confirm the room quote",
+          "wake_condition": "Alex replies in the email thread",
+          "until": "2026-11-20T18:00:00Z",
+          "since": "2026-11-18T08:45:00Z",
+          "url": "https://mail.example.com/threads/venue-42",
+          "contact": {
+            "channel": "email",
+            "sender": "Persona",
+            "sent_at": "2026-11-18T08:45:00Z",
+            "url": "https://mail.example.com/threads/venue-42",
+            "request": "Asked whether the conference room is open on Nov 25"
+          }
+        }
+      }
+    },
+    {
+      "name": "parked_merge_review",
+      "input": {
+        "now": "2026-11-18T10:00:00Z",
+        "todo": {
+          "id": "todo_wait_review",
+          "title": "Add offline cache retry",
+          "created_at": "2026-11-17T08:00:00Z",
+          "updated_at": "2026-11-18T09:00:00Z",
+          "origin": "conv_main",
+          "agents": [],
+          "supervision": {
+            "supervisor": "conv_main",
+            "state": "parked",
+            "updated_at": "2026-11-18T09:00:00Z",
+            "reviews": [
+              {"at": "2026-11-18T09:00:00Z", "verdict": "parked"}
+            ],
+            "parked": {
+              "reason": "PR #418 is ready for Sam's review",
+              "until": "2026-11-19T12:00:00Z",
+              "waiting_on": "someone_else",
+              "evidence": {
+                "kind": "merge_review",
+                "target": "Sam",
+                "url": "https://github.com/example/app/pull/418",
+                "wake": "Sam approves or requests changes on PR #418",
+                "contact": {
+                  "channel": "chat",
+                  "sender": "Persona",
+                  "sent_at": "2026-11-18T08:55:00Z",
+                  "url": "https://chat.example.com/messages/901",
+                  "request": "Requested review on PR #418",
+                  "status": "sent"
+                }
+              }
+            }
+          }
+        }
+      },
+      "expected": {
+        "wait": {
+          "kind": "merge_review",
+          "waiting_on": "Sam",
+          "reason": "PR #418 is ready for Sam's review",
+          "wake_condition": "Sam approves or requests changes on PR #418",
+          "until": "2026-11-19T12:00:00Z",
+          "since": "2026-11-18T08:55:00Z",
+          "url": "https://github.com/example/app/pull/418",
+          "contact": {
+            "channel": "chat",
+            "sender": "Persona",
+            "sent_at": "2026-11-18T08:55:00Z",
+            "url": "https://chat.example.com/messages/901",
+            "request": "Requested review on PR #418"
+          }
+        }
+      }
+    },
+    {
+      "name": "parked_external_event",
+      "input": {
+        "now": "2026-11-18T10:00:00Z",
+        "todo": {
+          "id": "todo_wait_ext",
+          "title": "Submit release build",
+          "created_at": "2026-11-17T08:00:00Z",
+          "updated_at": "2026-11-18T09:00:00Z",
+          "origin": "conv_main",
+          "agents": [],
+          "supervision": {
+            "supervisor": "conv_main",
+            "state": "parked",
+            "updated_at": "2026-11-18T09:00:00Z",
+            "reviews": [
+              {"at": "2026-11-18T09:00:00Z", "verdict": "parked"}
+            ],
+            "parked": {
+              "reason": "Waiting for App Store review to finish",
+              "until": "2026-11-21T09:00:00Z",
+              "waiting_on": "external_event",
+              "evidence": {
+                "kind": "external_event",
+                "target": "App Store Review",
+                "url": "https://appstoreconnect.example.com/apps/1/builds/42",
+                "wake": "Build status changes to Ready for Distribution"
+              }
+            }
+          }
+        }
+      },
+      "expected": {
+        "wait": {
+          "kind": "external_event",
+          "waiting_on": "App Store Review",
+          "reason": "Waiting for App Store review to finish",
+          "wake_condition": "Build status changes to Ready for Distribution",
+          "until": "2026-11-21T09:00:00Z",
+          "since": "2026-11-18T09:00:00Z",
+          "url": "https://appstoreconnect.example.com/apps/1/builds/42"
+        }
+      }
+    },
+    {
+      "name": "parked_date",
+      "input": {
+        "now": "2026-11-18T10:00:00Z",
+        "todo": {
+          "id": "todo_wait_date",
+          "title": "Publish November changelog",
+          "created_at": "2026-11-17T08:00:00Z",
+          "updated_at": "2026-11-18T09:00:00Z",
+          "origin": "conv_main",
+          "agents": [],
+          "supervision": {
+            "supervisor": "conv_main",
+            "state": "parked",
+            "updated_at": "2026-11-18T09:00:00Z",
+            "reviews": [
+              {"at": "2026-11-18T09:00:00Z", "verdict": "parked"}
+            ],
+            "parked": {
+              "reason": "Wait until launch day morning",
+              "until": "2026-11-25T09:00:00Z",
+              "waiting_on": "date",
+              "evidence": {
+                "kind": "date",
+                "target": "Launch day",
+                "wake": "Publish at 09:00 UTC on launch day"
+              }
+            }
+          }
+        }
+      },
+      "expected": {
+        "wait": {
+          "kind": "date",
+          "waiting_on": "Launch day",
+          "reason": "Wait until launch day morning",
+          "wake_condition": "Publish at 09:00 UTC on launch day",
+          "wake_at": "2026-11-25T09:00:00Z",
+          "until": "2026-11-25T09:00:00Z",
+          "since": "2026-11-18T09:00:00Z"
+        }
+      }
+    },
+    {
+      "name": "parked_todo_handoff",
+      "input": {
+        "now": "2026-11-18T10:00:00Z",
+        "todo": {
+          "id": "todo_wait_handoff",
+          "title": "Cut iOS beta release",
+          "created_at": "2026-11-17T08:00:00Z",
+          "updated_at": "2026-11-18T09:00:00Z",
+          "origin": "conv_main",
+          "agents": [],
+          "supervision": {
+            "supervisor": "conv_main",
+            "state": "parked",
+            "updated_at": "2026-11-18T09:00:00Z",
+            "reviews": [
+              {"at": "2026-11-18T09:00:00Z", "verdict": "parked"}
+            ],
+            "parked": {
+              "reason": "Waiting for API schema migration to pass integration tests",
+              "until": "2026-11-19T10:00:00Z",
+              "waiting_on": "todo_handoff",
+              "handoff": {
+                "todo_id": "todo_api_schema",
+                "title": "Migrate API schema",
+                "check": "Integration test suite passes on staging"
+              }
+            }
+          }
+        }
+      },
+      "expected": {
+        "wait": {
+          "kind": "todo_handoff",
+          "waiting_on": "Migrate API schema",
+          "reason": "Waiting for API schema migration to pass integration tests",
+          "wake_condition": "Integration test suite passes on staging",
+          "until": "2026-11-19T10:00:00Z",
+          "since": "2026-11-18T09:00:00Z",
+          "handoff_todo_id": "todo_api_schema"
+        }
+      }
+    },
+    {
+      "name": "parked_legacy_generic",
+      "input": {
+        "now": "2026-11-18T10:00:00Z",
+        "todo": {
+          "id": "todo_wait_legacy",
+          "title": "Revisit billing copy",
+          "created_at": "2026-11-17T08:00:00Z",
+          "updated_at": "2026-11-18T09:00:00Z",
+          "origin": "conv_main",
+          "agents": [],
+          "supervision": {
+            "supervisor": "conv_main",
+            "state": "parked",
+            "updated_at": "2026-11-18T09:00:00Z",
+            "reviews": [
+              {"at": "2026-11-18T09:00:00Z", "verdict": "parked"}
+            ],
+            "parked": {
+              "reason": "Deferred until after quarterly review",
+              "until": "2026-11-22T09:00:00Z",
+              "waiting_on": "owner_priority"
+            }
+          }
+        }
+      },
+      "expected": {
+        "wait": {
+          "kind": "parked",
+          "reason": "Deferred until after quarterly review",
+          "until": "2026-11-22T09:00:00Z",
+          "since": "2026-11-18T09:00:00Z"
+        }
+      }
+    },
+    {
+      "name": "pr_open_with_review_and_checks",
+      "input": {
+        "now": "2026-11-18T10:00:00Z",
+        "todo": {
+          "id": "todo_wait_pr1",
+          "title": "Fix report export",
+          "created_at": "2026-11-17T08:00:00Z",
+          "updated_at": "2026-11-18T09:50:00Z",
+          "origin": "conv_main",
+          "agents": [],
+          "pr_url": "https://github.com/example/app/pull/88",
+          "pr_status": {
+            "url": "https://github.com/example/app/pull/88",
+            "title": "Fix CSV escaping in export",
+            "state": "open",
+            "draft": false,
+            "review": "review_required",
+            "checks": "pending",
+            "conflicts": false,
+            "checked_at": "2026-11-18T09:55:00Z"
+          }
+        }
+      },
+      "expected": {
+        "wait": {
+          "kind": "pr_merge",
+          "waiting_on": "PR #88",
+          "reason": "Fix CSV escaping in export",
+          "url": "https://github.com/example/app/pull/88",
+          "pr_blockers": ["review_required", "checks_pending"]
+        }
+      }
+    },
+    {
+      "name": "pr_open_with_conflicts_changes_and_failing_checks",
+      "input": {
+        "now": "2026-11-18T10:00:00Z",
+        "todo": {
+          "id": "todo_wait_pr2",
+          "title": "Refactor calendar sync",
+          "created_at": "2026-11-17T08:00:00Z",
+          "updated_at": "2026-11-18T09:50:00Z",
+          "origin": "conv_main",
+          "agents": [],
+          "pr_url": "https://gitlab.example.com/team/app/-/merge_requests/19",
+          "pr_status": {
+            "url": "https://gitlab.example.com/team/app/-/merge_requests/19",
+            "title": "Sync recurring events",
+            "state": "open",
+            "draft": false,
+            "review": "changes_requested",
+            "checks": "failing",
+            "conflicts": true,
+            "checked_at": "2026-11-18T09:55:00Z"
+          }
+        }
+      },
+      "expected": {
+        "wait": {
+          "kind": "pr_merge",
+          "waiting_on": "MR !19",
+          "reason": "Sync recurring events",
+          "url": "https://gitlab.example.com/team/app/-/merge_requests/19",
+          "pr_blockers": ["conflicts", "changes_requested", "checks_failing"]
+        }
+      }
+    },
+    {
+      "name": "usage_limit_with_reset_time",
+      "input": {
+        "now": "2026-11-18T10:00:00Z",
+        "todo": {
+          "id": "todo_wait_limit",
+          "title": "Summarize customer feedback",
+          "created_at": "2026-11-17T08:00:00Z",
+          "updated_at": "2026-11-18T09:30:00Z",
+          "origin": "conv_main",
+          "agents": [
+            {"machine_id": "m1", "session_id": "s1", "title": "Feedback Worker"}
+          ]
+        },
+        "sessions": [
+          {
+            "machine_id": "m1",
+            "session_id": "s1",
+            "title": "Feedback Worker",
+            "state": "idle",
+            "state_since": "2026-11-18T09:30:00Z",
+            "updated_at": "2026-11-18T09:30:00Z",
+            "turn_error": "Usage limit reached",
+            "turn_error_kind": "usage_limit",
+            "turn_error_resets_at": "2026-11-18T12:00:00Z"
+          }
+        ]
+      },
+      "expected": {
+        "wait": {
+          "kind": "usage_limit",
+          "waiting_on": "Feedback Worker",
+          "wake_at": "2026-11-18T12:00:00Z",
+          "since": "2026-11-18T09:30:00Z"
+        }
+      }
+    },
+    {
+      "name": "run_waits_on_another_agent",
+      "input": {
+        "now": "2026-11-18T10:00:00Z",
+        "todo": {
+          "id": "todo_wait_agent",
+          "title": "Connect login screen to new endpoint",
+          "created_at": "2026-11-17T08:00:00Z",
+          "updated_at": "2026-11-18T09:40:00Z",
+          "origin": "conv_main",
+          "agents": [
+            {"machine_id": "m1", "session_id": "s2", "title": "Login UI"}
+          ]
+        },
+        "sessions": [
+          {
+            "machine_id": "m1",
+            "session_id": "s2",
+            "title": "Login UI",
+            "state": "idle",
+            "state_since": "2026-11-18T09:40:00Z",
+            "updated_at": "2026-11-18T09:40:00Z",
+            "work": {
+              "phase": "blocked",
+              "on": "agent",
+              "wait": "Waiting for backend auth PR to merge",
+              "then": "Rebase and run end-to-end login tests",
+              "wake_at": "2026-11-18T10:30:00Z",
+              "agent": {
+                "machine_id": "m1",
+                "session_id": "s_auth",
+                "label": "Auth API Worker"
+              }
+            }
+          }
+        ]
+      },
+      "expected": {
+        "wait": {
+          "kind": "agent",
+          "waiting_on": "Auth API Worker",
+          "reason": "Waiting for backend auth PR to merge",
+          "wake_condition": "Rebase and run end-to-end login tests",
+          "wake_at": "2026-11-18T10:30:00Z",
+          "since": "2026-11-18T09:40:00Z"
+        }
+      }
+    },
+    {
+      "name": "run_waits_on_external_ci_with_fallback",
+      "input": {
+        "now": "2026-11-18T10:00:00Z",
+        "todo": {
+          "id": "todo_wait_ci",
+          "title": "Merge release branch",
+          "created_at": "2026-11-17T08:00:00Z",
+          "updated_at": "2026-11-18T09:45:00Z",
+          "origin": "conv_main",
+          "agents": [
+            {"machine_id": "m1", "session_id": "s3", "title": "Release Worker"}
+          ]
+        },
+        "sessions": [
+          {
+            "machine_id": "m1",
+            "session_id": "s3",
+            "title": "Release Worker",
+            "state": "idle",
+            "state_since": "2026-11-18T09:45:00Z",
+            "updated_at": "2026-11-18T09:45:00Z",
+            "work": {
+              "phase": "blocked",
+              "on": "external",
+              "wait": "Waiting for CI checks on PR #512",
+              "then": "Merge PR #512 once checks are green",
+              "wake_at": "2026-11-18T10:15:00Z",
+              "ci": {
+                "repo": "example/app",
+                "number": 512,
+                "fallback_at": "2026-11-18T11:30:00Z"
+              }
+            }
+          }
+        ]
+      },
+      "expected": {
+        "wait": {
+          "kind": "external_event",
+          "waiting_on": "PR #512",
+          "reason": "Waiting for CI checks on PR #512",
+          "wake_condition": "Merge PR #512 once checks are green",
+          "wake_at": "2026-11-18T10:15:00Z",
+          "until": "2026-11-18T11:30:00Z",
+          "since": "2026-11-18T09:45:00Z",
+          "url": "https://github.com/example/app/pull/512"
+        }
+      }
+    },
+    {
+      "name": "parent_rolls_up_waiting_step",
+      "input": {
+        "now": "2026-11-18T10:00:00Z",
+        "todo": {
+          "id": "todo_parent",
+          "title": "Plan Kyoto trip",
+          "created_at": "2026-11-17T08:00:00Z",
+          "updated_at": "2026-11-18T09:00:00Z",
+          "agents": []
+        },
+        "steps": [
+          {
+            "id": "todo_step_1",
+            "title": "Book ryokan",
+            "part_of": "todo_parent",
+            "created_at": "2026-11-17T09:00:00Z",
+            "updated_at": "2026-11-18T09:00:00Z",
+            "origin": "conv_main",
+            "agents": [],
+            "supervision": {
+              "supervisor": "conv_main",
+              "state": "parked",
+              "updated_at": "2026-11-18T09:00:00Z",
+              "reviews": [
+                {"at": "2026-11-18T09:00:00Z", "verdict": "parked"}
+              ],
+              "parked": {
+                "reason": "Waiting for the ryokan to confirm availability",
+                "until": "2026-11-19T12:00:00Z",
+                "waiting_on": "someone_else",
+                "evidence": {
+                  "kind": "person_reply",
+                  "target": "Ryokan Hanami",
+                  "wake": "Front desk replies by email"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "expected": {
+        "wait": {
+          "kind": "person_reply",
+          "waiting_on": "Ryokan Hanami",
+          "reason": "Waiting for the ryokan to confirm availability",
+          "wake_condition": "Front desk replies by email",
+          "until": "2026-11-19T12:00:00Z",
+          "since": "2026-11-18T09:00:00Z",
+          "step": "Book ryokan"
+        }
+      }
+    },
+    {
+      "name": "working_todo_has_no_wait",
+      "input": {
+        "now": "2026-11-18T10:00:00Z",
+        "todo": {
+          "id": "todo_working",
+          "title": "Write unit tests",
+          "created_at": "2026-11-17T08:00:00Z",
+          "updated_at": "2026-11-18T09:55:00Z",
+          "origin": "conv_main",
+          "agents": [
+            {"machine_id": "m1", "session_id": "s_work", "title": "Test Worker"}
+          ]
+        },
+        "sessions": [
+          {
+            "machine_id": "m1",
+            "session_id": "s_work",
+            "title": "Test Worker",
+            "state": "working",
+            "state_since": "2026-11-18T09:55:00Z",
+            "updated_at": "2026-11-18T09:55:00Z",
+            "activity": "Running tests"
+          }
+        ]
+      },
+      "expected": {
+        "wait": null
+      }
+    }
+  ]
+}

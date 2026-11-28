@@ -45,7 +45,7 @@ describe("SubagentCard: the two lines", () => {
   it("running: Subagent, its title, Running; Claude Code, the model it ran on, tokens, tool uses, Running for", () => {
     const h = html(call(input), "running");
     expect(h).toContain('data-subagent-card="running"');
-    expect(h).toContain(">子智能体<");
+    expect(h).toContain(">子 Agent<");
     expect(h).toContain(">Checkout regression<");
     expect(h).toContain('data-task-status="running"');
     expect(h).toContain("运行中");
@@ -86,7 +86,7 @@ describe("SubagentCard: the two lines", () => {
 
   it("titles from the description, else the subagent's, else the prompt, else Subagent task; at most 96 characters", () => {
     expect(html(call({ prompt: "x".repeat(200) }), "running", { subagents: [] })).toContain(`>${"x".repeat(95)}…<`);
-    expect(html(call({}), "running", { subagents: [] })).toContain(">子智能体任务<");
+    expect(html(call({}), "running", { subagents: [] })).toContain(">子 Agent 任务<");
     expect(compactText("  a\n\n b  ", 10)).toBe("a b");
     // never half of a character
     expect(compactText("😀😀😀", 2)).toBe("😀…");
@@ -155,7 +155,7 @@ describe("SubagentCard: opened in place", () => {
     expect(host.querySelector("[data-subagent-view-full]")).toBeNull();
     act(() => head().click());
     const btn = host.querySelector<HTMLButtonElement>("[data-subagent-view-full]");
-    expect(btn?.textContent).toBe("查看完整");
+    expect(btn?.textContent).toBe("查看完整内容");
     act(() => btn!.click());
     expect(getPanel()).toEqual({ kind: "subagent", mid: "m", sid: "s@sa1", parentMid: "m", parentSid: "s", call: "c-a1", from: "card" });
     closePanel();

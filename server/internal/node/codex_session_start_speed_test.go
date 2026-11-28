@@ -14,7 +14,7 @@ import (
 // codexSpeedStart runs the real session.start path with a managed Codex whose
 // app-server catalog contains tiersJSON for the selected model. The captured
 // personad launch argv and fake herdr calls are the acceptance evidence.
-func codexSpeedStart(t *testing.T, tiersJSON, speed string) (*Node, *fakeHerdr, []string, error) {
+func codexSpeedStart(t *testing.T, tiersJSON, field, speed string) (*Node, *fakeHerdr, []string, error) {
 	t.Helper()
 	withCodexLaunchers(t, map[string][]string{})
 	n, f, _, _ := codexStartHerdr(t, 0)
@@ -37,7 +37,7 @@ sleep 60
 	}
 	n.setManaged([]proto.ManagedLauncher{{Name: "gw", Agent: "codex", BaseURL: "https://gateway.example.com", APIKey: "k", Model: "example-big"}})
 	_, err := request(t, n, "session.start", map[string]any{
-		"cwd": "~/proj", "launcher": "gw", "prompt": "hello", "speed": speed,
+		"cwd": "~/proj", "launcher": "gw", "prompt": "hello", field: speed,
 	})
 	return n, f, slices.Clone(ran), err
 }
@@ -84,7 +84,7 @@ func TestCodexSessionStartSpeedMapsArgvAndRollout(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			tiers := `[{"id":"priority","name":"Fast"},{"id":"ultrafast","name":"Ultrafast"}]`
-			n, _, argv, err := codexSpeedStart(t, tiers, tc.speed)
+			n, _, argv, err := codexSpeedStart(t, tiers, "speed", tc.speed)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -123,7 +123,7 @@ func TestCodexSessionStartSpeedRequiresSelectedModelTier(t *testing.T) {
 		{name: "ultrafast missing from selected model", speed: "ultrafast", tiers: `[{"id":"priority","name":"Fast"}]`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, f, _, err := codexSpeedStart(t, tc.tiers, tc.speed)
+			_, f, _, err := codexSpeedStart(t, tc.tiers, "speed", tc.speed)
 			if code := rpcCode(err); code != "agent_speed_model" {
 				t.Errorf("refusal = %q (%v), want agent_speed_model", code, err)
 			}
@@ -132,4 +132,37 @@ func TestCodexSessionStartSpeedRequiresSelectedModelTier(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCodexSessionStartServiceTier(t *testing.T) {
+	const tiers = `[{"id":"priority","name":"Fast"},{"id":"ultrafast","name":"Ultrafast"}]`
+	for _, tier := range []string{"priority", "ultrafast"} {
+		t.Run(tier, func(t *testing.T) {
+			n, _, argv, err := codexSpeedStart(t, tiers, "service_tier", tier)
+			if err != nil || codexStartTier(argv) != tier {
+				t.Fatalf("start tier = %q, err = %v", codexStartTier(argv), err)
+			}
+			catalog, err := request(t, n, "launchers.models", map[string]any{"name": "gw", "configured": true})
+			if err != nil || catalog["supports_start_service_tier"] != true {
+				t.Fatalf("catalog did not advertise support: %v, %v", catalog, err)
+			}
+			recordCodexStartTurnContext(t, n, argv)
+			row := proto.Session{SessionID: startThread, Agent: "codex", Capabilities: &proto.SessionCapabilities{}}
+			path := n.transcriptPath(startThread)
+			info, err := os.Stat(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			n.codexPaneControls(&row, n.metaNow(path, info))
+			if row.ServiceTier != tier {
+				t.Fatalf("first turn reported %q, want %q", row.ServiceTier, tier)
+			}
+		})
+	}
+	t.Run("unadvertised", func(t *testing.T) {
+		_, f, _, err := codexSpeedStart(t, `[{"id":"priority","name":"Fast"}]`, "service_tier", "ultrafast")
+		if rpcCode(err) != "agent_speed_model" || len(f.trace("tab.create", "pane.send_input")) != 0 {
+			t.Fatalf("unadvertised tier reached startup or returned the wrong error: %v", err)
+		}
+	})
 }

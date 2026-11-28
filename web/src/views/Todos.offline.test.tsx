@@ -61,8 +61,8 @@ it("says the current assistant is offline in place of the empty list", async () 
   act(() => chooseManager("m-home"));
   await render();
   expect(offlineState()?.dataset.assistantOffline).toBe("m-home");
-  expect(offlineState()?.textContent).toContain("家里 离线");
-  expect(offlineState()?.textContent).toContain("它上线后这里会更新。");
+  expect(offlineState()?.textContent).toContain("家里 已离线");
+  expect(offlineState()?.textContent).toContain("助手恢复在线后页面将自动更新。");
   expect(host.textContent).not.toContain(t("todos.empty_title"));
 });
 

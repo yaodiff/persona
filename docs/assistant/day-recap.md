@@ -22,9 +22,9 @@ Decided for the first version (#4741); each changes only with a new decision the
 1. **Transcription stays on the phone**, offline (`SpeechAnalyzer` / `SpeechTranscriber`, as recordings do today).
    The hub receives text only, never audio.
 2. **Raw audio lives only on the user's devices**: on the phone it is deleted 3 days after the day's final recap; on
-   every device it is gone at most 7 days after the day (or `recording_days`, when shorter). The watch keeps only
+   every device it is gone at most 7 days after the day (or `recording_audio_days`, when shorter). The watch keeps only
    audio the phone has not acknowledged yet ("Retention and privacy").
-3. **The transcript follows `recording_days`** (14 days by default); **the recap follows `minutes_days`** (forever by
+3. **The transcript follows `recording_text_days`** on the hub (forever by default, #16412) and the phone's audio window (`recording_audio_days`, formerly `recording_days`, 14 days by default) on the phone; **the recap follows `minutes_days`** (forever by
    default) and survives trimming like minutes do.
 4. **The recap joins the 21:30 evening routine** as a facts section, and also gets one push a day when it is ready,
    like minutes.
@@ -208,8 +208,8 @@ to `recordingRolling`), which the watch stores beside `WatchSync.phoneRollingKey
 | Key | Value | Meaning |
 | --- | --- | --- |
 | `recordingDay` | `1` (this contract's version) | The phone app takes all-day recordings as this section says, and the user agreed to the consent sheet. A phone from before never sets it, so the watch hides **All-Day Recording**; one that sets it but has no consent yet sets `0`, and the watch then points to the phone. A higher number than the watch knows still means it can. A new consent version takes effect at the next start: a recording already running goes on under the agreement it started with |
-| `recordingDayHub` | `true` / `false` | The phone's hub lists `recording_day`, so the text will reach it and a recap will be written. With `false` the watch still records (the phone keeps the text and uploads it once the hub supports it, within `recording_days`) and says the recap needs a hub update |
-| `recordingDayKeepDays` | `1`–`7` | How long the watch may keep an unacknowledged chunk after its `day`: `min(7, recording_days)` as the phone last learned it (7 until it knows) |
+| `recordingDayHub` | `true` / `false` | The phone's hub lists `recording_day`, so the text will reach it and a recap will be written. With `false` the watch still records (the phone keeps the text and uploads it once the hub supports it, within `audio_days`) and says the recap needs a hub update |
+| `recordingDayKeepDays` | `1`–`7` | How long the watch may keep an unacknowledged chunk after its `day`: `min(7, audio_days)` as the phone last learned it (7 until it knows, and 7 when audio is forever) |
 
 The phone sets them from what its app supports, the consent and its hub's last `hello.features`; neither goes through
 the hub.
@@ -309,7 +309,7 @@ full-state `PUT /api/v1/recordings/{id}` and then grows by appends:
   revision; an older request (a slow retry) stores its new positions and changes nothing else. Absent means
   unchanged; `ended_at` and `complete` go back only through a `PUT`.
 - `200 {"id", "revision", "next", "status"}`: `status` `stored`, or `expired` (the day started before the
-  `recording_days` window, or the recording was trimmed; nothing written). `next` is the hub's count after this
+  `recording_text_days` window, or the recording was trimmed; nothing written). `next` is the hub's count after this
   request; `revision` the stored one.
 - **The phone's side of it**: one request per recording in flight at a time; every request's `revision` above the last
   it sent (`max(now in ms, last + 1)`); the body under 1 MiB (on `413 too_large` it halves the batch). When a `200`'s
@@ -551,22 +551,23 @@ the user either way.
   them first (some places require everyone's consent); audio stays on your watch and iPhone and is deleted within 7
   days; the transcript goes to your Persona hub, which sends it to the AI model configured for the knowledge base and
   the main chat; Agents and extensions allowed to read the knowledge base can read it; the transcript is kept
-  `recording_days` and the recap until `minutes_days` (forever by default). The agreement is stored with the sheet's
+  `recording_text_days` (forever by default) and the recap until `minutes_days` (forever by default). The agreement is stored with the sheet's
   version, and a new version asks again. The watch shows a short version and points to the phone.
 - **Indication.** The watch's microphone indicator, the app's state and the complication show it is on; pause and
   "Erase the last 10 minutes" are one tap away.
 - **Audio** never reaches the hub. On the phone it is deleted at the earliest of: 3 days after the day's first final
   recap (`recap_final_at` in reconciliation), 7 days after its `day`,
-  and `recording_days` after its `day`. On the watch an acknowledged chunk is deleted at once, and an unacknowledged
+  and `recording_audio_days` after its `day`. On the watch an acknowledged chunk is deleted at once, and an unacknowledged
   one `recordingDayKeepDays` after its `day` (reported `lost`): the only age-based loss. A chunk that arrives
   after the phone's own deadline for that day's audio (the earliest of the three above) is acknowledged, discarded
   and settled as `lost`; one that arrives before it is transcribed and appended even after a final recap (the next
   final recap includes it).
-- **Transcript** (`segments.json`, `transcript.md`, `recap_notes.json`) follows `recording_days`, counted from
-  `started_at` as for every recording, on the hub and (through reconciliation's `days`) on the phone; the text of a day
-  older than that is not uploaded. With a very short `recording_days` the final recap may not come before the
+- **Transcript** (`segments.json`, `transcript.md`, `recap_notes.json`) follows `recording_text_days` on the hub and
+  the audio window (reconciliation's `audio_days`, `recording_audio_days`) on the phone, counted from `started_at` as for every
+  recording; the text of a day
+  older than that is not uploaded. With a very short window the final recap may not come before the
   transcript expires; the recap written by then is kept.
-- **Recap** (`recap.json`, `recap.md`) is kept like minutes: past `recording_days` the hub trims a day recording that
+- **Recap** (`recap.json`, `recap.md`) is kept like minutes: past a finite `recording_text_days` the hub trims a day recording that
   has `recap.json` to `meta.json` and the recap (the kept set becomes `meta.json`, `minutes.json`, `minutes.md`,
   `meeting.json`, `recap.json`, `recap.md`), and removes it only past a finite `minutes_days` (forever by default). A
   trimmed day recording keeps its recap readable and searchable and its to-dos confirmable; `POST …/minutes` is

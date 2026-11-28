@@ -10,8 +10,8 @@
   "close_agent": "エージェントを閉じる",
   "close_agent_detail": "{machine}の「{where}」で動いているClaudeを終了し、このタブを閉じます。会話はここに残り、あとでターミナルページから再開できます。",
   "close_runtime_detail": "{machine}の「{title}」を終了します。会話履歴は引き続き参照できます。",
-  "archive_close_detail": "Persona は「{title}」をアーカイブし、{machine} 上のタブとプロセスを閉じます。会話は残ります。「アーカイブしたエージェント」から復元し、ターミナルページから再開できます。",
-  "archive_close_agy_detail": "Persona は {machine} 上の会話「{title}」を閉じ、「アーカイブしたエージェント」に移します。メッセージを送ると戻ってきます。",
-  "archive_close_agy_pane_detail": "Persona は {machine} 上で「{title}」が動いているペインを閉じ、会話を「アーカイブしたエージェント」に移します。メッセージを送ると戻ってきます。",
+  "archive_close_detail": "Personaは「{title}」をアーカイブし、{machine}のタブとプロセスを閉じます。会話は残ります。「アーカイブ済みセッション」から復元し、ターミナル画面から再開できます。",
+  "archive_close_agy_detail": "Personaは{machine}の「{title}」を閉じ、会話を「アーカイブ済みセッション」に移します。メッセージを送ると元に戻ります。",
+  "archive_close_agy_pane_detail": "Personaは{machine}で「{title}」を実行中のターミナルを閉じ、会話を「アーカイブ済みセッション」に移します。メッセージを送ると元に戻ります。",
   "archive_close": "アーカイブして閉じる"
 }

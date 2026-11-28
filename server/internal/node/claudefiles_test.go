@@ -49,6 +49,10 @@ func TestLiveClaudesReadsAQuietFileOnce(t *testing.T) {
 	if got := liveSessionID(t, n, pid); got != b {
 		t.Fatalf("a file with a new time was not read again: %q", got)
 	}
+	claudeFileAt(t, home, pid, "longer-"+b, old.Add(time.Second))
+	if got := liveSessionID(t, n, pid); got != "longer-"+b {
+		t.Fatalf("a file with a new size was not read again: %q", got)
+	}
 }
 
 // A file written just now is read again on every pass until it has been quiet for claudeFileRacy: a second write
@@ -89,5 +93,54 @@ func TestLiveClaudesForgetsRemovedAndDeadFiles(t *testing.T) {
 	}
 	if _, ok := n.cfiles.files[path]; ok || len(n.cfiles.files) != 1 {
 		t.Fatalf("kept files after one was removed: %v", n.cfiles.files)
+	}
+}
+
+// Replacing the file can preserve its size and timestamp while changing which session is open.
+func TestLiveClaudesRechecksReplacedQuietFile(t *testing.T) {
+	config := t.TempDir()
+	n := &Node{sessionScope: &nodeSessionScope{claude: config}}
+	pid := os.Getpid()
+	const first, next = "first", "other"
+	path := quietClaudeConfigSession(t, config, pid, first)
+	original := statOf(t, path)
+	live := n.liveClaudes()
+	if len(live) != 1 || live[0].SessionID != first {
+		t.Fatalf("first listing = %+v", live)
+	}
+	live[0].SessionID = "changed by caller"
+	if got := liveSessionID(t, n, pid); got != first {
+		t.Fatalf("caller changed quiet listing: %q", got)
+	}
+	replacement := writeClaudeConfigSession(t, filepath.Join(config, "staging"), pid, next)
+	if err := os.Chtimes(replacement, original.ModTime(), original.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	staged := statOf(t, replacement)
+	if os.SameFile(original, staged) || original.Size() != staged.Size() || !original.ModTime().Equal(staged.ModTime()) {
+		t.Fatal("replacement must have a distinct identity and identical size and timestamp")
+	}
+	if err := os.Rename(replacement, path); err != nil {
+		t.Fatal(err)
+	}
+	if got := liveSessionID(t, n, pid); got != next {
+		t.Fatalf("replaced quiet session = %q, want %q", got, next)
+	}
+}
+
+func TestLiveClaudesRechecksQuietFileAfterProcessExit(t *testing.T) {
+	config := t.TempDir()
+	n := &Node{sessionScope: &nodeSessionScope{claude: config}}
+	pid, stop := idleTerminalTestProcess(t)
+	path := quietClaudeConfigSession(t, config, pid, "held")
+	if got := liveSessionID(t, n, pid); got != "held" {
+		t.Fatalf("live child's session = %q", got)
+	}
+	stop()
+	if got := liveSessionID(t, n, pid); got != "" {
+		t.Fatalf("exited child's session still live: %q", got)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("expected session file left on disk: %v", err)
 	}
 }

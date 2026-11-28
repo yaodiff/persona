@@ -2,14 +2,15 @@
   "kind_inbox": "事件",
   "kind_todo": "待办",
   "kind_session": "Agent 会话",
-  "gone": "已不在收件箱里",
+  "kind_agent": "个人 Agent",
+  "gone": "已不在收件箱中",
   "next": "下一步",
   "title": "线索",
   "not_same": "不是同一件事",
-  "same": "是同一件事…",
-  "not_same_done": "已标为不是同一件事",
-  "linked": "已连到「{title}」",
-  "link_conflict": "这个关联不成立，请选择其他内容。",
+  "same": "关联为同一件事…",
+  "not_same_done": "已标记为不同事项",
+  "linked": "已关联到「{title}」",
+  "link_conflict": "无法建立此关联，请选择其他条目。",
   "search_placeholder": "搜索标题和位置",
-  "empty": "没有符合的未处理事项"
+  "empty": "没有匹配的未处理事项"
 }

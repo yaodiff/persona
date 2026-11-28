@@ -56,6 +56,12 @@ class FleetFeed @Inject constructor(
     /** Whether a hub is paired: the widget and the tile say "Not paired" otherwise. */
     val paired: StateFlow<Boolean> get() = pairing.isPaired
 
+    /** The hub connection state observed by this feed. */
+    val connectionState: StateFlow<ConnectionState> get() = connection.state
+
+    /** The active pairing's scope path, or null when unpaired (same key that scopes persisted snapshots). */
+    fun activePairing(): String? = source.pairing()
+
     /** Call once at process start; the first snapshot and collectors wait for the pairing restore. */
     @Synchronized fun start() {
         if (started) return

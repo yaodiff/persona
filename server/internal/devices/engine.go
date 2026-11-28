@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -99,40 +100,50 @@ func (d *Devices) storedChoice(machine string) (proto.EngineChoice, bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	d.loadEnginesLocked(ctx)
-	if c, ok := d.engines.sets[machine]; ok {
+	return d.engines.choiceLocked(machine)
+}
+
+// choiceLocked is storedChoice from what is loaded (e.mu held).
+func (e *engineChoices) choiceLocked(machine string) (proto.EngineChoice, bool) {
+	if c, ok := e.sets[machine]; ok {
 		return c, true
 	}
-	if engine := d.engines.byID[machine]; engine != "" {
+	if engine := e.byID[machine]; engine != "" {
 		return proto.EngineHostsOf(engine), true
 	}
 	return proto.EngineChoice{}, false
 }
 
-// engineChoiceToMove is the machine's stored set for a move to another manager (devicewire.MethodEngineGet): nil when
-// never chosen, an error while settings can't be read (not "never chosen", which would let the move drop it).
-func (d *Devices) engineChoiceToMove(machine string) (*proto.EngineChoice, error) {
-	c, ok := d.storedChoice(machine)
+// engineChoiceToMove reads the stored set before a move to another manager. An unset choice is omitted.
+// Unreadable settings return an error so a move does not mistake them for an unset choice.
+func (d *Devices) engineChoiceToMove(p devicewire.MachineRef) (devicewire.MachineEngine, error) {
+	c, ok := d.storedChoice(p.MachineID)
 	d.engines.mu.Lock()
 	loaded := d.engines.loaded
 	d.engines.mu.Unlock()
-	switch {
-	case !loaded:
-		return nil, errors.New("engines: settings not readable")
-	case !ok:
-		return nil, nil
+	if !loaded {
+		return devicewire.MachineEngine{}, errors.New("engines: settings not readable")
 	}
-	return &c, nil
+	out := devicewire.MachineEngine{MachineID: p.MachineID}
+	if ok {
+		out.Choice = &c
+	}
+	return out, nil
 }
 
 // errUnknownEngine: not one of proto.EngineNames, or a set that is not valid.
 var errUnknownEngine = errors.New("unknown engine")
 
-// setEngine stores the machine's single engine (PUT with {"engine"}): the set it stands for.
+// setEngine stores the machine's single engine (PUT with {"engine"}, from older clients): the set it stands for, or
+// only a new default when the stored set is one such a client cannot show and already holds it (proto.LegacyEngineOnto,
+// #17052), so a phone's Save on herdr, Orca and Paseo built on the web keeps all three.
 func (d *Devices) setEngine(ctx context.Context, machine, engine string) error {
 	if _, ok := proto.EngineNames[engine]; !ok {
 		return fmt.Errorf("%w %q (herdr, herdr-core, herdr-both, orca, tern, rex, paseo, cindy, t3code)", errUnknownEngine, engine)
 	}
-	return d.setEngineChoice(ctx, machine, proto.EngineHostsOf(engine))
+	return d.updateEngineChoice(ctx, machine, func(stored proto.EngineChoice) proto.EngineChoice {
+		return proto.LegacyEngineOnto(stored, engine)
+	})
 }
 
 // setEngineHosts stores the machine's set (PUT with {"hosts", "default"}).
@@ -141,11 +152,12 @@ func (d *Devices) setEngineHosts(ctx context.Context, machine string, hosts []st
 	if err != nil {
 		return fmt.Errorf("%w: %v", errUnknownEngine, err)
 	}
-	return d.setEngineChoice(ctx, machine, c)
+	return d.updateEngineChoice(ctx, machine, func(proto.EngineChoice) proto.EngineChoice { return c })
 }
 
-// setEngineChoice writes the set, then the single engine closest to it (for older hubs after a rollback).
-func (d *Devices) setEngineChoice(ctx context.Context, machine string, c proto.EngineChoice) error {
+// updateEngineChoice writes the set next makes of the stored one (herdr alone when never chosen), then the single
+// engine closest to it (for older hubs after a rollback). It reads and writes under one lock, so two saves never mix.
+func (d *Devices) updateEngineChoice(ctx context.Context, machine string, next func(stored proto.EngineChoice) proto.EngineChoice) error {
 	e := &d.engines
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -154,6 +166,11 @@ func (d *Devices) setEngineChoice(ctx context.Context, machine string, c proto.E
 	if !e.loaded {
 		return errors.New("engines: settings not readable")
 	}
+	stored, ok := e.choiceLocked(machine)
+	if !ok {
+		stored = proto.EngineHostsOf(proto.EngineHerdr)
+	}
+	c := next(stored)
 	sets := map[string]proto.EngineChoice{}
 	for id, v := range e.sets {
 		sets[id] = v
@@ -207,7 +224,8 @@ func (m *Machine) useEngine(ctx context.Context, peer *rpc.Peer) error {
 
 // putEngine is PUT /api/v1/machines/{mid}/engine, with a set {"hosts": ["herdr", "orca"], "default": "herdr"}
 // ("default" may be left out: the first host; "hosts": [] enables none) or, from older clients, a single engine
-// {"engine": "herdr-core"}; a body with hosts is a set whatever else it says. Stored even while the machine is
+// {"engine": "herdr-core"} (setEngine: on a set such a client cannot show it may only move the default); a body
+// with hosts is a set whatever else it says. Stored even while the machine is
 // offline (applied when it connects), sent to the node at once when online; answers the machine as listed.
 func (d *Devices) putEngine(w http.ResponseWriter, r *http.Request, m *Machine) {
 	var in struct {

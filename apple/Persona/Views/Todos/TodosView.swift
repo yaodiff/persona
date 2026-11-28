@@ -372,7 +372,7 @@ struct TodosView: View {
         let seen: (() -> Void)? = triage?.section == .justDone && TodoTriageLogic.seenCanFile(todo) && model.hubFeatures.contains(TodoSeen.feature)
             ? { markSeen(todo, after: triage?.last ?? .distantPast) } : nil
         return NavigationLink(value: TodoDetailRoute(id: todo.id)) {
-            TodoRow(todo: todo, triage: triage, onToggleDone: { store.toggleDone(todo, done: open) },
+            TodoRow(todo: todo, triage: triage, now: clock, onToggleDone: { store.toggleDone(todo, done: open) },
                     onRestore: triage?.section == .shelved ? { restore(todo) } : nil, onSeen: seen, related: related)
         }
         .swipeActions(edge: .leading) {
@@ -408,7 +408,7 @@ struct TodosView: View {
         }
         .swipeActions(edge: .trailing) {
             Button(role: .destructive) {
-                Task { do { try await store.delete(id: todo.id) } catch { AppModel.shared.show(error) } }
+                Task { do { try await store.delete(id: todo.id) } catch { TodoStore.reportWriteFailure(error) } }
             } label: {
                 Label("Delete", systemImage: Theme.Icon.delete)
             }
@@ -603,6 +603,8 @@ struct TodoRow: View {
     var todo: TodoItem
     /// Its place on the list by status (#3206); nil where the row is drawn outside it.
     var triage: TodoTriage? = nil
+    /// Current clock supplied by the list for formatting waiting timestamps without reading `Date.now` per row.
+    var now: Date = .now
     var onToggleDone: () -> Void
     /// Set for a shelved row: one tap brings it back.
     var onRestore: (() -> Void)? = nil
@@ -672,6 +674,10 @@ struct TodoRow: View {
                 // Nobody is working on it (#3618): under its state, where its supervision shows.
                 OrphanedLine(todo: todo, state: status)
 
+                if let wait = todo.wait {
+                    TodoWaitLine(wait: wait, now: now)
+                }
+
                 TodoPlanLine(todo: todo)
 
                 if triage?.section == .pr, let pr = todo.prLink {
@@ -719,6 +725,8 @@ struct TodoRow: View {
                         .font(Theme.Font.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
+                } else if todo.wait != nil {
+                    EmptyView()
                 } else if let summary = mostUrgentSummary(urgent: urgent) {
                     Text(summary)
                         .font(Theme.Font.caption)

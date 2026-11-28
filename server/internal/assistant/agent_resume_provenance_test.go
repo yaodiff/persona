@@ -183,3 +183,81 @@ func taskCount(s *Service) int {
 	defer s.todos.mu.RUnlock()
 	return len(s.todos.todos)
 }
+
+func TestAssistantResumeIdleUnownedCodexAppHistoryAndLinkedTodo(t *testing.T) {
+	t.Run("idle unowned App history resumes on existing todo and supports compaction", func(t *testing.T) {
+		for _, fullContext := range []bool{false, true} {
+			name := "normal_context"
+			if fullContext {
+				name = "nearly_full_context"
+			}
+			t.Run(name, func(t *testing.T) {
+				s, f := newQuietService(t)
+				c := codexHistorySession("app00001", proto.StopTaskCompleted, proto.StatusOffline)
+				c.SpaceKind = codexAppSpace
+				c.AgentName = "Codex App"
+				c.Capabilities.Takeover = &proto.CodexTakeover{Running: false, CanResume: true, AppOwned: true}
+				if fullContext {
+					c.ContextTokens, c.ContextWindow = 190_000, 200_000
+				}
+				f.setSessions("box", c)
+				resumingNode(f)
+				original := onBoxTask(t, s, c.SessionID, "conv1", false, "Un-draft the MR and verify")
+
+				// Plain agent_send without resume must stay refused.
+				if _, err := s.runTool(t.Context(), "server", "conv1", "agent_send", sendArgs(c.SessionID, "Un-draft the MR", "")); err == nil {
+					t.Fatal("plain agent_send woke idle Codex App history")
+				}
+				assertNoResumeSideEffects(t, f)
+
+				// Explicit agent_send with resume: true resumes the same thread and preserves the linked to-do.
+				if _, err := runJSON(t, s, "conv1", "agent_send", map[string]any{
+					"machine": "box", "session_id": c.SessionID, "text": "Un-draft the MR",
+					"resume": true, "resume_why": "Needs the finished Codex App thread context",
+				}); err != nil {
+					t.Fatalf("agent_send resume on idle App history failed: %v", err)
+				}
+				starts := startCalls(f)
+				if len(starts) != 1 || starts[0]["resume_session_id"] != c.SessionID || starts[0]["resume_automatic"] != true {
+					t.Fatalf("session.start = %v", starts)
+				}
+				if fullContext {
+					if _, hasPrompt := starts[0]["prompt"]; hasPrompt {
+						t.Fatalf("nearly full context resume should compact before sending prompt: %v", starts[0])
+					}
+					if sent := sentToAgent(f); len(sent) != 1 {
+						t.Fatalf("expected compacted follow-up send, got %q", sent)
+					}
+				}
+				todo := onlyTodo(s)
+				if todo.ID != original.ID || len(todo.Agents) != 1 || todo.Agents[0].SessionID != c.SessionID {
+					t.Fatalf("linked todo changed: got %+v, want %s", todo, original.ID)
+				}
+			})
+		}
+	})
+
+	t.Run("view-only App history while App is running refuses agent_send resume", func(t *testing.T) {
+		s, f := newQuietService(t)
+		c := proto.Session{
+			SessionID: "app00002", MachineID: "box", Agent: "codex", AgentName: "Codex App",
+			SourceKind: "codex_history", SpaceKind: codexAppSpace, Status: proto.StatusIdle,
+			Capabilities: &proto.SessionCapabilities{
+				Read:     true,
+				Terminal: false,
+				Takeover: &proto.CodexTakeover{Running: false, CanResume: false, Reason: "app_running", AppOwned: true},
+			},
+			ReadOnlyReason: "View-only in the Codex App: resume is unavailable here.",
+		}
+		f.setSessions("box", c)
+		resumingNode(f)
+		onBoxTask(t, s, c.SessionID, "conv1", false, "Original task")
+		if _, err := runJSON(t, s, "conv1", "agent_send", map[string]any{
+			"machine": "box", "session_id": c.SessionID, "text": "Un-draft the MR",
+			"resume": true, "resume_why": "Needs context",
+		}); err == nil {
+			t.Fatal("agent_send resumed a view-only Codex App chat while App is running")
+		}
+		assertNoResumeSideEffects(t, f)
+	})
+}

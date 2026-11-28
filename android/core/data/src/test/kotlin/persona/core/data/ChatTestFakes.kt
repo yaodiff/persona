@@ -105,13 +105,19 @@ internal class MemoryOutboxStore : OutboxStore {
         val old = entries.value.single { it.clientMessageId == id }
         if (old.state !in from) return false
         transitions += old.state to to
-        entries.value = entries.value.map { if (it == old) it.copyForDelivery(state = to, error = error) else it }
+        // As the database: every transition but the one that records a refusal's words clears them.
+        entries.value = entries.value.map { if (it == old) it.copyForDelivery(state = to, error = error, reason = null) else it }
         return true
     }
     override suspend fun transition(id: String, from: Set<OutboxState>, to: OutboxState, error: String?, opId: String): Boolean =
         transition(id, from, to, error).also { moved ->
             if (moved) entries.value = entries.value.map { if (it.clientMessageId == id) it.copyForDelivery(opId = opId) else it }
         }
+    override suspend fun transition(
+        id: String, from: Set<OutboxState>, to: OutboxState, error: String?, opId: String?, reason: String?,
+    ): Boolean = (if (opId == null) transition(id, from, to, error) else transition(id, from, to, error, opId)).also { moved ->
+        if (moved) entries.value = entries.value.map { if (it.clientMessageId == id) it.copyForDelivery(reason = reason) else it }
+    }
     override suspend fun recoverInterrupted() {
         entries.value = entries.value.map { if (it.state == OutboxState.Sending) it.copyForDelivery(state = OutboxState.Unknown) else it }
     }

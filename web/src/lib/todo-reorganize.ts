@@ -186,14 +186,14 @@ export interface ResolvedDirectionSection {
 }
 
 /**
- * Resolves "By direction" sections for the Web To-dos list (#15653).
+ * Resolves "By direction" sections for the Web To-dos list (#15653, #17181).
  *
  * - When `todosV2 === false`: preserves 100% of the legacy `directionTree` runtime grouping.
- * - When `todosV2 === true`: prioritizes each open to-do's explicit `direction_id` when non-empty
- *   so batch reorganize and single-item direction changes take effect immediately without
- *   interrupting running Agents. To-dos without `direction_id` fall back to the existing
- *   runtime `directionTree` membership. If a `direction_id` is not present in `tree.directions`,
- *   a synthetic direction section is added before the secretary group so no task is lost.
+ * - When `todosV2 === true`: prioritizes each open to-do's explicit `direction_id`, falling back
+ *   to its server-resolved `effective_direction_id` (such as unanimous-child umbrella goals) before
+ *   runtime `directionTree` membership. If a target direction is not present in `tree.directions`,
+ *   a synthetic direction section is added before the uncategorized group using `resolveFallbackName`
+ *   or `effective_direction_name` so no task is lost or misbucketed.
  */
 export function resolveDirectionSections({
   tree,
@@ -220,10 +220,19 @@ export function resolveDirectionSections({
       .map(({ d, todos }) => ({ d, todos, title: resolveDirectionName(d) }));
   }
 
-  const explicitDirByTodo = new Map<string, string>();
+  const targetDirByTodo = new Map<string, string>();
+  const effectiveNameByDirId = new Map<string, string>();
   for (const td of openTodos) {
-    const dirId = td.direction_id?.trim();
-    if (dirId) explicitDirByTodo.set(td.id, dirId);
+    const explicitId = td.direction_id?.trim();
+    const effectiveId = td.effective_direction_id?.trim();
+    const dirId = explicitId || effectiveId;
+    if (dirId) {
+      targetDirByTodo.set(td.id, dirId);
+      const effName = td.effective_direction_name?.trim();
+      if (effName && (!effectiveId || effectiveId === dirId) && !effectiveNameByDirId.has(dirId)) {
+        effectiveNameByDirId.set(dirId, effName);
+      }
+    }
   }
 
   const placed = new Set<string>();
@@ -235,8 +244,8 @@ export function resolveDirectionSections({
     for (const task of d.tasks ?? []) {
       const td = openById.get(task.id);
       if (!td || placed.has(td.id)) continue;
-      const explicit = explicitDirByTodo.get(td.id);
-      if (explicit && explicit !== d.id) continue;
+      const target = targetDirByTodo.get(td.id);
+      if (target && target !== d.id) continue;
       todos.push(td);
       placed.add(td.id);
     }
@@ -245,34 +254,34 @@ export function resolveDirectionSections({
     if (!sectionsById.has(d.id)) sectionsById.set(d.id, section);
   }
 
-  // Place open to-dos whose explicit `direction_id` was not listed in that direction's `tasks`
-  // (for example after reorganizing with `transfer_supervision=false` or into an unknown direction).
+  // Place open to-dos whose explicit or effective direction was not listed in that direction's `tasks`
+  // (for example after reorganizing with `transfer_supervision=false`, inferred umbrella goals, or an unknown direction).
   const syntheticSections: ResolvedDirectionSection[] = [];
   const syntheticById = new Map<string, ResolvedDirectionSection>();
 
   for (const td of openTodos) {
     if (placed.has(td.id)) continue;
-    const explicit = explicitDirByTodo.get(td.id);
-    if (!explicit) continue;
+    const target = targetDirByTodo.get(td.id);
+    if (!target) continue;
 
-    const existing = sectionsById.get(explicit);
+    const existing = sectionsById.get(target);
     if (existing) {
       existing.todos.push(td);
       placed.add(td.id);
       continue;
     }
 
-    let synth = syntheticById.get(explicit);
+    let synth = syntheticById.get(target);
     if (!synth) {
-      const label = resolveFallbackName?.(explicit)?.trim() || explicit;
+      const label = resolveFallbackName?.(target)?.trim() || effectiveNameByDirId.get(target) || target;
       const d: Direction = {
-        id: explicit,
+        id: target,
         name: label,
         counts: { working: 0, needs_you: 0, stuck: 0, review: 0 },
         running: false,
       };
       synth = { d, todos: [], title: label };
-      syntheticById.set(explicit, synth);
+      syntheticById.set(target, synth);
       syntheticSections.push(synth);
     }
     synth.todos.push(td);

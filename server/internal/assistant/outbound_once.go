@@ -30,10 +30,10 @@ type outboundFlight struct {
 	err     error
 }
 
-// outboundKey is a hand-off by who sends it, with which tool, what and where to (summary names the target).
-func outboundKey(self, tool, text, summary string) string {
+// outboundKey identifies a hand-off and, when supplied, its exact proposal and privacy authority.
+func outboundKey(self, tool, text, summary string, scope ...string) string {
 	h := sha256.New()
-	for _, p := range []string{self, tool, text, summary} {
+	for _, p := range append([]string{self, tool, text, summary}, scope...) {
 		h.Write([]byte(p))
 		h.Write([]byte{0})
 	}

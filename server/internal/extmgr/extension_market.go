@@ -60,7 +60,7 @@ type marketState struct {
 var errMarketSignature = errors.New("market signature")
 
 // signedIndex enforces official identity independently of stored signature state.
-func signedIndex(rec extension.MarketRecord, f *extension.Fetched, now time.Time) (extension.MarketRecord, *extension.MarketIndex, error) {
+func signedIndex(rec extension.MarketRecord, f *extension.Fetched, now time.Time, build int64) (extension.MarketRecord, *extension.MarketIndex, error) {
 	key := ""
 	rec.FetchedAt = &now
 	if extension.IsOfficialMarket(rec.Spec) {
@@ -78,15 +78,28 @@ func signedIndex(rec extension.MarketRecord, f *extension.Fetched, now time.Time
 	} else {
 		rec.SigningKey = ""
 	}
-	verified, err := extension.ParseCatalog(f.Raw, key)
+	keys := rec.TrustedKeys
+	if key != "" {
+		keys = []string{key}
+	} else if len(keys) > 0 {
+		// A private market's owner keys (extension_market_keys.go): any one of them must sign the catalog.
+		normalized, err := extension.NormalizeMarketKeys(keys)
+		if err != nil || len(normalized) == 0 {
+			rec.Signature = extension.MarketSignature{State: extension.SigInvalid}
+			rec.Error = i18n.T(i18n.Default, "extension-market_security.private_signature")
+			return rec, nil, fmt.Errorf("%w: %s", errMarketSignature, rec.Error)
+		}
+		keys = normalized
+	}
+	verified, err := extension.ParseCatalogKeysForBuild(f.Raw, keys, build)
 	if err != nil {
 		rec.Signature = extension.MarketSignature{State: extension.SigInvalid}
 		rec.Error = err.Error()
 		return rec, nil, fmt.Errorf("%w: %s", errMarketSignature, rec.Error)
 	}
 	rec.Signature = extension.MarketSignature{State: extension.SigUnsigned}
-	if key != "" {
-		rec.Signature = extension.MarketSignature{State: extension.SigSigned, KeyID: keyIDOf(key)}
+	if verified.SignedBy != "" {
+		rec.Signature = extension.MarketSignature{State: extension.SigSigned, KeyID: keyIDOf(verified.SignedBy)}
 	}
 	// An empty owner pin is not silently rewritten. Runtime verification uses only
 	// the compiled-in key; approved pin migration belongs to the rotation workflow.
@@ -127,9 +140,9 @@ func (h *Manager) marketsLoad(ctx context.Context) error {
 		if len(r.Index) > 0 {
 			// Never trust a cached state flag: the complete envelope is verified again.
 			f := &extension.Fetched{Raw: r.Index}
-			rec, ix, verifyErr := signedIndex(r, f, time.Now())
+			rec, ix, verifyErr := signedIndex(r, f, time.Now(), h.build.Number)
 			rec.FetchedAt = r.FetchedAt
-			if r.Signature.Bad() && extension.IsOfficialMarket(r.Spec) {
+			if r.Signature.Bad() && requiresSignature(r) {
 				rec.Signature, rec.Error = r.Signature, r.Error
 				ix = nil
 			}
@@ -140,6 +153,10 @@ func (h *Manager) marketsLoad(ctx context.Context) error {
 		} else if extension.IsOfficialMarket(r.Spec) {
 			state.rec.Signature = extension.MarketSignature{State: extension.SigInvalid}
 			state.rec.Error = i18n.T(i18n.Default, "extension-market_security.cache")
+			state.rec.FetchedAt = nil
+		} else if len(r.TrustedKeys) > 0 {
+			// A private market with keys and no verified catalog yet: nothing to install from until it is read.
+			state.rec.SigningKey = ""
 			state.rec.FetchedAt = nil
 		} else {
 			state.rec.SigningKey = ""
@@ -253,9 +270,11 @@ func (h *Manager) market(rec extension.MarketRecord) (*extension.Market, error) 
 	if err != nil {
 		return nil, err
 	}
-	mk := &extension.Market{Spec: spec, TrustedKey: rec.SigningKey, Client: client, GitHubAPI: h.extensions.markets.githubAPI, Dir: h.marketsDir(), Cache: h.packageCache()}
+	mk := &extension.Market{Spec: spec, HubBuild: h.build.Number, TrustedKey: rec.SigningKey, Client: client, GitHubAPI: h.extensions.markets.githubAPI, Dir: h.marketsDir(), Cache: h.packageCache()}
 	if extension.IsOfficialMarket(rec.Spec) {
 		mk.TrustedKey = extension.Official.SigningKey
+	} else {
+		mk.TrustedKeys = slices.Clone(rec.TrustedKeys)
 	}
 	if rec.TokenSealed != "" {
 		if mk.Token, err = (hubSealer{h}).Open(rec.TokenSealed); err != nil {
@@ -297,14 +316,14 @@ func (h *Manager) marketRead(ctx context.Context, id string) (MarketView, error)
 		return MarketView{}, errNoMarket
 	}
 	rec := s.rec
-	if rec.Spec != snapshot.Spec || rec.SigningKey != snapshot.SigningKey || rec.TokenSealed != snapshot.TokenSealed {
+	if !sameMarketTrust(rec, snapshot) {
 		return h.marketView(s), i18n.Err("extension-market_security.changed")
 	}
 	nextIndex := s.index
 	if err != nil {
 		rec.FetchedAt = &now
 		switch {
-		case errors.Is(err, extension.ErrCatalogUnverified) && extension.IsOfficialMarket(rec.Spec):
+		case errors.Is(err, extension.ErrCatalogUnverified) && requiresSignature(rec):
 			// A catalog was read and does not verify: quarantined, the last good index unusable too.
 			rec.Signature, rec.Error = extension.MarketSignature{State: extension.SigInvalid}, err.Error()
 			err = fmt.Errorf("%w: %w", errMarketSignature, err)
@@ -316,7 +335,7 @@ func (h *Manager) marketRead(ctx context.Context, id string) (MarketView, error)
 		}
 	} else {
 		var ix *extension.MarketIndex
-		if rec, ix, err = signedIndex(rec, f, now); ix != nil {
+		if rec, ix, err = signedIndex(rec, f, now, h.build.Number); ix != nil {
 			nextIndex = ix
 		} else {
 			h.logf("extension market %s: %v", id, err)

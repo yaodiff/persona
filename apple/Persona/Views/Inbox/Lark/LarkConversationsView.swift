@@ -32,7 +32,11 @@ private struct LarkConversationsPage: View {
     @Environment(\.shellRailEdge) private var railEdge
     @Environment(\.scenePhase) private var phase
     @State private var store: LarkConversationsModel
-    @State private var path: [LarkConversation] = []
+    @State private var path = NavigationPath()
+    /// The personal Agents listed with the chats (`LarkAgentFeed`), while Settings › Lark › AI Assistants in Messages is on.
+    @State private var agentFeed = LarkAgentFeedModel()
+    /// The "AI Assistants" pill: the Agents alone, no Feishu chat and no paging.
+    @State private var agentsOnly = false
     @State private var query = ""
     @State private var pins = LarkPinnedInteraction()
     @State private var canExpandPins = false
@@ -66,6 +70,22 @@ private struct LarkConversationsPage: View {
                                      query: query, more: store.nextCursor != nil)
     }
 
+    private var mixesAgents: Bool { LarkHomePreference.shared.agentsInMessages }
+    private var agents: [PersonalAgentSession] { mixesAgents ? agentFeed.sessions : [] }
+    private var onlyAgents: Bool { agentsOnly && !agents.isEmpty }
+
+    /// The list: the chats `filtered` gives with the Agents put in by their latest message.
+    private func feed(_ chats: [LarkConversation]) -> [LarkFeedRow] {
+        LarkAgentFeed.rows(chats: chats, loaded: store.conversations, more: store.nextCursor != nil, agents: agents,
+                           query: query, agentsOnly: onlyAgents, unreadOnly: store.filter == .unread)
+    }
+
+    /// The shelf: pinned chats and pinned Agents, on the "All" list without a search.
+    private var shelf: [LarkFeedRow] {
+        guard store.filter == .all, query.isEmpty else { return [] }
+        return LarkAgentFeed.shelf(chats: store.pinned, agents: agents, pins: PersonalAgentPrefsStore.shared.prefs.pins, agentsOnly: onlyAgents)
+    }
+
     var body: some View {
         NavigationStack(path: $path) {
             ScrollViewReader { proxy in
@@ -76,8 +96,8 @@ private struct LarkConversationsPage: View {
                         .listRowSeparator(.hidden)
                         .themedRow()
                 }
-                if store.filter == .all, query.isEmpty, !store.pinned.isEmpty {
-                    LarkPinnedShelf(conversations: store.pinned, interaction: $pins, expandable: $canExpandPins) { path.append($0) }
+                if !shelf.isEmpty {
+                    LarkPinnedShelf(conversations: shelf, interaction: $pins, expandable: $canExpandPins) { open($0) }
                         .id("feishu-pins")
                         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { scroll.shelfChanged($0) }
                         .background(LarkConversationScroll.Finder(scroll: scroll))
@@ -86,28 +106,27 @@ private struct LarkConversationsPage: View {
                         .themedRow()
                 }
                 Section {
-                    if store.conversations.isEmpty, store.nextCursor == nil {
+                    if onlyAgents ? !agents.contains(where: { store.filter != .unread || $0.unreadCount > 0 }) : store.conversations.isEmpty && store.nextCursor == nil && agents.isEmpty {
                         empty
                             .listRowSeparator(.hidden)
                     } else {
                         // Once per update: with a query it filters every loaded chat (`listed`), and three places read it.
-                        let rows = filtered
-                        if store.failed {
+                        let rows = feed(onlyAgents ? [] : filtered)
+                        if store.failed, !onlyAgents {
                             Button { Task { await store.refresh() } } label: {
                                 Label(store.needsUpgrade ? String(localized: "Update the hub to sync pinned chats · Check Again") : String(localized: "Not updated · Retry"), systemImage: Theme.Icon.retry)
                                     .font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(1)
                             }
                             .listRowSeparator(.hidden)
                         }
-                        let prefetch = query.isEmpty && store.filter == .all ? rows.dropLast(Self.prefetchRows).last?.id : nil
-                        ForEach(rows) { conversation in
-                            NavigationLink(value: conversation) { LarkConversationRow(conversation: conversation, display: display) }
-                                .accessibilityIdentifier("feishu-chat-" + conversation.id)
-                                .id(conversation.id)
-                                .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { scroll.reader.row(conversation.id, top: $0) }
-                                .onDisappear { scroll.reader.gone(conversation.id) }
+                        let prefetch = query.isEmpty && store.filter == .all && !onlyAgents ? rows.dropLast(Self.prefetchRows).last?.id : nil
+                        ForEach(rows) { row in
+                            feedLink(row)
+                                .id(row.id)
+                                .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { scroll.reader.row(row.id, top: $0) }
+                                .onDisappear { scroll.reader.gone(row.id) }
                                 .onScrollVisibilityChange(threshold: 0.01) { visible in
-                                    if visible, conversation.id == prefetch { Task { await store.more() } }
+                                    if visible, row.id == prefetch { Task { await store.more() } }
                                 }
                                 .listRowInsets(EdgeInsets(top: 0, leading: Theme.Space.page, bottom: 0, trailing: Theme.Space.page))
                                 .themedRow()
@@ -119,7 +138,7 @@ private struct LarkConversationsPage: View {
                                 .listRowSeparator(.hidden)
                                 .listRowBackground(Color.clear)
                         }
-                        if store.nextCursor != nil {
+                        if store.nextCursor != nil, !onlyAgents {
                             Group {
                                 if store.pageFailed {
                                     Button("Retry [Lark Conversations View 8924c7]") { Task { await store.more() } }.lineLimit(1)
@@ -206,8 +225,9 @@ private struct LarkConversationsPage: View {
             }
             }
             .navigationDestination(for: LarkConversation.self) { LarkChatView(conversation: $0, messageComposer: true) }
+            .navigationDestination(for: PersonalAgentSession.self) { PersonalAgentSessionView(session: $0).id($0.id) }
         }
-        .onChange(of: store.accountID) { _, _ in path = []; pins = LarkPinnedInteraction() }
+        .onChange(of: store.accountID) { _, _ in path = NavigationPath(); pins = LarkPinnedInteraction() }
         .onChange(of: query) { _, _ in
             pins = LarkPinnedInteraction(); scroll.resetShelf()
             searchPages = 0
@@ -220,8 +240,15 @@ private struct LarkConversationsPage: View {
             sceneActive = VisibleScenePolicy.permits(value)
             resumePaging()
         }
-        .onChange(of: store.pinned.isEmpty) { _, empty in
+        .onChange(of: shelf.isEmpty) { _, empty in
             if empty { pins = LarkPinnedInteraction(); scroll.resetShelf() }
+        }
+        // The Agents and their pins, read again on the hub's `agents` events (PersonalAgentSync).
+        .tabActiveTask(id: (model.connection.shown == .online) && mixesAgents) {
+            guard mixesAgents, let api = model.hub?.api else { return }
+            async let pinsRead: Void = PersonalAgentPrefsStore.shared.load(api)
+            await agentFeed.watch(api)
+            await pinsRead
         }
         .onDisappear { pins.cancelDrag(); store.holdScrolling(false); store.willChange = {} }
         .onChange(of: path.isEmpty, initial: true) { _, root in
@@ -265,7 +292,7 @@ private struct LarkConversationsPage: View {
 
     private func loadAtEnd() async {
         let selected = store.filter
-        while pageVisible, sceneActive, path.isEmpty, selected == store.filter, endVisible, let cursor = store.nextCursor, !store.pageFailed, !Task.isCancelled {
+        while !onlyAgents, pageVisible, sceneActive, path.isEmpty, selected == store.filter, endVisible, let cursor = store.nextCursor, !store.pageFailed, !Task.isCancelled {
             let searching = scansPages
             if searching, searchPages >= Self.searchPageLimit { return }
             await store.more()
@@ -278,14 +305,16 @@ private struct LarkConversationsPage: View {
     }
 
     private func select(_ filter: LarkConversationsModel.Filter, proxy: ScrollViewProxy) {
-        guard filter != store.filter else { return }
+        let wasAgents = onlyAgents
+        agentsOnly = false
+        guard filter != store.filter || wasAgents else { return }
         searchPages = 0
         endVisible = false
         pins = LarkPinnedInteraction()
         scroll.resetShelf()
         Task {
             await store.select(filter)
-            let top = filter == .all && query.isEmpty && !store.pinned.isEmpty ? "feishu-pins" : "feishu-filters"
+            let top = !shelf.isEmpty ? "feishu-pins" : "feishu-filters"
             proxy.scrollTo(top, anchor: .top)
         }
     }
@@ -295,6 +324,7 @@ private struct LarkConversationsPage: View {
         HStack(spacing: Theme.Space.flush) {
             filter(.all, title: String(localized: "lark.filter.all"), proxy: proxy)
             filter(.unread, title: String(localized: "lark.filter.unread"), proxy: proxy)
+            if !agents.isEmpty { agentsPill(proxy: proxy) }
         }
         .padding(.horizontal, Theme.Space.xxs)
         .background {
@@ -308,9 +338,26 @@ private struct LarkConversationsPage: View {
     }
 
     private func filter(_ value: LarkConversationsModel.Filter, title: String, proxy: ScrollViewProxy) -> some View {
-        let selected = store.filter == value
-        return Button {
-            select(value, proxy: proxy)
+        pill(title, selected: store.filter == value && !onlyAgents, id: value.rawValue) { select(value, proxy: proxy) }
+    }
+
+    /// "AI Assistants": the personal Agents alone (the Feishu filter underneath stays as it was).
+    private func agentsPill(proxy: ScrollViewProxy) -> some View {
+        pill(String(localized: "lark.filter.agents", defaultValue: "AI Assistants", comment: "Messages filter: only the personal AI assistants"),
+             selected: onlyAgents, id: "agents") {
+            guard !onlyAgents else { return }
+            agentsOnly = true
+            searchPages = 0
+            endVisible = false
+            pins = LarkPinnedInteraction()
+            scroll.resetShelf()
+            proxy.scrollTo(!shelf.isEmpty ? "feishu-pins" : "feishu-filters", anchor: .top)
+        }
+    }
+
+    private func pill(_ title: String, selected: Bool, id: String, action: @escaping () -> Void) -> some View {
+        Button {
+            action()
             Haptics.tap()
         } label: {
             Text(title)
@@ -327,7 +374,33 @@ private struct LarkConversationsPage: View {
         }
         .buttonStyle(.plain)
         .accessibilityAddTraits(selected ? .isSelected : [])
-        .accessibilityIdentifier("feishu-filter-" + value.rawValue)
+        .accessibilityIdentifier("feishu-filter-" + id)
+    }
+
+    private func open(_ row: LarkFeedRow) {
+        switch row {
+        case .chat(let c): path.append(c)
+        case .agent(let s): path.append(s)
+        }
+    }
+
+    @ViewBuilder private func feedLink(_ row: LarkFeedRow) -> some View {
+        switch row {
+        case .chat(let c):
+            NavigationLink(value: c) { LarkConversationRow(conversation: c, display: display) }
+                .accessibilityIdentifier("feishu-chat-" + c.id)
+        case .agent(let s):
+            NavigationLink(value: s) { LarkAgentRow(session: s) }
+                .accessibilityIdentifier("feishu-agent-" + s.id)
+                .contextMenu {
+                    let pinned = PersonalAgentPrefsStore.shared.prefs.isPinned(s.id)
+                    Button(pinned ? String(localized: "lark.agent.unpin", defaultValue: "Unpin", comment: "Messages: unpin a personal AI assistant")
+                                  : String(localized: "lark.agent.pin", defaultValue: "Pin", comment: "Messages: pin a personal AI assistant to the shelf"),
+                           systemImage: pinned ? Theme.Icon.unpin : Theme.Icon.pin) {
+                        PersonalAgentPrefsStore.shared.update(model.hub?.api) { $0.togglePin(s.id) }
+                    }
+                }
+        }
     }
 
     private func shelfPassed(_ offset: Double) -> Bool {

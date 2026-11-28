@@ -58,6 +58,7 @@ func TestArchiveSnapshotKeepsStopCauseWithoutLiveControls(t *testing.T) {
 		t.Run(string(cause), func(t *testing.T) {
 			c := stoppedBoxAgent("stop0001")
 			c.SourceKind = "codex_history"
+			c.ReadOnlyReason = "The linked to-do was closed."
 			c.Capabilities = &proto.SessionCapabilities{
 				Read: true, Send: true, Terminal: true, Attach: true, Interrupt: true, Approve: true,
 				StopCause: cause, Modes: proto.CanModes(true), Model: proto.CanModes(true),
@@ -66,6 +67,9 @@ func TestArchiveSnapshotKeepsStopCauseWithoutLiveControls(t *testing.T) {
 			want := &proto.SessionCapabilities{Read: true, Terminal: true, StopCause: cause}
 			if !reflect.DeepEqual(snapshot.Capabilities, want) || !stoppedAgent(snapshot) {
 				t.Fatalf("lost stopped provenance or retained live controls: %+v", snapshot.Capabilities)
+			}
+			if snapshot.ReadOnlyReason != c.ReadOnlyReason {
+				t.Fatalf("lost closed-task reason: %q, want %q", snapshot.ReadOnlyReason, c.ReadOnlyReason)
 			}
 		})
 	}

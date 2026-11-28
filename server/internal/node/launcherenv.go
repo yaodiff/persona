@@ -32,6 +32,21 @@ var providerEnvClear = append(slices.Clone(legacyEnvClear), "CLAUDE_CODE_EFFORT_
 // proxyEnvClear: the shell's proxy, dropped when the provider sets its own.
 var proxyEnvClear = []string{"HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy"}
 
+// launcherProxyVars sets both spellings because runtimes can prefer either. A launcher with its own proxy brings
+// its whole bypass list, including an empty one, so inherited bypasses do not apply to that proxy (#6238).
+func launcherProxyVars(l proto.ManagedLauncher) [][2]string {
+	var vars [][2]string
+	if l.Proxy != "" {
+		for _, key := range []string{"HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"} {
+			vars = append(vars, [2]string{key, l.Proxy})
+		}
+	}
+	if l.NoProxy != "" || l.Proxy != "" {
+		vars = append(vars, [2]string{"NO_PROXY", l.NoProxy}, [2]string{"no_proxy", l.NoProxy})
+	}
+	return vars
+}
+
 // envClearFor is what to drop before l runs: a launcher from before #2455 keeps the shell's proxy and timeout, as it
 // always has; a provider keeps the shell's proxy unless it has one (a dead one is dropped at launch,
 // withoutDeadProxies). Its bypass list replaces the shell's in both spellings (`personad launch` adds the inherited
@@ -154,6 +169,23 @@ func launcherEnvVars(raw string) [][2]string {
 		}
 	}
 	return out
+}
+
+// launcherEnvOverrides mirrors a proxy assignment unless the launcher supplies both spellings explicitly.
+func launcherEnvOverrides(raw string) [][2]string {
+	vars := launcherEnvVars(raw)
+	given := make(map[string]bool, len(vars))
+	for _, kv := range vars {
+		given[kv[0]] = true
+	}
+	for _, kv := range vars {
+		for _, key := range otherSpelling(kv[0]) {
+			if !given[key] {
+				vars = append(vars, [2]string{key, kv[1]})
+			}
+		}
+	}
+	return vars
 }
 
 // envLine reads one line of a launcher's environment: k "" (and ok) for a blank line or a comment, ok false for a line
@@ -743,7 +775,8 @@ func providerEnv(l proto.ManagedLauncher, model, effort string, mainConversation
 	}
 	// The compact window the provider declares, else its model's window; none when neither is known, and Claude Code
 	// compacts by the model it knows. The same for an assistant conversation as for an agent (#3066); an assistant start
-	// writes its own, which holds the main conversation to assistant.main_compact_window (#7314, perStartEnv).
+	// writes its own, which holds the main conversation and the leader conversations to assistant.main_compact_window
+	// (#7314, #15318, perStartEnv).
 	if c := cmp.Or(l.CompactWindow, w); c > 0 {
 		env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] = strconv.Itoa(c)
 	}
@@ -766,19 +799,8 @@ func providerEnv(l proto.ManagedLauncher, model, effort string, mainConversation
 		}
 	}
 	set("ANTHROPIC_CUSTOM_HEADERS", headers)
-	// Both spellings: Node's fetch reads the lower-case one first, so an upper-case value alone would lose to a lower-case
-	// one in the user's settings env.
-	if l.Proxy != "" {
-		for _, k := range []string{"HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"} {
-			env[k] = l.Proxy
-		}
-	}
-	// Both spellings: Claude Code's own check reads both, but the runtime under it (Bun) takes no_proxy || NO_PROXY,
-	// so a lower-case list from the shell alone would still send the gateway through the proxy (#6238). A provider with
-	// a proxy of its own brings its whole list, an empty one too: one from the shell or the user's settings would apply
-	// to its proxy. "*" is no proxy at all.
-	if l.NoProxy != "" || l.Proxy != "" {
-		env["NO_PROXY"], env["no_proxy"] = l.NoProxy, l.NoProxy
+	for _, kv := range launcherProxyVars(l) {
+		env[kv[0]] = kv[1]
 	}
 	if l.CustomModel != "" {
 		env["ANTHROPIC_CUSTOM_MODEL_OPTION"] = l.CustomModel
@@ -796,31 +818,25 @@ func providerEnv(l proto.ManagedLauncher, model, effort string, mainConversation
 		env[toolSearchEnv] = "false"
 		ours = maps.Clone(env)
 	}
-	// The launcher's own environment last: it wins over all of the above (#5953); an empty value sets the variable
-	// empty. A proxy variable goes in both spellings unless both are given, or the shell's other spelling would still
-	// count. Not for an assistant conversation the thinking level, which it switches while it runs.
-	vars := launcherEnvVars(l.Env)
-	given := map[string]bool{}
-	for _, kv := range vars {
-		given[kv[0]] = true
-	}
-	for _, kv := range vars {
+	// The launcher's own environment wins over the defaults (#5953). An assistant conversation sets its own effort.
+	for _, kv := range launcherEnvOverrides(l.Env) {
 		if mainConversation && kv[0] == "CLAUDE_CODE_EFFORT_LEVEL" {
 			continue
 		}
 		env[kv[0]] = kv[1]
-		for _, o := range otherSpelling(kv[0]) {
-			if !given[o] {
-				env[o] = kv[1]
-			}
-		}
 	}
 	if gateway {
 		withoutTierAliases(env, ours)
+		for _, key := range tierModelVars {
+			if key != "ANTHROPIC_MODEL" && key != "ANTHROPIC_SMALL_FAST_MODEL" && env[key] == "" && ours[key] != "" {
+				env[key] = ours[key]
+			}
+		}
 	}
 	// The reply limit by the models the process ends up with (the launcher's own environment may name one), unless
 	// that environment sets it itself (empty: Claude Code's own limit).
-	if n := outputTokens(func(m string) int { return outputLimit(l, m) }, env); n > 0 && !given[maxOutputEnv] {
+	_, explicitOutputLimit := env[maxOutputEnv]
+	if n := outputTokens(func(m string) int { return outputLimit(l, m) }, env); n > 0 && !explicitOutputLimit {
 		env[maxOutputEnv], env[outputMarkEnv] = strconv.Itoa(n), strconv.Itoa(n)
 	}
 	return env

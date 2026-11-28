@@ -34,6 +34,7 @@ jobs:
       tag: ${{ steps.plan.outputs.tag }}
       build: ${{ steps.plan.outputs.build }}
       commit: ${{ steps.plan.outputs.commit }}
+      merge_commit: ${{ steps.plan.outputs.merge_commit }}
       source_commit: ${{ steps.plan.outputs.source_commit }}
       check_run_id: ${{ steps.merge-check.outputs.id }}
     steps:
@@ -136,18 +137,20 @@ jobs:
           )"
           build="$(python3 scripts/operations/release_pr.py --repository "$REPOSITORY" --channel "$CHANNEL" next-build --current "$current_build")"
           test "$GIT_COMMIT" = "$MERGE_COMMIT"
+          target_commit="$(python3 scripts/operations/release_pr.py --repository "$REPOSITORY" --channel "$CHANNEL" resolve-target --dir .github/release-prs --version "$version" --merge-commit "$MERGE_COMMIT")"
           mkdir -p release
           python3 scripts/operations/release_pr.py --repository "$REPOSITORY" --channel "$CHANNEL" plan \
-            --version "$version" --commit "$GIT_COMMIT" --pr "$PR_NUMBER" --merge-commit "$MERGE_COMMIT" --build "$build" \
+            --version "$version" --commit "$target_commit" --pr "$PR_NUMBER" --merge-commit "$MERGE_COMMIT" --build "$build" \
             --source-commit "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["headRefOid"])' "$PR_JSON")" --out release/plan.json
-          python3 scripts/operations/release_pr.py --repository "$REPOSITORY" --channel "$CHANNEL" check-plan --plan release/plan.json --commit "$GIT_COMMIT"
+          python3 scripts/operations/release_pr.py --repository "$REPOSITORY" --channel "$CHANNEL" check-plan --plan release/plan.json --commit "$target_commit"
           {
             printf 'pr=%s\n' "$PR_NUMBER"
             printf 'channel=%s\n' "$CHANNEL"
             printf 'version=%s\n' "$version"
             printf 'tag=v%s\n' "$version"
             printf 'build=%s\n' "$(python3 -c 'import json; print(json.load(open("release/plan.json"))["build"])')"
-            printf 'commit=%s\n' "$GIT_COMMIT"
+            printf 'commit=%s\n' "$target_commit"
+            printf 'merge_commit=%s\n' "$MERGE_COMMIT"
             printf 'source_commit=%s\n' "$(python3 -c 'import json; print(json.load(open("release/plan.json"))["source_commit"])')"
           } >> "$GITHUB_OUTPUT"
       - name: Bind the required check to the exact proposed merge result
@@ -155,7 +158,7 @@ jobs:
         if: steps.plan.outputs.version != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          COMMIT: ${{ steps.plan.outputs.commit }}
+          COMMIT: ${{ steps.plan.outputs.merge_commit }}
           PR_NUMBER: ${{ steps.plan.outputs.pr }}
         run: |
           set -euo pipefail
@@ -550,7 +553,7 @@ jobs:
           $architecture = if ($env:PROCESSOR_ARCHITECTURE -eq 'AMD64') { 'amd64' } elseif ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'arm64' } else { throw 'Unsupported native Windows architecture' }
           @{commit=$plan.commit; assets=$assets} | ConvertTo-Json -Depth 5 | Set-Content release/receipt.json -NoNewline
           python -B -c "import sys; sys.path.insert(0, 'scripts/operations'); from windows_release import check_windows_artifacts; import json; data=json.load(open('release/receipt.json')); check_windows_artifacts(data['assets'], '$($plan.version)', '$architecture')"
-          python scripts/operations/release_pr.py --repository '${{ github.repository }}' --channel '${{ needs.plan.outputs.channel }}' verify-artifacts --plan release/plan.json --commit '${{ needs.plan.outputs.commit }}' --add release/downloads
+          python scripts/operations/release_pr.py --repository '${{ github.repository }}' --channel '${{ needs.plan.outputs.channel }}' verify-artifacts --plan release/plan.json --commit '${{ needs.plan.outputs.commit }}' --merge-commit '${{ needs.plan.outputs.merge_commit }}' --add release/downloads
       - uses: actions/setup-node@v4
         with:
           node-version-file: web/.nvmrc
@@ -600,7 +603,7 @@ jobs:
       # The failure conclusion needs this script even when the platform gate below stops before any artifact download.
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.plan.outputs.commit }}
+          ref: ${{ needs.plan.outputs.merge_commit }}
           fetch-depth: 0
           persist-credentials: false
       - name: Require every platform job to succeed before verification
@@ -639,9 +642,10 @@ jobs:
           REPOSITORY: ${{ github.repository }}
           CHANNEL: ${{ needs.plan.outputs.channel }}
           COMMIT: ${{ needs.plan.outputs.commit }}
+          MERGE_COMMIT: ${{ needs.plan.outputs.merge_commit }}
         run: |
           set -euo pipefail
-          python3 scripts/operations/release_pr.py --repository "$REPOSITORY" --channel "$CHANNEL" verify-artifacts --plan release/plan.json --commit "$COMMIT" --add release/downloads
+          python3 scripts/operations/release_pr.py --repository "$REPOSITORY" --channel "$CHANNEL" verify-artifacts --plan release/plan.json --commit "$COMMIT" --merge-commit "$MERGE_COMMIT" --add release/downloads
           python3 - <<'PY'
           import json
           from pathlib import Path

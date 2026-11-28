@@ -1,0 +1,13 @@
+{
+  "settings_changed": "Outward-message settings changed. This approval was not applied. Refresh settings and request approval again.",
+  "identity_change": "Change the default outward-message sender to {identity}. Existing message grants remain bound to their approved identity. A bot failure never falls back to your account.",
+  "all_chats": "All chats in this channel",
+  "scope_confirm": "Allow automatic sends without another confirmation?\nChannel: {channel}\nChat: {target}\nScenario: {scenario}\nSender: {identity}\nEach attempt is audited. Revoke this grant at any time in Standing authorizations. Revocation stops future sends, not an already started send.",
+  "inbox_reply": "Suggested Inbox replies",
+  "assistant_message": "Assistant-authored messages",
+  "bot": "Bot",
+  "user": "Me",
+  "send_confirm": "Send this message?\nChannel: {channel}\nChat: {target}\nSender: {identity}\n\n{text}",
+  "scope_changed": "The authorization, recipient, or sender changed. Nothing was sent. Refresh the settings and confirm the intended scope.",
+  "already_delivered": "This send ID was delivered earlier. This attempt sent nothing, and does not verify the attempted text. Inspect the previous message at its destination before retrying."
+}

@@ -76,12 +76,13 @@ struct CallPersonaIntentTests {
         #expect(CallPersonaIntent.calling != CarPlayTalk.notConnected.sentence)
     }
 
-    /// A build has the SiriKit extension exactly when apple/siri-calls.yml was merged in, which brings Siri's purpose
-    /// string with it: off by default, and then the app never asks for Siri. The raw Info.plist: the translations sit in
-    /// InfoPlist.strings either way, and `object(forInfoDictionaryKey:)` would find them there.
+    /// `NSSiriUsageDescription` stays in the raw Info.plist in every build (ITMS-90683: `SiriCalls.swift` and
+    /// `OwnerCall.swift` unconditionally link `Intents`), while a build carries the SiriKit extension and runtime
+    /// `SiriCalls.builtIn` switch (`PersonaSiriCalls`) only when `apple/siri-calls.yml` was merged in.
     @MainActor @Test func siriCallsFollowTheBuildsSwitch() {
         let purpose = Bundle.main.infoDictionary?["NSSiriUsageDescription"] as? String
-        #expect(SiriCalls.builtIn == (purpose != nil))
+        #expect(purpose?.isEmpty == false)
+        #expect(purpose != "NSSiriUsageDescription")
         let plugins = Bundle.main.builtInPlugInsURL?.appending(path: "PersonaCallIntents.appex").path ?? ""
         #expect(SiriCalls.builtIn == FileManager.default.fileExists(atPath: plugins))
     }

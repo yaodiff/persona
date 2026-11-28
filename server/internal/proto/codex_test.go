@@ -9,6 +9,8 @@ import (
 func TestSessionCapabilitiesTakeoverAndRewindRoundTrip(t *testing.T) {
 	for _, raw := range []string{
 		`{"session_id":"s","capabilities":{"takeover":{"running":true,"can_resume":true},"rewind":true,"rewind_code":false}}`,
+		`{"session_id":"s","capabilities":{"takeover":{"running":false,"can_resume":true,"app_owned":true}}}`,
+		`{"session_id":"s","capabilities":{"takeover":{"running":false,"can_resume":false,"reason":"app_running","app_owned":true}}}`,
 		`{"session_id":"s","capabilities":{"takeover":{"running":false,"can_resume":false,"reason":"encrypted_context"}}}`,
 		`{"session_id":"s","capabilities":{"rewind":false,"rewind_code":true}}`,
 		`{"session_id":"s","capabilities":{}}`,

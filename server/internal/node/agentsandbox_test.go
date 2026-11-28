@@ -95,7 +95,7 @@ func TestAssistantCLIInAgentSandbox(t *testing.T) {
 	profile := t.TempDir()
 	env := []string{"PATH=/usr/bin:/bin", "CLAUDE_CONFIG_DIR=" + profile}
 	plain := func(args []string) []string {
-		return append([]string{"/bin/zsh", "-ic", "echo " + assistantShellReady + "; CLAUDE_CONFIG_DIR=" + shellQuote(profile) + ` claude "$@"`, "persona"}, args...)
+		return append([]string{"/bin/zsh", shellFlag("zsh"), "echo " + assistantShellReady + "; CLAUDE_CONFIG_DIR=" + shellQuote(profile) + ` claude "$@"`, "persona"}, args...)
 	}
 
 	n := agentNode(t, false)
@@ -342,7 +342,7 @@ func TestCodexStartExec(t *testing.T) {
 	command := func(words []string) []string {
 		if runtime.GOOS != "windows" {
 			if shell, err := exec.LookPath(loginShellProgram()); err == nil {
-				return append([]string{shell, "-ic", codexNativeStartScript, "persona-codex-start", proj, "--"}, words...)
+				return append([]string{shell, shellFlag(shell), codexNativeStartScript, "persona-codex-start", proj, "--"}, words...)
 			}
 		}
 		return append([]string{"/opt/bin/codex"}, words[1:]...)

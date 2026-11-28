@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"crypto/rand"
+	"encoding/json"
 	"errors"
 	"slices"
 	"strings"
@@ -924,37 +925,58 @@ func messageCardOf(it *InboxItem) *MessageCard {
 		Text: clip(strings.TrimSpace(it.Preview), 400), Draft: it.Agent.Draft, MessageVersion: it.Last}
 }
 
-// inboxRepliedAt is when those of the inbox items ids the user replied to were replied to (the message cards say
-// sent by it).
-func (s *Service) inboxRepliedAt(ctx context.Context, ids []string) map[string]time.Time {
-	b := &s.inbox
-	out := map[string]time.Time{}
-	if s.inboxReady(ctx) != nil {
-		return out
-	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	for _, id := range ids {
-		if it := b.items[id]; it != nil && it.DoneBy == "replied" && it.DoneAt != nil {
-			out[id] = *it.DoneAt
-		}
-	}
-	return out
+// inboxSentAt finds completed replies Persona recorded as sent. The filing reason alone also covers replies made in the source.
+func (s *Service) inboxSentAt(ctx context.Context, ids []string) map[string]time.Time {
+	return s.inboxCardDoneAt(ctx, ids, true)
 }
 
-// inboxFiledAt is when those of the inbox items ids that were filed were filed. An unfinished merged member has no
-// filing time of its own, although open is false for it.
+// inboxFiledAt finds each item's own filing time. An unfinished merged member has none, even when it is not open.
 func (s *Service) inboxFiledAt(ctx context.Context, ids []string) map[string]time.Time {
+	return s.inboxCardDoneAt(ctx, ids, false)
+}
+
+// inboxCardDoneAt keeps closed drafts filed for as long as their history is stored, including after memory eviction.
+func (s *Service) inboxCardDoneAt(ctx context.Context, ids []string, sentOnly bool) map[string]time.Time {
 	b := &s.inbox
-	out := map[string]time.Time{}
+	out := make(map[string]time.Time, len(ids))
 	if s.inboxReady(ctx) != nil {
 		return out
 	}
+	record := func(it *InboxItem) {
+		if it.DoneAt != nil && (!sentOnly || it.DoneBy == "replied" && it.hasChainEventAt(ChainSent, *it.DoneAt)) {
+			out[it.ID] = *it.DoneAt
+		}
+	}
+	var missing []string
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	for _, id := range ids {
-		if it := b.items[id]; it != nil && it.DoneAt != nil {
-			out[id] = *it.DoneAt
+		if it := b.items[id]; it != nil {
+			record(it)
+		} else {
+			missing = append(missing, id)
+		}
+	}
+	b.mu.Unlock()
+
+	if st := s.inboxDB(); len(missing) > 0 && st != nil {
+		rows, err := st.DoneInboxItemsByID(ctx, missing)
+		if err != nil {
+			s.logf("inbox: read card history: %v", err)
+			return out
+		}
+		for _, raw := range rows {
+			var it InboxItem
+			if json.Unmarshal(raw, &it) != nil || it.ID == "" {
+				continue
+			}
+			b.mu.Lock()
+			// A reopen or a new message may have brought the item back during the query.
+			if live := b.items[it.ID]; live != nil {
+				record(live)
+			} else {
+				record(&it)
+			}
+			b.mu.Unlock()
 		}
 	}
 	return out

@@ -214,7 +214,7 @@ func (s *Service) taskInboxTurnEnded(ctx context.Context, t Todo, last proto.Ses
 		}):
 			sendErr = errors.New("the event's agent is no longer assigned to the task")
 		default:
-			_, sendErr = s.sendTaskInput(ctx, current, e.Prompt, true, &e, false)
+			_, sendErr = s.sendTaskInput(ctx, current, e.Prompt, true, &e, false, nil)
 		}
 		if err := s.updateTaskInboxEvents(ctx, func(events map[string]taskInboxEvent) bool {
 			cur, exists := events[e.ID]

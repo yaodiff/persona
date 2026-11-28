@@ -10,7 +10,7 @@
 //   without `assistant_compact`) are not offered a broken action.
 import { IMAGE_LIMIT_CODE, isRetryText } from "./api-errors";
 import { CONTEXT_RE } from "./compatibility";
-import { sessionCan, stateOf } from "./format";
+import { sessionCan, activityOf } from "./format";
 import { isInterjectContext, tagAttrs, withoutViewErrors, type ChatLine, type UserMessage } from "./turns";
 import type { Item, Session } from "./types";
 
@@ -84,7 +84,7 @@ export function compactResendSupport(session: Session | undefined, opts: Compact
   if (session.source_kind) return { supported: false, mode: null };
   if (session.host === "botmux") return { supported: false, mode: null };
   if (session.agent && session.agent !== "claude") return { supported: false, mode: null };
-  const st = stateOf(session);
+  const st = activityOf(session);
   if (st === "offline" || st === "needs_you" || st === "working") return { supported: false, mode: null };
   return { supported: true, mode: "claude-terminal" };
 }

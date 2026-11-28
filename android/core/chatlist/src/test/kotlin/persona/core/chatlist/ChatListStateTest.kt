@@ -12,6 +12,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.yield
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -86,5 +87,13 @@ class ChatListStateTest {
                 running.cancel()
             }
         }
+    }
+
+    @Test fun aOnePixelOvershootSettlesTheRiseToTopHold() {
+        assertTrue(expansionNeedsScroll(visibleOffset = 102, target = 100, riseToTop = true))
+        assertFalse("a 1px rounding difference must settle", expansionNeedsScroll(101, 100, true))
+        assertFalse("a rise-to-top hold never moves the header back down", expansionNeedsScroll(98, 100, true))
+        assertTrue(expansionNeedsScroll(102, 100, riseToTop = false))
+        assertFalse(expansionNeedsScroll(101, 100, riseToTop = false))
     }
 }

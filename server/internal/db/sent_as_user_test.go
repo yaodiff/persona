@@ -290,3 +290,27 @@ func mustJSON(t *testing.T, v any) string {
 	}
 	return string(b)
 }
+
+func TestSentAsUserExactMessageReceipt(t *testing.T) {
+	d := open(t)
+	ctx := context.Background()
+	at := time.Now().UTC()
+	_, err := d.RecordSentAsUser(ctx, SentAsUser{At: at, Connector: "larkcli", Action: "send", MessageRef: "om_example_sent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		message string
+		since   time.Time
+		want    bool
+	}{
+		{"om_example_sent", at.Add(-time.Minute), true},
+		{"om_example_other", at.Add(-time.Minute), false},
+		{"om_example_sent", at.Add(time.Minute), false},
+	} {
+		got, err := d.HasSentAsUserMessage(ctx, tc.message, tc.since)
+		if err != nil || got != tc.want {
+			t.Errorf("%s: got %v, error %v, want %v", tc.message, got, err, tc.want)
+		}
+	}
+}

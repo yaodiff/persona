@@ -149,7 +149,7 @@ describe("the model panel for a new Agent", () => {
     expect(r.getAttribute("aria-disabled")).toBe("true");
     act(() => r.click());
     expect(onPick).not.toHaveBeenCalled();
-    act(() => button("怎么修好").click());
+    act(() => button("如何修复").click());
     expect(onHelp).toHaveBeenCalledWith("work_gw");
   });
 

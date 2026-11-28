@@ -195,7 +195,7 @@ function HealthHome({ onToggleSidebar }: { onToggleSidebar: () => void }) {
       </header>
       {items.enabled && <HealthItemsEditor items={items} open={editing && Boolean(items.state)} onClose={() => setEditing(false)} />}
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-[760px] px-4 py-6 sm:px-8" style={{ animation: `fade-up 320ms ${EASE} both` }}>
+        <div className="mx-auto max-w-[760px] px-4 py-6 sm:px-8" style={{ animation: `fade-up 320ms ${EASE} backwards` }}>
           {items.enabled && items.ask && <HealthItemsAsk items={items} />}
           <HealthToday items={items.enabled ? { kinds: items.shown, error: items.error, reload: items.reload } : undefined} />
           <div className="mb-5 flex flex-col items-center text-center">

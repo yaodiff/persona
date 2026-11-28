@@ -50,6 +50,10 @@ type Detail struct {
 	// hub transcription not final) while nothing can settle it; "module_off": the recording module is off. Derived
 	// when read, never stored (docs/assistant/knowledge.md "Recordings without the recording module"). Absent otherwise.
 	Paused string `json:"paused,omitempty"`
+	// Speakers: a hub-transcribed meeting's speaker list, state, quality and timeline spans
+	// (docs/assistant/meeting-minutes.md "Speakers (#17674)"), derived on read (Core, with or without the recording
+	// module). Absent when the recording has no speaker data.
+	Speakers *DetailSpeakers `json:"speakers,omitempty"`
 }
 
 // ProfileRecord is one writer's profile of a person and when it was written.
@@ -175,6 +179,11 @@ type RecordingSegment struct {
 	// docs/assistant/meeting-minutes.md "Persona's echo"), marked by the phone or by the hub's rule (modules/recording/writers/echo.go). Kept,
 	// never fed to the minutes, the summary or the follow-up; absent (false) for every other line.
 	Echo bool `json:"echo,omitempty"`
+	// Speaker is the canonical speaker id ("s1", "s2", ...) assigned on read when a speaker timeline exists
+	// (docs/assistant/meeting-minutes.md "Speakers (#17674)"). Only the hub sets it on read; never accepted from uploads.
+	Speaker SpeakerID `json:"speaker,omitempty"`
+	// SpeakerUnsure is true when the speaker label is uncertain or the meeting's separation quality is low.
+	SpeakerUnsure bool `json:"speaker_unsure,omitempty"`
 }
 
 // Hit is one search result.

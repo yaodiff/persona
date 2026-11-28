@@ -23,6 +23,7 @@ import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
 import persona.core.contracts.api.ConnectionState
 import persona.core.contracts.api.InboxActionsTransport
+import persona.core.contracts.api.InboxItemContext
 import persona.core.inbox.*
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -354,7 +355,7 @@ class InboxHandOffBarModelTest {
         }
         val actions = object : InboxActionsTransport {
             override suspend fun collectNow() = Unit
-            override suspend fun context(itemId: String) = "Context"
+            override suspend fun context(itemId: String) = InboxItemContext("Context")
         }
         val experience = InboxExperienceRepository(repository, storage, actions,
             MutableStateFlow(ConnectionState.Online), owner, { _, _, _ -> }, resources = resources)

@@ -1,7 +1,7 @@
 {
-  "chunk_title": "这一页没能加载",
-  "error_title": "这一页出错了",
-  "chunk_body": "可能是 hub 刚更新过，重新加载一次就好。",
-  "error_body": "重新加载试试；还不行的话，换个页面再回来。",
+  "chunk_title": "页面加载失败",
+  "error_title": "页面出现异常",
+  "chunk_body": "hub 可能刚刚完成更新，重新加载页面通常即可恢复。",
+  "error_body": "请尝试重新加载。如仍无法恢复，可先切换到其他页面后再返回。",
   "reload": "重新加载"
 }

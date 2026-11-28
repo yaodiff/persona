@@ -160,13 +160,14 @@ func TestMessageCardSendsOnce(t *testing.T) {
 	}
 }
 
-// A card from before the hub recorded sends: its item was replied to after it came, so it reads as sent (with the
-// draft), and stays so when the item opens again.
+// A recorded Persona send restores the send time even if the original write did not update the card.
 func TestMessageCardSentBeforeTheRecord(t *testing.T) {
 	h, _, it := cardHub(t)
 	draft(t, h, "在修了")
 	h.inbox.mu.Lock()
-	it.done(time.Now().Add(time.Second), "replied")
+	at := time.Now().Add(time.Second)
+	h.inbox.noteSent(it, at)
+	it.done(at, "replied")
 	h.inbox.mu.Unlock()
 	got := cards(t, h, time.Time{})
 	if len(got) != 1 || cardSentAt(got[0]) == nil || cardBody(t, got[0]).Sent != "" || cardBody(t, got[0]).Draft != "在修了" {
@@ -198,6 +199,86 @@ func TestMessageCardSentBeforeTheRecord(t *testing.T) {
 	body, _ := json.Marshal(map[string]string{"text": "在修了", "card": got[0].ID})
 	if code, _ := inboxCall(t, h2.routes(), "POST", "/api/v1/inbox/example:1/reply", string(body)); code != http.StatusConflict || len(rc2.got) != 0 {
 		t.Fatalf("filed, not replied: 发送 = %d, sent %+v", code, rc2.got)
+	}
+}
+
+func TestMessageCardsFromSourceReplyAreFiled(t *testing.T) {
+	h, rc, it := cardHub(t)
+	draft(t, h, "First draft")
+	draft(t, h, "Second draft")
+	if got := cards(t, h, time.Time{}); len(got) != 2 {
+		t.Fatalf("feed has %d drafts, want two", len(got))
+	}
+	at := time.Now().Add(time.Second).UTC()
+	h.inbox.mu.Lock()
+	settled := h.inbox.settleThing(it, connector.InboxThing{Done: connector.DoneReplied}, at)
+	h.inbox.mu.Unlock()
+	if !settled {
+		t.Fatal("source reply did not file the item")
+	}
+	code, out := inboxCall(t, h.routes(), "GET", "/api/v1/inbox/example:1", "")
+	if code != http.StatusOK || out["done_by"] != "source_replied" || out["now"] != NowDoneReplied {
+		t.Fatalf("inbox detail: %d %v", code, out)
+	}
+	for _, card := range cards(t, h, time.Time{}) {
+		if sent, filed := cardSentAt(card), cardFiledAt(t, card); sent != nil || filed == nil || !filed.Equal(at) {
+			t.Fatalf("source reply: %s", card.Body)
+		}
+	}
+	if len(rc.got) != 0 {
+		t.Fatal("filing a draft sent a message")
+	}
+}
+
+func TestMessageCardsKeepDoneStateAfterInboxEviction(t *testing.T) {
+	ctx := t.Context()
+	database := todoTestDB(t)
+	s, _ := newTaskServiceOn(t, database)
+	h := &inboxHub{Service: s}
+	at := time.Now().UTC().Add(-inboxForget - time.Hour)
+	for id, event := range map[string]string{"example:source-reply": ChainSelfReplied, "example:send": ChainSent} {
+		it := InboxItem{ID: id, Source: "example", UpdatedAt: at, Chain: []InboxChainEntry{{Kind: event, At: at}}}
+		it.done(at, "replied")
+		raw, err := json.Marshal(it)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := database.PutInboxItem(ctx, id, raw, at, it.DoneAt); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.appendFeedAt(ctx, "conv1", feedMessage, id, MessageCard{Draft: "A draft"}, at.Add(-time.Minute)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.inboxReady(ctx); err != nil {
+		t.Fatal(err)
+	}
+	h.inbox.mu.Lock()
+	held := len(h.inbox.items)
+	h.inbox.mu.Unlock()
+	if held != 0 {
+		t.Fatalf("loaded %d inbox items into memory, want none", held)
+	}
+	for range 2 {
+		got := cards(t, h, time.Time{})
+		if len(got) != 2 {
+			t.Fatalf("feed has %d message cards, want two", len(got))
+		}
+		for _, card := range got {
+			sent, filed := cardSentAt(card), cardFiledAt(t, card)
+			switch card.Ref {
+			case "example:source-reply":
+				if sent != nil || filed == nil || !filed.Equal(at) {
+					t.Fatalf("archived source reply: %s", card.Body)
+				}
+			case "example:send":
+				if sent == nil || !sent.Equal(at) || filed != nil || cardBody(t, card).Sent != "" {
+					t.Fatalf("archived send: %s", card.Body)
+				}
+			default:
+				t.Fatalf("unexpected card: %s", card.Ref)
+			}
+		}
 	}
 }
 

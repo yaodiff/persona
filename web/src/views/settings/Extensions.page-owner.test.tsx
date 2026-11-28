@@ -65,6 +65,14 @@ const click = async (label: string) => {
   await act(async () => button!.click());
   await flush();
 };
+const clickBack = async (label: string) => {
+  const back = vi.spyOn(history, "back").mockImplementation(() => {});
+  await click(label);
+  expect(back).toHaveBeenCalledOnce();
+  back.mockRestore();
+  await act(async () => window.dispatchEvent(new PopStateEvent("popstate", { state: { extPage: 1 } })));
+  await flush();
+};
 const draws = () => requests.filter((r) => r.url.includes("/ui/") && !r.body.action);
 const actions = () => requests.filter((r) => !!r.body.action);
 const opens = () => socket.sent.filter((e) => e.request.request === "open");
@@ -145,9 +153,32 @@ it.each(["example@m-1/ui/main", "example/ui/main"])("keeps resolved owner conten
   await click("Change setting");
   expect(actions().at(-1)).toMatchObject({ manager: "m-1", body: { action: "change", state: "Work-details-state" } });
   expect(actions().at(-1)?.url).toMatch(/\/ui\/details$/);
+  await clickBack("Work main");
   await click("Work extension");
   expect(onOpen).toHaveBeenLastCalledWith("example@m-1");
   expect(socket.sent).toHaveLength(0);
+});
+
+it.each([
+  ["example@m-1/ui/main", "Work extension", "Work main", "example@m-1"],
+  ["example/ui/main", "Personal extension", "Main settings", "example"],
+])("shows one Back for a pushed page and keeps the route Back after it pops on %s", async (route, extensionBack, pageBack, extensionRoute) => {
+  const onOpen = await render(route);
+  if (route === "example/ui/main") await frame(snapshot(opens()[0], "page-owner"));
+  const backButtons = () => [...host.querySelectorAll<HTMLButtonElement>("button")].filter((b) => b.textContent === extensionBack || b.textContent === pageBack);
+
+  expect(backButtons().map((b) => b.textContent)).toEqual([extensionBack]);
+  await click("Next page");
+  expect(backButtons().map((b) => b.textContent)).toEqual([pageBack]);
+
+  await clickBack(pageBack);
+
+  expect(host.textContent).toContain(route.includes("@m-1") ? "Work main content" : "Personal main content");
+  expect(backButtons().map((b) => b.textContent)).toEqual([extensionBack]);
+  expect(onOpen).not.toHaveBeenCalled();
+
+  await click(extensionBack);
+  expect(onOpen).toHaveBeenCalledWith(extensionRoute);
 });
 
 it.each(["example@assistant/ui/main", "example/ui/main"])("retains default native page and action ownership on %s", async (route) => {

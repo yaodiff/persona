@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -23,6 +24,7 @@ import (
 // Someday; a zero time is none.
 type placement struct {
 	assistantwire.TodoSummary
+	wait                 *assistantwire.TodoWait
 	deadline, wake, back time.Time
 }
 
@@ -54,7 +56,29 @@ func place(f *Facts, now time.Time) placement {
 
 // place is the placement the rows and the steps give, without next_change_at.
 func (r *reading) place() placement {
-	return r.withSteps(r.own())
+	p := r.withSteps(r.own())
+	if p.Section != assistantwire.TodoListSectionTodo {
+		return p
+	}
+	// A gate or blocker fills an otherwise idle row before it is ranked or rolled up to a parent.
+	switch {
+	case r.f.TodosV2 && r.f.RepoGate != nil:
+		p.Reason = assistantwire.TodoReasonPrOpen
+		p.Line = line(assistantwire.TodoLineKeyPrOpen)
+		p.wait = copyWait(*r.f.RepoGate)
+	case len(r.f.ActiveBlockers) > 0:
+		b := r.f.ActiveBlockers[0]
+		p.Reason = assistantwire.TodoReasonParked
+		p.Line = line(assistantwire.TodoLineKeyParked, assistantwire.TodoLineArgReason, b.WaitingOn)
+		if remaining := len(r.f.ActiveBlockers) - 1; remaining > 0 {
+			p.Line = withArg(p.Line, "remaining", strconv.Itoa(remaining))
+		}
+		p.wait = copyWait(b)
+	default:
+		return p
+	}
+	p.Phase, p.Section, p.Inactive = assistantwire.TodoPhaseWaiting, assistantwire.TodoListSectionWaiting, time.Time{}
+	return p
 }
 
 // own places the to-do by its own facts, rows 1 to 14.
@@ -66,15 +90,17 @@ func (r *reading) own() placement {
 		return r.failedStart()
 	}
 	for _, row := range []func() (placement, bool){
-		r.runAsks,        // row 2
-		r.ownerDecides,   // row 3
-		r.canWait,        // row 4
-		r.working,        // row 5
-		r.parked,         // row 8
-		r.finishedRecent, // row 9
-		r.waiting,        // row 10
-		r.finishedSeen,   // row 11
-		r.someday,        // row 12
+		r.runAsks,           // row 2
+		r.ownerDecides,      // row 3
+		r.stoppedUnfinished, // row 2's unattended-stop fallback; explicit owner asks keep their own reason
+		r.canWait,           // row 4
+		r.working,           // row 5
+		r.parked,            // row 8
+		r.structuredWait,    // row 8, from a runtime report or provider observation
+		r.finishedRecent,    // row 9
+		r.waiting,           // row 10
+		r.finishedSeen,      // row 11
+		r.someday,           // row 12
 	} {
 		if p, ok := row(); ok {
 			return p
@@ -93,6 +119,12 @@ func (r *reading) at(phase, section, reason string) placement {
 // seenSince: the owner looked at it at or after at.
 func (r *reading) seenSince(at time.Time) bool {
 	return r.f.SeenAt != nil && !r.f.SeenAt.Before(at)
+}
+
+// supervised: a conversation (main or a direction leader) supervises this task and handles its operational failures
+// (failed starts, transient/model interruptions, supervisor-held cards) until it explicitly escalates to the owner.
+func (r *reading) supervised() bool {
+	return r.f.Supervision != nil && r.f.Supervision.Supervisor != ""
 }
 
 // line is a line 2 with the arguments that have a value (name, value pairs); an empty args map is left out.
@@ -215,7 +247,7 @@ func (r *reading) failedStart() placement {
 		}
 		return r.rest()
 	}
-	if f.Supervision != nil && f.Supervision.Supervisor != "" {
+	if r.supervised() {
 		// A supervised task's failed start is its supervisor's to retry, remedy or give up on (the start remedies and
 		// the failed signal go there): Persona works on it, and only the supervisor's needs_user brings it to the owner.
 		p := r.at(assistantwire.TodoPhaseWorking, assistantwire.TodoListSectionWorking, assistantwire.TodoReasonPersonaWorking)
@@ -234,7 +266,7 @@ func (r *reading) failedStart() placement {
 // ---- row 2: a run asks, or was cut off ----
 
 // runAsks: a run waits on the owner (agent_asks; every run that asks is an ask, the oldest first) or was cut off by a
-// model error (interrupted). stopped_unfinished needs a run's end reason, which the session list does not carry yet.
+// model error (interrupted). Unattended closeouts are handled separately, after explicit owner decisions.
 func (r *reading) runAsks() (placement, bool) {
 	var asking []run
 	for _, rn := range r.runs {
@@ -253,13 +285,72 @@ func (r *reading) runAsks() (placement, bool) {
 		r.withOwnAsk(&p)
 		return p, true
 	}
-	if rn, ok := firstRun(r.runs, runInterrupted); ok {
-		p := r.at(assistantwire.TodoPhaseNeedsYou, assistantwire.TodoListSectionNeedsYou, assistantwire.TodoReasonInterrupted)
-		p.Line, p.Since = line(assistantwire.TodoLineKeyInterrupted, "run", rn.title()), utc(rn.since())
-		r.withOwnAsk(&p)
-		return p, true
+	if !r.supervised() {
+		if rn, ok := firstRun(r.runs, runInterrupted); ok {
+			p := r.at(assistantwire.TodoPhaseNeedsYou, assistantwire.TodoListSectionNeedsYou, assistantwire.TodoReasonInterrupted)
+			p.Line, p.Since = line(assistantwire.TodoLineKeyInterrupted, "run", rn.title()), utc(rn.since())
+			r.withOwnAsk(&p)
+			return p, true
+		}
 	}
 	return placement{}, false
+}
+
+// stoppedTurn reads the latest evidenced stop, not a read receipt or automatic ledger update. A newer stopped
+// run supersedes an older report; any actual execution keeps the task out of the unattended-stop fallback.
+func (r *reading) stoppedTurn() (run, time.Time, bool) {
+	var lead run
+	var at time.Time
+	found := false
+	for _, rn := range r.runs {
+		switch rn.kind {
+		case runRunning, runPersona, runStarting, runBackground:
+			return run{}, time.Time{}, false
+		}
+		if !rn.found || rn.s.Work == nil || rn.kind != runIdle && rn.kind != runUnread && rn.kind != runWaits {
+			continue
+		}
+		if rn.reportStatus() == "" && rn.kind != runIdle {
+			continue // preserve upstream's unread/wait compatibility when there is no closeout report
+		}
+		if rn.reportStatus() == "" && rn.s.Work.TurnAt.IsZero() {
+			continue // older snapshots without stop evidence keep their compatibility reading
+		}
+		end := rn.since()
+		if end.IsZero() && rn.link.LinkedAt != nil {
+			end = *rn.link.LinkedAt
+		}
+		if !found || end.After(at) {
+			lead, at, found = rn, end, true
+		}
+	}
+	at = latest(at, r.f.CreatedAt)
+	if sv := r.f.Supervision; sv != nil {
+		at = later(at, sv.FollowedUpAt)
+		for _, review := range sv.Reviews {
+			if review.By == "" {
+				at = latest(at, review.At)
+			}
+		}
+	}
+	return lead, at, found
+}
+
+func (r *reading) stoppedUnfinished() (placement, bool) {
+	if r.f.Unreached || r.settled() || reviewState(r.f) == reviewParked || r.runtimeWait() != nil {
+		return placement{}, false
+	}
+	rn, since, ok := r.stoppedTurn()
+	if !ok || rn.kind == runWaits || rn.reportStatus() == proto.CloseoutDone || since.IsZero() || r.now.Sub(since) <= stoppedFollowupAfter {
+		return placement{}, false
+	}
+	text := rn.s.Work.Wait
+	if c := rn.s.Work.Closeout; c != nil {
+		text = cmp.Or(c.Waiting, c.Missing, text)
+	}
+	p := r.at(assistantwire.TodoPhaseNeedsYou, assistantwire.TodoListSectionNeedsYou, assistantwire.TodoReasonStoppedUnfinished)
+	p.Line, p.Since = line(assistantwire.TodoLineKeyStoppedUnfinished, "run", rn.title(), "text", text), utc(since)
+	return p, true
 }
 
 // runAsk is run rn's ask, at home in its session, its id following the moment the session came to wait: what its
@@ -397,19 +488,12 @@ func (r *reading) pendingReviewWaiting() bool {
 
 // ---- row 3: the owner decides ----
 
-// ownerDecides: open, and its review requires personal verification or waits for the owner's decision. A decision
-// may also say the work cannot be done. A dismissed decision is out, and a decision that can wait is row 4's.
+// ownerDecides: open, and its review waits for the owner's decision (needs_user) or its ask is a decision or says it
+// cannot be done. A dismissed decision is out, and a decision that can wait is row 4's. Personal verification
+// (user_check) is deliberately not placed here: #15680 (#15638) keeps that optional "to verify" layer calm and out of
+// Needs you on every surface, so it falls through to its review/rest placement; clients report counts.user_check.
 func (r *reading) ownerDecides() (placement, bool) {
 	state := reviewState(r.f)
-	if state == reviewUserCheck {
-		p := r.at(assistantwire.TodoPhaseNeedsYou, assistantwire.TodoListSectionNeedsYou, assistantwire.TodoReasonVerify)
-		p.Since = utc(r.f.Supervision.UpdatedAt)
-		if a := openAsk(r.f); a != nil && a.Outcome == "" {
-			// Clients answer the verification round from the listed to-do's ask through the existing Pass action.
-			p.Line, p.Since = line(assistantwire.TodoLineKeyDecision, "text", a.Verdict), utc(a.AskedAt)
-		}
-		return p, true
-	}
 	a := r.decisionAsk()
 	p := r.at(assistantwire.TodoPhaseNeedsYou, assistantwire.TodoListSectionNeedsYou, assistantwire.TodoReasonOwnerDecides)
 	switch {
@@ -515,6 +599,16 @@ func (r *reading) working() (placement, bool) {
 		p.Line, p.Since = line(assistantwire.TodoLineKeyPersonaWorking), utc(pendingReviewSince(r.f))
 		return p, true
 	}
+	// A supervised task whose agent stopped on a model error (e.g. 503) is its supervisor's to recover or escalate,
+	// just like a supervised failed start: keep it in Working / persona_working unless the task is already settled,
+	// parked, or awaiting optional owner verification (user_check).
+	if r.supervised() && !r.settled() && reviewState(r.f) != reviewParked && reviewState(r.f) != reviewUserCheck && r.runtimeWait() == nil {
+		if rn, ok := firstRun(r.runs, runInterrupted); ok {
+			p := r.at(assistantwire.TodoPhaseWorking, assistantwire.TodoListSectionWorking, assistantwire.TodoReasonPersonaWorking)
+			p.Line, p.Since = line(assistantwire.TodoLineKeyInterrupted, "run", rn.title()), utc(rn.since())
+			return p, true
+		}
+	}
 	return placement{}, false
 }
 
@@ -537,7 +631,20 @@ func (r *reading) parked() (placement, bool) {
 	if rv := latestReview(sv); rv != nil && rv.Verdict == reviewParked {
 		p.Since = utc(rv.At)
 	}
+	p.wait = buildParkedWait(sv)
 	p.wake = sv.Parked.Until
+	return p, true
+}
+
+func (r *reading) structuredWait() (placement, bool) {
+	w := r.runtimeWait()
+	if w == nil {
+		return placement{}, false
+	}
+	p := r.at(assistantwire.TodoPhaseWaiting, assistantwire.TodoListSectionWaiting, assistantwire.TodoReasonParked)
+	p.wait = buildRuntimeWait(w, r.f.RuntimeAt)
+	p.Line = line(assistantwire.TodoLineKeyParked, assistantwire.TodoLineArgReason, p.wait.Reason, assistantwire.TodoLineArgUntil, stamp(p.wait.Until))
+	p.Since, p.wake = p.wait.Since, p.wait.Until
 	return p, true
 }
 
@@ -557,6 +664,16 @@ func (r *reading) finish() (time.Time, *assistantwire.TodoLine, bool) {
 			at = r.last
 		}
 		return at, line(assistantwire.TodoLineKeyDeployed), true
+	}
+	if rn, since, ok := r.stoppedTurn(); ok {
+		if rn.reportStatus() != proto.CloseoutDone {
+			return time.Time{}, nil, false
+		}
+		at := rn.since()
+		if at.IsZero() {
+			at = since
+		}
+		return at, line(assistantwire.TodoLineKeyFinished, "run", rn.title()), true
 	}
 	if rn, ok := firstRun(r.runs, runUnread); ok {
 		return rn.since(), line(assistantwire.TodoLineKeyFinished, "run", rn.title()), true
@@ -589,6 +706,9 @@ func (r *reading) finishedRecent() (placement, bool) {
 	}
 	p := r.at(assistantwire.TodoPhaseReady, assistantwire.TodoListSectionJustFinished, assistantwire.TodoReasonFinishedUnseen)
 	p.Line, p.Since = l, utc(at)
+	if rn, _, known := r.stoppedTurn(); known && rn.reportStatus() == proto.CloseoutDone {
+		p.Seen = r.seenSince(at)
+	}
 	if !p.Seen {
 		return p, true
 	}
@@ -607,6 +727,9 @@ func (r *reading) finishedSeen() (placement, bool) {
 	}
 	p := r.at(assistantwire.TodoPhaseTodo, assistantwire.TodoListSectionTodo, assistantwire.TodoReasonFinishedSeen)
 	p.Line, p.Since = line(assistantwire.TodoLineKeyFinishedSeen, assistantwire.TodoLineArgAt, stamp(at)), utc(at)
+	if rn, _, known := r.stoppedTurn(); known && rn.reportStatus() == proto.CloseoutDone {
+		p.Seen = r.seenSince(at)
+	}
 	return p, true
 }
 
@@ -620,6 +743,7 @@ func (r *reading) waiting() (placement, bool) {
 	if prs := openPRs(r.f, r.now); len(prs) > 0 && !r.settled() {
 		p := r.at(assistantwire.TodoPhaseWaiting, assistantwire.TodoListSectionWaiting, assistantwire.TodoReasonPrOpen)
 		p.Line = line(assistantwire.TodoLineKeyPrOpen)
+		p.wait = buildPRWait(prs[0])
 		return p, true
 	}
 	if rn, ok := firstRun(r.runs, runLimited); ok {
@@ -629,6 +753,7 @@ func (r *reading) waiting() (placement, bool) {
 			p.Line = line(assistantwire.TodoLineKeyUsageLimit, "run", rn.title(), assistantwire.TodoLineArgResetsAt, stamp(*reset))
 			p.wake = reset.Add(usageLimitGrace)
 		}
+		p.wait = buildUsageLimitWait(rn)
 		return p, true
 	}
 	if rn, ok := firstRun(r.runs, runWaits); ok {
@@ -638,6 +763,7 @@ func (r *reading) waiting() (placement, bool) {
 		if w := rn.s.Work.WakeAt; w != nil {
 			p.wake = *w
 		}
+		p.wait = buildRunWaitsWait(rn)
 		return p, true
 	}
 	return placement{}, false
@@ -763,6 +889,10 @@ func (r *reading) withSteps(own placement) placement {
 	out.Seen = r.seenSince(latest(r.last, latestOf(parts)))
 	if lead.step != nil {
 		out.Line = withArg(out.Line, "step", lead.step.Title)
+		if out.wait != nil {
+			out.wait = cloneWait(out.wait)
+			out.wait.Step = lead.step.Title
+		}
 		out.Inactive, out.Steps, out.back = time.Time{}, own.Steps, time.Time{}
 	}
 	return out
@@ -846,6 +976,9 @@ func moments(f *Facts, now time.Time) []time.Time {
 		if t.After(now) && t.Before(somedayNoDate) {
 			out = append(out, t)
 		}
+	}
+	if rn, since, ok := read(f, now).stoppedTurn(); ok && rn.reportStatus() != proto.CloseoutDone && !since.IsZero() {
+		add(since.Add(stoppedFollowupAfter).Add(time.Nanosecond))
 	}
 	add(f.UpdatedAt.Add(failedStartFor))
 	if f.DoneAt != nil {

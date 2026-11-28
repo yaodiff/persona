@@ -14,18 +14,18 @@ import { openLink } from "../../lib/links";
 import { useLinkManager } from "../../lib/manager-choice";
 import {
   blocks, initials, isHttps, numberProblem, percent, tableRows, toneOf,
-  type RowIcon, type UIAction, type UIItem, type UIMore, type UISection, type UITone, type UIView,
+  type UIAction, type UIItem, type UIMore, type UISection, type UITone, type UIView,
 } from "../../lib/extension-ui";
 import { presenceStyle, usePresence, type Present } from "../../ui/motion";
 import { Rolling } from "../../ui/Rolling";
 import { scrollBehavior } from "../../ui/stream/motion";
 import { t } from "../../i18n";
 import { Button, cx, EASE, Loading, Spinner } from "../../ui/atoms";
-import { Icon, type IconName } from "../../ui/icons";
+import { Icon } from "../../ui/icons";
 import { Switch } from "../settings/SettingsParts";
 import { ChartFrame, LABEL_H, plotHeight } from "./ChartFrame";
-import { ExtensionChart } from "./view-sections-lazy";
-import { NEW_ICON_GLYPH } from "./icon-map";
+import { ExtensionChart, GraphCanvas, SceneCanvas } from "./view-sections-lazy";
+import { ROW_ICON } from "./icon-map";
 import { SegmentedTrack } from "../../ui/Segmented";
 import { colorOf, hue, hueTint } from "../../lib/extension-ui-v6";
 import { Badge, Carousel, DateInput, glyphOf, Grid, ImageItem, MultiChoice, MultilineInput, SliderLine, Sparkline, TrailingControl, useImage, useRowMenu, type V6Handlers } from "./ViewBody6";
@@ -48,20 +48,8 @@ const DiffView = lazyPage(() => import("./DiffReview").then((m) => m.DiffView));
 // Loading meanwhile; ViewBody8 then draws it through ViewSections again, with its own head for the sections.
 const Sections8 = lazyPage<ViewHandlers & { view: UIView; embedded?: boolean; compact?: boolean }>(() => import("./ViewBody8").then((m) => m.Sections8));
 
-// UI version 10's graph canvas (ViewBody10.tsx) is a chunk of its own as well: only an extension's page or card with a
-// graph draws it, so it stays out of the first screen and the idle preload. It loads with the first view that has one;
-// meanwhile the space keeps its height and shows nothing (the graph is a canvas of its own, not a row). A compact
-// card's fallback mirrors the drawn card's own wrapper (px-4 py-3 around the 200 px preview), so the card does not
-// jump when the chunk arrives. The canvas reads whose view it is from lib/extension-owner.tsx's context.
-const GraphCanvas = lazyPage<
-  {
-    item: UIItem;
-    compact?: boolean;
-    busy: string;
-    onPress: (a: UIAction, destructive?: boolean) => void;
-    canPress?: (a: UIAction) => boolean;
-  }
->(() => import("./ViewBody10").then((m) => m.GraphCanvas));
+// Graph and scene canvases have separate on-demand chunks, registered in view-sections-lazy.tsx. Their shared fallback
+// keeps a compact card's 200 px preview height while the chunk arrives.
 
 // UI version 12's interactive vector map canvas (ViewBody12.tsx) is its own lazy chunk: only loaded when an extension
 // page, card or chat tool view renders a `map` item, keeping the first screen and idle preload clear.
@@ -436,16 +424,19 @@ function NativeItem({ item: it, compact, values, setValue, busy, onPress, onChoo
       );
     // UI version 10: a graph is a canvas of its own (ViewBody10.tsx), drawn from its own chunk; the space keeps its
     // height meanwhile, so the page does not jump when it comes in. The canvas itself reads whose view it is (the
-    // extension, else the page's own path) from lib/extension-owner.tsx's context, so two owners' graphs never share
+    // extension, else the page's own path) from lib/extension-owner.tsx's context, so two owners' canvases never share
     // what a key keeps.
     case "graph":
+    case "scene": {
+      const Canvas = it.type === "graph" ? GraphCanvas : SceneCanvas;
       return (
         <div className={compact ? "" : "graph-shell"}>
           <Suspense fallback={<div className={compact ? "px-4 py-3" : "graph-canvas w-full"} aria-hidden>{compact && <div className="graph-preview" />}</div>}>
-            <GraphCanvas item={it} compact={compact} busy={busy} onPress={onPress} canPress={canPress} />
+            <Canvas item={it} compact={compact} busy={busy} onPress={onPress} canPress={canPress} />
           </Suspense>
         </div>
       );
+    }
     case "map":
       return (
         <Suspense
@@ -692,14 +683,8 @@ function Field({ item: it, value, locked, onChange }: { item: UIItem; value: str
 
 // ── UI version 3 ─────────────────────────────────────────
 
-/** A row's icon from the fixed vocabulary, as one of the web's icons. */
-export const ROW_ICON: Record<RowIcon, IconName> = {
-  extension: "extension", plugin: "extension", chart: "chart", gauge: "gauge", list: "list", bell: "bell", doc: "read", calendar: "calendar",
-  money: "money", person: "person", chat: "chat", mail: "mail", link: "link", folder: "folder", star: "star", check: "check",
-  warning: "warning", clock: "clock", tag: "tag", search: "search", settings: "gear", branch: "branch", commit: "commit", code: "code",
-  pull_request: "pullRequest", merge: "merge", file: "read",
-  ...NEW_ICON_GLYPH,
-};
+/** A row's icon from the fixed vocabulary, as one of the web's icons (icon-map.ts, shared with a nav_page's, #16281). */
+export { ROW_ICON };
 
 /** What leads a row: its icon (UI version 6: in its color), a picture (its initials until it loads, or when it does not), or a thumbnail. */
 function RowLead({ item, onImageFailed }: { item: UIItem; onImageFailed?: () => void }) {

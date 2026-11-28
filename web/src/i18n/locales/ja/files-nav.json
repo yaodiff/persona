@@ -16,6 +16,6 @@
   "link_to": "リンク → {target}",
   "link_broken": "リンク切れ・{target} がありません",
   "show_in_files": "ファイルパネルで表示",
-  "open_terminal": "ここでターミナルを開く",
-  "terminal_failed": "ターミナルを開けませんでした：{error}"
+  "open_terminal": "ここでシェルを開く",
+  "terminal_failed": "シェルを開けませんでした（{error}）"
 }

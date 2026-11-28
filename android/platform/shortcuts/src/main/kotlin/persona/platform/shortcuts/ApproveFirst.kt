@@ -99,7 +99,7 @@ class ApproveFirstModel(
             ?: run { mutable.value = ApproveState.Failed(res.getString(R.string.shortcuts_locked)); return null }
         mutable.value = current.copy(sending = true)
         return try {
-            center.resolve(current.request.id, resolution)
+            center.resolveOccurrence(current.request, resolution)
             ShortcutText.done(res, current.request)
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (failure: Exception) {

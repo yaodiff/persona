@@ -1,10 +1,10 @@
 {
   "label": "随消息发送的上下文",
-  "edit_title": "要改的内容",
+  "edit_title": "待修改内容",
   "context": "上下文",
-  "edit": "要改",
+  "edit": "修改",
   "quoted": "「{text}」",
-  "remove_label": "移除这个上下文",
+  "remove_label": "移除此上下文",
   "remove": "移除",
   "workspace": "工作区",
   "repository": "仓库",

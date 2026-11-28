@@ -1,7 +1,6 @@
 package assistant
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -69,6 +68,9 @@ func applySavedBackendPlan(t *PlanTask, plan *workspacenaming.Plan, op string) {
 	resolved := &TaskWorkspaceResolved{Machine: t.Machine, Path: t.Cwd, OperationID: op}
 	for _, repo := range plan.Repositories {
 		resolved.Repositories = append(resolved.Repositories, BackendLaunchRepository{RepositoryPlan: repo})
+	}
+	if len(plan.Repositories) == 1 {
+		resolved.Branch = plan.Repositories[0].TaskBranch
 	}
 	t.WorkspaceResolved = resolved
 }
@@ -276,17 +278,8 @@ func (s *Service) resolveContainerTask(ctx context.Context, t *PlanTask) error {
 		}
 		return problem
 	}
-	if err := workspacenaming.CheckPlan(*preview.Plan); err != nil {
+	if err := validateWorkspaceNamingPlan(*preview.Plan, source); err != nil {
 		return err
-	}
-	expected := source
-	if expected.Timezone == "" {
-		expected.Timezone = "UTC"
-	}
-	want, _ := json.Marshal(expected)
-	got, _ := json.Marshal(preview.Plan.Source)
-	if !bytes.Equal(want, got) {
-		return repository.Problem("invalid")
 	}
 	applySavedBackendPlan(t, preview.Plan, sel.OperationID)
 	return nil
@@ -356,14 +349,9 @@ func (s *Service) ensureContainerTodoRepositories(ctx context.Context, todoID st
 }
 
 func (s *Service) probeBackendWorkspaceStart(ctx context.Context, machine, op, cwd string) error {
-	var capabilities struct {
-		Start bool `json:"start"`
-	}
-	if err := s.call(ctx, machine, "task.workspace.capabilities", nil, &capabilities); err != nil {
-		if strings.Contains(err.Error(), "unknown method") {
-			return taskworkspace.Failure("unsupported", "capability", op, "", cwd)
-		}
-		return taskworkspace.Failure("node_unavailable", "capability", op, "", cwd)
+	capabilities, err := s.backendWorkspaceCapabilities(ctx, machine, op, cwd)
+	if err != nil {
+		return err
 	}
 	if !capabilities.Start {
 		return taskworkspace.Failure("unsupported", "capability", op, "", cwd)
@@ -405,6 +393,10 @@ func (s *Service) admitBackendTask(ctx context.Context, t *PlanTask) error {
 			return err
 		}
 	}
+	return s.admitPreparedTaskWorkspace(ctx, t, op)
+}
+
+func (s *Service) admitPreparedTaskWorkspace(ctx context.Context, t *PlanTask, op string) error {
 	st, err := s.backendWorkspaceStore()
 	if err != nil {
 		return err
@@ -442,6 +434,13 @@ func (s *Service) admitBackendTask(ctx context.Context, t *PlanTask) error {
 	}
 	// Every retry of this plan slot presents the same use. A different plan must first retire the old session.
 	use := "launch_" + taskworkspace.Hash([]string{t.planID, strconv.Itoa(t.planIndex), r.OperationID})[:32]
+	if t.nodeDispatchedWorkspace() {
+		if !s.preclaimWorkspace(ctx, t.Machine, t.Cwd, t.TodoID) {
+			return taskworkspace.Failure("worktree_in_use", "admission", op, "", t.Cwd)
+		}
+		t.WorkspaceResolved.Created = true
+		s.resolveTaskRepo(ctx, t)
+	}
 	if err = s.releaseStoppedBackendUses(ctx, r, use); err != nil {
 		return err
 	}
@@ -450,6 +449,7 @@ func (s *Service) admitBackendTask(ctx context.Context, t *PlanTask) error {
 	t.WorkspaceResolved.BackendWorkspaceID, t.WorkspaceResolved.OperationID = r.WorkspaceID, r.OperationID
 	if err = s.patchPlanTask(ctx, t.planID, t.planIndex, func(pt *PlanTask) {
 		pt.Cwd, pt.MachinePolicy, pt.WorkspaceResolved = t.Cwd, machineFixed, t.WorkspaceResolved
+		pt.Repo = t.Repo
 	}); err != nil {
 		return err
 	}
@@ -465,6 +465,8 @@ func (s *Service) admitBackendTask(ctx context.Context, t *PlanTask) error {
 }
 
 func (s *Service) startBackendTask(ctx context.Context, t *PlanTask, params map[string]any, out any) error {
+	ctx, cancel := context.WithTimeout(ctx, taskStartTimeout)
+	defer cancel()
 	req := t.backendRequest
 	if req == nil {
 		return errors.New("backend workspace admission required")
@@ -472,7 +474,9 @@ func (s *Service) startBackendTask(ctx context.Context, t *PlanTask, params map[
 	if _, err := s.CheckBackendWorkspaceUse(ctx, t.TodoID, req.OperationID, req.UseID); err != nil {
 		return err
 	}
-	params["backend_workspace"] = *req
+	envelope := *req
+	envelope.TaskDispatch = t.nodeDispatchedWorkspace()
+	params["backend_workspace"] = envelope
 	if host := t.backendHost(); host != "" {
 		params["host"] = host
 	}
@@ -547,7 +551,10 @@ func (s *Service) releaseStoppedBackendUses(ctx context.Context, r *taskworkspac
 			return err
 		}
 		obs := view.Observation
-		if obs == nil || obs.Error != nil || obs.OperationID != r.OperationID || obs.NodeOperationID != r.OperationID || obs.WorkspaceID != r.WorkspaceID {
+		// A checkout's Git drift says nothing about its launch. Release still
+		// requires the Node to prove that the exact launch is stopped.
+		if obs == nil || obs.Error != nil && obs.Error.Code != "workspace_drift" || obs.OperationID != r.OperationID ||
+			obs.NodeOperationID != r.OperationID || obs.WorkspaceID != r.WorkspaceID || obs.InputDigest != r.InputDigest {
 			return taskworkspace.Failure("operation_unknown", "release", r.OperationID, "", r.Plan.RootPath)
 		}
 		// A confirmed cancellation also rules out a late start that had not dispatched.

@@ -4,7 +4,7 @@
 // the renderer a chunk of its own: fetched once the browser is idle after start, or by the first card drawn before then,
 // which shows its sections' boxes meanwhile so the card's frame doesn't collapse. Types only come from ViewBody here.
 import { Suspense } from "react";
-import type { UIView } from "../../lib/extension-ui";
+import type { UIAction, UIItem, UIView } from "../../lib/extension-ui";
 import { lazyPage } from "../../lib/lazy-page";
 import { cx } from "../../ui/atoms";
 import type { ViewHandlers } from "./ViewBody";
@@ -15,6 +15,17 @@ export const INERT: ViewHandlers = { values: {}, setValue: () => {}, busy: "", o
 // Only chart items draw it: its own chunk, fetched by the idle preload or the first chart. Registered here, on the first
 // screen: an idle page registered inside a lazy chunk (ViewBody's) would miss the idle preload (lib/lazy-page.ts).
 export const ExtensionChart = lazyPage(() => import("./ExtensionChart").then((m) => m.ExtensionChart), { idle: true });
+
+// Canvas registrations live here too: their chunks load only on intent, while ViewBody's idle chunk stays small.
+type CanvasProps = {
+  item: UIItem;
+  compact?: boolean;
+  busy: string;
+  onPress: (a: UIAction, destructive?: boolean) => void;
+  canPress?: (a: UIAction) => boolean;
+};
+export const GraphCanvas = lazyPage<CanvasProps>(() => import("./ViewBody10").then((m) => m.GraphCanvas));
+export const SceneCanvas = lazyPage<CanvasProps>(() => import("./ViewBody11").then((m) => m.SceneCanvas));
 
 type SectionsProps = ViewHandlers & { view: UIView; embedded?: boolean; compact?: boolean };
 

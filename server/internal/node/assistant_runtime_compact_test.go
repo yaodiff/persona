@@ -301,3 +301,132 @@ func TestAssistantRuntimeHandoff(t *testing.T) {
 		t.Fatalf("runtime pages: %s", pages)
 	}
 }
+
+func TestAssistantRuntimeCompactionSettledByRuntimeEventDespiteUnknownStatus(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		eventErr  string
+		wantState string
+	}{
+		{name: "done", eventErr: "", wantState: proto.CompactionDone},
+		{name: "failed", eventErr: "upstream compaction failed", wantState: proto.CompactionFailed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			n, hub := runtimeNode(t)
+			hub.mu.Lock()
+			hub.answer = func(method string, _ json.RawMessage) (any, error, bool) {
+				return map[string]string{"text": "- Example snapshot"}, nil, method == "assistant.context"
+			}
+			hub.mu.Unlock()
+			hello := assistantRuntimeHello()
+			hello["runtime"], hello["name"], hello["launcher"] = "agy", "Antigravity", "agy"
+			host := dialRuntime(t, n, hello)
+			otherHello := assistantRuntimeHello()
+			otherHello["runtime"], otherHello["name"], otherHello["launcher"] = "other", "Other", "other"
+			other := dialRuntime(t, n, otherHello)
+
+			id := runtimeCompactTestID
+			cwd := filepath.Join(n.home, ".persona", "assistant")
+			push := func(status string, rev int64) {
+				t.Helper()
+				row := proto.Session{SessionID: id, Cwd: cwd, Status: status, Rev: rev}
+				if err := host.peer.Notify("runtime.sessions", map[string]any{"sessions": []proto.Session{row}}); err != nil {
+					t.Fatal(err)
+				}
+				waitFor(t, "runtime row updated", func() bool {
+					got, _, ok := n.runtimes.rowOf(id)
+					return ok && got.Status == status && got.Rev == rev
+				})
+			}
+			push(proto.StatusIdle, 1)
+
+			if _, err := nodeCall(t, n, "assistant.compact", map[string]any{"session_id": id}); err != nil {
+				t.Fatal(err)
+			}
+			// Simulate conversation_summaries.db lagging behind (summary_behind -> StatusUnknown, unchanged Rev).
+			push(proto.StatusUnknown, 1)
+			if !n.runtimes.compacting(id) {
+				t.Fatal("compaction should remain running while only StatusUnknown arrives")
+			}
+
+			// An unrelated runtime connection must not be able to settle this compaction.
+			if err := other.peer.Notify("session.compaction.settled", map[string]any{"session_id": id, "error": "spoofed"}); err != nil {
+				t.Fatal(err)
+			}
+			// Synchronize with other connection by pushing an unrelated row on it, then verify compaction is still running.
+			if err := other.peer.Notify("runtime.sessions", map[string]any{"sessions": []proto.Session{{SessionID: "other-1", Status: proto.StatusIdle}}}); err != nil {
+				t.Fatal(err)
+			}
+			waitFor(t, "other runtime list processed", func() bool {
+				_, _, ok := n.runtimes.rowOf("other-1")
+				return ok
+			})
+			if !n.runtimes.compacting(id) {
+				t.Fatal("unrelated runtime settled active compaction")
+			}
+
+			payload := map[string]any{"session_id": id}
+			if tc.eventErr != "" {
+				payload["error"] = tc.eventErr
+			}
+			if err := host.peer.Notify("session.compaction.settled", payload); err != nil {
+				t.Fatal(err)
+			}
+
+			waitFor(t, "compaction settled via runtime event", func() bool {
+				got := listed(t, n)[id].Compaction
+				return got != nil && got.State == tc.wantState && got.FinishedAt != nil && got.Error == tc.eventErr
+			})
+			waitFor(t, "hub received terminal compaction state via sessions.changed", func() bool {
+				for _, row := range hub.lastList() {
+					if row.SessionID == id && row.Compaction != nil && row.Compaction.State == tc.wantState && row.Compaction.Error == tc.eventErr {
+						return true
+					}
+				}
+				return false
+			})
+
+			// Subsequent lagging runtime.sessions rows must not overwrite the settled compaction state.
+			push(proto.StatusUnknown, 1)
+			got := listed(t, n)[id].Compaction
+			if got == nil || got.State != tc.wantState || got.Error != tc.eventErr {
+				t.Fatalf("compaction state changed after trailing StatusUnknown: %+v", got)
+			}
+
+			// Sending a follow-up message must no longer be refused with compacting.
+			if _, err := nodeCall(t, n, "assistant.send", map[string]any{"session_id": id, "text": "After settled"}); err != nil {
+				t.Fatalf("assistant.send after settlement: %v", err)
+			}
+		})
+	}
+}
+
+func TestSilentRuntimeCompactionSettledByEventDespiteUnknownStatus(t *testing.T) {
+	n, host, push := runtimeCompactFixture(t)
+	id := runtimeCompactTestID
+	_, rtHost, ok := n.runtimes.rowOf(id)
+	if !ok {
+		t.Fatal("missing runtime owner")
+	}
+	unlock := n.typing.lock(id)
+	compaction, err := n.startRuntimeCompactionLocked(t.Context(), rtHost, id, true, true, false)
+	unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	push(proto.StatusUnknown, 1, "")
+	if err := host.peer.Notify("session.compaction.settled", map[string]any{"session_id": id}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-compaction.done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("silent compaction did not unblock on session.compaction.settled")
+	}
+	if failure := compaction.failureMessage(); failure != "" {
+		t.Fatalf("unexpected failure message: %q", failure)
+	}
+	if n.runtimes.compacting(id) {
+		t.Fatal("compaction still reported running after settlement")
+	}
+}

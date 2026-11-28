@@ -6,13 +6,15 @@ import persona.core.designsystem.*
 import androidx.annotation.StringRes
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import persona.core.designsystem.icons.PhIcons
+import persona.core.designsystem.icons.PersonaIcons
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import persona.core.contracts.Session
+import persona.core.contracts.api.AgentWorkspace
+import persona.core.domain.engines.Engines
 import persona.core.domain.sort.SessionRename
 import persona.core.domain.sort.canTerminal
 import persona.core.domain.sort.closeConfirmation
@@ -28,6 +30,13 @@ internal sealed interface AgentOperationDialog {
     data class RenameSpace(override val session: Session) : AgentOperationDialog
     data class Close(override val session: Session) : AgentOperationDialog
     data class Delete(override val session: Session) : AgentOperationDialog
+}
+
+@Composable
+internal fun workspaceCopyPathAction(workspace: AgentWorkspace?): JAction? {
+    val path = workspace?.cwd?.takeIf(String::isNotBlank) ?: return null
+    val copy = rememberCopy()
+    return JAction(stringResource(R.string.agents_copy_workspace_path), PersonaIcons.copy, onClick = { copy(path, null) })
 }
 
 @Composable
@@ -86,7 +95,8 @@ internal fun AgentOperationDialog(
             val unifiedEdit = if (unified) SessionRename.unifiedChanges(session, tab) else SessionRename()
             JDialog(
                 onDismiss = dismiss, title = stringResource(if (space) R.string.agents_dialog_rename_space else R.string.agents_action_rename),
-                text = renameNote(session, space, unified)?.let { stringResource(it) },
+                // the engine the tab or workspace is in, by name (#17054): herdr, Orca, Herdr App
+                text = renameNote(session, space, unified)?.let { stringResource(it, Engines.sessionEngineName(session)) },
                 confirmEnabled = if (unified) unifiedEdit.changed else newName != null || newTab != null,
                 confirm = stringResource(R.string.agents_dialog_save) to {
                     when {
@@ -100,7 +110,7 @@ internal fun AgentOperationDialog(
                         if (unified) {
                             JTextField(tab, { tab = it }, singleLine = true, label = stringResource(R.string.agents_dialog_name))
                         } else {
-                            if (hasTab) JTextField(tab, { tab = it }, singleLine = true, label = stringResource(tabNameLabel(session)))
+                            if (hasTab) JTextField(tab, { tab = it }, singleLine = true, label = stringResource(tabNameLabel(session), Engines.sessionEngineName(session)))
                             JTextField(name, { name = it }, singleLine = true, label = stringResource(if (space) R.string.agents_dialog_space_name else R.string.agents_dialog_session_name))
                         }
                     }
@@ -112,8 +122,9 @@ internal fun AgentOperationDialog(
 
 /**
  * The note of a rename dialog: what else the new name renames (iOS `SpaceRenameForm.note`, `SessionRenameForm.tabNote`). A
- * space is a herdr workspace, or in Tern one of its sessions (Tern's spaces are its sessions); a pane's tab is herdr's or
- * Tern's. None for a session without a terminal (a runtime's, #6294): it has no tab, and no Claude's /rename.
+ * space is its engine's workspace (herdr's, an Orca worktree), or in Tern or Rex one of its sessions (their spaces are their
+ * sessions); a pane's tab is its engine's. The generic notes take the engine's name (`Engines.sessionEngineName`, #17054).
+ * None for a session without a terminal (a runtime's, #6294): it has no tab, and no Claude's /rename.
  */
 @StringRes
 internal fun renameNote(session: Session, space: Boolean, unified: Boolean = false): Int? = when {
@@ -129,7 +140,7 @@ internal fun renameNote(session: Session, space: Boolean, unified: Boolean = fal
     else -> R.string.agents_dialog_rename_text
 }
 
-/** The tab field of a session's rename: a Tern or Rex pane's tab is renamed in that engine. */
+/** The tab field of a session's rename: the tab is renamed in its engine, named by the generic label's argument. */
 @StringRes
 internal fun tabNameLabel(session: Session): Int = when {
     session.isTern -> R.string.agents_dialog_tab_name_tern
@@ -147,18 +158,19 @@ internal val Session.todoSpaceName: String?
 /**
  * The actions of a space. [onOpen] adds "Open space" (the list offers it here instead of a separate button);
  * [compact] is the smaller trigger of list headings. A space without a herdr name can only be opened and read.
+ * [extra] goes last (an Orca space's New worktree…, #17054).
  */
 @Composable
 internal fun AgentSpaceMenu(session: Session, pinned: Boolean, muted: Boolean, busy: Boolean,
     onPin: () -> Unit, onMute: () -> Unit, onRename: () -> Unit, onMarkRead: (() -> Unit)? = null,
-    onOpen: (() -> Unit)? = null, compact: Boolean = false, todo: SpaceTodoActions? = null) {
+    onOpen: (() -> Unit)? = null, compact: Boolean = false, todo: SpaceTodoActions? = null, extra: List<JAction> = emptyList()) {
     val named = !session.spaceName.isNullOrBlank()
-    if (!named && onOpen == null && onMarkRead == null && todo == null) return
+    if (!named && onOpen == null && onMarkRead == null && todo == null && extra.isEmpty()) return
     var menu by remember { mutableStateOf(false) }
     val actions = stringResource(R.string.agents_space_actions)
-    if (compact) HeadingAction(PhIcons.DotsThree, actions, onClick = { menu = true })
-    else JIconButton(PhIcons.DotsThree, actions, { menu = true })
-    if (menu) JActionSheet(agentSpaceActions(session, pinned, muted, busy, onPin, onMute, onRename, onMarkRead, onOpen, todo),
+    if (compact) HeadingAction(PersonaIcons.more, actions, onClick = { menu = true })
+    else JIconButton(PersonaIcons.more, actions, { menu = true })
+    if (menu) JActionSheet(agentSpaceActions(session, pinned, muted, busy, onPin, onMute, onRename, onMarkRead, onOpen, todo) + extra,
         { menu = false }, title = session.spaceName?.takeIf { it.isNotBlank() } ?: actions)
 }
 
@@ -170,17 +182,17 @@ internal fun AgentSpaceMenu(session: Session, pinned: Boolean, muted: Boolean, b
 internal fun agentSpaceActions(session: Session, pinned: Boolean, muted: Boolean, busy: Boolean,
     onPin: () -> Unit, onMute: () -> Unit, onRename: () -> Unit, onMarkRead: (() -> Unit)? = null,
     onOpen: (() -> Unit)? = null, todo: SpaceTodoActions? = null): List<JAction> = buildList {
-    if (onOpen != null) add(JAction(stringResource(R.string.agents_space_open), PhIcons.SquaresFour, onClick = onOpen))
-    if (onMarkRead != null) add(JAction(stringResource(R.string.agents_mark_all_read), PhIcons.Check, onClick = onMarkRead))
+    if (onOpen != null) add(JAction(stringResource(R.string.agents_space_open), PersonaIcons.allMachines, onClick = onOpen))
+    if (onMarkRead != null) add(JAction(stringResource(R.string.agents_mark_all_read), PersonaIcons.done, onClick = onMarkRead))
     if (!session.spaceName.isNullOrBlank()) {
-        add(JAction(stringResource(if (pinned) R.string.agents_space_unpin else R.string.agents_space_pin), PhIcons.PushPin, enabled = !busy, onClick = onPin))
-        add(JAction(stringResource(if (muted) R.string.agents_space_unmute else R.string.agents_space_mute), PhIcons.Prohibit, enabled = !busy, onClick = onMute))
-        add(JAction(stringResource(R.string.agents_dialog_rename_space), PhIcons.NotePencil, enabled = !busy && session.operationWorkspaceId != null, onClick = onRename))
+        add(JAction(stringResource(if (pinned) R.string.agents_space_unpin else R.string.agents_space_pin), PersonaIcons.highPriority, enabled = !busy, onClick = onPin))
+        add(JAction(stringResource(if (muted) R.string.agents_space_unmute else R.string.agents_space_mute), PersonaIcons.interrupt, enabled = !busy, onClick = onMute))
+        add(JAction(stringResource(R.string.agents_dialog_rename_space), PersonaIcons.compose, enabled = !busy && session.operationWorkspaceId != null, onClick = onRename))
     }
     if (todo != null) {
-        add(JAction(stringResource(if (todo.linked) R.string.agents_space_todo_move else R.string.agents_space_todo_link), PhIcons.ListChecks,
+        add(JAction(stringResource(if (todo.linked) R.string.agents_space_todo_move else R.string.agents_space_todo_link), PersonaIcons.backgroundTasks,
             separatorBefore = isNotEmpty(), onClick = todo.onLink))
-        todo.onUnlink?.let { add(JAction(stringResource(R.string.agents_space_todo_unlink), PhIcons.LinkSimple, destructive = true, onClick = it)) }
+        todo.onUnlink?.let { add(JAction(stringResource(R.string.agents_space_todo_unlink), PersonaIcons.link, destructive = true, onClick = it)) }
     }
 }
 

@@ -30,7 +30,9 @@ func (s *Service) capacitySnapshot(ctx context.Context) proto.CapacitySnapshot {
 
 // launcherProvider maps a launcher on a machine to the upstream provider id its pooled accounts are listed under
 // (proto.ProviderCapacity.Provider, the "claude" / "codex" vocabulary). The health record already names the agent
-// the check ran there, and a Persona-managed launcher names its agent too; "" when unknown.
+// the check ran there, a Persona-managed launcher names its agent too, and so does the machine's rc-file or companion
+// launcher as the hub last saw it (no node is asked; #17011: the built-in agy launcher is only there). A launcher that
+// names no agent but is called after one (codex, agy…) runs that agent, as viewAgent reads it. "" when unknown.
 func (s *Service) launcherProvider(ctx context.Context, machine, launcher string) string {
 	if r, ok := s.launcherHealth(ctx, machine, launcher); ok && r.Agent != "" {
 		return r.Agent
@@ -40,7 +42,18 @@ func (s *Service) launcherProvider(ctx context.Context, machine, launcher string
 			return l.Agent
 		}
 	}
+	seen, _ := s.zshrcLaunchersLastSeen(ctx)
+	if l, ok := launcherInSnapshot(seen, machine, launcher); ok {
+		if agent := namedAgent(l.Name, l.Agent); agent != "" {
+			return agent
+		}
+	}
 	return ""
+}
+
+// namedAgent is the agent a launcher runs: its own agent field, else the agent it is named after.
+func namedAgent(name, agent string) string {
+	return viewAgent(LauncherView{Name: name, Agent: agent})
 }
 
 // capacityNote is a sentence about the provider's pool when it is freshly known to be saturated: "" with no data,

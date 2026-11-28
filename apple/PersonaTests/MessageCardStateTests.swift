@@ -45,8 +45,7 @@ struct MessageCardStateTests {
     }
 
     @Test func theInboxListDecidesWhereItHasTheItem() {
-        #expect(state(card(), item(doneBy: "replied")) == .sent)
-        for way in ["user", "dismissed", "read", "superseded"] {
+        for way in ["user", "dismissed", "read", "superseded", "replied", "source_replied"] {
             #expect(state(card(), item(doneBy: way)) == .filed, "done by \(way)")
         }
         // Moved back to the inbox since the card was read: open again, as the hub would send it.

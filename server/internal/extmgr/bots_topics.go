@@ -15,6 +15,7 @@ import (
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/channel"
+	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -24,8 +25,9 @@ import (
 // group in (the /topics command in it, or the bot's settings), and from then on, in that group:
 //
 //   - a message reaches the assistant when five things all hold: the bot is paired, the sender is the owner, the chat
-//     is on the list, the message is in a topic (it has a thread_id), and it is not the command below. Any other
-//     message is dropped without a word: nobody is told the bot is there, and nothing is said in the group.
+//     is on the list, the message is in a topic (it has a thread_id), and it is not the command below. A message from
+//     anyone else is judged by the group access policy instead (bots_guest.go): allowed, it runs as a guest; otherwise
+//     it is dropped without a word. A chat on the blocklist is dropped for everyone, the owner included.
 //   - the bot may send into the chat (botChatAllowed).
 //
 // A group message never changes where the owner's pushes go (BotOwner.ChatID), which stays the private chat.
@@ -41,19 +43,24 @@ type BotChat struct {
 	Name   string `json:"name,omitempty"` // a label the app may set; the command in the chat leaves it empty
 	// Home marks the home topic group (#6146): where a request from a group that is not opted in opens its topic. At
 	// most one chat has it; with none marked, the first legacy enrollment is the home (homeChat).
-	Home                bool `json:"home,omitempty"`
-	RequireOwnerMention bool `json:"require_owner_mention,omitempty"`
+	Home                bool                        `json:"home,omitempty"`
+	RequireOwnerMention bool                        `json:"require_owner_mention,omitempty"`
+	TodoMode            assistantwire.TopicTodoMode `json:"todo_mode,omitempty"`
+	// Space binds this topic group to a domain space slug: unbound topics start isolated conversations in that space.
+	Space string `json:"space,omitempty"`
 	// Strict enrollments never acquire an implicit home, even after their policy is reversed.
 	ExplicitHomeOnly bool      `json:"explicit_home_only,omitempty"`
 	At               time.Time `json:"at"`
 }
 
 type botChatView struct {
-	ChatID              string `json:"chat_id"`
-	Name                string `json:"name,omitempty"`
-	AddedAt             int64  `json:"added_at"`
-	Home                bool   `json:"home,omitempty"` // the effective home topic group
-	RequireOwnerMention bool   `json:"require_owner_mention"`
+	ChatID              string                      `json:"chat_id"`
+	Name                string                      `json:"name,omitempty"`
+	AddedAt             int64                       `json:"added_at"`
+	Home                bool                        `json:"home,omitempty"` // the effective home topic group
+	RequireOwnerMention bool                        `json:"require_owner_mention"`
+	TodoMode            assistantwire.TopicTodoMode `json:"todo_mode"`
+	Space               string                      `json:"space,omitempty"`
 }
 
 // BotAISource is a message the hub took as the owner's "@bot /ai …" in a group chat that is not opted in (#6146).
@@ -67,6 +74,19 @@ type BotAISource struct {
 	// Kind is what the owner asked with: "" for "/ai" (#6146), botSourceRead for "/read" (#11803, bots_read.go), whose
 	// answer is cards under the message rather than one short line.
 	Kind string `json:"kind,omitempty"`
+	// HandoffID is the hub's id of a proxy reply ("bh_" + 16 hex); the rest of these fields belong to one too.
+	HandoffID string `json:"handoff_id,omitempty"`
+	// Confirm: the owner approves the draft before the bot posts (decided when the handoff was taken).
+	Confirm bool `json:"confirm,omitempty"`
+	// InThread puts an anchored reply into the anchor's thread.
+	InThread bool `json:"in_thread,omitempty"`
+	// By is who handed it over: "extension:<id>" or the device actor.
+	By string `json:"by,omitempty"`
+	// Ref is the caller's idempotency key; RefSum is the sha256 of the caller, the ref and the payload.
+	Ref    string `json:"ref,omitempty"`
+	RefSum string `json:"ref_sum,omitempty"`
+	// Ended is how a proxy reply finished: posted, declined, expired, no_reply or failed.
+	Ended string `json:"ended,omitempty"`
 }
 
 const (
@@ -110,6 +130,9 @@ func (s FeishuBotSettings) aiSource(messageID string, now time.Time) *BotAISourc
 		return nil
 	}
 	for i := range s.AISources {
+		if s.AISources[i].Kind == botSourceProxyReply {
+			continue // a handoff is never an /ai or /read source (handoffSource finds it)
+		}
 		if s.AISources[i].MessageID == messageID && now.Sub(s.AISources[i].At) <= botAISourcesKeepFor {
 			return &s.AISources[i]
 		}
@@ -162,10 +185,47 @@ func (h *Manager) topicChatsPossible(ctx context.Context, appID *string) error {
 	return nil
 }
 
+type topicSpaceStore interface {
+	Tracks(ctx context.Context) ([]db.Track, error)
+}
+
+// checkTopicSpace validates an optional domain space slug bound to a topic group.
+// Empty clears/omits the binding; "health" or any non-archived, non-builtin space track is allowed.
+func (h *Manager) checkTopicSpace(ctx context.Context, space string) error {
+	space = strings.TrimSpace(space)
+	if space == "" {
+		return nil
+	}
+	if len(space) > 100 || strings.ContainsFunc(space, unicode.IsSpace) || strings.Contains(space, "/") || strings.Contains(space, "..") {
+		return i18n.Err("hub-bots.topic_space_bad")
+	}
+	if space == "health" {
+		return nil
+	}
+	st, ok := h.store.(topicSpaceStore)
+	if !ok {
+		return i18n.Err("hub-bots.topic_space_bad")
+	}
+	tracks, err := st.Tracks(ctx)
+	if err != nil {
+		return i18n.Err("hub-bots.settings_unavailable")
+	}
+	for _, t := range tracks {
+		if t.Slug == space && t.ArchivedAt == nil && !t.Builtin && (t.Template == "space" || (t.Template == "" && t.DirName != "")) {
+			return nil
+		}
+	}
+	return i18n.Err("hub-bots.topic_space_bad")
+}
+
 // setTopicChats replaces the owner's list (PUT /api/v1/bots/feishu): the chats that stay keep the time they were
 // added, new ones get now. keepHome: the request said nothing about the home group, so the one the list had stays
 // (when it is still in the list). A bot with no owner has no list to keep.
 func (h *Manager) setTopicChats(ctx context.Context, want []BotChat, keepHome bool, mentionEdits map[string]bool) error {
+	return h.setTopicChatsOpt(ctx, want, keepHome, mentionEdits, nil)
+}
+
+func (h *Manager) setTopicChatsOpt(ctx context.Context, want []BotChat, keepHome bool, mentionEdits map[string]bool, spaceEdits map[string]string) error {
 	b := &h.bots
 	b.mu.Lock()
 	if err := h.loadBotsLocked(ctx); err != nil {
@@ -184,11 +244,16 @@ func (h *Manager) setTopicChats(ctx context.Context, want []BotChat, keepHome bo
 	next := make([]BotChat, 0, len(want))
 	for _, c := range want {
 		c.ChatID, c.Name = strings.TrimSpace(c.ChatID), strings.TrimSpace(c.Name)
+		c.Space = strings.TrimSpace(c.Space)
 		c.At = b.clock().UTC()
 		existing := slices.IndexFunc(before, func(o BotChat) bool { return o.ChatID == c.ChatID })
 		if i := existing; i >= 0 {
 			c.At = before[i].At
 			c.RequireOwnerMention = before[i].RequireOwnerMention
+			if c.TodoMode == "" {
+				c.TodoMode = before[i].TodoMode
+			}
+			c.Space = before[i].Space
 			c.ExplicitHomeOnly = before[i].ExplicitHomeOnly
 			if keepHome {
 				c.Home = before[i].Home
@@ -196,6 +261,9 @@ func (h *Manager) setTopicChats(ctx context.Context, want []BotChat, keepHome bo
 		}
 		if required, ok := mentionEdits[c.ChatID]; ok {
 			c.RequireOwnerMention = required
+		}
+		if sp, ok := spaceEdits[c.ChatID]; ok {
+			c.Space = strings.TrimSpace(sp)
 		}
 		if existing < 0 {
 			c.ExplicitHomeOnly = c.RequireOwnerMention
@@ -205,6 +273,15 @@ func (h *Manager) setTopicChats(ctx context.Context, want []BotChat, keepHome bo
 	records := topicRecords(before, next)
 	if was, now := markedHome(before), markedHome(next); now != "" && now != was {
 		records = append(records, botRecord{auditBotTopicHome, map[string]any{"chat_id": now}})
+	}
+	for _, c := range next {
+		prevSpace := ""
+		if i := slices.IndexFunc(before, func(o BotChat) bool { return o.ChatID == c.ChatID }); i >= 0 {
+			prevSpace = before[i].Space
+		}
+		if c.Space != prevSpace {
+			records = append(records, botRecord{auditBotTopicSpace, map[string]any{"chat_id": c.ChatID, "space": c.Space}})
+		}
 	}
 	b.set.TopicChats = next
 	if len(records) > 0 || !slices.EqualFunc(before, next, func(a, b BotChat) bool { return a == b }) {
@@ -245,17 +322,24 @@ func topicRecords(before, after []BotChat) []botRecord {
 	return out
 }
 
-// The commands /topics takes: it opts the group in, out, or makes it the home topic group (opting it in if it is not).
+// The commands /topics takes: it opts the group in, out, makes it the home topic group (opting it in if it is not),
+// or binds/clears a domain space for its topics.
 const (
-	topicsOn   = "on"
-	topicsOff  = "off"
-	topicsHome = "home"
+	topicsOn    = "on"
+	topicsOff   = "off"
+	topicsHome  = "home"
+	topicsSpace = "space"
 )
 
 // topicsCmd reads the owner's message as the command that opts a group in or out: /topics or /话题群 (a full-width
 // slash too), alone or with "on" / "off" (关) or "home" (主群 in Chinese), after the @ of the bot that a group
 // message may start with. ok is false for any other text, which is then an ordinary message.
 func topicsCmd(text string, mentions []botcard.Mention) (cmd string, ok bool) {
+	cmd, _, ok = parseTopicsCmd(text, mentions)
+	return cmd, ok
+}
+
+func parseTopicsCmd(text string, mentions []botcard.Mention) (cmd, arg string, ok bool) {
 	t := strings.TrimSpace(text)
 	for stripped := true; stripped; {
 		stripped = false
@@ -272,26 +356,38 @@ func topicsCmd(text string, mentions []botcard.Mention) (cmd string, ok bool) {
 	}
 	word, ok := strings.CutPrefix(t, "/")
 	if !ok {
-		return "", false
+		return "", "", false
 	}
 	fields := strings.Fields(word)
-	if len(fields) == 0 || len(fields) > 2 {
-		return "", false
+	if len(fields) == 0 || len(fields) > 3 {
+		return "", "", false
 	}
 	switch strings.ToLower(fields[0]) {
 	case "topics", "话题群": // i18n-ignore: the command's own name
 	default:
-		return "", false
+		return "", "", false
 	}
-	switch arg := strings.ToLower(strings.Join(fields[1:], "")); arg {
+	if len(fields) == 3 {
+		switch strings.ToLower(fields[1]) {
+		case "space", "空间": // i18n-ignore: the command's own words
+			val := strings.TrimSpace(fields[2])
+			switch strings.ToLower(val) {
+			case "off", "none", "clear", "关", "关闭", "无": // i18n-ignore: the command's own words
+				return topicsSpace, "", true
+			}
+			return topicsSpace, val, true
+		}
+		return "", "", false
+	}
+	switch a := strings.ToLower(strings.Join(fields[1:], "")); a {
 	case "", "on", "开": // i18n-ignore: the command's own word
-		return topicsOn, true
+		return topicsOn, "", true
 	case "off", "关", "关闭": // i18n-ignore: the command's own words
-		return topicsOff, true
+		return topicsOff, "", true
 	case "home", "主群": // i18n-ignore: the command's own words
-		return topicsHome, true
+		return topicsHome, "", true
 	}
-	return "", false
+	return "", "", false
 }
 
 // botGroupMessage takes a message from a group chat (not the bot's private chat): see the five conditions above, and
@@ -299,22 +395,28 @@ func topicsCmd(text string, mentions []botcard.Mention) (cmd string, ok bool) {
 // no note, no reaction, nothing in the chat.
 func (h *Manager) botGroupMessage(api botport.Client, set FeishuBotSettings, ev botcard.MessageEvent, raw json.RawMessage, since time.Time, pass func()) {
 	msg := ev.Message
-	if set.Owner == nil || ev.Sender.SenderID.OpenID != set.Owner.OpenID || msg.ChatID == "" {
-		return // not paired, or not the owner: in a group anyone could write to the owner's Persona
+	if set.Owner == nil || msg.ChatID == "" {
+		return
+	}
+	if set.groupChatBlocked(msg.ChatID) {
+		return // the blocklist wins, over the owner too
+	}
+	if ev.Sender.SenderID.OpenID != set.Owner.OpenID {
+		h.botGuestMessage(api, set, ev, pass) // bots_guest.go; never the owner's path
+		return
 	}
 	// Apply the group's current policy before settings commands or any topic side effect.
 	if i := slices.IndexFunc(set.TopicChats, func(c BotChat) bool { return c.ChatID == msg.ChatID }); i >= 0 && set.TopicChats[i].RequireOwnerMention {
-		botID := h.botOpenID(api)
-		if botID == "" || !slices.ContainsFunc(msg.Mentions, func(m botcard.Mention) bool { return m.ID.OpenID == botID }) {
+		if !mentionsBot(msg.Mentions, h.botOpenID(api)) {
 			return
 		}
 	}
 	if msg.MessageType == "text" || msg.MessageType == "post" {
 		content := botcard.ParseContent(msg.MessageType, msg.Content, msg.Mentions)
-		if cmd, ok := topicsCmd(content.Text, msg.Mentions); ok && !content.Forward {
+		if cmd, arg, ok := parseTopicsCmd(content.Text, msg.Mentions); ok && !content.Forward {
 			// The list is changed before the next message is let go: the one right after /topics off must not pass the
 			// gate, and the one right after /topics must.
-			key, recs := h.applyTopicsCommand(set.Owner.OpenID, msg.ChatID, cmd)
+			key, args, recs := h.applyTopicsCommand(context.Background(), set.Owner.OpenID, msg.ChatID, cmd, arg)
 			pass()
 			if key == "" {
 				return // unpaired meanwhile
@@ -324,7 +426,7 @@ func (h *Manager) botGroupMessage(api botport.Client, set FeishuBotSettings, ev 
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
-			h.botNoteIn(ctx, api, msg.ChatID, msg.MessageID, i18n.T(h.userLang(), key), msg.ThreadID != "")
+			h.botNoteIn(ctx, api, msg.ChatID, msg.MessageID, i18n.T(h.userLang(), key, args), msg.ThreadID != "")
 			return // the hub's own: it never goes to the assistant
 		}
 	}
@@ -366,7 +468,7 @@ func (h *Manager) botAIElsewhere(api botport.Client, set FeishuBotSettings, ev b
 		return // the bot cannot tell which @ is its own: nothing is taken
 	}
 	isBot := func(m botcard.Mention) bool { return m.ID.OpenID == botID }
-	if !slices.ContainsFunc(msg.Mentions, isBot) {
+	if !mentionsBot(msg.Mentions, botID) {
 		return
 	}
 	if _, ok := botcard.AICommand(content.StripLeadingMentions(msg.Mentions, isBot)); !ok {
@@ -428,7 +530,13 @@ func (h *Manager) takeAISource(chatID, messageID, kind string) {
 		return
 	}
 	now := b.clock().UTC()
-	kept := slices.DeleteFunc(slices.Clone(b.set.AISources), func(s BotAISource) bool { return now.Sub(s.At) > botAISourcesKeepFor })
+	kept := slices.DeleteFunc(slices.Clone(b.set.AISources), func(s BotAISource) bool {
+		keep := botAISourcesKeepFor
+		if s.Kind == botSourceProxyReply {
+			keep = botHandoffKeepFor
+		}
+		return now.Sub(s.At) > keep
+	})
 	kept = append(kept, BotAISource{ChatID: chatID, MessageID: messageID, At: now, Kind: kind})
 	if len(kept) > botAISourcesKeep {
 		kept = kept[len(kept)-botAISourcesKeep:]
@@ -457,31 +565,37 @@ func aiSourceReply(set FeishuBotSettings, chatID, replyTo, text string, now time
 	return src.ChatID, true, nil
 }
 
-// applyTopicsCommand opts the group chat in or out for the owner, or makes it the home topic group (whose open id it
-// is, checked by the caller) and returns the key of the line that says what came of it, with the audit records when the
-// list changed; "" when the owner is gone or another by now.
-func (h *Manager) applyTopicsCommand(ownerID, chatID, cmd string) (key string, recs []botRecord) {
+// applyTopicsCommand opts the group chat in or out for the owner, makes it the home topic group, or binds/clears a
+// domain space (whose open id it is, checked by the caller) and returns the key and args of the line that says what
+// came of it, with the audit records when the list changed; "" when the owner is gone or another by now.
+func (h *Manager) applyTopicsCommand(ctx context.Context, ownerID, chatID, cmd, arg string) (key string, args i18n.Args, recs []botRecord) {
+	if cmd == topicsSpace && arg != "" {
+		if err := h.checkTopicSpace(ctx, arg); err != nil {
+			return "hub-bots_chat.topics_space_bad", i18n.Args{"space": arg}, nil
+		}
+	}
 	b := &h.bots
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	cur := &b.set
 	if cur.Owner == nil || cur.Owner.OpenID != ownerID {
-		return "", nil
+		return "", nil, nil
 	}
-	has := cur.topicChat(chatID)
+	idx := slices.IndexFunc(cur.TopicChats, func(c BotChat) bool { return c.ChatID == chatID })
+	has := idx >= 0
 	added := botRecord{auditBotTopicChatAdded, map[string]any{"chat_id": chatID}}
 	home := botRecord{auditBotTopicHome, map[string]any{"chat_id": chatID}}
 	switch {
 	case cmd == topicsOn && has:
-		return "hub-bots_chat.topics_already", nil
-	case (cmd == topicsOn || cmd == topicsHome) && !has && len(cur.TopicChats) >= botTopicChatsMax:
-		return "hub-bots_chat.topics_full", nil
+		return "hub-bots_chat.topics_already", nil, nil
+	case (cmd == topicsOn || cmd == topicsHome || (cmd == topicsSpace && arg != "")) && !has && len(cur.TopicChats) >= botTopicChatsMax:
+		return "hub-bots_chat.topics_full", nil, nil
 	case cmd == topicsOn:
 		cur.TopicChats = append(slices.Clone(cur.TopicChats), BotChat{ChatID: chatID, At: b.clock().UTC()})
 		h.saveBotSettingsLocked()
-		return "hub-bots_chat.topics_on", []botRecord{added}
+		return "hub-bots_chat.topics_on", nil, []botRecord{added}
 	case cmd == topicsHome && has && markedHome(cur.TopicChats) == chatID:
-		return "hub-bots_chat.topics_home_already", nil
+		return "hub-bots_chat.topics_home_already", nil, nil
 	case cmd == topicsHome:
 		// Opted in with it when it was not on: the owner said so in so many words, and the group is the owner's own pick.
 		list := slices.Clone(cur.TopicChats)
@@ -495,13 +609,35 @@ func (h *Manager) applyTopicsCommand(ownerID, chatID, cmd string) (key string, r
 		}
 		cur.TopicChats = list
 		h.saveBotSettingsLocked()
-		return key, recs
+		return key, nil, recs
+	case cmd == topicsSpace && arg == "":
+		if !has || cur.TopicChats[idx].Space == "" {
+			return "hub-bots_chat.topics_space_none", nil, nil
+		}
+		list := slices.Clone(cur.TopicChats)
+		list[idx].Space = ""
+		cur.TopicChats = list
+		h.saveBotSettingsLocked()
+		return "hub-bots_chat.topics_space_cleared", nil, []botRecord{{auditBotTopicSpace, map[string]any{"chat_id": chatID, "space": ""}}}
+	case cmd == topicsSpace:
+		list := slices.Clone(cur.TopicChats)
+		spaceRec := botRecord{auditBotTopicSpace, map[string]any{"chat_id": chatID, "space": arg}}
+		if !has {
+			list = append(list, BotChat{ChatID: chatID, Space: arg, At: b.clock().UTC()})
+			cur.TopicChats = list
+			h.saveBotSettingsLocked()
+			return "hub-bots_chat.topics_on_space", i18n.Args{"space": arg}, []botRecord{added, spaceRec}
+		}
+		list[idx].Space = arg
+		cur.TopicChats = list
+		h.saveBotSettingsLocked()
+		return "hub-bots_chat.topics_space", i18n.Args{"space": arg}, []botRecord{spaceRec}
 	case has: // off
 		cur.TopicChats = slices.DeleteFunc(slices.Clone(cur.TopicChats), func(c BotChat) bool { return c.ChatID == chatID })
 		h.saveBotSettingsLocked()
-		return "hub-bots_chat.topics_off", []botRecord{{auditBotTopicChatRemoved, map[string]any{"chat_id": chatID}}}
+		return "hub-bots_chat.topics_off", nil, []botRecord{{auditBotTopicChatRemoved, map[string]any{"chat_id": chatID}}}
 	}
-	return "hub-bots_chat.topics_not_on", nil
+	return "hub-bots_chat.topics_not_on", nil, nil
 }
 
 // ---- which chat a message is in ----

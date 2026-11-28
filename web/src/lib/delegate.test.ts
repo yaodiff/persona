@@ -28,7 +28,7 @@ describe("delegateLines", () => {
     const deadline = "2026-11-08T10:00:00Z";
     const lines = delegateLines({ what: "换数据库驱动", why_now: "", recommend: "pgx", cost: "要重写查询", reason: "影响上线时间", deadline });
     expect(lines.map((l) => l.key)).toEqual(["what", "recommend", "cost", "reason", "deadline"]);
-    expect(lines[0]).toEqual({ key: "what", label: "这件事", text: "换数据库驱动" });
+    expect(lines[0]).toEqual({ key: "what", label: "事项", text: "换数据库驱动" });
     expect(lines[4].text).toBe(formatDate(deadline, { dateStyle: "medium", timeStyle: "short" }));
   });
   it("没有上下文或只有空白：一行也没有", () => {
@@ -99,14 +99,14 @@ describe("reanswer", () => {
   });
   it("失败时说清楚为什么", async () => {
     request.mockRejectedValue(new ApiError(503, "assistant offline", { code: "assistant_offline" }));
-    expect(await reanswer("ix_1", { a: "b" })).toEqual({ ok: false, error: "助手不在线，稍后再试" });
+    expect(await reanswer("ix_1", { a: "b" })).toEqual({ ok: false, error: "助手当前离线，请稍后重试。" });
   });
   it("按协议的错误码各说各的", () => {
-    expect(reanswerError(new ApiError(403, "x", {}))).toBe("这台设备只能按卡片上的选项回答，不能改答");
-    expect(reanswerError(new ApiError(409, "x", {}))).toBe("这个问题不是助手代答的，不能在这里改答");
-    expect(reanswerError(new ApiError(400, "x", {}))).toBe("先选一个答案");
-    expect(reanswerError(new ApiError(502, "node unreachable", {}))).toBe("新答案没能发给 Agent：node unreachable");
-    expect(reanswerError(new ApiError(404, "404 page not found", {}, false))).toBe("这个 hub 还不支持改答，先更新 hub");
-    expect(reanswerError(new ApiError(500, "boom", {}))).toContain("没能改答");
+    expect(reanswerError(new ApiError(403, "x", {}))).toBe("当前设备仅支持按卡片选项回答，无法修改回答。");
+    expect(reanswerError(new ApiError(409, "x", {}))).toBe("该问题并非由助手代答，无法在此修改回答。");
+    expect(reanswerError(new ApiError(400, "x", {}))).toBe("请先选择一个回答");
+    expect(reanswerError(new ApiError(502, "node unreachable", {}))).toBe("无法将新回答发送给 Agent：node unreachable");
+    expect(reanswerError(new ApiError(404, "404 page not found", {}, false))).toBe("当前 hub 暂不支持修改回答，请先更新 hub。");
+    expect(reanswerError(new ApiError(500, "boom", {}))).toContain("修改回答失败");
   });
 });

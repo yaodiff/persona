@@ -39,6 +39,7 @@ type codexAppThread struct {
 	Title       string `json:"title"`
 	Cwd         string `json:"cwd"`
 	Source      string `json:"source"`
+	Originator  string `json:"originator"`
 	UpdatedAtMs int64  `json:"updatedAtMs"`
 	Paginated   bool   `json:"-"`
 	// Model and Effort are what the App runs the chat with (its model and reasoning_effort columns, #6501): its
@@ -74,6 +75,9 @@ type codexAppDB struct {
 	at    time.Time // when the database was last looked at
 	stamp string    // the database's files and the sidebar's ids when last read
 	byID  map[string]codexAppThread
+	// sqliteMissingUntil backs off database reads (and their path Globs) after the system sqlite3 CLI was found absent.
+	// Unlike at, this also bounds fresh callers, which otherwise bypass the refresh TTL on every high-frequency re-entry.
+	sqliteMissingUntil time.Time
 }
 
 var codexAppDBs = struct {
@@ -178,7 +182,8 @@ func fileStamp(path string) string {
 // readCodexAppThreads reads the unarchived rows of ids (validID only: they are put in the query as they are), plus
 // the migrated App's sidebar chats and their subagents, which have no legacy sidebar key (#6388). Exec runs are not
 // sidebar chats; subagent rows must stay available so their origin and guardian filters still work once the rollout
-// is gone (#8191). That second read is a separate query so a schema without the originator column keeps the explicit
+// is gone (#8191). Shared app-server chats can carry the paired persona/vscode stamp (#10438).
+// That second read is a separate query so a schema without the originator column keeps the explicit
 // sidebar answer instead of failing it.
 func readCodexAppThreads(ctx context.Context, db string, ids []string) (map[string]codexAppThread, error) {
 	byID := map[string]codexAppThread{}
@@ -189,12 +194,15 @@ func readCodexAppThreads(ctx context.Context, db string, ids []string) (map[stri
 		}
 		byID = rows
 	}
-	migrated, err := readCodexThreads(ctx, db, `archived = 0 AND source != '' AND source != 'exec' AND originator IN ('Codex Desktop', 'codex_work_desktop')`)
+	migrated, err := readCodexThreads(ctx, db, `archived = 0 AND (
+		(originator IN ('Codex Desktop', 'codex_work_desktop', 'codex-tui') AND source != '' AND source != 'exec')
+		OR (originator = 'persona' AND source = 'vscode')
+	)`)
 	if err == nil {
 		for id, t := range migrated {
 			// Subagent metadata is needed for parent folding and guardian suppression. Other inferred sources are not
-			// desktop conversations; explicit sidebar IDs above remain authoritative for legacy rows.
-			if strings.TrimSpace(t.Source) != "vscode" && !t.origin().sub {
+			// desktop or terminal conversations; explicit sidebar IDs remain authoritative for legacy rows.
+			if t.Originator != "codex-tui" && strings.TrimSpace(t.Source) != "cli" && strings.TrimSpace(t.Source) != "vscode" && !t.origin().sub {
 				continue
 			}
 			if _, ok := byID[id]; !ok {
@@ -223,9 +231,14 @@ func readCodexThreads(ctx context.Context, db, where string) (map[string]codexAp
 		hideCodexSQLiteWindow(cmd)
 		return cmd.Output()
 	}
-	out, err := query(`, COALESCE(model, '') AS model, COALESCE(reasoning_effort, '') AS effort`)
-	if err != nil { // a schema without those columns: the rest as before
-		out, err = query("")
+	settings := `, COALESCE(model, '') AS model, COALESCE(reasoning_effort, '') AS effort`
+	origin := `, COALESCE(originator, '') AS originator`
+	var out []byte
+	for _, columns := range []string{settings + origin, origin, settings, ""} {
+		out, err = query(columns) // older schemas may lack settings, originator, or both
+		if err == nil {
+			break
+		}
 	}
 	if err != nil {
 		return nil, err
@@ -239,6 +252,7 @@ func readCodexThreads(ctx context.Context, db, where string) (map[string]codexAp
 		return nil, err
 	}
 	for _, r := range rows {
+		r.includeRunning = r.Originator == "codex-tui" || strings.TrimSpace(r.Source) == "cli"
 		byID[r.ID] = r
 	}
 	return byID, nil
@@ -277,13 +291,20 @@ func readCodexAppProjects(home string) map[string]codexAppProject {
 // (read-only, as readCodexThreads; a WAL database nobody has open is read as it is on disk, codexDBTarget): the Codex
 // App's state database, opencode's (usage_opencode.go).
 func querySQLite(ctx context.Context, db, q string, into any) error {
+	return readSQLiteJSON(ctx, db, nil, into, q)
+}
+
+// Queries containing terminal titles can use stdin to keep user text out of the process list.
+func readSQLiteJSON(ctx context.Context, db string, input io.Reader, into any, query ...string) error {
 	sqlite, err := codexSQLiteProgram()
 	if err != nil {
 		return err
 	}
 	cctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(cctx, sqlite, "-readonly", "-bail", "-json", "-cmd", ".timeout 2000", codexDBTarget(db), q)
+	args := []string{"-readonly", "-bail", "-json", "-cmd", ".timeout 2000", codexDBTarget(db)}
+	cmd := exec.CommandContext(cctx, sqlite, append(args, query...)...)
+	cmd.Stdin = input
 	hideCodexSQLiteWindow(cmd)
 	out, err := cmd.Output()
 	if err != nil {

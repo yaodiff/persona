@@ -13,11 +13,11 @@ import { Group, Row, RowFailed, settingsInputClass, Switch } from "./SettingsPar
 
 const text = (key: string, values?: Record<string, string | number>) => t(`settings-knowledge.${key}`, values);
 
-export function KnowledgeSelection() {
+export function KnowledgeSelection({ manager }: { manager?: string } = {}) {
   const owner = useSyncExternalStore(subscribeCredentialOwner, credentialOwner, credentialOwner);
-  return <ConfigurationManager>{(manager) => <>
-    <KnowledgeTopicsSwitch key={`topics/${owner}/${manager}`} manager={manager} />
-    <KnowledgeSelectionEditor key={`${owner}/${manager}`} manager={manager} owner={owner} />
+  return <ConfigurationManager manager={manager}>{(target) => <>
+    <KnowledgeTopicsSwitch key={`topics/${owner}/${target}`} manager={target} />
+    <KnowledgeSelectionEditor key={`${owner}/${target}`} manager={target} owner={owner} />
   </>}</ConfigurationManager>;
 }
 

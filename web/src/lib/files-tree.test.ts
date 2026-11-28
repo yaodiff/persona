@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { FsEntry, FsListing } from "./files";
 import { syncBadge, type GitStatus } from "./files";
-import { ancestors, CACHE_FOLDERS, expandedKey, ListingCache, listingBytes, listingCache, readExpanded, toggleExpanded, treeRows, visibleDirs, withExpanded, writeExpanded, type Listed } from "./files-tree";
+import { ancestors, CACHE_FOLDERS, expandedKey, ListingCache, listingBytes, listingCache, readExpanded, revealDirs, sameTreePath, toggleExpanded, treeRows, visibleDirs, withExpanded, writeExpanded, type Listed } from "./files-tree";
 
 const file = (name: string, extra: Partial<FsEntry> = {}): FsEntry => ({ name, dir: false, size: 1, ...extra });
 const dir = (name: string, extra: Partial<FsEntry> = {}): FsEntry => ({ name, dir: true, size: 0, ...extra });
@@ -47,6 +47,27 @@ describe("expanded folders", () => {
     expect(withExpanded(["/w/a"], ["/w/a", "/w/a/b"])).toEqual(["/w/a", "/w/a/b"]);
     const same = ["/w/a"];
     expect(withExpanded(same, ["/w/a"])).toBe(same);
+  });
+
+  it("computes ancestor directories to reveal for a target file", () => {
+    expect(revealDirs("/w", "/w/src/views/SidebarRows.tsx")).toEqual(["/w/src", "/w/src/views"]);
+    expect(revealDirs("/w", "/w/README.md")).toEqual([]);
+    expect(revealDirs("/w", "/other/file.ts")).toEqual([]);
+    expect(revealDirs("C:\\work", "C:\\work\\docs\\guide\\intro.md")).toEqual(["C:\\work/docs", "C:\\work/docs/guide"]);
+    expect(revealDirs("c:\\work\\", "C:\\work\\docs\\guide\\intro.md")).toEqual(["c:\\work\\/docs", "c:\\work\\/docs/guide"]);
+    expect(revealDirs("C:\\", "c:\\Users\\me\\file.md")).toEqual(["C:\\/Users", "C:\\/Users/me"]);
+    expect(sameTreePath("/w/src/a.ts", "/w/src/a.ts")).toBe(true);
+    expect(sameTreePath("C:\\work\\docs\\README.md", "C:\\work/docs/README.md")).toBe(true);
+    expect(sameTreePath("c:\\work\\docs\\README.md", "C:\\work/docs/README.md")).toBe(true);
+    expect(sameTreePath("/w/a.ts", "/w/b.ts")).toBe(false);
+    // treeRows / visibleDirs match Windows open paths regardless of slash style or drive case.
+    const winListings: Record<string, Listed> = {
+      "C:\\work": { listing: list("C:\\work", [dir("docs")]) },
+      "C:\\work/docs": { listing: list("C:\\work/docs", [file("intro.md")]) },
+    };
+    const winRows = treeRows("C:\\work", new Set(["c:\\work\\docs"]), (d) => winListings[d], false);
+    expect(winRows.map((r) => r.path)).toEqual(["C:\\work/docs", "C:\\work/docs/intro.md"]);
+    expect(visibleDirs("C:\\work", new Set(["c:\\work\\docs"]), (d) => winListings[d])).toEqual(["C:\\work", "C:\\work/docs"]);
   });
 });
 

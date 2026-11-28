@@ -2,6 +2,7 @@
 // Shared Inbox write entrypoints (list DraftCard Send, detail DraftDialog Send, and TextSuggestion reply
 // confirm/retry/instruct including Enter) follow the Lark module boundary for Lark and larkcli items while
 // preserving readable drafts, Done, external links, non-reply actions, and other connectors.
+import { registerTestMailbox } from "../../test/mailbox-fixture";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -233,6 +234,7 @@ beforeEach(async () => {
   await initI18n("en");
   localStorage.clear();
   resetModulesForTest();
+  registerTestMailbox();
   forgetModuleSwitches();
   reset();
   hub.features = [];

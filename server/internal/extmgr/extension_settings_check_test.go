@@ -290,11 +290,11 @@ func setVarFor[T any](t *testing.T, v *T, to T) {
 // An extension's page may open its own settings (persona://settings/extensions/<id>), not another's.
 func TestOpenOwnSettings(t *testing.T) {
 	page := extension.UIItem{ID: "page", Placement: "nav_page"}
-	if err := checkOpenURL("example-gateway", page, "", extension.SettingsURL("example-gateway")); err != nil {
+	if err := checkOpenURL("example-gateway", nil, page, "", extension.SettingsURL("example-gateway")); err != nil {
 		t.Fatal(err)
 	}
 	for _, bad := range []string{extension.SettingsURL("example-notes"), "persona://settings/extensions/example-gateway/../example-notes", "persona://settings"} {
-		if err := checkOpenURL("example-gateway", page, "", bad); err == nil {
+		if err := checkOpenURL("example-gateway", nil, page, "", bad); err == nil {
 			t.Errorf("%s opened", bad)
 		}
 	}

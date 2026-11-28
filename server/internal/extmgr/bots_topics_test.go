@@ -51,10 +51,12 @@ func (w *botWorld) topicsOn(t *testing.T, chats ...string) {
 	}
 }
 
-// botStarted waits for the two calls each bot start makes in the background (after the pairing and each settings
-// change): the read of its own identity (GET /bot/v3/info, #14219) and the long connection's first attempt (POST
-// /callback/ws/endpoint, which fails in tests, #14986). A count of the calls the bot makes taken before they end would
-// count them as calls a message caused.
+// botStarted waits for the two calls each bot start makes in the background (restartBotLocked: turning the bot on, new
+// credentials, a restart; pairing and other settings changes do not start it): the read of its own identity (GET
+// /bot/v3/info, #14219) and the long connection's first attempt (POST /callback/ws/endpoint, which fails in tests,
+// #14986). A count of the calls the bot makes taken before they end would count them as calls a message caused; where
+// the message needs the bot's id before the read is back, it reads the id itself, a second call (#16350). newBotWorld
+// waits for its start.
 func (w *botWorld) botStarted(t *testing.T) {
 	t.Helper()
 	eventually(t, 5*time.Second, "the bot's start-up calls", func() bool {

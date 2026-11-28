@@ -7,6 +7,8 @@ registerHooks({
   resolve(specifier, context, next) {
     if (specifier === '@kit.ArkTS') return { url: 'worktree:arkts', shortCircuit: true };
     if (specifier.endsWith('platform/HubTransport')) return { url: 'worktree:transport', shortCircuit: true };
+    if (specifier === '../core/SessionNaming' && context.parentURL?.endsWith('.ets'))
+      return { url: new URL(specifier + '.ts', context.parentURL).href, shortCircuit: true };
     if (specifier.startsWith('.') && context.parentURL?.endsWith('.ets'))
       return { url: new URL(specifier + '.ets', context.parentURL).href, shortCircuit: true };
     return next(specifier, context);

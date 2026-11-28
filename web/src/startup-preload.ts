@@ -94,6 +94,30 @@ export function preloadScript(files: PreloadFiles): string {
 })();`;
 }
 
+/** Font registration and the Hub read are deferred until after the app commits and the browser has painted it. */
+export function fontStartupScript(module: string): string {
+  return `(function () {
+  var root = document.getElementById("root");
+  if (/^screen\\/[^/]/.test(location.pathname.slice(new URL(document.baseURI).pathname.length))) return;
+  function start() {
+    requestAnimationFrame(function () {
+      requestAnimationFrame(function () {
+        import(new URL(${JSON.stringify(`./${module}`)}, document.baseURI).href).then(function () { dispatchEvent(new Event("persona-font-startup")); }).catch(function () {});
+      });
+    });
+  }
+  if (root.childElementCount) start();
+  else {
+    var observer = new MutationObserver(function () {
+      if (!root.childElementCount) return;
+      observer.disconnect();
+      start();
+    });
+    observer.observe(root, { childList: true });
+  }
+})();`;
+}
+
 /** The smallest file worth a brotli copy: server/internal/webasset MinSize, below which the hub compresses nothing. */
 export const BROTLI_MIN_SIZE = 1024;
 
@@ -600,7 +624,34 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // #15511: an explicitly promoted main relay keeps its incoming source collapsed until opened, including its deferred
 // placeholder. This change on base 4bab19c283 measures en 483,782 B, ja 486,399 B, zh-Hans 484,384 B. Raise the budget
 // to the measured ja size plus 10 B of room.
-export const FIRST_SCREEN_BUDGET = 486_409;
+// #16992: Hub Admin shares the main app's titlebar inset under the desktop's macOS titlebar (the expanded sidebar's rule
+// in styles.css also names the admin sidebar; lib/mac-chrome.ts is now shared with the admin page, and macChromeMode
+// gives both shells their data-mac-chrome). 77 B in every language, measured in one environment on base 4a81814ec7
+// (ja 485,962 B to 486,039 B; en 483,466 B to 483,543 B, zh-Hans 484,115 B to 484,192 B). The budget moves by the
+// same 77 B, keeping the room main had.
+// #17136: align the sidebar glide highlight to each row's own horizontal bounds inside the scroller (no scroll wobble,
+// no active-row overlap) and host the macOS sidebar collapse toggle in MacBayTools beside the traffic lights (+46 B on
+// base 53884840c4: ja 486,430 B to 486,476 B). Merged with origin/main (including #17071, which added +109 B to the
+// first screen), this tree measures en 484,077 B, ja 486,585 B, zh-Hans 485,079 B. Raise the budget to the measured
+// ja size plus 10 B of room.
+// Frosted Glass & macOS bay polish: fade truncated overlay-menu sidebar row text before ⋯ without "..."+"⋯" six dots,
+// apply translucent glass tokens inside [data-sidebar-column] under liquid-glass, and host both Collapse and Search in
+// MacBayTools (+274 B on origin/main 0e974208f9: en 484,357 B, ja 486,859 B, zh-Hans 485,362 B). Raise the budget to
+// the measured ja size plus 10 B of room.
+// Vibrancy focus-churn reduction + 3-track wide-screen sidebar transition + continuous Apple G2 contour morph
+// (lib/sidebar-transition.ts, useMacChromeMode, appleG2ContourAt, MacMainContour live SVG driver, desktop-glass
+// inner backdrop-filter suppression, and animating top-inset preservation): en 485,174 B, ja 487,676 B,
+// zh-Hans 486,179 B. Raise the budget to the measured ja size plus 10 B of room.
+// #17037: the Agents list's "Orca isn't running on <computer>" row (HerdrNotices.tsx, engines.ts orcaStopped, the
+// herdr-notice strings) and the herdr row keyed on the engine set add 41 B to the ja first screen, measured in one
+// environment against main at 83cad7ccd7 (ja 487,986 B to 488,027 B; en 485,511 B to 485,537 B, zh-Hans 486,517 B to
+// 486,541 B). That main already measured over the budget there; the budget moves by these 41 B only.
+// #17697: eliminating wide-screen sidebar expand/collapse flicker (render-phase leaving state + deferred clearStyles
+// in lib/sidebar-transition.ts, active outgoing Sidebar in App.tsx, non-inert CollapseButton handoff in
+// SidebarRail.tsx, preloaded root counts in PagedSessionList.tsx) adds 140 B to the ja first screen, measured in
+// one environment against main at 2443320510 (ja 488,035 B to 488,175 B; en 485,565 B to 485,705 B, zh-Hans
+// 486,567 B to 486,707 B). That main already measured over budget (tracked in #17695); the budget moves by these 140 B only.
+export const FIRST_SCREEN_BUDGET = 487_867;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;

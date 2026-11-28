@@ -70,8 +70,8 @@ final class DesktopStartUITests: XCTestCase {
         }
     }
 
-    /// The MacBook, and a launcher of its from the launcher list (claude-desktop unless said).
-    @MainActor private func pickMacBook(_ name: String = "claude-desktop") {
+    /// The MacBook, and a launcher of its from the launcher list (Claude Desktop unless said).
+    @MainActor private func pickMacBook(_ name: String = "Claude Desktop") {
         see(app.buttons["newChat.directory"], "the directory row", timeout: 15)
         see(app.buttons["newChat.machine.macbook"], "MacBook card").tap()
         // Below the fold once Recent has cards (a list only has the rows it shows).
@@ -92,7 +92,7 @@ final class DesktopStartUITests: XCTestCase {
     /// first message (a Codex start needs one).
     @MainActor func testTheCodexAppWithNoFolderStartsAChatInNoProject() throws {
         launch()
-        pickMacBook("codex-app")
+        pickMacBook("Codex App")
         let row = app.buttons["newChat.directory"]
         let end = Date().addingTimeInterval(10)
         while Date() < end, !row.label.contains("Codex App") { usleep(300_000) }

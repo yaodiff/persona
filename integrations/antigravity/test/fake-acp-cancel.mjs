@@ -8,7 +8,7 @@
 //   'ignore-cancel'  hold the prompt and never end it, even when cancelled (an agent that does not confirm the cancel)
 //   anything else    hold the prompt until it is cancelled
 // Every message it receives goes to the --record file as one JSON line, after a first {"started": <pid>} line.
-import { appendFileSync } from 'node:fs'
+import { appendFileSync, existsSync } from 'node:fs'
 import { createInterface } from 'node:readline'
 
 if (process.argv.includes('models')) { console.log('test-model\tTest Model'); process.exit(0) }
@@ -23,6 +23,7 @@ const turns = new Map() // sessionId -> { id, mode, cancelled, open: Set of perm
 
 function askPermission(sessionId, toolCallId, toolCall = { title: 'run_command', rawInput: { command: 'ls' } }, options) {
   const id = `perm-${nextId++}`
+  record({ askedPermission: id, sessionId })
   send({
     jsonrpc: '2.0',
     id,
@@ -34,6 +35,38 @@ function askPermission(sessionId, toolCallId, toolCall = { title: 'run_command',
         { optionId: 'allow', name: 'Allow', kind: 'allow_once' },
         { optionId: 'reject', name: 'Reject', kind: 'reject_once' },
       ] : options,
+    },
+  })
+  return id
+}
+
+function askElicitation(sessionId, toolCallId, params = {}) {
+  const id = `elicit-${nextId++}`
+  record({ askedElicitation: id, sessionId })
+  send({
+    jsonrpc: '2.0',
+    id,
+    method: 'elicitation/create',
+    params: {
+      sessionId,
+      toolCallId,
+      mode: 'form',
+      message: 'The agent has a question.',
+      requestedSchema: {
+        type: 'object',
+        properties: {
+          q1: {
+            type: 'string',
+            title: 'Pick a fruit',
+            oneOf: [
+              { const: '1', title: '(Recommended) Apple' },
+              { const: '2', title: 'Banana' },
+            ],
+          },
+          q1_other: { type: 'string', title: 'Other', description: 'Optional free-form answer to: Pick a fruit' },
+        },
+      },
+      ...params,
     },
   })
   return id
@@ -80,6 +113,35 @@ function onRequest(msg) {
         const options = JSON.parse(mode.slice('ask-options '.length))
         turn.open.add(askPermission(sessionId, 'call-1', undefined, options))
       }
+      if (mode.startsWith('ask-full ')) {
+        const { toolCall, options, waitFile, endOnAnswer, asks, askOnCancel, nextAsk } = JSON.parse(mode.slice('ask-full '.length))
+        turn.endOnAnswer = !!endOnAnswer
+        turn.askOnCancel = askOnCancel || null
+        turn.nextAsk = nextAsk || null
+        if (Array.isArray(asks) && asks.length) {
+          for (const spec of asks) {
+            turn.open.add(askPermission(sessionId, spec.toolCallId || `call-${nextId}`, spec.toolCall, spec.options ?? options))
+          }
+        } else if (waitFile) {
+          const timer = setInterval(() => {
+            if (!turns.has(sessionId) || turn.cancelled) {
+              clearInterval(timer)
+              return
+            }
+            if (existsSync(waitFile)) {
+              clearInterval(timer)
+              turn.open.add(askPermission(sessionId, 'call-1', toolCall, options))
+            }
+          }, 10)
+        } else {
+          turn.open.add(askPermission(sessionId, 'call-1', toolCall, options))
+        }
+      }
+      if (mode.startsWith('elicit ')) {
+        const { toolCallId = 'elicit-call-1', params: elicitParams, endOnAnswer = true } = JSON.parse(mode.slice('elicit '.length))
+        turn.endOnAnswer = !!endOnAnswer
+        turn.open.add(askElicitation(sessionId, toolCallId, elicitParams))
+      }
       if (mode === 'updates' || mode === 'unrelated-updates') {
         let count = 0
         const timer = setInterval(() => {
@@ -113,12 +175,29 @@ function onNotification(msg) {
   if (turn.mode === 'ignore-cancel') return
   turn.cancelled = true
   if (turn.mode === 'ask-on-cancel') turn.open.add(askPermission(sessionId, 'call-2'))
+  if (turn.askOnCancel) {
+    const spec = turn.askOnCancel
+    turn.askOnCancel = null
+    turn.open.add(askPermission(sessionId, spec.toolCallId || 'call-cancel', spec.toolCall, spec.options))
+  }
   endIfDone(sessionId)
 }
 
 function onAnswer(msg) {
   for (const [sessionId, turn] of turns) {
-    if (turn.open.delete(msg.id)) endIfDone(sessionId)
+    if (turn.open.delete(msg.id)) {
+      if (turn.nextAsk && !turn.cancelled) {
+        const spec = turn.nextAsk
+        turn.nextAsk = null
+        turn.open.add(askPermission(sessionId, spec.toolCallId || 'call-2', spec.toolCall, spec.options))
+      } else if (turn.endOnAnswer && !turn.cancelled && turn.open.size === 0) {
+        turns.delete(sessionId)
+        record({ ended: sessionId, stopReason: 'end_turn' })
+        send({ jsonrpc: '2.0', id: turn.id, result: { stopReason: 'end_turn' } })
+      } else {
+        endIfDone(sessionId)
+      }
+    }
   }
 }
 

@@ -275,11 +275,17 @@ func (h *Hub) newPairCode(ctx context.Context, machine string) (*pairCode, error
 	p := pairCode{Token: "jp_" + hex.EncodeToString(secret[:]), ExpiresAt: time.Now().UTC().Add(pairLifetime),
 		URL: h.cfg.PublicURL, HubID: h.hubID(), Alt: []string{}, Machine: machine}
 	p.TLSPort, p.FP = h.tlsPin()
-	for _, alt := range h.pairCandidates() {
-		if len(p.Alt) == 2 {
-			break
+	if machine != "" && p.FP != "" && len(h.cfg.Public.LinkAdvertise) > 0 {
+		endpoints := h.linkEndpointList()
+		if len(endpoints) == 0 {
+			return nil, errors.New("public.link_advertise has no valid HTTPS endpoints")
 		}
-		p.Alt = append(p.Alt, alt)
+		p.URL, p.TLSPort = endpoints[0].URL, endpoints[0].Port
+		for _, e := range endpoints[1:min(len(endpoints), 3)] {
+			p.Alt = append(p.Alt, e.URL)
+		}
+	} else {
+		p.Alt = append(p.Alt, h.pairCandidates()...)
 	}
 	if err := h.store.CreatePairToken(ctx, hashToken(p.Token), p.ExpiresAt, p.Machine); err != nil {
 		return nil, err

@@ -431,9 +431,8 @@ private struct LarkOAuthSheet: View {
                 .navigationTitle(String(localized: "Lark"))
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button { dismiss() } label: { Text("Cancel").lineLimit(1) }
-                    }
+                    // The sheet's way out, ✕ at the top leading corner (#9653, #16676).
+                    SheetClose { dismiss() }
                 }
         }
     }

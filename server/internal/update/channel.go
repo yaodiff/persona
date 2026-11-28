@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+
+	"github.com/nwverse/persona/server/internal/nodeproto"
 )
 
 // A versioned prerelease owns immutable files. The beta-channel Release only
@@ -38,9 +40,9 @@ func (m *Manifest) ValidateChannel(channel string) error {
 	return nil
 }
 
-// CheckChannel reads the selected feed and refuses a stable/beta mix-up.
-func CheckChannel(ctx context.Context, client *http.Client, base, channel string) (*Published, error) {
-	r, err := Check(ctx, client, base)
+// CheckChannel reads the selected feed of edition (CheckFeed) and refuses a stable/beta mix-up.
+func CheckChannel(ctx context.Context, client *http.Client, base, channel string, edition nodeproto.Edition) (*Published, error) {
+	r, err := CheckFeed(ctx, client, base, edition)
 	if err != nil {
 		return nil, err
 	}

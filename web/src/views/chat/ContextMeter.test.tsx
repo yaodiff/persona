@@ -44,17 +44,17 @@ describe("ContextMeter", () => {
   it("names both shares for assistive technology and in the tooltip", () => {
     const html = renderToStaticMarkup(<ContextMeter session={s} />);
     expect(html).toMatch(/^<button type="button" aria-haspopup="dialog" aria-expanded="false"/);
-    expect(html).toContain('aria-label="上下文 39%（已用），还剩 61%"');
-    expect(html).toContain('role="progressbar" aria-label="上下文 39%（已用），还剩 61%" aria-valuenow="39"');
-    expect(html).toMatch(/title="上下文 39%（已用），还剩 61%\n上下文是 Agent/);
-    expect(html).toContain('aria-description="上下文是 Agent 在这段对话里能记住的量');
+    expect(html).toContain('aria-label="上下文已用 39%，剩余 61%"');
+    expect(html).toContain('role="progressbar" aria-label="上下文已用 39%，剩余 61%" aria-valuenow="39"');
+    expect(html).toMatch(/title="上下文已用 39%，剩余 61%\n上下文表示 Agent/);
+    expect(html).toContain('aria-description="上下文表示 Agent 在当前对话中能够记住的内容容量');
     expect(html).not.toContain("opus");
   });
   it("keeps the labelled share and popover button in compact mode", () => {
     const html = renderToStaticMarkup(<ContextMeter session={s} compact />);
     expect(html).toMatch(/^<button type="button" aria-haspopup="dialog"/);
     expect(html).toContain(">上下文 39%<");
-    expect(html).toContain('aria-label="上下文 39%（已用），还剩 61%"');
+    expect(html).toContain('aria-label="上下文已用 39%，剩余 61%"');
     expect(html).not.toContain("progressbar");
     expect(html).not.toContain("opus");
     expect(renderToStaticMarkup(<ContextMeter session={{ ...s, context_tokens: 0 }} compact />)).toBe("");

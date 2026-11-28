@@ -14,6 +14,7 @@ import (
 )
 
 func TestLarkLeadingGlobalOptions(t *testing.T) {
+	needsLarkGate(t)
 	for _, tc := range []struct {
 		name, command, risk, path, actor, deny string
 		calls                                  int
@@ -391,8 +392,9 @@ func TestLarkKnownReadsDoNotOverrideReportedRisk(t *testing.T) {
 
 // A gated call's @file body is read from the conversation's directory. Anything else in the command may run the call
 // elsewhere (cd however spelled, env -C, sudo -D, a subshell), so a relative body file is known only for a lone call,
-// at most under timeout and piped into filters (#8404). The default mode, where body rules decide; an absolute
-// @file still resolves.
+// at most under timeout and piped into filters (#8404). On an Auth-less gate in default mode, an @file body never
+// selects a silent body-scoped allow because no proxy can verify the body at send time (#8413); inline bodies and
+// authenticated proxy gates keep their body-scoped allow.
 func TestLarkRelativeBodyFileAfterCd(t *testing.T) {
 	cwd, other := t.TempDir(), t.TempDir()
 	_ = os.WriteFile(filepath.Join(cwd, "body.json"), []byte(`{"type":"p2p"}`), 0o644)
@@ -402,9 +404,10 @@ func TestLarkRelativeBodyFileAfterCd(t *testing.T) {
 		name, command string
 		cards         int
 	}{
-		{"no cd", `ex POST /conversations @body.json`, 0},
-		{"no cd, timeout", `timeout 20 ex POST /conversations @body.json | jq .`, 0},
-		{"absolute after cd", `cd ` + other + `; ex POST /conversations @` + cwd + `/body.json`, 0},
+		{"no cd", `ex POST /conversations @body.json`, 1},
+		{"inline body", `ex POST /conversations '{"type":"p2p"}'`, 0},
+		{"no cd, timeout", `timeout 20 ex POST /conversations @body.json | jq .`, 1},
+		{"absolute after cd", `cd ` + other + `; ex POST /conversations @` + cwd + `/body.json`, 1},
 		{"absolute after cd, other body", `cd ` + other + `; ex POST /conversations @` + other + `/body.json`, 1},
 		{"bare after cd", `cd ` + other + `; ex POST /conversations @body.json`, 1},
 		{"variable after cd", `cd ` + other + `; G=` + script + `; $G POST /conversations @body.json`, 1},
@@ -427,7 +430,7 @@ func TestLarkRelativeBodyFileAfterCd(t *testing.T) {
 		{"redirected", `ex POST /conversations @body.json > /tmp/out.json`, 1},
 		{"after another command", `true; ex POST /conversations @body.json`, 1},
 		{"body written first", `echo '{"type":"group"}' > body.json; ex POST /conversations @body.json`, 1},
-		{"absolute after escaped cd", `\cd ` + other + `; ex POST /conversations @` + cwd + `/body.json`, 0},
+		{"absolute after escaped cd", `\cd ` + other + `; ex POST /conversations @` + cwd + `/body.json`, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			n := codexTestNode(t)
@@ -444,6 +447,40 @@ func TestLarkRelativeBodyFileAfterCd(t *testing.T) {
 			}
 			if got := len(fh.interactions()); got != tc.cards || tc.cards == 0 && decision != "allow" {
 				t.Fatalf("decision=%q cards=%d; want %d", decision, got, tc.cards)
+			}
+		})
+	}
+	// Authenticated proxy gates keep #8404's lone-call relative @file boundary while allowing lone and absolute @file calls.
+	// Non-standalone relative @file calls are marked v.other and refused directly for proxy-authenticated writes.
+	proxiedCfg := olCfg()
+	proxiedCfg.Gates[0] = proxiedGate("http://127.0.0.1:1")
+	for _, tc := range []struct {
+		name, command, wantDecision string
+	}{
+		{"proxied/no cd", `ex POST /conversations @body.json`, "allow"},
+		{"proxied/no cd, timeout", `timeout 20 ex POST /conversations @body.json | jq .`, "allow"},
+		{"proxied/absolute after cd", `cd ` + other + `; ex POST /conversations @` + cwd + `/body.json`, "allow"},
+		{"proxied/absolute after escaped cd", `\cd ` + other + `; ex POST /conversations @` + cwd + `/body.json`, "allow"},
+		{"proxied/bare after cd", `cd ` + other + `; ex POST /conversations @body.json`, "deny"},
+		{"proxied/env -C", `env -C ` + other + ` ex POST /conversations @body.json`, "deny"},
+		{"proxied/redirected", `ex POST /conversations @body.json > /tmp/out.json`, "deny"},
+		{"proxied/body written first", `echo '{"type":"group"}' > body.json; ex POST /conversations @body.json`, "deny"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			n := codexTestNode(t)
+			fh := withFakeHub(t, n)
+			p, c, _ := newFakeCodex(t, n, cwd)
+			p.id, c.threadID = testThread, testThread
+			n.procs[testThread] = p
+			n.larkCfg, n.larkCfgAt = proxiedCfg, time.Now().Add(time.Hour)
+			n.noteModes(testThread, "default", "")
+			fh.answer = func(proto.Interaction) proto.Resolution { no := false; return proto.Resolution{Allow: &no} }
+			decision, _, err := n.larkCheck(context.Background(), testThread, cwd, tc.command, proto.Interaction{SessionID: testThread, ExpiresAt: time.Now().Add(time.Minute)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if decision != tc.wantDecision || len(fh.interactions()) != 0 {
+				t.Fatalf("decision=%q cards=%d; want decision=%q cards=0", decision, len(fh.interactions()), tc.wantDecision)
 			}
 		})
 	}

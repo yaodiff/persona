@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistant/repository"
+	"github.com/nwverse/persona/server/internal/assistant/repositorystore"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -22,7 +23,12 @@ import (
 // delivery_gate=live (legacy done_needs_delivery=true) unless off (delivery_gate=off).
 func deliveryReviewService(t *testing.T, forge *fakeForge, hub *runningHub, off bool) (*Service, Todo) {
 	t.Helper()
-	s, _, todo := newSupervisedService(t)
+	return deliveryReviewServiceOn(t, forge, hub, off, nil)
+}
+
+func deliveryReviewServiceOn(t *testing.T, forge *fakeForge, hub *runningHub, off bool, st Store) (*Service, Todo) {
+	t.Helper()
+	s, _, todo := newSupervisedServiceOn(t, st)
 	s.deploy.forge = forge
 	if hub != nil {
 		s.deploy.hubBuild = hub.build
@@ -47,6 +53,82 @@ func setDeliveryGate(t *testing.T, s *Service, gate string) {
 		return nil
 	}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestDeliveryGateContractPrecedence(t *testing.T) {
+	for _, tc := range []struct {
+		name, completion, global, title, refusal string
+		merged, live                             bool
+	}{
+		{name: "draft skips live", completion: "draft", global: deliveryGateLive},
+		{name: "ready skips live", completion: "ready", global: deliveryGateLive},
+		{name: "landed requires merge even with global off", completion: "landed", global: deliveryGateOff, title: "Do not stop at PR", refusal: "not merged"},
+		{name: "verified requires a live build", completion: "verified", global: deliveryGateOff, merged: true, refusal: "not live"},
+		{name: "verified accepts a live build", completion: "verified", global: deliveryGateOff, merged: true, live: true},
+		{name: "inherit uses the global gate without guessing", completion: "inherit", global: deliveryGateMerged, title: "Stop at the draft PR", refusal: "not merged"},
+		{name: "legacy PR-only scope still works", global: deliveryGateMerged, title: "Stop at the draft PR"},
+		{name: "legacy scope after a negated clause", global: deliveryGateMerged, title: "Do not deploy, stop at the draft PR"},
+		{name: "legacy negation does not opt out", global: deliveryGateMerged, title: "Do not stop at PR", refusal: "not merged"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := t.Context()
+			s, _ := newTaskService(t)
+			title := tc.title
+			if title == "" {
+				title = "Deliver the artifact"
+			}
+			todo := startPlanTask(t, s, planTaskArgs(false, title, title, "The artifact is reviewed"))
+			s.deploy.forge = &fakeForge{merged: tc.merged, sha: mergeSHA, contains: map[string]bool{oldHub: tc.live}}
+			s.deploy.hubBuild = (&runningHub{commit: oldHub}).build
+			s.deploy.listPaths = []string{}
+			s.setTaskStage(ctx, todo.ID, "review", "https://github.com/o/r/pull/9")
+			setDeliveryGate(t, s, tc.global)
+			if tc.completion != "" {
+				if _, err := runJSON(t, s, "conv1", "task_scope", map[string]any{
+					"todo_id": todo.ID, "change": "Set the delivery milestone", "why": "Updated task scope",
+					"completion_mode": tc.completion,
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			_, err := s.acceptedDeliveryError(ctx, todoNow(s, todo.ID), "", "")
+			if tc.refusal == "" && err != nil {
+				t.Fatalf("delivery was refused: %v", err)
+			}
+			if tc.refusal != "" && (err == nil || !strings.Contains(err.Error(), tc.refusal)) {
+				t.Fatalf("delivery error = %v, want %q", err, tc.refusal)
+			}
+		})
+	}
+}
+
+type scopeChangeForge struct {
+	*fakeForge
+	change func()
+}
+
+func (f scopeChangeForge) PRMerge(ctx context.Context, repo string, number int) (bool, string, error) {
+	f.change()
+	return f.fakeForge.PRMerge(ctx, repo, number)
+}
+
+func TestDeliveryGateRetriesWhenCompletionModeChangesDuringVerification(t *testing.T) {
+	ctx := t.Context()
+	forge := &fakeForge{merged: true, sha: mergeSHA}
+	s, todo := deliveryReviewService(t, forge, nil, false)
+	setMode := func(mode string) {
+		if _, err := runJSON(t, s, "conv1", "task_scope", map[string]any{
+			"todo_id": todo.ID, "change": "Update the delivery milestone", "why": "The scope changed",
+			"completion_mode": mode,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	setMode("landed")
+	s.deploy.forge = scopeChangeForge{forge, func() { setMode("verified") }}
+	if _, err := s.acceptedDeliveryError(ctx, todoNow(s, todo.ID), "", ""); err == nil || !strings.Contains(err.Error(), "changed its completion mode") {
+		t.Fatalf("review used stale delivery checks: %v", err)
 	}
 }
 
@@ -226,12 +308,12 @@ func TestAcceptedDoesNotDiscardUnconfirmedPR(t *testing.T) {
 }
 
 func TestAcceptedNonPRCannotHideEarlierRealPR(t *testing.T) {
-	s, todo := deliveryReviewService(t, &fakeForge{}, &runningHub{commit: oldHub}, false)
+	s, todo := deliveryReviewServiceOn(t, &fakeForge{}, &runningHub{commit: oldHub}, false, repositorystore.New(todoTestDB(t)))
 	ctx := context.Background()
 	s.setTaskStage(ctx, todo.ID, "review", "https://github.com/o/r/pull/10")
-	s.hub.(*fakeHub).setItems(proto.Item{Role: "assistant", Kind: proto.KindText,
+	s.hub.(*fakeHub).setItems(append(artifactCreationItems(todo, "https://github.com/o/r/pull/9"), proto.Item{Role: "assistant", Kind: proto.KindText, TS: artifactTurnAt(todo),
 		Text: "<closeout status=\"not_done\" merged=\"no\" deployed=\"no\">\n" +
-			"artifact: pr https://github.com/o/r/pull/9\n</closeout>"})
+			"artifact: pr https://github.com/o/r/pull/9\n</closeout>"})...)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/repos/o/r/issues/10":
@@ -515,14 +597,15 @@ func TestDeliveryGateChecksLinkedRepositoryIssuesAndPRs(t *testing.T) {
 		}
 	}
 
-	t.Run("merged PR with open linked issue is refused until issue closes", func(t *testing.T) {
+	t.Run("landed requires linked issue closure even with global off", func(t *testing.T) {
 		st := newMemRepoStore()
 		s, _ := newQuietServiceOn(t, st)
 		ctx := context.Background()
 		raw, _ := json.Marshal(map[string]any{"tasks": []map[string]any{{
 			"title": "Fix bug #42", "prompt": "Fix issue #42",
 			"machine": "box", "cwd": "/code/app", "readonly": false, "user_requested": true, "why": "repo",
-			"done_when": []string{"PR merged and issue #42 closed"},
+			"completion_mode": "landed",
+			"done_when":       []string{"PR merged and issue #42 closed"},
 		}}})
 		if _, err := s.toolTaskPlan(ctx, "conv1", raw); err != nil {
 			t.Fatal(err)
@@ -534,6 +617,7 @@ func TestDeliveryGateChecksLinkedRepositoryIssuesAndPRs(t *testing.T) {
 		s.deploy.forge = forge
 		s.deploy.hubBuild = func(context.Context) (string, string, error) { return "dev", "", nil }
 		s.deploy.listPaths = []string{}
+		setDeliveryGate(t, s, deliveryGateOff)
 
 		checks := []ReviewCheck{{Criterion: "PR merged and issue #42 closed", Met: true, Evidence: "PR #9 merged"}}
 		_, err := acceptReview(s, todo.ID, map[string]any{"checks": checks})
@@ -604,7 +688,9 @@ func TestDeliveryGateChecksLinkedRepositoryIssuesAndPRs(t *testing.T) {
 		s.deploy.forge = &fakeForge{merged: false, issueStates: map[string]string{"o/r#42": "open"}}
 		s.deploy.hubBuild = func(context.Context) (string, string, error) { return "dev", "", nil }
 		s.deploy.listPaths = []string{}
-		if _, err := acceptReview(s, roTodo.ID, map[string]any{"checks": []ReviewCheck{}}); err != nil {
+		// The owner asked for this investigation, so its result goes to the owner (user_check, #15566); the delivery
+		// gate still checks the review.
+		if _, err := acceptReview(s, roTodo.ID, map[string]any{"checks": []ReviewCheck{}, "user_check": true}); err != nil {
 			t.Fatalf("read-only task was blocked under default merged: %v", err)
 		}
 

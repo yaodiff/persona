@@ -24,7 +24,7 @@ class RecordingDayMockTests(Hub, unittest.TestCase):
         self.call("POST", "/mock/recording_minutes", {"mode": "ready"})
         self.call("POST", "/mock/recording_day", {"on": True, "recap": "ready"})
         self.call("POST", "/mock/meeting_attendance", {"kb_read_only": False})
-        self.call("PUT", "/api/v1/assistant", {"recording_days": 14})
+        self.call("PUT", "/api/v1/assistant", {"recording_text_days": 14})
         self.now = datetime.now(timezone.utc).replace(hour=8, minute=0, second=0, microsecond=0)
         self.rid = str(uuid.uuid4())
 
@@ -259,11 +259,11 @@ class RecordingDayMockTests(Hub, unittest.TestCase):
         old = self.now - timedelta(days=30)
         self.assertEqual(self.put(started_at=old.isoformat(), day=old.date().isoformat())[1]["status"], "expired")
         self.assertEqual(self.call("GET", "/api/v1/recordings")[1]["recordings"], [])
-        self.assertEqual(self.call("PUT", "/api/v1/assistant", {"recording_days": 60})[0], 200)
+        self.assertEqual(self.call("PUT", "/api/v1/assistant", {"recording_text_days": 60})[0], 200)
         self.assertEqual(self.put(started_at=old.isoformat(), day=old.date().isoformat(), segments=[segment()])[1]["status"], "stored")
         note = str(uuid.uuid4())
         self.put(note, kind="note", started_at=old.isoformat())
-        self.call("PUT", "/api/v1/assistant", {"recording_days": 14})
+        self.call("PUT", "/api/v1/assistant", {"recording_text_days": 14})
         self.error(self.append(base=0), 400)
         out = self.append(base=99, revision=100, **{"from": 500})[1]
         self.assertEqual((out["status"], out["revision"], out["next"]), ("expired", 10, 1))

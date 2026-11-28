@@ -1,0 +1,26 @@
+{
+  "manifest_version": 1,
+  "id": "quicknotes",
+  "name": "Quick notes",
+  "version": "0.1.0",
+  "description": "A sample of adding a feature to Persona Core without changing it: a page of short notes, an app-facing route and a hub feature flag.",
+  "engines": {"extension_protocol": 1, "plugin_protocol": 1},
+  "runtime": {
+    "command": {
+      "linux-amd64": "bin/quicknotes-linux-amd64",
+      "linux-arm64": "bin/quicknotes-linux-arm64",
+      "darwin-amd64": "bin/quicknotes-darwin-amd64",
+      "darwin-arm64": "bin/quicknotes-darwin-arm64"
+    },
+    "http": true
+  },
+  "activation_events": ["on_startup"],
+  "contributes": {
+    "ui": [
+      {"id": "quicknotes", "title": "Quick notes", "placement": "nav_page", "icon": "doc"}
+    ],
+    "api": [
+      {"id": "quicknotes", "prefix": "quicknotes", "features": ["quicknotes"]}
+    ]
+  }
+}

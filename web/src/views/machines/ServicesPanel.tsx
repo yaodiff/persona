@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { t } from "../../i18n";
 import { api, ApiError, enc, errorText, isAbort, pastHub } from "../../lib/api";
 import type { Machine } from "../../lib/types";
+import { MachineTool, type MachineToolProps } from "./MachinePicker";
 import { Button, copyText, cx, Dialog, Loading, Spinner, toast } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { Segmented } from "../assistant/parts";
@@ -105,17 +106,17 @@ function classifyUnavailable(err: unknown): "old-node" | "old-hub" | "forbidden"
   return null;
 }
 
-export function ServicesPanel({ machines }: { machines: Machine[] }) {
-  const defaultMid = useMemo(() => machines.find((m) => m.online)?.id ?? machines[0]?.id ?? "", [machines]);
-  const [selectedMid, setSelectedMid] = useState(defaultMid);
-
-  // Keep selected machine valid if machine list changes.
-  const activeMachine = useMemo(
-    () => machines.find((m) => m.id === selectedMid) ?? machines.find((m) => m.online) ?? machines[0],
-    [machines, selectedMid],
+export function ServicesPanel(props: MachineToolProps) {
+  return (
+    <MachineTool {...props}>
+      {(machine) => <Services activeMachine={machine} />}
+    </MachineTool>
   );
+}
+
+function Services({ activeMachine }: { activeMachine?: Machine }) {
   const mid = activeMachine?.id ?? "";
-  const online = activeMachine?.online ?? false;
+  const online = !!activeMachine?.online;
 
   const [load, setLoad] = useState<LoadState>({ kind: "idle" });
   const [refreshing, setRefreshing] = useState(false);
@@ -254,27 +255,8 @@ export function ServicesPanel({ machines }: { machines: Machine[] }) {
 
   return (
     <section data-testid="services-panel" aria-label={t("machines-services.title")} className="flex flex-col gap-3">
-      {/* Toolbar: machine selector, category filter, search, and manual refresh */}
+      {/* Filter, search and refresh the selected computer’s services */}
       <div className="flex flex-wrap items-center gap-2 rounded-card bg-surface px-4 py-3 shadow-card">
-        {machines.length > 1 ? (
-          <label className="flex items-center gap-2 text-label text-ink-2">
-            <span className="shrink-0">{t("machines-services.machine_label")}</span>
-            <select
-              aria-label={t("machines-services.machine_label")}
-              value={mid}
-              onChange={(e) => setSelectedMid(e.target.value)}
-              className="h-8 max-w-56 rounded-control bg-inset px-2.5 pr-7 text-label text-ink shadow-hairline outline-none"
-            >
-              {machines.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.name} {!m.online ? `(${t("machines.offline")})` : ""}
-                </option>
-              ))}
-            </select>
-          </label>
-        ) : (
-          activeMachine && <span className="text-meta font-semibold text-ink">{activeMachine.name}</span>
-        )}
 
         <Segmented
           compact

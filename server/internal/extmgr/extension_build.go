@@ -41,7 +41,12 @@ writing one:
                                     (settings and secrets from extension.dev.json: {"config": {…}, "secrets": {…}})
   test [<directory>]                build it for this machine and hold it to the hub's checks
   pack [<directory>] [--platforms linux-amd64,…] [--out dist] [--split]
-                                    build every platform and pack it; prints the sha256 and the index entry`
+                                    build every platform and pack it; prints the sha256 and the index entry
+publishing a private market:
+  keygen --out <file>               a new Ed25519 signing key: the private key to <file> (0600, PKCS #8 PEM), its
+                                    public key printed for market add --key / market key add
+  sign-index <persona-extensions.json> --key <file> [--key <file>…] [--out <file>]
+                                    sign the index with the official envelope format (several keys while rotating)`
 
 // extensionBuildCommand runs new, test and pack.
 func extensionBuildCommand(ctx context.Context, args []string, stdout, stderr io.Writer) error {

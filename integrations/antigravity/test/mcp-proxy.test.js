@@ -340,6 +340,90 @@ describe('mcpServers', () => {
   })
 })
 
+describe('MCP proxy assistant alwaysLoad filtering', { timeout: 15_000 }, () => {
+  const toolBytes = (tool) => Buffer.byteLength(JSON.stringify({ name: tool.name, description: tool.description, inputSchema: tool.inputSchema }))
+  const bigTool = (name, desc, extra = {}) => ({
+    name,
+    description: `${desc} `.repeat(45).trim(),
+    inputSchema: { type: 'object', properties: { id: { type: 'string' } } },
+    ...extra,
+  })
+
+  it('declares only alwaysLoad tools larger than persona_call and routes deferred tools through persona_call', async (t) => {
+    const corePlan = bigTool('task_plan', 'Plan work for supervised tasks.', { _meta: { 'anthropic/alwaysLoad': true } })
+    const coreKb = bigTool('kb_search', 'Search the knowledge base.', { _meta: { 'anthropic/alwaysLoad': true } })
+    const deferredNoMeta = bigTool('phone_health_summary', 'Summarize daily phone health metrics.')
+    const deferredFalse = bigTool('mail_search', 'Search mailbox messages.', { _meta: { 'anthropic/alwaysLoad': false } })
+    const { call } = proxied(t, [corePlan, deferredNoMeta, coreKb, deferredFalse])
+
+    const res = await call('tools/list', {})
+    const declared = res.result.tools
+    assert.deepEqual(declared.map((x) => x.name), ['task_plan', 'kb_search', 'persona_call'])
+    const dispatch = declared.find((x) => x.name === 'persona_call')
+    assert.ok(declared.every((x) => x === dispatch || toolBytes(x) > toolBytes(dispatch)), 'persona_call stays smallest declared tool')
+
+    const summary = (await call('tools/call', { name: 'persona_call', arguments: {} })).result.content[0].text
+    assert.match(summary, /task_plan, phone_health_summary, kb_search, mail_search/)
+    assert.match(summary, /- phone_health_summary: .* Arguments: \{"type":"object","properties":\{"id":\{"type":"string"\}\}\}/)
+    assert.match(summary, /- mail_search: .* Arguments: \{"type":"object","properties":\{"id":\{"type":"string"\}\}\}/)
+    assert.doesNotMatch(summary, /- task_plan:/)
+    assert.doesNotMatch(summary, /- kb_search:/)
+
+    const forwarded = await call('tools/call', {
+      name: 'persona_call',
+      arguments: { name: 'phone_health_summary', arguments: { id: 'steps' } },
+    })
+    assert.deepEqual(JSON.parse(forwarded.result.content[0].text), { name: 'phone_health_summary', args: { id: 'steps' } })
+    const forwardedFalse = await call('tools/call', {
+      name: 'persona_call',
+      arguments: { name: 'mail_search', arguments: { id: 'inbox' } },
+    })
+    assert.deepEqual(JSON.parse(forwardedFalse.result.content[0].text), { name: 'mail_search', args: { id: 'inbox' } })
+  })
+
+  it('falls back to declaring all tools larger than persona_call when all tools are alwaysLoad or none carry _meta', async (t) => {
+    const allAlways = [
+      bigTool('task_plan', 'Plan work.', { _meta: { 'anthropic/alwaysLoad': true } }),
+      bigTool('phone_health_summary', 'Health summary.', { _meta: { 'anthropic/alwaysLoad': true } }),
+    ]
+    const resAll = await proxied(t, allAlways).call('tools/list', {})
+    assert.deepEqual(resAll.result.tools.map((x) => x.name), ['task_plan', 'phone_health_summary', 'persona_call'])
+
+    const noMeta = [
+      bigTool('task_plan', 'Plan work.'),
+      bigTool('phone_health_summary', 'Health summary.'),
+    ]
+    const resLegacy = await proxied(t, noMeta).call('tools/list', {})
+    assert.deepEqual(resLegacy.result.tools.map((x) => x.name), ['task_plan', 'phone_health_summary', 'persona_call'])
+  })
+
+  it('keeps an alwaysLoad tool smaller than persona_call hidden to preserve the #10756 invariant', async (t) => {
+    const tinyAlways = {
+      name: 'kb_get',
+      description: 'Read one note',
+      inputSchema: { type: 'object', properties: {} },
+      _meta: { 'anthropic/alwaysLoad': true },
+    }
+    const bigAlways = bigTool('task_plan', 'Plan work.', { _meta: { 'anthropic/alwaysLoad': true } })
+    const deferred = bigTool('mail_search', 'Search mail.')
+    const { call } = proxied(t, [tinyAlways, bigAlways, deferred])
+
+    const res = await call('tools/list', {})
+    const declared = res.result.tools
+    assert.deepEqual(declared.map((x) => x.name), ['task_plan', 'persona_call'])
+    const dispatch = declared.find((x) => x.name === 'persona_call')
+    assert.ok(declared.every((x) => x === dispatch || toolBytes(x) > toolBytes(dispatch)), 'persona_call remains strictly smallest')
+
+    const summary = (await call('tools/call', { name: 'persona_call', arguments: {} })).result.content[0].text
+    assert.match(summary, /- kb_get: Read one note Arguments: \{"type":"object","properties":\{\}\}/)
+    assert.match(summary, /- mail_search:/)
+    assert.doesNotMatch(summary, /- task_plan:/)
+
+    const via = await call('tools/call', { name: 'persona_call', arguments: { name: 'kb_get', arguments: {} } })
+    assert.deepEqual(JSON.parse(via.result.content[0].text), { name: 'kb_get', args: {} })
+  })
+})
+
 describe('MCP proxy --agent mode (#15822)', { timeout: 15_000 }, () => {
   const bulkSecondary = Array.from({ length: 34 }, (_, i) => ({
     name: i < 29 ? `phone_tool_${i}` : `mail_tool_${i - 29}`,

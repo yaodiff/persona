@@ -52,6 +52,10 @@ data class KnowledgeEntry(
     val paused: RecordingPaused? = null,
     /** Client-only: the imported meeting this recording stands for in the merged Meetings list. */
     @Transient val imported: KnowledgeEntry? = null,
+    /** A project's parent as it shows (#12927); null at the top level and from an older hub. Read only on Android. */
+    val parent: String? = null,
+    /** A project's milestone flags (#12927); null without any and from an older hub. Read only on Android. */
+    val milestones: List<KnowledgeMilestone>? = null,
 ) {
     val key: String get() = "$kind/$id"
 }
@@ -180,7 +184,30 @@ data class KnowledgeSegment(val start: Double = 0.0, val end: Double = 0.0, val 
 
 /** [agents]: the live, non-assistant sessions working in a project's code directories (projects only). */
 @Serializable
-data class KnowledgeDetailResponse(val detail: KnowledgeDetail, val agents: List<Session>? = null)
+data class KnowledgeDetailResponse(
+    val detail: KnowledgeDetail,
+    val agents: List<Session>? = null,
+    /** A project's place in the project tree (#12927); null from an older hub. Read only on Android. */
+    val tree: KnowledgeProjectTree? = null,
+)
+
+/** A milestone flag on a project (#12927); every field optional so a later field or a damaged flag never fails a list. */
+@Serializable
+data class KnowledgeMilestone(val id: String? = null, val title: String? = null, val target: String? = null, val state: String? = null)
+
+/** A project as the tree names it: a parent, one above it, one under it. */
+@Serializable
+data class KnowledgeProjectRef(val id: String = "", val name: String? = null, val status: String? = null, val children: Int? = null)
+
+/** `tree` of a project's detail (`GET /api/v1/kb/projects/{id}`, #12927). */
+@Serializable
+data class KnowledgeProjectTree(
+    val parent: KnowledgeProjectRef? = null,
+    val ancestors: List<KnowledgeProjectRef>? = null,
+    val children: List<KnowledgeProjectRef>? = null,
+    val milestones: List<KnowledgeMilestone>? = null,
+    val depth: Int? = null,
+)
 
 /**
  * Tagging set by hand (`PUT /api/v1/kb/{kind}/{id}`); the hub keeps it over its automatic tagging. Only the fields

@@ -108,8 +108,11 @@ func (h healthHost) Standby(ctx context.Context) bool { return h.s.hello(ctx).As
 func (h healthHost) QuietPush(ctx context.Context) bool { return h.s.hello(ctx).QuietPush }
 
 func (h healthHost) Notify(ctx context.Context, n assistantwire.Notification) (assistantwire.NotifyResult, error) {
-	h.s.noteCard(ctx, cardHealthWater, n)
-	return h.s.hub.NotifyRequest(ctx, NotifyRequest{Notification: n})
+	res, err := h.s.hub.NotifyRequest(ctx, NotifyRequest{Notification: n})
+	if err == nil {
+		h.s.noteCardResult(ctx, cardHealthWater, n, res)
+	}
+	return res, err
 }
 
 func (h healthHost) FitPage(view *wire.View, version int, l i18n.Lang) error {

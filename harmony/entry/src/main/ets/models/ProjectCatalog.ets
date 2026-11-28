@@ -2,6 +2,7 @@ import type { ClientModel } from './ClientModel';
 import { ResourceRow, Wire } from './Wire';
 import { SessionSpaceTab } from './SessionSpace';
 import { agentRepositoryPlace, AgentRepositoryPlace } from './AgentRepositoryPlace';
+import { herdrTabName } from '../core/SessionNaming';
 
 function leaf(path: string): string {
   const parts = path.replace(/\\/g, '/').split('/').filter((part: string) => !!part);
@@ -39,6 +40,7 @@ export class ProjectAgent {
   todoTitle: string;
   tabKey: string = '';
   tabTitle: string = '';
+  readonly herdrTabName: string = '';
   pane?: SessionSpaceTab;
   private searchText: string;
   private searchFolded: boolean = false;
@@ -74,6 +76,7 @@ export class ProjectAgent {
     this.spaceName = Wire.text(data,'space_name');
     this.spaceId = Wire.text(data,'space_id'); this.spaceKind = Wire.text(data,'space_kind');
     this.archived = Wire.bool(data,'archived'); this.pending = Wire.number(data,'pending_interactions');
+    this.herdrTabName = herdrTabName(data);
     const todo = Wire.object(data,'todo');
     this.todoTitle = Wire.text(todo,'id') ? Wire.text(todo,'title') : '';
     const space = this.spaceId, slot = Wire.text(data,'slot_id');

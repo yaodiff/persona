@@ -207,6 +207,44 @@ class ChatDeliveryStateTest {
         }
     }
 
+    /**
+     * A code the app has no words for says the hub's own sentence when the hub gave one (an agy open in a terminal,
+     * #16531), as iOS and the web do; the app's words still win for the codes it has, and without a sentence or a code
+     * the generic refusal stays.
+     */
+    @Test fun aRefusalWithoutTheAppsWordsSaysTheHubsSentence() {
+        val words = "This Antigravity conversation is open in agy in a terminal on that computer. Nothing was sent."
+        assertEquals(words, refusalText("agy_in_terminal", words).resolve(res))
+        val agy = OutboxMessage("agy", SessionKey("machine", "agy-session"), "to agy", DeliveryState.Refused,
+            error = "agy_in_terminal", reason = words)
+        assertEquals(words, refusalText(agy.error, agy.reason).resolve(res))
+        val cases = listOf(
+            Triple("agy_in_terminal", null, R.string.chat_delivery_refused),
+            Triple("agy_in_terminal", " ", R.string.chat_delivery_refused),
+            Triple(null, words, R.string.chat_delivery_refused),
+            Triple("input_draft", words, R.string.chat_delivery_input_draft),
+            Triple("node_unreachable", words, persona.core.designsystem.R.string.designsystem_feedback_computer_offline),
+        )
+        for ((code, hubWords, expected) in cases) {
+            assertEquals("$code $hubWords", res.getString(expected), refusalText(code, hubWords).resolve(res))
+        }
+    }
+
+    @Test fun staleComposerDeliveryNeverMasksAuthoritativeRefusedOrRejectedState() {
+        for (authoritative in listOf(DeliveryState.Refused, DeliveryState.Rejected)) {
+            for (stale in listOf(null, DeliveryState.Unknown, DeliveryState.WaitingForNetwork,
+                DeliveryState.Queued, DeliveryState.Verifying, DeliveryState.NeedsConfirmation,
+                DeliveryState.Refused, DeliveryState.Rejected)) {
+                assertEquals("$authoritative with $stale", authoritative, effectiveOutboxState(authoritative, stale))
+            }
+            for (advancing in listOf(DeliveryState.Sending, DeliveryState.Sent, DeliveryState.Held)) {
+                assertEquals("$authoritative with $advancing", advancing, effectiveOutboxState(authoritative, advancing))
+            }
+        }
+        assertEquals(DeliveryState.NeedsConfirmation, effectiveOutboxState(DeliveryState.NeedsConfirmation, DeliveryState.Sending))
+        assertEquals(DeliveryState.WaitingForNetwork, effectiveOutboxState(DeliveryState.WaitingForNetwork, DeliveryState.Unknown))
+    }
+
     private class FakeSender : MessageSender {
         val message = OutboxMessage("message", SessionKey("machine", "session"), "原消息", DeliveryState.WaitingForNetwork)
         override val outbox = MutableStateFlow(listOf(message))

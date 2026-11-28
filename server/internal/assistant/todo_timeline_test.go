@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"reflect"
 	"slices"
@@ -294,8 +295,9 @@ func TestTodoTimelineToAnExtension(t *testing.T) {
 // and a to-do on its brief that are hidden. A to-do whose conversations and runs are all known to be outside the space
 // still reads, from its links' directories, its conversations' deletion records and the computer its main
 // conversation is kept on too. Hidden, it is on neither the list nor any route of its own (its item, timeline and
-// decisions answer 404, #10941); shown, an extension reads its row, history and decisions as a device does, which
-// reads every one.
+// decisions answer 404, #10941); one that cannot be told yet is not on the list either, but its routes answer 503 to
+// be tried again (#12216); shown, an extension reads its row, history and decisions as a device does, which reads
+// every one.
 func TestTodoTimelineHiddenFromAnExtension(t *testing.T) {
 	const told, summary = "Resting heart rate was 48 all week", "Logged the new prescription"
 	health := identity.HealthDir("/home/owner")
@@ -381,26 +383,26 @@ func TestTodoTimelineHiddenFromAnExtension(t *testing.T) {
 		return task.ID
 	}
 	cases := []struct {
-		name   string
-		hidden bool
-		setup  func(t *testing.T, e *todoEnv, database *db.DB) string
+		name    string
+		verdict todoVerdict // what an extension is told of it: shown, hidden, or not yet (#12216)
+		setup   func(t *testing.T, e *todoEnv, database *db.DB) string
 	}{
-		{"a health run, the to-do done", true, func(t *testing.T, e *todoEnv, _ *db.DB) string {
+		{"a health run, the to-do done", todoHidden, func(t *testing.T, e *todoEnv, _ *db.DB) string {
 			id := linked(t, e, "conv1", "h1")
 			e.must("PATCH", "/api/v1/todos/"+id, `{"done":true}`)
 			return id
 		}},
-		{"a health run whose link keeps no directory, the to-do done", true, func(t *testing.T, e *todoEnv, _ *db.DB) string {
+		{"a health run whose link keeps no directory, the to-do done", todoHidden, func(t *testing.T, e *todoEnv, _ *db.DB) string {
 			id := linked(t, e, "conv1", "h2")
 			e.must("PATCH", "/api/v1/todos/"+id, `{"done":true}`)
 			return id
 		}},
-		{"a health run taken off", true, func(t *testing.T, e *todoEnv, _ *db.DB) string {
+		{"a health run taken off", todoHidden, func(t *testing.T, e *todoEnv, _ *db.DB) string {
 			id := linked(t, e, "conv1", "h1", "s1")
 			e.must("DELETE", "/api/v1/todos/"+id+"/agents/server/h1", "")
 			return id
 		}},
-		{"a health run the extension tries to take off", true, func(t *testing.T, e *todoEnv, _ *db.DB) string {
+		{"a health run the extension tries to take off", todoHidden, func(t *testing.T, e *todoEnv, _ *db.DB) string {
 			id := linked(t, e, "conv1", "h1")
 			if w := e.doAs(roleExtension, "DELETE", "/api/v1/todos/"+id+"/agents/server/h1", ""); w.Code != http.StatusNotFound {
 				t.Fatalf("an extension takes the run off: %d %s", w.Code, w.Body)
@@ -410,34 +412,34 @@ func TestTodoTimelineHiddenFromAnExtension(t *testing.T) {
 			}
 			return id
 		}},
-		{"a health run whose computer does not answer", true, func(t *testing.T, e *todoEnv, _ *db.DB) string {
+		{"a health run whose computer does not answer", todoHidden, func(t *testing.T, e *todoEnv, _ *db.DB) string {
 			id := linked(t, e, "conv1", "h1")
 			unreached(e)
 			return id
 		}},
-		{"a run that keeps no directory, its computer not answering", true, func(t *testing.T, e *todoEnv, _ *db.DB) string {
+		{"a run that keeps no directory, its computer not answering", todoUntold, func(t *testing.T, e *todoEnv, _ *db.DB) string {
 			id := linked(t, e, "conv1", "s1")
 			unreached(e)
 			return id
 		}},
-		{"a health run relinked once its shell left the space, the to-do done", true, func(t *testing.T, e *todoEnv, _ *db.DB) string {
+		{"a health run relinked once its shell left the space, the to-do done", todoHidden, func(t *testing.T, e *todoEnv, _ *db.DB) string {
 			id := linked(t, e, "conv1", "h1")
 			e.sessions("server", append(without("h1"), session("h1", "Sleep log", "", "/tmp", false))...)
 			e.must("PUT", "/api/v1/todos/"+id+"/agents/server/h1", "")
 			e.must("PATCH", "/api/v1/todos/"+id, `{"done":true}`)
 			return id
 		}},
-		{"a health run that came through a space the owner unlinked", true, func(t *testing.T, e *todoEnv, _ *db.DB) string {
+		{"a health run that came through a space the owner unlinked", todoHidden, func(t *testing.T, e *todoEnv, _ *db.DB) string {
 			id := spaced(t, e)
 			e.must("DELETE", "/api/v1/todos/"+id+"/spaces/server/Journal", "")
 			return id
 		}},
-		{"a health run that came through a space the owner moved to another to-do", true, func(t *testing.T, e *todoEnv, _ *db.DB) string {
+		{"a health run that came through a space the owner moved to another to-do", todoHidden, func(t *testing.T, e *todoEnv, _ *db.DB) string {
 			id := spaced(t, e)
 			e.must("PUT", "/api/v1/todos/"+e.create("Plan the trip").ID+"/spaces/server/Journal", "")
 			return id
 		}},
-		{"a health run that came through a space voided by a rename", true, func(t *testing.T, e *todoEnv, _ *db.DB) string {
+		{"a health run that came through a space voided by a rename", todoHidden, func(t *testing.T, e *todoEnv, _ *db.DB) string {
 			id := spaced(t, e)
 			other := e.create("Plan the trip").ID
 			e.sessions("server", append(listed, session("s3", "Diary", "", "/home/owner/diary", false))...)
@@ -448,12 +450,12 @@ func TestTodoTimelineHiddenFromAnExtension(t *testing.T) {
 			}
 			return id
 		}},
-		{"opened from a health conversation no longer listed", true, func(t *testing.T, e *todoEnv, _ *db.DB) string {
+		{"opened from a health conversation no longer listed", todoHidden, func(t *testing.T, e *todoEnv, _ *db.DB) string {
 			id := opened(t, e, "h0")
 			e.sessions("server", without("h0")...)
 			return id
 		}},
-		{"opened from a health conversation, its history written elsewhere", true, func(t *testing.T, e *todoEnv, _ *db.DB) string {
+		{"opened from a health conversation, its history written elsewhere", todoHidden, func(t *testing.T, e *todoEnv, _ *db.DB) string {
 			task, err := e.s.createTaskTodo(context.Background(), "Book the clinic", "", "h0", "", "")
 			if err != nil {
 				t.Fatal(err)
@@ -461,16 +463,16 @@ func TestTodoTimelineHiddenFromAnExtension(t *testing.T) {
 			history(t, e, "conv1", task.ID, "s1")
 			return task.ID
 		}},
-		{"written to by a health conversation", true, func(t *testing.T, e *todoEnv, _ *db.DB) string {
+		{"written to by a health conversation", todoHidden, func(t *testing.T, e *todoEnv, _ *db.DB) string {
 			return linked(t, e, "h0", "s1")
 		}},
-		{"written to by a conversation not listed", true, func(t *testing.T, e *todoEnv, _ *db.DB) string {
+		{"written to by a conversation not listed", todoUntold, func(t *testing.T, e *todoEnv, _ *db.DB) string {
 			return linked(t, e, "gone", "s1")
 		}},
-		{"opened by a task leader in the space", true, func(t *testing.T, e *todoEnv, _ *db.DB) string {
+		{"opened by a task leader in the space", todoHidden, func(t *testing.T, e *todoEnv, _ *db.DB) string {
 			return worker(t, e, health)
 		}},
-		{"opened by a task leader linked twice, once in the space", true, func(t *testing.T, e *todoEnv, _ *db.DB) string {
+		{"opened by a task leader linked twice, once in the space", todoHidden, func(t *testing.T, e *todoEnv, _ *db.DB) string {
 			id := worker(t, e, "/home/owner/code/app")
 			// The leader's agent led another task before, working in the space: whichever link a read meets first, the
 			// leader is in it.
@@ -487,14 +489,14 @@ func TestTodoTimelineHiddenFromAnExtension(t *testing.T) {
 			}
 			return id
 		}},
-		{"a step of it whose run works in the space", true, func(t *testing.T, e *todoEnv, _ *db.DB) string {
+		{"a step of it whose run works in the space", todoHidden, func(t *testing.T, e *todoEnv, _ *db.DB) string {
 			parent, step := e.create("Plan the meals").ID, e.create("Count the eggs").ID
 			e.must("PATCH", "/api/v1/todos/"+step, `{"part_of":"`+parent+`"}`)
 			e.must("PUT", "/api/v1/todos/"+step+"/agents/server/h1", "")
 			history(t, e, "conv1", parent, "s1")
 			return parent
 		}},
-		{"on a brief with a to-do whose run works in the space", true, func(t *testing.T, e *todoEnv, _ *db.DB) string {
+		{"on a brief with a to-do whose run works in the space", todoHidden, func(t *testing.T, e *todoEnv, _ *db.DB) string {
 			ctx := context.Background()
 			first := e.create("Log the week").ID
 			e.must("PUT", "/api/v1/todos/"+first+"/agents/server/h1", "")
@@ -508,27 +510,27 @@ func TestTodoTimelineHiddenFromAnExtension(t *testing.T) {
 			}
 			return id
 		}},
-		{"opened by a task leader outside the space", false, func(t *testing.T, e *todoEnv, _ *db.DB) string {
+		{"opened by a task leader outside the space", todoShown, func(t *testing.T, e *todoEnv, _ *db.DB) string {
 			return worker(t, e, "/home/owner/code/app")
 		}},
-		{"done, its run outside the space", false, func(t *testing.T, e *todoEnv, _ *db.DB) string {
+		{"done, its run outside the space", todoShown, func(t *testing.T, e *todoEnv, _ *db.DB) string {
 			id := linked(t, e, "conv1", "s1")
 			e.must("PATCH", "/api/v1/todos/"+id, `{"done":true}`)
 			return id
 		}},
-		{"its run taken off, its computer not answering, the link's directory outside the space", false,
+		{"its run taken off, its computer not answering, the link's directory outside the space", todoShown,
 			func(t *testing.T, e *todoEnv, _ *db.DB) string {
 				id := linked(t, e, "conv1", "s2")
 				e.must("DELETE", "/api/v1/todos/"+id+"/agents/server/s2", "")
 				unreached(e)
 				return id
 			}},
-		{"its run taken off, listed outside the space", false, func(t *testing.T, e *todoEnv, _ *db.DB) string {
+		{"its run taken off, listed outside the space", todoShown, func(t *testing.T, e *todoEnv, _ *db.DB) string {
 			id := linked(t, e, "conv1", "s1")
 			e.must("DELETE", "/api/v1/todos/"+id+"/agents/server/s1", "")
 			return id
 		}},
-		{"opened from a conversation since deleted, outside the space", false, func(t *testing.T, e *todoEnv, database *db.DB) string {
+		{"opened from a conversation since deleted, outside the space", todoShown, func(t *testing.T, e *todoEnv, database *db.DB) string {
 			id := opened(t, e, "c0")
 			row := deletedConversation{Machine: "server", ID: "c0", At: time.Now().UTC()}
 			if database != nil {
@@ -545,7 +547,7 @@ func TestTodoTimelineHiddenFromAnExtension(t *testing.T) {
 			e.sessions("server", without("c0")...)
 			return id
 		}},
-		{"opened from the main conversation, kept on the assistant's former computer", false, func(t *testing.T, e *todoEnv, _ *db.DB) string {
+		{"opened from the main conversation, kept on the assistant's former computer", todoShown, func(t *testing.T, e *todoEnv, _ *db.DB) string {
 			setSettings(t, e.s, func(v *Settings) { v.Main, v.MainMachineID = "m1", "laptop" })
 			e.sessions("laptop", session("m1", "Persona", "", "", true))
 			return opened(t, e, "m1")
@@ -570,7 +572,7 @@ func TestTodoTimelineHiddenFromAnExtension(t *testing.T) {
 					!strings.Contains(w.Body.String(), summary) {
 					t.Errorf("a device's timeline: %s", w.Body)
 				}
-				extensionReads(t, e, id, !c.hidden, told, summary)
+				extensionReads(t, e, id, c.verdict, told, summary)
 			})
 		})
 	}
@@ -578,10 +580,11 @@ func TestTodoTimelineHiddenFromAnExtension(t *testing.T) {
 
 // extensionReads checks what an extension's token reads of to-do id: shown, its row on the list and on its own is a
 // device's, and its timeline (which has words) and its decisions answer as a device's; not shown, it is not on the
-// list, and its item, timeline and decisions answer 404 todo_not_found as for a to-do that does not exist, with none
-// of words.
-func extensionReads(t *testing.T, e *todoEnv, id string, shown bool, words ...string) {
+// list, and its item, timeline and decisions answer 404 todo_not_found as for a to-do that does not exist (503
+// todo_not_told_yet while it cannot be told yet, verdict todoUntold), with none of words.
+func extensionReads(t *testing.T, e *todoEnv, id string, verdict todoVerdict, words ...string) {
 	t.Helper()
+	shown := verdict == todoShown
 	dev, _ := rowsAs(t, e, "")
 	ext, list := rowsAs(t, e, roleExtension)
 	if _, listed := ext[id]; listed != shown || shown && !reflect.DeepEqual(ext[id], dev[id]) {
@@ -596,7 +599,11 @@ func extensionReads(t *testing.T, e *todoEnv, id string, shown bool, words ...st
 		var refused struct{ Code string }
 		_ = json.Unmarshal(w.Body.Bytes(), &refused)
 		if !shown {
-			if w.Code != http.StatusNotFound || refused.Code != "todo_not_found" || slices.ContainsFunc(words, func(word string) bool {
+			status, code := http.StatusNotFound, "todo_not_found"
+			if verdict == todoUntold { // not yet told: tried again, never read as a to-do that does not exist (#12216)
+				status, code = http.StatusServiceUnavailable, "todo_not_told_yet"
+			}
+			if w.Code != status || refused.Code != code || slices.ContainsFunc(words, func(word string) bool {
 				return strings.Contains(w.Body.String(), word)
 			}) {
 				t.Errorf("an extension at %s (not shown): %d %s", path, w.Code, w.Body)
@@ -616,7 +623,11 @@ func extensionReads(t *testing.T, e *todoEnv, id string, shown bool, words ...st
 // bytes.
 func rowsAs(t *testing.T, e *todoEnv, role string) (map[string]map[string]any, []byte) {
 	t.Helper()
-	w := e.doAs(role, "GET", "/api/v1/todos", "")
+	return readTodoRows(t, role, e.doAs(role, "GET", "/api/v1/todos", ""))
+}
+
+func readTodoRows(t *testing.T, role string, w *httptest.ResponseRecorder) (map[string]map[string]any, []byte) {
+	t.Helper()
 	var list struct {
 		Todos []map[string]any `json:"todos"`
 	}

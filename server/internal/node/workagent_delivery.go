@@ -45,7 +45,7 @@ func (n *Node) watchAgySend(id, pane, text string, typedAt time.Time) *agySendWa
 		return nil
 	}
 	w := &agySendWatch{
-		path:  filepath.Join(n.agyDataRoot(), "brain", conversation, agyTranscriptPath),
+		path:  filepath.Join(n.agyRootFor(conversation), "brain", conversation, agyTranscriptPath),
 		want:  echoWords(text),
 		sent:  text,
 		after: typedAt,
@@ -146,7 +146,7 @@ func agyNativeInputText(text, sent string) string {
 	return text
 }
 
-func (n *Node) confirmAgySend(ctx context.Context, id, pane, text string, typedAt time.Time, watch *agySendWatch, beforeQueued int) error {
+func (n *Node) confirmAgySend(ctx context.Context, id, pane, text string, typedAt time.Time, watch *agySendWatch, beforeQueued int) (bool, error) {
 	ticker := time.NewTicker(agySendPoll)
 	defer ticker.Stop()
 	timer := time.NewTimer(agySendWait)
@@ -162,24 +162,24 @@ func (n *Node) confirmAgySend(ctx context.Context, id, pane, text string, typedA
 			}
 		}
 		if watch.took() {
-			return nil
+			return false, nil
 		}
 		if watch != nil && watch.lost {
-			return uncertain(errors.New(agySendUnconfirmed))
+			return false, uncertain(errors.New(agySendUnconfirmed))
 		}
 		// While agy is busy, it buffers follow-ups in TUI memory and shows `<preview>... (alt+m to send immediately)`
 		// instead of appending USER_INPUT to transcript.jsonl immediately (#14871).
 		if screen, err := n.readPane(ctx, pane, "visible", 80); err == nil {
 			if lines := parseAgyQueuedLines(screen); agyScreenShowsQueued(lines, text, beforeQueued) {
 				n.recordAgyQueued(id, pane, text, watch, lines)
-				return nil
+				return true, nil
 			}
 		}
 		select {
 		case <-ctx.Done():
-			return uncertain(fmt.Errorf("%s: %w", agySendUnconfirmed, ctx.Err()))
+			return false, uncertain(fmt.Errorf("%s: %w", agySendUnconfirmed, ctx.Err()))
 		case <-timer.C:
-			return uncertain(errors.New(agySendUnconfirmed))
+			return false, uncertain(errors.New(agySendUnconfirmed))
 		case <-ticker.C:
 		}
 	}

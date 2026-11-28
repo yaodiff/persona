@@ -65,6 +65,23 @@ func TestCodexFirstPromptWithPasteChips(t *testing.T) {
 	}
 }
 
+func TestCodexFirstPasteAcrossBlankLine(t *testing.T) {
+	n, f, _ := codexNode(t, "idle")
+	f.setScreen(cxPane, cxReady)
+	f.after(func(c herdrCall) {
+		if c.Method == "pane.send_text" {
+			f.setScreen(cxPane, "› First paragraph.\n\n  Second paragraph.\n\n  GPT-6.2-Sol default · /work/project\n"+
+				"                            ⚠ 1 warning · f2 to view\n")
+		}
+	})
+	if err := n.typeCodexFirst(t.Context(), cxPane, "First paragraph.\n\nSecond paragraph."); err != nil {
+		t.Fatal(err)
+	}
+	if keys := f.trace("pane.send_keys"); len(keys) != 1 || !strings.Contains(keys[0], `"enter"`) {
+		t.Fatalf("first paste was not submitted once: %v", keys)
+	}
+}
+
 func TestCodexFirstPasteWaitsForItsVisibleTail(t *testing.T) {
 	n, f, _ := codexNode(t, "idle")
 	prefix, tail := strings.Repeat("Context 中文\n", 120), "the final instruction"

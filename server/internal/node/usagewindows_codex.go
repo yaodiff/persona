@@ -33,6 +33,7 @@ func collectCodexAppUsage(ctx context.Context, homes []string, found map[string]
 	if err != nil {
 		return
 	}
+	proxyEnv := codexUsageProxyEnv(ctx)
 	var reads errgroup.Group
 	reads.SetLimit(codexUsagePollParallel)
 	accounts := make([]proto.UsageNodeAccount, len(homes))
@@ -46,7 +47,7 @@ func collectCodexAppUsage(ctx context.Context, homes []string, found map[string]
 		reads.Go(func() error {
 			readCtx, cancel := context.WithTimeout(ctx, codexUsagePollTimeout)
 			defer cancel()
-			accounts[i] = readCodexAppUsage(readCtx, cli, home)
+			accounts[i] = readCodexAppUsageWithEnv(readCtx, cli, home, proxyEnv)
 			return nil
 		})
 	}
@@ -58,10 +59,21 @@ func collectCodexAppUsage(ctx context.Context, homes []string, found map[string]
 	}
 }
 
+func codexUsageProxyEnv(ctx context.Context) []string {
+	if hasExplicitProxyEnv(os.Environ()) {
+		return nil
+	}
+	return withShellProxyEnv(ctx, withSystemProxyEnv(ctx, nil))
+}
+
 // readCodexAppUsage asks only for usage metadata. The CLI manages its own login. In particular, the account ID comes
 // from the very same response as the windows, so changing the signed-in account never relabels a historical rollout.
 func readCodexAppUsage(ctx context.Context, cli, home string) proto.UsageNodeAccount {
-	app, err := startCodexStdio(ctx, cli, home, os.TempDir())
+	return readCodexAppUsageWithEnv(ctx, cli, home, codexUsageProxyEnv(ctx))
+}
+
+func readCodexAppUsageWithEnv(ctx context.Context, cli, home string, proxyEnv []string) proto.UsageNodeAccount {
+	app, err := startCodexStdioWithEnv(ctx, cli, home, os.TempDir(), proxyEnv)
 	if err != nil {
 		return proto.UsageNodeAccount{}
 	}

@@ -6,6 +6,7 @@
 Pair a fresh simulator with this hub. ComposerKeyboardTests needs these short/long GPT fixtures;
 never run it against a production hub. This entry keeps mock_hub.py free of composer-specific changes.
 A message sent here lands in its chat's transcript a moment later (mock_hub.py MOCK_ECHO_SENT), as the agent taking it.
+Set MOCK_COMPOSER_CLAUDE_PANES=1 for ComposerClaudePaneCommandsTests and the main conversation's own Clear Context.
 """
 import os
 from pathlib import Path
@@ -32,6 +33,27 @@ def configure(mock):
     mock["LAUNCHERS"][1]["model"] = "gpt-6.1"
 
 
+def add_claude_panes(mock):
+    """Independent Agent rows for the terminal fallback and explicit model capabilities (#13325)."""
+    terminal = {"read": True, "send": True, "terminal": True}
+    cases = [
+        ("Claude pane", {}),
+        ("Legacy pane", {}),
+        ("Pane with empty agent", {"agent": ""}),
+        ("Antigravity pane", {"agent": "agy", "launcher": "agy", "model": "gemini-3-pro"}),
+        ("Codex pane with model support", {"agent": "codex", "launcher": "codex", "model": "gpt-5.5",
+                                          "capabilities": dict(terminal, model=True)}),
+        ("Claude pane with model disabled", {"capabilities": dict(terminal, model=False)}),
+    ]
+    for slot, (title, fields) in enumerate(cases, start=1):
+        row = mock["sess"]("macbook", f"c1332500-0000-4000-8000-{slot:012d}", title, "/Users/me/code/commands",
+                           "idle", "idle", "Composer fixtures", 13325, title, slot, 1, "")
+        row.update(fields)
+        if slot == 2:
+            row.pop("agent")
+        mock["SESSIONS"].append(row)
+
+
 def main():
     # Without its transcript copy the app keeps a message sent to the working Agent chat queued for up to 16 minutes
     # (Outbox.sentWait), across launches: in the next test its queue strip took what the keyboard, the quotes and a long
@@ -41,8 +63,14 @@ def main():
     # and session index then keep only the current assistant's rows (sessions_manager); the composer Agent chat opens
     # with no session row, so the field, + and mic stay disabled. QuietReceipts and other UI fixtures use the same.
     os.environ.setdefault("MOCK_MANAGERS", "1")
+    claude_panes = os.environ.get("MOCK_COMPOSER_CLAUDE_PANES") == "1"
+    if claude_panes:
+        os.environ["MOCK_MAIN_ACTIONS"] = "1"
     mock = runpy.run_path(str(Path(__file__).with_name("mock_hub.py")))
-    configure(mock)
+    if claude_panes:
+        add_claude_panes(mock)
+    else:
+        configure(mock)
     loopback = "127.0.0.1"
     server = ThreadingHTTPServer((loopback, int(os.environ.get("PORT", "18760"))), mock["H"])
     server.daemon_threads = True

@@ -8,6 +8,7 @@
   "relay_delivery_failed": "メッセージを届けられませんでした",
   "supervision_delivery_failed": "このチャットではタスクのフォローアップ指示を受け取れません。タスクを開いて最新の状態と報告を確認してください。このコンピュータで対応するランチャー：{launchers}。",
   "supervision_delivery_refused": "このチャットがタスクのフォローアップメッセージを受け取らなかったため、自動では再送しません。タスクを開いて最新の状態と報告を確認してください。",
+  "supervision_delivery_unconfirmed": "タスクのフォローアップメッセージを複数回確認してもこのチャットで受信確認できなかったため、後続の更新が詰まらないよう Persona が滞留項目を解除しました。見落としがないかタスクを確認してください。",
   "supervision_reviewer_required": "このタスクを始める前に、Claude Code または Codex の監督チャットを選んでください。",
   "started_on": "実行構成は {run} です。",
   "pick_save_failed": "次のターンで使うモデル設定を保存できませんでした：{error}",

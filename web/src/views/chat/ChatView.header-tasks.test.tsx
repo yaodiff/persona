@@ -5,7 +5,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Item, Session } from "../../lib/types";
+import { REVIEW_FEATURE, type Item, type Session } from "../../lib/types";
 
 // a phone (under 640 px, touch) or a desktop (a mouse), as the test says
 const media = vi.hoisted(() => {
@@ -27,12 +27,13 @@ vi.mock("./useTranscript", () => ({ useTranscript: () => transcript }));
 vi.mock("../assistant/Persona", () => ({ usePersona: () => ({ name: "Persona" }) }));
 
 const { ChatView } = await import("./ChatView");
-const { reset, upsertSession } = await import("../../lib/store");
+const { applyCompleteSessions, reset, upsertSession } = await import("../../lib/store");
 const { closePanel, getPanel } = await import("../../lib/panel");
 const { t } = await import("../../i18n");
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const TASKS = t("sidepanel.conversation_tasks");
+const REVIEW = t("chat-chatview.review_changes");
 const agent = { machine_id: "mac", session_id: "s1", title: "Checks", cwd: "/code", status: "idle", state: "idle" } as Session;
 const main = { machine_id: "hub", session_id: "c1", title: "Persona", status: "idle", state: "idle", assistant: true, agent: "claude" } as Session;
 const reply = { id: "i1", seq: 1, role: "assistant", kind: "text", text: "Done.", ts: "2026-11-06T00:00:00Z" } as Item;
@@ -110,16 +111,62 @@ describe("conversation tasks in the header", () => {
     expect(getPanel()).toMatchObject({ kind: "conversation-tasks", mid: "mac", sid: "s1" });
   });
 
-  it("from 640 px, the button opens it and ⋯ has no row for it", async () => {
+  it("from 640 px, the button opens it and ⋯ omits duplicate desktop panel items and aligns right", async () => {
     media.phone = false;
-    upsertSession(agent);
+    applyCompleteSessions([{ ...agent, branch: "feat/header-cleanup" }], [], { features: [REVIEW_FEATURE] });
     act(() => root.render(<ChatView mid="mac" sid="s1" inPage />));
     await flush();
+    expect(header().querySelector("[data-chat-branch]")).toBeNull();
+    expect(header().querySelector("[data-header-divider]")).not.toBeNull();
     await openMore();
+    const labels = menuRows().map((r) => r.textContent ?? "");
     expect(tasksRow()).toBeUndefined();
+    expect(labels.some((l) => l.includes(t("chat-chatview.files")))).toBe(false);
+    expect(labels.some((l) => l === "Git")).toBe(false);
+    expect(labels.some((l) => l.includes(t("chat-chatview.terminal")))).toBe(false);
+    expect(labels).toContain(REVIEW);
+    const menuEl = document.querySelector<HTMLElement>('[role="menu"]')!;
+    expect(menuEl.style.transformOrigin).toBe("top right");
     act(() => tasksButton()!.click());
     await flush();
     expect(getPanel()).toMatchObject({ kind: "conversation-tasks", mid: "mac", sid: "s1" });
+  });
+
+  it("on a phone, ⋯ retains Files, Git, and Review changes alongside Conversation tasks", async () => {
+    media.phone = true;
+    applyCompleteSessions([agent], [], { features: [REVIEW_FEATURE] });
+    act(() => root.render(<ChatView mid="mac" sid="s1" inPage />));
+    await flush();
+    await openMore();
+    const labels = menuRows().map((r) => r.textContent ?? "");
+    expect(labels.some((l) => l.includes(t("chat-chatview.files")))).toBe(true);
+    expect(labels.some((l) => l === "Git")).toBe(true);
+    expect(labels).toContain(REVIEW);
+    expect(labels.some((l) => l.includes(TASKS))).toBe(true);
+  });
+});
+
+describe("Review changes in the header", () => {
+  it("opens the review panel from ⋯ on desktop", async () => {
+    media.phone = false;
+    applyCompleteSessions([agent], [], { features: [REVIEW_FEATURE] });
+    act(() => root.render(<ChatView mid="mac" sid="s1" inPage />));
+    await openMore();
+    const reviewRow = menuRows().find((row) => row.textContent === REVIEW);
+    expect(reviewRow).toBeDefined();
+    act(() => reviewRow!.click());
+    expect(getPanel()).toMatchObject({ kind: "review", mid: "mac", sid: "s1", cwd: agent.cwd });
+  });
+
+  it.each([
+    { reason: "the hub lacks review support", session: agent, features: [] },
+    { reason: "the session has no working directory", session: { ...agent, cwd: "" }, features: [REVIEW_FEATURE] },
+  ])("omits the entry when $reason", async ({ session, features }) => {
+    media.phone = true;
+    applyCompleteSessions([session], [], { features });
+    act(() => root.render(<ChatView mid="mac" sid="s1" inPage />));
+    await openMore();
+    expect(menuRows().map((row) => row.textContent)).not.toContain(REVIEW);
   });
 });
 

@@ -57,8 +57,8 @@ afterEach(() => {
 describe("New agent: a typed model ID (#1644)", () => {
   it("lists the IDs typed before under their own heading, each with Forget", () => {
     act(() => root.render(<Picker models={{ status: "ready", list }} />));
-    expect(host.textContent).toContain("输入过的");
-    const forget = host.querySelector<HTMLButtonElement>('button[aria-label="忘记「vendor/model-x」"]')!;
+    expect(host.textContent).toContain("历史输入");
+    const forget = host.querySelector<HTMLButtonElement>('button[aria-label="移除「vendor/model-x」"]')!;
     act(() => forget.click());
     expect(forgot).toHaveBeenCalledWith("vendor/model-x");
     expect(picked).not.toHaveBeenCalled();
@@ -69,7 +69,7 @@ describe("New agent: a typed model ID (#1644)", () => {
     act(() => button("其他模型…")!.click());
     const input = host.querySelector<HTMLInputElement>("[data-model-id-field] input")!;
     type(input, "vendor model");
-    expect(host.querySelector("[data-model-id-problem]")!.textContent).toBe("模型 ID 里不能有空格");
+    expect(host.querySelector("[data-model-id-problem]")!.textContent).toBe("模型 ID 不能包含空格");
     expect(button("使用")!.disabled).toBe(true);
     enter(input);
     expect(picked).not.toHaveBeenCalled();

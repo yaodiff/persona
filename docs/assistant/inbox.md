@@ -5,6 +5,22 @@ The Inbox tab is Persona's information entry point: Lark messages and mail from 
 
 Android's navigation badge counts each unread open item in Needs you once, including separate items from the same source conversation; Web and Apple use the same item-level rule. The current hub `status` decides, with the existing tier fallback; FYI, Noise, In progress, read and completed items do not count. Reading an item never files it: read-but-pending items remain in their hub sections and keep their completion state, and Android has no separate read-pending section. Zero keeps the existing hidden-badge behavior. The roster's `inbox_needs_you` and the home page's pending count retain their separate meaning: open items requiring action, including ones already read. A receipt can precede the next item-list update, so Android's badge also reads the reconciled `InboxConversations` state rather than only the cached item flags.
 
+## Opt-in automatic replies (#9762)
+
+Suggested replies still wait for Send by default. A scoped `send` standing
+authorization can enable plain-text Lark via lark-cli replies for an exact
+group/chat (or explicitly all chats in that channel), scenario `inbox_reply`,
+and one sender identity. Configure and revoke it in Web Settings > Persona;
+see [Scoped outward messages](assistant.md#scoped-outward-messages-9762).
+
+The suggestion must be persisted before the existing version-checked
+confirmation path consumes it. Handbacks, document writes, conclusions, and
+Agent/to-do suggestions remain manual. Each automatic attempt is durably
+audited before transport. Each source message permits only one automatic reply
+attempt per sender, even across rewording, suggestion versions, or a manager restart.
+Failure or uncertain delivery needs inspection and a deliberate manual retry.
+Revocation and identity changes serialize with the final grant check/send.
+
 ## Ownership: the manager owns the Inbox (2026-11-04)
 
 The Inbox belongs to the **manager** (assistant process `personad assistant`; `docs/assistant/assistant.md`, "Boundary with hub"): items and their state (pre-admission triage,
@@ -210,6 +226,29 @@ they are not listed. No relational table or connector acknowledgement protocol i
   until turned off and kept with the other connector switches. Off, the mail rounds read no account (`readMail`), so the mail items the
   Inbox has stay as they are (and its accounts' read errors as last read); search, replies and the knowledge base go on. Turned on again, the
   next round is a full one and reads mail at once. `mail` declares no inbox capability: `Manifest.InboxSwitch` gives it the switch.
+
+### Duplicate group mentions from Lark connectors
+
+The Inbox list shows one row when the built-in CLI connector and the Lark
+companion connector report an unambiguous copy of the same latest group mention.
+The connectors can use different message, chat, and sender IDs, so the manager
+compares the chat name, sender name, message minute, and complete message text
+from both sources. It ignores background messages and allows the known
+difference in how the sources render a trailing emoji. Short messages, clipped
+text, multiple matches, and a CLI batch with other new messages stay visible.
+
+The companion row keeps its own reply target and state, including a confirmed
+reply. When the CLI row has the only reply route, separate work, or an open
+request that the companion row would downgrade, both rows stay visible. The
+companion's related items link to the original CLI record and its history.
+Neither connector changes its collection, stored records, or sign-in. The list
+rechecks the match as each source moves. A later distinct message becomes
+visible on its own, and the original is still accessible by its ID.
+
+Different groups or people with identical display names can send identical
+text in the same minute. Without a shared upstream ID, the manager cannot tell
+these cases apart when only one candidate per source is present. The match
+therefore affects list visibility only and keeps each original record.
 
 ## Docs: mentions in sheets, bases, and documents (2026-10-31)
 
@@ -496,6 +535,29 @@ The assistant can put one of its conversations into the Inbox as a row, so a res
 - **The user's rules still apply**: a policy set for the source (Rules, "Policies") changes the tier like any source's.
 - **One switch.** Inbox Sources lists an **Assistant** row (`b.assistant`, icon robot) whose Add to Inbox switch is `Settings.InboxPost` (`inbox.post` on the bus; on unless turned off). Off, `inbox_post` answers that nothing was added and says to tell the user in the conversation, and tasks set to every time add nothing; rows already there stay. The Relationships view shows it with the other Persona-side sources.
 
+## Owner promise reminders in selected Lark groups
+
+The built-in lark-cli Inbox source can pilot private reminders for follow-up
+promises typed by the owner. It starts off. Set `owner_promise_groups` in the
+existing lark-cli connector options to a list of up to five group chat IDs.
+Keep the lark-cli Inbox feed enabled. Set the list to `[]` to stop the pilot.
+Ordinary Inbox collection and replied status still follow their own settings.
+
+The pilot reads recent owner text in those groups, starting with a fresh
+baseline. It considers topic replies with an explicit action and waits
+15 minutes before showing a Needs you row. An existing open to-do bound to the
+same source request suppresses the row. Other work from the same topic does
+not suppress it. A matching Persona send receipt is excluded.
+
+Optionally set `owner_promise_model` to `true` to let the configured Inbox
+triage model assess a short reply about asking the owner's assistant, together
+with one verified preceding request. The option is off by default. These
+snippets stay within the existing Inbox visibility boundary.
+
+The reminder links to the original message. Use **Add to to-dos** to record
+the action, **Hand to AI** to choose how to pass it along, or dismiss the row.
+An action on the reminder never replies in the Lark topic.
+
 ## Merge rows and Add to to-dos (2026-11-14, #6480)
 
 Two manual actions in Select mode (web, iPhone), the row menu and the detail page. Who it serves: anyone whose Inbox split one matter into several rows, or who got a deadline in a message no machine can read. Plain words only. Code: `assistant/inbox_merge.go`, `assistant/inbox_todo.go`.
@@ -708,7 +770,7 @@ bound to that item (`handling` on the item; chat source `inbox`, `origin_ref` = 
 | --- | --- | --- |
 | 1 Triage | `inbox.triage` (small model) | Triage above, also returning `urgent` |
 | 2 Promote | Code | Triaged Needs you items with triaged content and latest message within `max_age_hours` (default 24) queue a handling chat; `handling.state = looking` (Working; urgent stays Needs you). The task comes from the triage summary and reason |
-| 2′ Link task | `inbox.judge` (small model, only when tasks are active) | Use only its `task_id`, and only with `evidence` quoted from that task: which task the item concerns, among the tasks the item's repository or thread allows (#6424; [unified-entry.md](unified-entry.md), "Message cards link to tasks"). Before it, the deterministic pass links a GitHub item to the one open task naming its number in its repository: a link, `owner/repo#N`, a bare `#N` in a task of that repository, a PR the task's Agents named earlier, or the PR that says it closes the issue (#6507). Its `handle` no longer decides whether to process the item |
+| 2′ Link task | `inbox.judge` (small model, only when tasks are active) | Use only its `task_id`, and only with `evidence` quoted from that task: which task the item concerns, among the tasks the item's repository or thread allows (#6424; [unified-entry.md](unified-entry.md), "Message cards link to tasks"). Before it, the deterministic pass links a GitHub item to the one open task naming its number in its repository: a saved repository issue/PR association (including Agent closeout and work-artifact PRs), a legacy link, `owner/repo#N`, a bare `#N` in a task of that repository, a PR the task's Agents named earlier, or the PR that says it closes the issue (#6507, #9725). Its `handle` no longer decides whether to process the item |
 | 3 Handle | `inbox.agent` (a launcher: Agents' unless set apart, see below) | Headless claude in the assistant directory; investigate, then submit a suggestion and recap through MCP `inbox_suggest` |
 
 - **The twin's model (#4232)**: by default the handling chat runs on **Agents** (`agent.new`): its provider / launcher, model and effort, including later changes there. Because the twin is a high-volume, short-lived job, it can be set apart under **Settings › Model configuration › AI twin runs** to run on a cheaper or faster launcher, model or effort without changing new Agents; **Follow Agents** clears that again. Provider, model and effort changes apply only to new handling chats. Permission changes apply to new chats and stopped chats when they resume; running chats keep their mode. The setting is stored as `model_config.overrides.v1.inbox.agent`; the retired `model_config.inbox.agent` record and the old `inbox.agent.launcher` are never read. It does not touch the twin's switch, its rules or which computer it runs on (`inbox.agent.machine`), and the model does not decide what the twin may do (`docs/assistant/model-config.md`, "AI twin override"). Permission is the one inheritance exception: an unset AI-twin `permission_mode` means `default`, never Agents' `bypassPermissions`. The existing selector in this row makes an explicit AI-twin mode visible and editable, and clearing it restores `default`.
@@ -764,7 +826,7 @@ conversation the item was handed to ("Item actions", Hand to AI), rejecting othe
 | --- | --- | --- |
 | `reply` | A reply (`text` sent verbatim, no 【…】 blanks for users to fill; Docs may include `changes`) | Send through `/reply`'s send-once path (`send_id`), **without marking the item done**. `handling.state = waiting` (Working, awaiting response) with the default 24-hour follow until the chat supplies one; chain records your confirmation and the send, then `waiting` with `via=user`, and tells the chat the user confirmed and it was sent |
 | `agent` | Assign an Agent (`text` is its instruction; optional `machine` / `cwd` default to assistant computer / home directory) | Code starts an Agent with that instruction (like the chat calling `agent_start`: `agent` chain entry links to it; completion reports back), `handling.state = agent` |
-| `handoff` | Hand the item to an existing eligible conversation on this manager (`machine` + `session` from the main conversation, an active leader conversation, or the linked open task's conversation, with `text` as the note for that conversation; processing chat only; #13562) | Re-validates the target and delivers the item + note through the existing Hand to AI path (`session.send_once`, `prompts/inbox/handoff.md`), records the conversation in `handoffs` and the chain (linked to that session), leaves the item open (`handling.state = done`), and allows that conversation to write back with `inbox_suggest` `item`. Refuses archived, deleted, unknown, ineligible, or other-manager targets with a clear error back to the model (and returns `409 handoff_target_unavailable` if the target became unavailable before confirmation). Processing chats still cannot delegate directly (`agent_start`, `conversation_send`, scheduling remain refused). `now` is `confirm_handoff`, and the listed suggestion includes `machine_id`, `session_id` and `target_title`; client UI rendering follows separately |
+| `handoff` | Hand the item to an existing eligible conversation on this manager (`machine` + `session` from the main conversation, an active leader conversation, or the linked open task's conversation, with `text` as the note for that conversation; processing chat only; #13562) | Re-validates the target and delivers the item + note through the existing Hand to AI path (`session.send_once`, `prompts/inbox/handoff.md`), records the conversation in `handoffs` and the chain (linked to that session), leaves the item open (`handling.state = done`), and allows that conversation to write back with `inbox_suggest` `item`. Refuses archived, deleted, unknown, ineligible, or other-manager targets with a clear error back to the model (and returns `409 handoff_target_unavailable` if the target became unavailable before confirmation). Processing chats still cannot delegate directly (`agent_start`, `conversation_send`, scheduling remain refused). `now` is `confirm_handoff`, and the listed suggestion includes `machine_id`, `session_id` and `target_title`. The web Inbox shows the proposed conversation in the list and detail before the user confirms |
 | `conclusion` | Conclusion: `outcome: fyi` (move to FYI with the conclusion; OK marks done) or `done` (review found no action needed; immediately done, `done_by=manager`) | OK marks done (`done_by=user`) |
 
 - The manager includes a new `processing_turn` in a processing conversation's first prompt and each subsequent Inbox delivery while the item is open. The call echoes its prompt's value. The manager checks it under the Inbox lock before changing the item, so a delayed write from a superseded prompt cannot replace a suggestion or change follow-up or handling. Existing processing chats without a value can omit it until their next Inbox delivery. Handed-off conversations still write back using `item`.
@@ -817,16 +879,19 @@ confirmable in new Apps. With reply policy absent or disabled, `/reply`, `/done`
 
 ## Relationships: parents and children (#2128)
 
-An item can have a parent (`parent: {kind, id, by}`), linking an item arriving from a chat, becoming a to-do, and going to several Agents into one thread.
-A parent is another Inbox item (`inbox`), a to-do (`todo`), or Agent session (`session`, ID `<machine>/<session>`). Persona stores, lists, and navigates only; it never guesses parents.
+A parent is another Inbox item (`inbox`), a to-do (`todo`), a coding Agent's session (`session`, ID `<machine>/<session>`), or a
+personal Agent's session (`agent`, ID `<agent source>:<sessionKey>`; the id `GET /api/v1/agents/sessions` lists). The two session
+kinds stay distinct: `session` opens a conversation on a computer, while `agent` opens an entry on the Agents page. The web Inbox
+Trail opens `agent` at `/a/<id>`; the native apps keep their existing pages and may follow with their own Agents routing.
+Persona stores, lists, and navigates only; it never guesses parents.
 To-dos do not store a separate tree. Code: `assistant/inbox_parent.go`.
 
 - **Origin** (`by`): a new event continuing an earlier one from grouping (`continues`), connector `InboxThing.parent` (`connector`), or user-set (`user`).
   Automatic values never overwrite user values; connector values may overwrite `continues`, not vice versa.
 - **Set**: `PUT /api/v1/inbox/{id}/parent {kind, id}`; `null` or `{}` removes it (no DELETE, avoiding collision with `DELETE /api/v1/inbox/mutes/{id}`).
   Item parents must exist (404 otherwise); no cycles, at most 8 ancestor levels (409 otherwise). IDs up to 256 characters, no control characters (400). Return updated item.
-- **Read a thread**: `GET /api/v1/inbox/tree/{kind}/{id...}` returns `{node, item?, ancestors, children}`. `ancestors` nearest first (last may be a to-do / session without an item,
-  or an item no longer in Inbox, with no `item`); `children` are direct child items, oldest start time first. `kind` may be `todo` / `session` to list items growing from it.
+- **Read a thread**: `GET /api/v1/inbox/tree/{kind}/{id...}` returns `{node, item?, ancestors, children}`. `ancestors` nearest first (last may be a to-do / session / personal Agent without an item,
+  or an item no longer in Inbox, with no `item`); `children` are direct child items, oldest start time first. `kind` may be `todo` / `session` / `agent` to list items growing from it.
 - Extension tokens require `inbox.read` for trees, `inbox.write` for parent changes (`extwire/inbox_scopes.go`); Watch cannot call either API.
 - Client rendering: "Relationships" under "App" below (web `web/src/views/inbox/InboxLine.tsx` offers **Not the same matter** and **Same matter as…**, the latter also in the detail's More menu; they use the existing `PUT /api/v1/inbox/{id}/parent` with `null` and `{kind, id}` respectively).
 - Tests: `inbox_parent_test.go` (`continues`, PUT / removal, depth, precedence, trees).
@@ -1014,6 +1079,7 @@ The same rules on the web (`web/src/lib/inbox-groups.ts`) and iOS / iPad (`Perso
   A moment in the future counts as today. Open items use their last activity (`updated_at`), Done items `done_at`; newest group first.
 - **Source groups** follow the filter chips' order: Lark, each mail account, each connector (by its account), then sources the chips don't name in the order they first show up.
 - **Filter chips (web)**: sources (Lark, which also holds lark-cli's items; each mail account; each other connector), then kinds: @me (mentions, plus document and Moments mentions), Direct, Group, Bot (a bot's own chat, no longer under Group), Doc comments, Mail, Agent.
+- **Module availability and stored sources (#17399)**: an existing Lark source entry or Lark mention in empty-state copy is hidden only when the hub offers neither the Lark extension capability nor `module.lark`, **and** `stored_sources.lark` is false. If either is present, the current entry and wording stay; a missing or `null` `stored_sources` is unknown and keeps today's behavior. The same rule applies independently to mail through `module.mail` and `stored_sources.mail`. Android keeps its record-derived source options rather than gaining an always-visible chip. Stored items remain listed and readable whatever the hub offers. Generic @Me / Direct / Group filters are unchanged because they match item kinds across sources, not Lark alone. Shared cases: `spec/fixtures/inbox-sources/presence.json`; wire compatibility: `docs/protocol/protocol.md` ("Inbox API").
 - **Folding**: every group folds to its title and count; folds are kept on this device per manager, section and group (web `inbox.folds`, Apple `@StoredValue("inbox.folds")`).
   Open at first: every group of Needs you, FYI and Collapsed; in Done only Just now and Today. Group titles stick to the top while their rows scroll by.
   On iOS, Done's title is a list row while Done lists its groups, not the header of an empty section: as that header (with its Jump To menu)
@@ -1206,16 +1272,27 @@ serves: everyone reading the Inbox on the Assistant side; it adds no setting and
   request again sends nothing more), or starts the main conversation with it, and answers `{item, session}`; a work machine is refused, and a failed send records nothing (`apierr.Call`'s status, as for a new conversation).
   The item keeps the hand-off (`handoffs`: `machine_id`, `session_id`, `at`, the latest 5) and its chain gets one `handling` entry per conversation ("Handed to Persona's main chat",
   linked to it). Its processing conversation (`agent`, `handling`) is not touched, so the AI twin's sweep and timeouts never take the main conversation for one of its own.
-  When that conversation dispatches work with `task_plan`, each related task supplies `inbox_item` with the handoff's exact item id.
-  The manager validates the conversation, machine, open item and link policy, records the handoff operation on the plan, and rechecks it at Start.
+  That conversation can pass an explicit `inbox_item` on each `task_plan` task. The manager validates the conversation,
+  machine, open item and link policy against its persisted handoff ledger, records the handoff operation on the plan,
+  and rechecks it at Start. Bot notifications and owner-bot handoffs fail this policy. Unrelated tasks omit the field.
+  When a plan omits the ID, [recent topic matching](#chat-created-tasks-and-recent-inbox-topics-15557) can infer a
+  source for new work.
   Admission persists the to-do's existing `inbox_item` back-reference and the item's `agent.todo_id`; an explicit handoff replaces an earlier inferred link
   without filing the item, changing its draft or sending a reply. New task rows include their source in the initial insert and stay reserved
   through binding and first start, so another plan cannot adopt a half-admitted task.
-  Unrelated tasks omit the field. Multiple tasks retain their own back-references:
+  Explicit item choices resolve multiple-item ambiguity. Multiple tasks retain their own back-references:
   the web detail lists each task and its current workers, scoped to the item's manager, and one completed task cannot file an item with other unfinished tasks.
   Reusing a to-do preserves its source; assigning it to a different item is refused. A failed item write rolls back the binding before any Agent starts.
   If a newer item write retains that target, admission instead keeps the to-do and its source, reports the failure without starting an Agent,
   and supplies the same `todo_id` for retry rather than deleting a target the newer write still references.
+  An explicit `inbox_item` on `agent_send` (with or without `task`) or `task_scope` can add this context to an existing
+  task. Omission leaves Inbox links alone. With a valid ID, a successful send (including queueing) or scope change saves
+  the item's task backlink and session link on its Agent chain; it creates no task or Agent and does not replace the
+  task's original Inbox source or the item's processing conversation. A failed send claims no assignment.
+  An item already linked to another task is refused. Rechecking the exact handoff before saving prevents a filed
+  item from gaining a new link. An association-save failure reports that the message or scope change already
+  succeeded, rather than suggesting that the user resend the message; normal item-write rollback removes the
+  unsaved backlink and chain entry.
   That conversation may then write back with `inbox_suggest` and `item` (above). What the user does with its suggestion is told there, wrapped to name the item
   (`prompts/inbox/handoff_note.md`; a Persona notice sent as a plain `session.send` without a message id, a failure only logged, which the hub marks `injected` (`system` / `inbox`)
   so the apps show one line, "Inbox: an update on “title”", not the model's text as a user bubble): reject, instruct, handback, a confirmed reply sent (which files the item as replied:
@@ -1280,3 +1357,29 @@ serves: everyone reading the Inbox on the Assistant side; it adds no setting and
   iPhone's Watch summary carries up to 20 items (`WatchSummary.inbox`); while open, Watch fetches `/api/v1/inbox` directly every 8 seconds. New items vibrate.
 - Open `WatchInboxItemView`: summary, latest message; AI reply drafts first and displays it, then Send (`/reply`); Done.
 - DEBUG: Watch `-openInboxFirst YES` opens the first item.
+
+
+### Chat-created tasks and recent Inbox topics (#15557)
+
+For people turning a chat request or screenshot into a task, `task_plan` looks for a recent matching group item when
+`inbox_item` is omitted. An explicit validated handoff takes priority. Continuations and `inbox_item: "none"` skip inference.
+Main chat, an explicit supervisor assignment and a direction receiving the owner's verified quote use the same path.
+Only the title, prompt and manager-verified original request are evidence; generated context and image pixels are not.
+
+The manager considers open, visible action group items that arrived within 24 hours (legacy rows fall back to their
+source update time), excluding merged members, mutes and existing task links. The normalized group name must match
+as a complete name, together with a sender, full non-root URL or a distinguishing verbatim passage. Group-only matches,
+short stock phrases and ambiguous topics yield suggestions rather than a link. URL matching never collapses a domain.
+
+Two sources remain separate. A shared source-local message position is usable only in its account and conversation;
+cross-source equivalence needs an individual received message's sender, exact distinguishing text or complete URL,
+and timestamps within two minutes. Mere context overlap or a general Related link is not proof. A unique pairwise
+verified topic uses a deterministic primary item and existing Related navigation; both reply routes and per-source
+processing states survive. Neither planning nor binding files the item or sends a source reply.
+
+The plan stores manager-owned evidence and a content fingerprint, even when a strongly matching item was already
+handed to the calling conversation. Start checks freshness, visibility, ownership,
+uniqueness and source changes again, including after a restart and card edits. An invalid soft link is removed and a
+localized notice is recorded in the conversation; the task can still start. Admission repeats the ownership check
+under the Inbox lock, so competing automatic links cannot replace a winner. The existing task/Inbox rollback handles
+failed persistence. Explicit handoffs retain their existing admission and legacy-link correction behavior.

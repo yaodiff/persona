@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -77,7 +78,7 @@ func TestCodexRolloutItemsReadAsARollout(t *testing.T) {
 	if c := parse("contextCompaction", `{"type":"contextCompaction","id":"k1"}`); len(c) != 1 || c[0].Kind != proto.KindNotice {
 		t.Fatalf("compaction = %+v", c)
 	}
-	for _, kind := range []string{"sleep", "subAgentActivity", "somethingNew"} {
+	for _, kind := range []string{"sleep", "somethingNew"} {
 		if item := codexRolloutItem(kind, []byte(`{"type":"`+kind+`","id":"x"}`)); item != nil {
 			t.Errorf("%s = %v, want left out", kind, item)
 		}
@@ -814,5 +815,41 @@ func TestCodexAppChatHistoryFailureBackoffAndLockErrors(t *testing.T) {
 	n.file(id)
 	if d := time.Since(start); d > time.Second {
 		t.Fatalf("waited %v on a lock that cannot be taken", d)
+	}
+}
+
+func TestCodexRolloutCollaborationAndPlanItems(t *testing.T) {
+	for _, tc := range []struct{ kind, raw, want string }{
+		{"collabAgentToolCall", `{"id":"c1","tool":"wait","status":"completed","senderThreadId":"parent","receiverThreadIds":["child"],"receiverAgents":[],"agentsStates":{"child":{"status":"running"}}}`, `{"id":"c1","type":"CollabAgentToolCall","tool":"wait","status":"completed","sender_thread_id":"parent","receiver_thread_ids":["child"],"receiver_agents":[],"agents_states":{"child":{"status":"running"}}}`},
+		{"subAgentActivity", `{"id":"s1","kind":"started","agentThreadId":"child","agentPath":"/review","model":"example-model","reasoningEffort":"high"}`, `{"id":"s1","type":"SubAgentActivity","kind":"started","agent_thread_id":"child","agent_path":"/review","model":"example-model","reasoning_effort":"high"}`},
+		{"plan", `{"id":"p1","text":"Inspect then fix"}`, `{"id":"p1","type":"Plan","text":"Inspect then fix"}`},
+	} {
+		var want map[string]any
+		if err := json.Unmarshal([]byte(tc.want), &want); err != nil {
+			t.Fatal(err)
+		}
+		if got := codexRolloutItem(tc.kind, []byte(tc.raw)); !reflect.DeepEqual(got, want) {
+			t.Errorf("%s = %#v, want %#v", tc.kind, got, want)
+		}
+	}
+}
+
+func TestCodexAppTerminalPaginatedRunningTurn(t *testing.T) {
+	n := remoteTestNode(t)
+	home, project := n.codexHome(), t.TempDir()
+	writeCodexApp(t, home, project, codexAppSchema+codexAppRow(appChat, "", project, "Terminal", time.Now(), 0, "codex-tui")+
+		"ALTER TABLE threads ADD COLUMN history_mode TEXT; UPDATE threads SET source = 'cli', history_mode = 'paginated';")
+	writeCodexHistory(t, home, []historyTurn{{thread: appChat, id: "running", status: "inProgress", ordinal: 0,
+		items: [][2]string{userItem("u1", "keep working"), answerItem("a1", "Checking files")}}})
+	if row := codexPaginatedThreads(home)[appChat]; !row.includeRunning || row.Originator != "codex-tui" {
+		t.Fatalf("terminal row = %+v", row)
+	}
+	id, text := readChat(t, n, appChat)
+	if !strings.Contains(text, "keep working") || !strings.Contains(text, "Checking files") {
+		t.Fatalf("running transcript = %q", text)
+	}
+	src, _, _ := n.codexAppHistoryChat(id)
+	if data, err := os.ReadFile(n.codexAppHistoryFile(src)); err != nil || strings.Contains(string(data), "task_complete") {
+		t.Fatalf("running turn was completed: %s, %v", data, err)
 	}
 }

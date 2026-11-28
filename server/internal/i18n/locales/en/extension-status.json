@@ -1,4 +1,5 @@
 {
+  "direct_usage_needs_url": "Save an HTTPS address for the direct usage source before setting its key.",
   "no_auth": "no sign-in",
   "qr_missing_url": "a QR sign-in step without a URL",
   "not_found": "no such plugin",

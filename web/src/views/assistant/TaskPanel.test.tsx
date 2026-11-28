@@ -11,13 +11,14 @@ vi.hoisted(() => {
 });
 
 import { t } from "../../i18n";
-import { closePanel, getPanel, openPanel, type Panel } from "../../lib/panel";
+import { closePanel, getPanel, openPanel, popPanel, type Panel } from "../../lib/panel";
 import { href } from "../../lib/router";
 import { handoffFrom } from "../../lib/handoff";
 import { applyCompleteSessions, getState, refreshTodos, reset } from "../../lib/store";
 import { TODO_STATUS_INFO, type Todo } from "../../lib/todos";
 import type { Session } from "../../lib/types";
-import { loadFeed, type TaskPlan } from "../../lib/feed";
+import { later, loadFeed, type TaskPlan } from "../../lib/feed";
+import { decisionLaterKey } from "../../lib/assistant-entries";
 import { SidePanel } from "../SidePanel";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -102,7 +103,49 @@ async function expectSessionWindow(s = first) {
   expect(newWindow.mock.calls.at(-1)?.[0]).not.toContain("/todos");
 }
 
+it("answers a rolled-up step's decision from its task panel", async () => {
+  const step: Todo = {
+    ...task(), part_of: "example-parent",
+    supervision: { state: "needs_user", supervisor: "example-conversation" },
+    ask: {
+      asked_at: at, outcome: "decide", verdict: "Choose a release", question: "Which release should go out?",
+      recommend: "Preview", options: [{ label: "Preview" }, { label: "Stable" }],
+    },
+    view: { phase: "needs_you", section: "needs_you", reason: "owner_decides", rank: 0 },
+  };
+  await open({ kind: "task", todo: step.id }, step);
+  await expect.poll(() => host.querySelector("aside [data-decision-question]")?.textContent).toBe(step.ask?.question);
+  const laterButton = [...host.querySelectorAll<HTMLButtonElement>("aside button")].find((button) => button.textContent === t("assistant-task-actions.later"));
+  expect(laterButton).toBeDefined();
+  await act(async () => laterButton!.click());
+  expect(host.querySelector("aside [data-decision-question]")).toBeNull();
+  await act(async () => later(decisionLaterKey(step), false));
+  const option = [...host.querySelectorAll<HTMLButtonElement>("aside button")].find((button) => button.textContent === "Stable");
+  expect(option).toBeDefined();
+  await act(async () => option!.click());
+  const writes = vi.mocked(fetch).mock.calls.filter(([url, init]) => String(url).endsWith("/accept") && init?.method === "POST");
+  expect(writes.map(([url, init]) => [url, JSON.parse(String(init?.body))])).toEqual([
+    [`/api/v1/todos/${step.id}/accept`, { asked_at: at, option: "Stable" }],
+  ]);
+});
+
 describe("Agent panel new-window destination", () => {
+  it("opens the verification report first and restores it after inspecting a released worker", async () => {
+    const todo = task();
+    todo.agents![0].released_at = at;
+    todo.supervision = { supervisor: "owner", state: "user_check", done_when: ["Check the route"], criteria: [{ criterion: "Check the route", state: "met", evidence: "Both transfers checked" }] };
+    todo.ask = { verdict: "Ready to verify", summary: "The itinerary is ready.", asked_at: at, link: "https://example.com/itinerary" };
+    await open({ kind: "task", todo: todo.id }, todo);
+    expect(host.textContent).toContain(todo.ask.summary);
+    expect(host.textContent).toContain("Both transfers checked");
+    expect(host.querySelector("a")?.href).toBe(todo.ask.link);
+    const button = [...host.querySelectorAll("button")].find((b) => b.textContent === t("assistant-taskpanel.raw_session"));
+    act(() => button!.click());
+    expect(getPanel()).toEqual({ kind: "agent", mid: first.machine_id, sid: first.session_id });
+    act(() => { popPanel(); });
+    expect(host.textContent).toContain(todo.ask.summary);
+  });
+
   it("opens the displayed Agent session from a task card or task-backed In progress tray entry", async () => {
     await open({ kind: "task", todo: "example-task" });
     expect(host.querySelector("aside header h1")?.textContent).toBe("Example task");

@@ -7,8 +7,17 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { currentLanguage, formatDate, t } from "../../i18n";
 import { api, ApiError, enc, errorText, getToken, isAbort } from "../../lib/api";
 import { BASE } from "../../lib/base";
+import { writableHere } from "../../lib/files-nav";
+import { openPanel } from "../../lib/panel";
+import { hubHas, useStore } from "../../lib/store";
+import { FileInfoDialog } from "../session/files/FileInfo";
+import { FILE_CHMOD_FEATURE, PermissionsDialog } from "../session/files/Permissions";
+import { dragHasFiles, SelectionBar, useFileOps, type OpTarget } from "../session/files/FileOps";
+import { FilesPanel } from "../session/FilesPanel";
+import { navigate } from "../../lib/router";
 import type { Machine } from "../../lib/types";
-import { Button, cx, IconButton, Loading } from "../../ui/atoms";
+import { MachineTool, type MachineToolProps } from "./MachinePicker";
+import { Button, cx, IconButton, Loading, Menu } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import {
   classifySensitivePathClient,
@@ -257,21 +266,23 @@ function classifyTargetPath(dir: MachineFileListResponse | null, name: string): 
   return { sensitive: false, reason: "" };
 }
 
-export function FileBrowserPanel({ machines, initialMachineId }: { machines: Machine[]; initialMachineId?: string }) {
-  const defaultMid = useMemo(() => {
-    if (initialMachineId && machines.some((m) => m.id === initialMachineId)) return initialMachineId;
-    return machines.find((m) => m.online)?.id ?? machines[0]?.id ?? "";
-  }, [machines, initialMachineId]);
+type DirectoryTarget = { path?: string; routed?: boolean };
 
-  const [selectedMid, setSelectedMid] = useState(defaultMid);
-  const activeMid = machines.some((m) => m.id === selectedMid) ? selectedMid : defaultMid;
-  const machine = machines.find((m) => m.id === activeMid);
+export function FileBrowserPanel({ path, routed, ...props }: MachineToolProps & DirectoryTarget) {
+  return (
+    <MachineTool {...props}>
+      {(machine) => <FileBrowser machine={machine} path={path} routed={routed} />}
+    </MachineTool>
+  );
+}
 
+function FileBrowser({ machine, path, routed }: { machine?: Machine } & DirectoryTarget) {
   const [roots, setRoots] = useState<MachineFileRoot[]>([]);
   const [dir, setDir] = useState<MachineFileListResponse | null>(null);
-  const [pathInput, setPathInput] = useState("~");
+  const [legacy, setLegacy] = useState(false);
+  const [pathInput, setPathInput] = useState(path || "~");
   const [filter, setFilter] = useState("");
-  const [loadingDir, setLoadingDir] = useState(false);
+  const [loadingDir, setLoadingDir] = useState(true);
   const [dirError, setDirError] = useState("");
   const [dirNotice, setDirNotice] = useState("");
 
@@ -367,13 +378,26 @@ export function FileBrowserPanel({ machines, initialMachineId }: { machines: Mac
       setCreateSensitiveAck(false);
       setPendingUpload((cur) => (cur && (cur.mid !== mid || cur.dir !== res.path) ? null : cur));
     } catch (err) {
-      if (isAbort(err)) return;
+      if (ctrl.signal.aborted || isAbort(err)) return;
+      if (err instanceof ApiError && (err.code === "node_outdated" || (err.status === 404 && !err.code))) setLegacy(true);
       currentDirRef.current = prevDir;
       setDirError(t("machines-files.load_error", { error: errorText(err) }));
     } finally {
       if (!ctrl.signal.aborted) setLoadingDir(false);
     }
   }, []);
+
+  const folder = dir?.path || path || "~";
+  const reload = () => { if (machine?.online) void loadDirectory(machine.id, folder); };
+  const ops = useFileOps({ mid: machine?.id ?? "", cwd: folder, onChanged: reload });
+  const features = useStore(s => s.features);
+  const writable = writableHere(folder, machine?.home);
+  const [selected, select] = useState<OpTarget[] | null>(null);
+  const [menu, setMenu] = useState<{ entry: MachineFileEntry; anchor: HTMLElement } | null>(null);
+  const [info, setInfo] = useState<MachineFileEntry | null>(null);
+  const [permissions, setPermissions] = useState<string | null>(null);
+  const canChmod = writable && hubHas(features, FILE_CHMOD_FEATURE) && machine?.os?.toLowerCase() !== "windows";
+  const target = (entry: MachineFileEntry): OpTarget => ({ path: entry.path, name: entry.name, dir: isNavigableDir(entry) });
 
   const loadFile = useCallback(async (mid: string, targetPath: string, viewMode: ViewMode, lines: number) => {
     if (!mid || !targetPath) return;
@@ -409,8 +433,13 @@ export function FileBrowserPanel({ machines, initialMachineId }: { machines: Mac
     }
   }, [resetEditor]);
 
-  // Load roots and initial $HOME listing whenever the active online machine changes.
+  // List the requested folder immediately. Optional root shortcuts load independently.
   useEffect(() => {
+    setLegacy(false);
+    select(null);
+    setInfo(null);
+    setPermissions(null);
+    setMenu(null);
     setRoots([]);
     setDir(null);
     setDirError("");
@@ -430,18 +459,13 @@ export function FileBrowserPanel({ machines, initialMachineId }: { machines: Mac
     if (!machine?.online) return;
 
     const ctrl = new AbortController();
+    void loadDirectory(machine.id, path || "~");
     api<MachineFileRootsResponse>(`/machines/${enc(machine.id)}/files/roots`, { signal: ctrl.signal })
       .then((res) => {
         if (ctrl.signal.aborted) return;
-        const list = res.roots ?? [];
-        setRoots(list);
-        const startPath = res.home || list[0]?.path || "~";
-        void loadDirectory(machine.id, startPath);
+        setRoots(res.roots ?? []);
       })
-      .catch((err) => {
-        if (isAbort(err)) return;
-        void loadDirectory(machine.id, "~");
-      });
+      .catch(() => {}); // Root shortcuts are optional. Directory failures appear in the listing.
 
     return () => {
       ctrl.abort();
@@ -449,7 +473,12 @@ export function FileBrowserPanel({ machines, initialMachineId }: { machines: Mac
       fileAbort.current?.abort();
       uploadXhrRef.current?.abort();
     };
-  }, [machine?.id, machine?.online, loadDirectory, resetEditor]);
+  }, [machine?.id, machine?.online, loadDirectory, resetEditor, path]);
+
+  const browse = useCallback((mid: string, next: string) => {
+    if (routed && next !== path) navigate({ name: "machine", mid, subview: "files", path: next });
+    else void loadDirectory(mid, next);
+  }, [routed, path, loadDirectory]);
 
   const openEntry = useCallback((entry: MachineFileEntry) => {
     if (!machine?.online) return;
@@ -461,14 +490,14 @@ export function FileBrowserPanel({ machines, initialMachineId }: { machines: Mac
       setPendingUpload(null);
       setUploadSensitiveAck(false);
       resetEditor();
-      void loadDirectory(machine.id, entry.path);
+      browse(machine.id, entry.path);
       return;
     }
     const nextMode: ViewMode = shouldDefaultToTail(entry) ? "tail" : "preview";
     setSelectedEntry(entry);
     setMode(nextMode);
     void loadFile(machine.id, entry.path, nextMode, tailLines);
-  }, [machine?.id, machine?.online, loadDirectory, loadFile, tailLines, resetEditor]);
+  }, [machine?.id, machine?.online, browse, loadFile, tailLines, resetEditor]);
 
   const switchMode = useCallback((nextMode: ViewMode) => {
     setMode(nextMode);
@@ -645,7 +674,7 @@ export function FileBrowserPanel({ machines, initialMachineId }: { machines: Mac
           const nextDir = curTrimmed === oldTrimmed
             ? newPath
             : `${newPath.replace(/\/+$/, "")}${dir.path.slice(oldTrimmed.length)}`;
-          void loadDirectory(machine.id, nextDir);
+          browse(machine.id, nextDir);
         } else {
           void loadDirectory(machine.id, dir.path);
         }
@@ -655,7 +684,7 @@ export function FileBrowserPanel({ machines, initialMachineId }: { machines: Mac
     } finally {
       setRenaming(false);
     }
-  }, [machine?.id, machine?.online, renameTarget, renameDest, renameSensitiveAck, selectedEntry, preview?.path, tail?.path, mode, tailLines, dir?.path, loadDirectory, loadFile, resetEditor]);
+  }, [machine?.id, machine?.online, renameTarget, renameDest, renameSensitiveAck, selectedEntry, preview?.path, tail?.path, mode, tailLines, dir?.path, browse, loadDirectory, loadFile, resetEditor]);
 
   const submitDelete = useCallback(async () => {
     if (!machine?.online || !deleteTarget) return;
@@ -835,13 +864,17 @@ export function FileBrowserPanel({ machines, initialMachineId }: { machines: Mac
     return classifySensitivePathClient(renameDest);
   }, [renameTarget, renameDest]);
 
-  if (machines.length === 0) {
+  if (!machine) {
     return (
       <section className="rounded-card bg-surface p-6 text-center text-sm text-ink-3 shadow-card" data-testid="machine-file-browser">
         {t("machines-files.no_machines")}
       </section>
     );
   }
+
+  if (legacy && machine.online) return <FilesPanel mid={machine.id} sid="" cwd={path || machine.home || "~"}
+    onBrowse={routed ? next => browse(machine.id, next) : undefined}
+    onClose={() => navigate({ name: "machine", mid: machine.id })} />;
 
   const activeFile = mode === "tail" ? tail : preview;
   const activeSensitive = Boolean(activeFile?.sensitive ?? selectedEntry?.sensitive);
@@ -864,8 +897,28 @@ export function FileBrowserPanel({ machines, initialMachineId }: { machines: Mac
     : 0;
 
   return (
-    <section className="flex flex-col gap-3" data-testid="machine-file-browser">
-      {/* Top toolbar: machine switcher + quick root shortcuts + path navigation */}
+    <section className="flex min-w-0 flex-col gap-3" data-testid="machine-file-browser"
+      onDragOver={e => { if (machine.online && writable && ops.canUpload && dragHasFiles(e)) e.preventDefault(); }}
+      onDrop={e => {
+        if (!machine.online || !writable || !dir || !ops.canUpload || !dragHasFiles(e)) return;
+        e.preventDefault();
+        ops.upload(Array.from(e.dataTransfer.files), dir.path);
+      }}>
+      {machine.online && <>
+        {ops.ui}
+        {menu && <Menu anchor={menu.anchor} align="right" onClose={() => setMenu(null)} items={[
+          ...ops.rowItems(target(menu.entry), () => openEntry(menu.entry))
+            .filter(item => writable ? !["open", "rename", "move", "upload"].includes(item.key) : ["copy", "download"].includes(item.key)),
+          { key: "info", icon: "info", label: t("files-info.info"), onSelect: () => setInfo(menu.entry) },
+          ...(!isNavigableDir(menu.entry) ? [{ key: "preview", icon: "read" as const, label: t("files-ops.open"),
+            onSelect: () => openPanel({ kind: "file", mid: machine.id, cwd: folder, path: menu.entry.path }) }] : []),
+          ...(canChmod ? [{ key: "permissions", icon: "shield" as const, label: t("files-perm.menu"), onSelect: () => setPermissions(menu.entry.path) }] : []),
+        ]} />}
+        {info && <FileInfoDialog mid={machine.id} cwd={folder} path={info.path}
+          entry={{ name: info.name, dir: isNavigableDir(info), size: info.size }} onClose={() => setInfo(null)} />}
+        {permissions && <PermissionsDialog mid={machine.id} cwd={folder} path={permissions} onClose={() => setPermissions(null)} onChanged={reload} />}
+      </>}
+      {/* Directory shortcuts and path navigation */}
       <div className="rounded-card bg-surface p-4 shadow-card">
         <div className="flex flex-wrap items-center gap-2">
           <div className="flex items-center gap-2">
@@ -873,21 +926,6 @@ export function FileBrowserPanel({ machines, initialMachineId }: { machines: Mac
             <h2 className="text-sm font-semibold text-ink">{t("machines-files.title")}</h2>
           </div>
           <div className="flex-1" />
-          <label className="flex items-center gap-2 text-xs text-ink-3">
-            <span>{t("machines-files.machine_label")}</span>
-            <select
-              aria-label={t("machines-files.machine_label")}
-              value={activeMid}
-              onChange={(e) => setSelectedMid(e.target.value)}
-              className="h-8 rounded-control bg-inset px-2.5 text-xs text-ink shadow-hairline outline-none"
-            >
-              {machines.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.name} {!m.online ? `(${t("machines.offline")})` : ""}
-                </option>
-              ))}
-            </select>
-          </label>
         </div>
 
         {!machine?.online ? (
@@ -903,7 +941,7 @@ export function FileBrowserPanel({ machines, initialMachineId }: { machines: Mac
                   <button
                     key={r.id}
                     type="button"
-                    onClick={() => void loadDirectory(machine.id, r.path)}
+                    onClick={() => browse(machine.id, r.path)}
                     title={r.path}
                     className={cx(
                       "inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs transition-colors",
@@ -924,14 +962,14 @@ export function FileBrowserPanel({ machines, initialMachineId }: { machines: Mac
               className="mt-3 flex flex-wrap items-center gap-2"
               onSubmit={(e) => {
                 e.preventDefault();
-                if (pathInput.trim()) void loadDirectory(machine.id, pathInput.trim());
+                if (pathInput.trim()) browse(machine.id, pathInput.trim());
               }}
             >
               <Button
                 tone="secondary"
                 icon="up"
                 disabled={!dir?.parent || loadingDir}
-                onClick={() => dir?.parent && void loadDirectory(machine.id, dir.parent)}
+                onClick={() => dir?.parent && browse(machine.id, dir.parent)}
               >
                 {t("machines-files.up")}
               </Button>
@@ -1270,6 +1308,10 @@ export function FileBrowserPanel({ machines, initialMachineId }: { machines: Mac
               )}
             </div>
 
+            {dir && writable && routed && <div className="border-b border-line">
+              {selected ? <SelectionBar ops={ops} selected={selected} onClear={() => select(null)} /> :
+                <Button tone="quiet" onClick={() => select([])}>{t("files-ops.select")}</Button>}
+            </div>}
             {dir?.truncated && (
               <p className="border-b border-line bg-orange-tint px-3 py-1.5 text-xs text-ink">
                 {t("machines-files.entries_truncated", { shown: dir.entries.length, total: dir.total })}
@@ -1286,7 +1328,7 @@ export function FileBrowserPanel({ machines, initialMachineId }: { machines: Mac
               <div className="flex h-48 items-center justify-center">
                 <Loading />
               </div>
-            ) : visibleEntries.length === 0 ? (
+            ) : !dir ? null : visibleEntries.length === 0 ? (
               <p className="px-4 py-8 text-center text-xs text-ink-3">
                 {filter.trim() ? t("machines-files.no_filter_matches", { query: filter.trim() }) : t("machines-files.empty_dir")}
               </p>
@@ -1299,16 +1341,18 @@ export function FileBrowserPanel({ machines, initialMachineId }: { machines: Mac
                   <span role="columnheader">{t("machines-files.col_mtime")}</span>
                 </div>
                 {visibleEntries.map((entry) => {
-                  const selected = selectedEntry?.path === entry.path;
+                  const previewing = selectedEntry?.path === entry.path;
                   const dirLike = isNavigableDir(entry);
                   return (
                     <div
                       key={entry.path}
                       className={cx(
                         "flex items-center gap-1 pr-2 transition-colors hover:bg-hover",
-                        selected && "bg-accent-tint/60",
+                        previewing && "bg-accent-tint/60",
                       )}
                     >
+                      {selected && <input type="checkbox" aria-label={entry.name} checked={selected.some(x => x.path === entry.path)}
+                        onChange={e => select(e.target.checked ? [...selected, target(entry)] : selected.filter(x => x.path !== entry.path))} />}
                       <button
                         type="button"
                         onClick={() => openEntry(entry)}
@@ -1358,6 +1402,8 @@ export function FileBrowserPanel({ machines, initialMachineId }: { machines: Mac
                           </span>
                         </span>
                       </button>
+                      {routed && <IconButton icon="more" size={44} label={t("files-ops.row_more", { name: entry.name })}
+                        onClick={e => setMenu({ entry, anchor: e.currentTarget })} />}
                       <IconButton
                         icon="pencil"
                         label={`${t("machines-files.rename_move")}: ${entry.name}`}

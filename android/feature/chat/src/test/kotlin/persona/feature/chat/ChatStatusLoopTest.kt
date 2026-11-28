@@ -14,10 +14,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.unit.dp
 import java.io.File
@@ -67,6 +69,26 @@ class ChatStatusLoopTest {
         val layout = layouts.single()
         assertFalse("the prompt is cut after ${layout.lineCount} lines", layout.hasVisualOverflow)
         assertTrue("the prompt fits in ${layout.lineCount} lines: too short to test the cut", layout.lineCount > 3)
+    }
+
+    @Test fun queuedMessagesInStatusSheetHideRawContextXml() {
+        val legacy = persona.core.contracts.ProtocolCompatibility.messageForHub(
+            "${ChatLinkContext.quote("Quoted body", "Antigravity", "1@0").xml()}\n\n先检查队列预览")
+        val session = Session(machineId = "mac", sessionId = "s1", title = "Watch CI", status = "working",
+            queued = listOf(legacy))
+        rule.setContent {
+            PersonaTheme(darkTheme = false, reduceMotion = true, style = AppStyle.Glass) {
+                val resources = LocalResources.current
+                val scope = rememberCoroutineScope()
+                val recovery = remember { ChatStatusRecovery(resources, null, scope) {} }
+                ChatStatusSheet(StatusLineState(), session, emptyList(), emptySet(), onAction = null, onDismiss = {},
+                    replacement = null, onOpenReplacement = null, onConnectionDetails = null, terminal = null,
+                    recordedDuration = null, notice = null, recovery = recovery, machine = null, draftSaveError = null,
+                    readOnly = false, onOpenSession = null)
+            }
+        }
+        rule.onAllNodesWithText("-context", substring = true).assertCountEquals(0)
+        rule.onNodeWithText("先检查队列预览").assertExists()
     }
 
     @Test fun quietSessionShowsSummaryRowInsteadOfBlankSheet() {

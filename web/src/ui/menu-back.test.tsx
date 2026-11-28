@@ -44,8 +44,12 @@ function open(onClose: () => void) {
 
 async function back() {
   await act(async () => {
+    const popped = new Promise<void>((done, fail) => {
+      const timer = setTimeout(() => fail(new Error("no Back happened")), 1000);
+      addEventListener("popstate", () => (clearTimeout(timer), done()), { once: true });
+    });
     history.back();
-    await new Promise((r) => setTimeout(r, 30));
+    await popped;
   });
 }
 

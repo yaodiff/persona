@@ -1,21 +1,26 @@
 """Real-user GitHub reviews on the exact current head (opt-in watcher policy).
 
 When a repository enables ``respect_human_reviews``, a review submitted by a
-real user can replace the watcher's own semantic review for that exact head.
-The rules are deliberately narrow:
+trusted maintainer or collaborator can replace the watcher's own semantic
+review for that exact head. The rules are deliberately narrow:
 
-* only the current head counts -- a review on an older commit never carries to
-  a new head, so every pushed commit is re-evaluated from scratch;
-* only real user accounts count -- bot and GitHub App reviews, missing users
-  and the watcher's own authenticated identity never qualify as human;
-* dismissed and pending reviews are neutral rather than approval or a block;
-* the latest effective review per reviewer wins, so an approval followed by a
-  change request on the same head blocks.
+* only the current head counts -- a review on an older commit or with
+  ``commit_id: null`` (draft/garbage-collected) never carries to a new head,
+  so every pushed commit is re-evaluated from scratch;
+* only trusted real user accounts count -- ``user.type == "User"`` with
+  ``author_association`` in ``OWNER`` / ``MEMBER`` / ``COLLABORATOR``; bot and
+  GitHub App reviews, external accounts, deleted users, the watcher's own
+  authenticated identity, and the PR author's own replies never qualify
+  (matched case-insensitively);
+* pending drafts are ignored and dismissals clear the reviewer's prior state;
+* per reviewer, non-pending reviews on the head are replayed chronologically
+  by parsed UTC timestamp and id so inline ``COMMENTED`` thread replies do not
+  erase an active ``APPROVED`` or ``CHANGES_REQUESTED`` decision.
 
 The watcher's other gates (verification, privacy scan, linked issue,
 mergeability and exact-head matching) are unaffected and stay mandatory.
 """
-from pr_watch_common import SHA, WatchError, bounded, gh_json, run
+from pr_watch_common import SHA, WatchError, bounded, gh_json, github_time, run
 
 APPROVED = "APPROVED"
 CHANGES_REQUESTED = "CHANGES_REQUESTED"
@@ -24,6 +29,7 @@ DISMISSED = "DISMISSED"
 PENDING = "PENDING"
 EFFECTIVE_STATES = (APPROVED, CHANGES_REQUESTED, COMMENTED)
 NEUTRAL_STATES = (DISMISSED, PENDING)
+TRUSTED_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
 
 DECISION_APPROVED = "approved"
 DECISION_CHANGES_REQUESTED = "changes_requested"
@@ -62,7 +68,7 @@ def authenticated_login():
 
 
 def _review_record(raw):
-    """Validate the transport shape; identity filtering happens separately."""
+    """Validate the transport shape; identity and trust filtering happen separately."""
     if not isinstance(raw, dict):
         raise WatchError("PR review record is not an object")
     review_id = raw.get("id")
@@ -71,11 +77,22 @@ def _review_record(raw):
     state = raw.get("state")
     if state not in EFFECTIVE_STATES + NEUTRAL_STATES:
         raise WatchError("PR review %s has an unknown state: %r" % (review_id, state))
-    commit_id = raw.get("commit_id")
+    if "commit_id" not in raw:
+        raise WatchError("PR review %s is missing commit_id" % review_id)
+    commit_id = raw["commit_id"]
+    if "user" not in raw:
+        raise WatchError("PR review %s is missing user" % review_id)
+    user = raw["user"]
+    if user is not None and not isinstance(user, dict):
+        raise WatchError("PR review %s has no valid reviewer identity" % review_id)
+    if commit_id is None:
+        # GitHub REST returns commit_id=null for PENDING draft reviews and
+        # reviews whose commit was garbage-collected after a force-push; they
+        # can never match the exact head, so ignore them cleanly.
+        return None
     if not isinstance(commit_id, str) or not SHA.fullmatch(commit_id):
         raise WatchError("PR review %s has no valid commit id" % review_id)
-    user = raw.get("user")
-    if not isinstance(user, dict):
+    if user is None:
         # A null user is a documented GitHub shape for deleted accounts; it can
         # never be a human credential, so it is ignored rather than accepted.
         return None
@@ -83,15 +100,24 @@ def _review_record(raw):
     user_type = user.get("type")
     if not isinstance(login, str) or not login.strip() or not isinstance(user_type, str):
         raise WatchError("PR review %s has no valid reviewer identity" % review_id)
+    author_association = raw.get("author_association")
+    if author_association is not None and not isinstance(author_association, str):
+        raise WatchError("PR review %s has an invalid author association" % review_id)
     submitted_at = raw.get("submitted_at")
-    if state in EFFECTIVE_STATES and (not isinstance(submitted_at, str) or not submitted_at):
-        raise WatchError("PR review %s has no submission timestamp" % review_id)
+    if state != PENDING:
+        if not isinstance(submitted_at, str) or not submitted_at:
+            raise WatchError("PR review %s has no submission timestamp" % review_id)
+        submitted_ts = github_time(submitted_at)
+    else:
+        submitted_at = submitted_at if isinstance(submitted_at, str) else ""
+        submitted_ts = 0.0
     return {"id": review_id, "state": state, "commit_id": commit_id,
             "login": login.strip(), "user_type": user_type,
-            "submitted_at": submitted_at if isinstance(submitted_at, str) else ""}
+            "author_association": author_association or "",
+            "submitted_at": submitted_at, "submitted_ts": submitted_ts}
 
 
-def classify_human_reviews(raw_reviews, head, self_login):
+def classify_human_reviews(raw_reviews, head, self_login, pr_author=None):
     """Classify real-user reviews bound to ``head``; pure and side-effect free.
 
     Returns ``{"decision": "none"}`` or a mapping carrying the deciding
@@ -101,7 +127,11 @@ def classify_human_reviews(raw_reviews, head, self_login):
         raise WatchError("human review classification needs the exact head")
     if not isinstance(self_login, str) or not self_login.strip():
         raise WatchError("human review classification needs the authenticated login")
-    latest_by_login = {}
+    if pr_author is not None and not isinstance(pr_author, str):
+        raise WatchError("human review classification PR author must be a string")
+    self_key = self_login.strip().casefold()
+    author_key = pr_author.strip().casefold() if pr_author and pr_author.strip() else ""
+    by_login = {}
     for raw in raw_reviews:
         record = _review_record(raw)
         if record is None:
@@ -109,24 +139,44 @@ def classify_human_reviews(raw_reviews, head, self_login):
         if record["commit_id"] != head:
             # Reviews on older heads never carry over to a new head.
             continue
+        if record["state"] == PENDING:
+            # Unpublished draft reviews never alter submitted review state.
+            continue
         if record["user_type"] != "User":
             # Bot/GitHub App/Organization/Mannequin accounts are not humans.
             continue
-        if record["login"] == self_login.strip():
-            # The watcher's own automated comment-reviews cannot self-approve.
+        if record["author_association"] not in TRUSTED_ASSOCIATIONS:
+            # Only repository owners, org members, and collaborators have
+            # review authority; external accounts can neither approve nor park.
             continue
-        previous = latest_by_login.get(record["login"])
-        if previous is None or (record["submitted_at"], record["id"]) > \
-                (previous["submitted_at"], previous["id"]):
-            latest_by_login[record["login"]] = record
+        login_key = record["login"].casefold()
+        if login_key == self_key or (author_key and login_key == author_key):
+            # The watcher's own automated comment-reviews and the PR author's
+            # own thread replies never qualify as independent human reviews.
+            continue
+        by_login.setdefault(login_key, []).append(record)
     deciding = None
-    for record in latest_by_login.values():
-        if record["state"] in NEUTRAL_STATES:
-            # A dismissal or pending review leaves the reviewer without an
-            # effective state on this head.
+    for records in by_login.values():
+        active = None
+        for record in sorted(records, key=lambda r: (r["submitted_ts"], r["id"])):
+            state = record["state"]
+            if state == DISMISSED:
+                active = None
+            elif state in (APPROVED, CHANGES_REQUESTED):
+                active = record
+            elif state == COMMENTED:
+                # Inline thread replies create COMMENTED reviews on the same
+                # head; they must not clear an active APPROVED/CHANGES_REQUESTED.
+                if active is None or active["state"] == COMMENTED:
+                    active = record
+        if active is None:
             continue
-        if deciding is None or _STATE_PRECEDENCE[record["state"]] > _STATE_PRECEDENCE[deciding["state"]]:
-            deciding = record
+        if deciding is None or (
+            _STATE_PRECEDENCE[active["state"]], active["submitted_ts"], active["id"]
+        ) > (
+            _STATE_PRECEDENCE[deciding["state"]], deciding["submitted_ts"], deciding["id"]
+        ):
+            deciding = active
     if deciding is None:
         return {"decision": DECISION_NONE}
     return {"decision": _DECISION_BY_STATE[deciding["state"]],

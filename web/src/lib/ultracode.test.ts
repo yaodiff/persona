@@ -71,7 +71,7 @@ describe("version gate", () => {
   });
 
   it("says why New agent grays it", () => {
-    expect(startBlocked("2.1.250")).toBe("这台电脑的 Claude Code 是 2.1.250，要 2.1.284 或更新才能开 ultracode");
+    expect(startBlocked("2.1.250")).toBe("此电脑上的 Claude Code 版本为 2.1.250，需要 2.1.284 或更高版本才能开启 ultracode");
     expect(startBlocked("2.1.320")).toBe("");
     expect(startBlocked(undefined)).toBe("");
   });
@@ -79,7 +79,7 @@ describe("version gate", () => {
 
 describe("the switch as drawn", () => {
   it("off: what it does, usable", () => {
-    expect(ultracodeSwitch(claude({ ultracode: false }))).toEqual({ on: false, disabled: false, pending: false, line: "每个任务都编排多 Agent workflow · 很费额度 · 只对本会话", caution: false });
+    expect(ultracodeSwitch(claude({ ultracode: false }))).toEqual({ on: false, disabled: false, pending: false, line: "每个任务都将以多 Agent 工作流运行 · 消耗较多额度 · 仅对当前会话生效", caution: false });
   });
 
   it("the node's reason takes the line's place in the caution colour, and the switch stays usable", () => {
@@ -103,7 +103,7 @@ describe("the switch as drawn", () => {
 
   it("a change queued elsewhere: the node's value stands, and the line says a change waits without tying it to the switch", () => {
     const s = claude({ ultracode: false, ultracode_pending: true, status: "working" });
-    expect(ultracodeSwitch(s)).toEqual({ on: false, disabled: false, pending: true, line: "有一次切换在排队，这一轮结束后生效", caution: false });
+    expect(ultracodeSwitch(s)).toEqual({ on: false, disabled: false, pending: true, line: "已有切换请求正在等待，将于本轮结束后生效", caution: false });
   });
 
   it("grayed only while its request is out", () => {
@@ -203,7 +203,7 @@ describe("requests", () => {
     expect(ultracodeSwitch(s, seen.at(-1))).toMatchObject({ on: false, disabled: false });
     act(() => root.unmount());
     vi.stubGlobal("fetch", vi.fn(async () => response({ code: "ultracode_unsupported", error: "" }, 409)));
-    expect(await setUltracode(claude({ session_id: "s2" }), true)).toEqual({ ok: false, error: "这个会话不能开 ultracode" });
+    expect(await setUltracode(claude({ session_id: "s2" }), true)).toEqual({ ok: false, error: "当前会话无法使用 ultracode" });
     vi.stubGlobal("fetch", vi.fn(async () => response({ error: "未能确认 ultracode 状态，请在终端里确认" }, 502)));
     expect(await setUltracode(claude({ session_id: "s3" }), true)).toEqual({ ok: false, error: "未能确认 ultracode 状态，请在终端里确认" });
   });

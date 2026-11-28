@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"io"
 	"log"
 	"net"
@@ -216,6 +217,27 @@ func TestTurnedDownStreamGoesInline(t *testing.T) {
 		}
 		eventually(t, 5*time.Second, "the relay let go", func() bool { return relaysLeft(h) == 0 })
 	}
+}
+
+func TestStreamedRequestDoesNotRetryOtherErrors(t *testing.T) {
+	h, srv := bodyHub(t)
+	m := &bodyManager{turn: bus.CodeInvalidParams}
+	connectBodyManager(t, h, srv, nil, true, m)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+
+	req := assistantwire.HTTPRequest{Method: http.MethodPut, Path: "/example", Body: bodyOf(t, bodyStreamMin)}
+	var res assistantwire.HTTPResponse
+	err := h.callHTTP(ctx, assistantwire.AssistantID, req, &res)
+	var coded *rpc.Error
+	if !errors.As(err, &coded) || coded.Code != bus.CodeInvalidParams {
+		t.Fatalf("callHTTP = %v, want the manager's invalid_params error", err)
+	}
+	how, _ := m.requests()
+	if want := []string{assistantwire.MethodHTTPStreamed + " turned down"}; !reflect.DeepEqual(how, want) {
+		t.Fatalf("the manager got %v, want %v", how, want)
+	}
+	eventually(t, 5*time.Second, "the relay let go", func() bool { return relaysLeft(h) == 0 })
 }
 
 // slowConn reads at most rate bytes a second, like a manager behind a slow link.

@@ -37,10 +37,14 @@ func (n *Node) zshrcPath() string {
 }
 
 // aliasFiles are the files launchers.zshrc reads, the login shell's (launcherShell) first: zsh reads ~/.zshrc, bash
-// ~/.bashrc, which Debian and Ubuntu have source ~/.bash_aliases.
+// ~/.bashrc, which Debian and Ubuntu have source ~/.bash_aliases, and ~/.bash_profile before them where it runs as a
+// login shell (macOS with a bash login file, shellFlag).
 func (n *Node) aliasFiles(shell string) []aliasFile {
 	zsh := aliasFile{"~/.zshrc", n.zshrcPath()}
 	bash := []aliasFile{{"~/.bashrc", filepath.Join(n.home, ".bashrc")}, {"~/.bash_aliases", filepath.Join(n.home, ".bash_aliases")}}
+	if profile := bashRCFile(shellFlag("bash")); profile == "~/.bash_profile" {
+		bash = append([]aliasFile{{profile, filepath.Join(n.home, ".bash_profile")}}, bash...)
+	}
 	if shell == "zsh" {
 		return append([]aliasFile{zsh}, bash...)
 	}

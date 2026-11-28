@@ -8,6 +8,7 @@ import { itemHeaders } from "./manager-choice";
 import { extRoot, listOf } from "./extension-api";
 import { changed, type HubExtension, type HubExtensionDetail, type ExtensionPermission } from "./extensions";
 import { previewConsent, type DependencyState, type PackMember } from "./extension-model";
+import type { ScopedAssistantClient } from "./scoped-assistant-api";
 import { t } from "../i18n";
 
 /** One market the hub reads (its token, if any, is never sent back). */
@@ -31,6 +32,52 @@ export interface Market {
   signature?: MarketSignature;
   /** The official market every hub has (#2351), listed first; absent on other markets and older hubs. */
   official?: boolean;
+  /** A private market's trusted public keys (docs/extensions/extensions.md "Private market keys"): while there are any,
+   *  its index must be signed by one of them. Absent on unsigned markets, the official one and older hubs. */
+  trusted_keys?: Record<string, string>; // key id → "ed25519:<base64>"
+}
+
+/** One trusted public key of a private market. */
+export interface MarketKey {
+  key: string;
+  key_id: string;
+}
+
+/** A market's trusted keys, by key id. */
+export function marketKeys(m?: Market | null): MarketKey[] {
+  return Object.entries(m?.trusted_keys ?? {})
+    .map(([key_id, key]) => ({ key_id, key }))
+    .sort((a, b) => a.key_id.localeCompare(b.key_id));
+}
+
+/** How an installed market extension was verified (ExtensionView.market_signature). */
+export interface ExtensionSignature {
+  state: string; // official | signed | key_removed | unsigned | market_invalid
+  key_id?: string;
+}
+
+const EXTENSION_SIGNATURES: Record<string, string> = {
+  official: t("lib-extension-market.ext_sig_official"),
+  signed: t("lib-extension-market.ext_sig_signed"),
+  key_removed: t("lib-extension-market.ext_sig_key_removed"),
+  unsigned: t("lib-extension-market.ext_sig_unsigned"),
+  market_invalid: t("lib-extension-market.ext_sig_market_invalid"),
+};
+
+/** An installed extension's verification as a short label, and the tone it shows in ("" from a hub that does not say). */
+export function extensionSignatureLabel(s?: ExtensionSignature): { text: string; tone: "green" | "accent" | "orange" | "red" | "gray" } | null {
+  if (!s?.state) return null;
+  const text = EXTENSION_SIGNATURES[s.state] ?? t("lib-extension-market.sig_state", { state: s.state });
+  const tone = s.state === "official" ? "accent" : s.state === "signed" ? "green" : s.state === "unsigned" ? "gray" : s.state === "key_removed" ? "orange" : "red";
+  return { text, tone };
+}
+
+/** The keys typed one per line (or separated by spaces or commas), without blanks. */
+export function parseKeyList(text: string): string[] {
+  return text
+    .split(/[\s,]+/)
+    .map((k) => k.trim())
+    .filter(Boolean);
 }
 
 /** A catalog's verification status. key_changed is an official pin mismatch, never a request to trust a key. */
@@ -59,6 +106,10 @@ export interface CatalogItem {
   permissions?: ExtensionPermission[];
   /** Why this hub cannot install it (no package for its platform, needs a newer hub). */
   problem?: string;
+  /** A newer release in this market that requires a newer Persona hub build. */
+  latest_incompatible_version?: string;
+  /** Localized reason why `latest_incompatible_version` cannot run on this hub. */
+  latest_incompatible_reason?: string;
   /** The installed version, if any. */
   installed?: string;
   installed_source?: string;
@@ -150,12 +201,13 @@ export interface ExtensionRemovalResult {
   warnings?: string[] | null;
 }
 /** Only one installed from a market (`origin` market:…); keepData leaves ~/.persona/extensions/data/<id>/. */
-export const uninstallExtension = (id: string, keepData = false, cascade = false, members = false) => {
+export const uninstallExtension = (id: string, keepData = false, cascade = false, members = false, client?: ScopedAssistantClient) => {
   const q = new URLSearchParams();
   if (keepData) q.set("keep_data", "1");
   if (cascade) q.set("cascade", "1");
   if (members) q.set("members", "1");
-  return api<ExtensionRemovalResult>(`${extRoot()}/${enc(id)}/-/${q.size ? `?${q}` : ""}`, { method: "DELETE" }).then(changed);
+  const remove = client?.request ?? api;
+  return remove<ExtensionRemovalResult>(`${extRoot()}/${enc(id)}/-/${q.size ? `?${q}` : ""}`, { method: "DELETE" }).then(changed);
 };
 
 // ── words and rules ─────────────────────────────────────
@@ -233,6 +285,16 @@ export function itemState(it: CatalogItem): ItemState {
 
 /** Uninstalling from here: only an extension this market installed. */
 export const canUninstall = (it: CatalogItem) => Boolean(it.installed && it.from_this_market);
+
+/** Newer release blocked by the hub build, surfaced only when the active release is not already blocked by `problem`. */
+export function newerIncompatibleHint(
+  it: Pick<CatalogItem, "problem" | "latest_incompatible_version" | "latest_incompatible_reason">,
+): { version: string; reason: string } | null {
+  if (it.problem?.trim()) return null;
+  const version = it.latest_incompatible_version?.trim() ?? "";
+  if (!version) return null;
+  return { version, reason: it.latest_incompatible_reason?.trim() ?? "" };
+}
 
 /** A market's line under its name: how many extensions, when it was read, whether it has a token. */
 export function marketLine(m: Market, ago: (iso?: string) => string): string {

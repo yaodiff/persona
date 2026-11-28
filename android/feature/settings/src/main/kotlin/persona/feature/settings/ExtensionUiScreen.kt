@@ -118,6 +118,8 @@ internal suspend fun extensionNotificationLockedAfterUnlockSettles(
 fun ExtensionUiPage(extensions: ExtensionManagement?, extensionId: String, uiId: String, title: String, onBack: () -> Unit,
                     initialState: String? = null, depth: Int = 0, shown: Boolean = true, availableAdapter: NativeExtensionStreamAdapter? = null,
                     onPush: (ExtensionUiRoute) -> Unit = {}, manager: String? = null, onAsk: ((String) -> Unit)? = null,
+                    onCompose: ((String, String?) -> Unit)? = null,
+                    onSettings: ((String, String?) -> Unit)? = null,
                     onConversation: ((String, String) -> Unit)? = null,
                     notificationActionToken: String? = null,
                     notificationIntent: Intent? = null,
@@ -215,17 +217,30 @@ fun ExtensionUiPage(extensions: ExtensionManagement?, extensionId: String, uiId:
     val scope = rememberCoroutineScope()
     val ask = onAsk
     val handle = rememberExtensionView(model, appLink = { url ->
-        val conversation = if (extensionId == "space-conversations") ExtensionViewText.spaceConversation(url) else null
-        if (conversation != null && onConversation != null) {
-            onConversation(conversation.first, conversation.second)
+        val settings = ExtensionViewText.settings(extensionId, url)
+        if (settings != null && onSettings != null) {
+            onSettings(settings, manager)
             true
         } else {
-        // Set Up with … is only answered here, and only from these pages. Close the page, then hand the text on.
-        val text = ExtensionViewText.askFrom(extensionId, url) ?: return@rememberExtensionView false
-        val send = ask ?: return@rememberExtensionView false
-        onBack()
-        send(text)
-        true
+            val conversation = if (extensionId == "space-conversations") ExtensionViewText.spaceConversation(url) else null
+            if (conversation != null && onConversation != null) {
+                onConversation(conversation.first, conversation.second)
+                true
+            } else {
+                val compose = ExtensionViewText.composeFrom(extensionId, url)
+                if (compose != null && onCompose != null) {
+                    // A page's own quick prompt goes to the assistant's composer, unsent. Close the page first.
+                    onBack()
+                    onCompose(compose, pageManager)
+                    return@rememberExtensionView true
+                }
+                // Set Up with … is only answered here, and only from these pages. Close the page, then hand the text on.
+                val text = ExtensionViewText.askFrom(extensionId, url) ?: return@rememberExtensionView false
+                val send = ask ?: return@rememberExtensionView false
+                onBack()
+                send(text)
+                true
+            }
         }
     }, onPush = { push ->
         ExtensionViewText.pushed(extensionId, uiId, title, depth, push, pageManager)?.let { model.covered(); onPush(it) }
@@ -383,7 +398,7 @@ fun LauncherPage(machines: MachineManagement?, extensions: ExtensionManagement?,
                 if (state.view == null && state.error == null) return@forEach
                 item("$key-title") { JSectionHeader(state.view?.title?.takeIf { it.isNotBlank() } ?: place.title.ifBlank { place.extension }) }
                 viewStatus(key, state, onRetry = { scope.launch { models.firstOrNull { it.first == place }?.second?.load() } })
-                extensionViewItems(key, state, handle, compactGraph = true)
+                extensionViewItems(key, state, handle, compactPreview = true)
             }
             if (placesState.places == null && placesState.loading || sections.any { it.second.view == null && it.second.loading }) {
                 item("places-loading") { JLoading() }

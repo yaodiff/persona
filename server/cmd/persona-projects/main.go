@@ -1,4 +1,4 @@
-// Command persona-projects runs the independent team document service or manages project membership.
+// Command persona-projects serves team documents and manages their membership and revisions.
 package main
 
 import (
@@ -25,8 +25,15 @@ const usage = `Usage:
   persona-projects serve [-listen 127.0.0.1:18082]
   persona-projects grant PROJECT MEMBER reader|writer|approver
   persona-projects revoke PROJECT MEMBER
+  persona-projects publish [member flags] -expected N -file PATH PROJECT DOCUMENT
+  persona-projects read [member flags] -revision N PROJECT DOCUMENT
+  persona-projects approve [member flags] -revision N -sha256 DIGEST PROJECT DOCUMENT
 
-Set TEAM_PROJECT_DATABASE_URL to an explicit PostgreSQL URL naming a dedicated team database.
+Member flags: -url SERVICE_URL and -token-file PATH, defaulting to TEAM_PROJECT_URL and TEAM_PROJECT_TOKEN_FILE.
+Publish the first revision with -expected 0. Publish and approve print a JSON receipt including the revision and SHA-256.
+Read writes the verified document bytes to stdout. Approve requires the lowercase SHA-256 of the reviewed revision.
+
+For serve, grant and revoke, set TEAM_PROJECT_DATABASE_URL to an explicit PostgreSQL URL naming a dedicated team database.
 Serve binds a literal loopback IP. For remote clients, place a TLS reverse proxy in front of it.
 Grant writes a new project bearer to stdout and replaces any previous bearer for that member.
 Revoke removes the member's access to the project.`
@@ -46,8 +53,12 @@ func run(args []string) error {
 		fmt.Println(usage)
 		return nil
 	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 	var listenAddr netip.AddrPort
 	switch args[0] {
+	case "publish", "read", "approve":
+		return runMemberCommand(ctx, args, os.Stdout)
 	case "serve":
 		f := flag.NewFlagSet("serve", flag.ContinueOnError)
 		f.SetOutput(io.Discard)
@@ -72,8 +83,6 @@ func run(args []string) error {
 		return errors.New(usage)
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 	setup, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 	cfg, err := teamDatabase(os.Getenv("TEAM_PROJECT_DATABASE_URL"))

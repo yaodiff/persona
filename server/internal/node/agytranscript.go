@@ -47,6 +47,7 @@ type agyStep struct {
 	Source                   string          `json:"source"`
 	Status                   string          `json:"status"`
 	CreatedAt                string          `json:"created_at"`
+	UpdatedAt                string          `json:"updated_at"`
 	Content                  string          `json:"content"`
 	ClientMsgID              string          `json:"client_msg_id"`
 	Thinking                 string          `json:"thinking"`
@@ -70,6 +71,7 @@ type agyStep struct {
 	branch                   string
 	record                   [32]byte
 	rendered                 [32]byte
+	backgroundStart          string
 }
 
 type agyStepMemo struct {
@@ -89,8 +91,10 @@ type agyTranscriptUsage struct {
 	compacted     bool
 	hasUsage      bool
 	contextStats  transcript.ContextStats
-	first         string    // the first message the user typed, as shown (agyUserText): an untitled pane's title (agytitle.go)
+	first         string // the first message the user typed, as shown (agyUserText): an untitled pane's title (agytitle.go)
+	turn          agyTurnEvidence
 	modTime       time.Time // transcript file mtime in UTC, used as fallback UpdatedAt for herdr agy panes
+	size          int64     // transcript file size in bytes: a herdr agy pane row's Rev (proto.Session.Rev)
 }
 
 type agyHistory struct {
@@ -282,11 +286,23 @@ func (f *agyFold) add(raw []byte) {
 			for floor >= 0 && steps[floor].seq > step.seq {
 				floor--
 			}
+			updatesRunning := false
+			if floor >= 0 {
+				prev := steps[floor]
+				if prev.seq == step.seq && step.Type == prev.Type && prev.CreatedAt == step.CreatedAt {
+					updatesRunning = isAgyStepRunning(prev.Status)
+					if prev.Type == "GENERIC" {
+						step.backgroundStart = prev.backgroundStart
+						if step.backgroundStart == "" && updatesRunning && agyBackgroundNotice(prev.Content) != "" {
+							step.backgroundStart = prev.Content
+						}
+					}
+				}
+			}
 			if step.seq < last.seq && (floor < 0 || steps[floor].seq != step.seq) {
 				at = floor + 1
 				rev.native = fmt.Sprintf("%x", step.record[:10])
-			} else if step.seq < last.seq && floor >= 0 && steps[floor].seq == step.seq &&
-				isAgyStepRunning(steps[floor].Status) && step.Type == steps[floor].Type && step.CreatedAt == steps[floor].CreatedAt {
+			} else if step.seq < last.seq && (updatesRunning || step.backgroundStart != "") {
 				// An earlier RUNNING step (such as a background tool call) finished after later steps were logged.
 				// Update it in place without treating it as a branch rewind or discarding later steps.
 				step.branch = steps[floor].branch
@@ -370,8 +386,17 @@ func agyContextEndNames() string {
 }
 
 // Antigravity writes embedded ACP resources into USER_INPUT.content. Require the complete
-// leading Persona envelope so a quoted label or another URI scheme keeps its text.
-var agyContextResource = lazyre.New(`(?s)^(?:Content of persona-context://[^\r\n]*:\r?\n<persona-context>.*?</persona-context>` + agySpace + `*)+`)
+// Persona envelope, with a non-empty URI containing no whitespace, so a quoted label or
+// another URI scheme keeps its text. Workflow prompts carry the resource after the user
+// body. The close is found by depth, not the last close tag: literal context tags inside a
+// snapshot stay part of it, while a paragraph that starts after its first nested close is
+// kept as the user's text.
+var (
+	agyContextResourceLabel = lazyre.New(`Content of persona-context://[^\s<>]+:\r?\n`)
+	agyContextResourceOpen  = lazyre.New(`(?i)^<` + compat.ContextPattern() + `\b[^>]*>`)
+	agyContextResourceTag   = lazyre.New(`(?i)<` + compat.ContextPattern() + `\b[^>]*>|</` + compat.ContextPattern() + `\s*>`)
+	agyViewErrorsTrailing   = lazyre.New(`(?is)(?:^|\n)<persona-view-errors\b[^>]*>.*?</persona-view-errors>` + agySpace + `*$`)
+)
 
 var agyTrimSpace = lazyre.New(`^` + agySpace + `+|` + agySpace + `+$`)
 
@@ -388,17 +413,108 @@ func isAgyInterruptedStep(step agyStep) bool {
 	return agyInterruptedError.MatchString(strings.TrimSpace(text))
 }
 
+func isAgyCompactCommand(text string) bool {
+	fields := strings.Fields(strings.TrimSpace(text))
+	return len(fields) > 0 && strings.EqualFold(fields[0], "/compact")
+}
+
 func agyUserText(text string) string {
 	if m := agyUserRequest.FindStringSubmatch(text); m != nil {
 		text = m[1]
 	}
 	for {
-		clean := agyContextEnd.ReplaceAllString(agySnapshot.ReplaceAllString(agyContextResource.ReplaceAllString(text, ""), ""), "")
+		clean := agyStripContextResources(text)
+		clean = agyViewErrorsTrailing.ReplaceAllString(clean, "")
+		clean = agySnapshot.ReplaceAllString(clean, "")
+		clean = agyContextEnd.ReplaceAllString(clean, "")
 		if clean == text {
 			return agyTrimSpace.ReplaceAllString(text, "")
 		}
 		text = clean
 	}
+}
+
+func agyStripContextResources(text string) string {
+	for start := 0; start < len(text); {
+		label := agyContextResourceLabel.FindStringIndex(text[start:])
+		if label == nil {
+			break
+		}
+		at := start + label[0]
+		labelEnd := start + label[1]
+		if at > 0 && text[at-1] != '\n' {
+			start = labelEnd
+			continue
+		}
+		openAt := labelEnd
+		open := agyContextResourceOpen.FindStringIndex(text[openAt:])
+		if open == nil || open[0] != 0 {
+			start = openAt
+			continue
+		}
+		end, ok := agyContextResourceEnd(text, openAt, strings.TrimSpace(text[:at]) != "")
+		if !ok {
+			start = openAt
+			continue
+		}
+		before := strings.TrimRight(text[:at], "\r\n")
+		after := strings.TrimLeft(text[end:], "\r\n")
+		switch {
+		case before == "":
+			text = after
+		case after == "":
+			text = before
+		default:
+			text = before + "\n\n" + after
+		}
+		start = len(before)
+	}
+	return text
+}
+
+func agyContextResourceEnd(text string, open int, allowUserBoundary bool) (int, bool) {
+	depth, firstNestedClose := 0, -1
+	for _, tag := range agyContextResourceTag.FindAllStringIndex(text[open:], -1) {
+		start, end := open+tag[0], open+tag[1]
+		raw := strings.TrimSpace(text[start:end])
+		if strings.HasPrefix(raw, "</") {
+			depth--
+			if depth < 0 {
+				return 0, false
+			}
+			if depth == 1 && firstNestedClose < 0 {
+				firstNestedClose = end
+			}
+			if depth == 0 {
+				if allowUserBoundary && firstNestedClose >= 0 && agyContextResourceHasUserParagraph(text[firstNestedClose:end]) {
+					return firstNestedClose, true
+				}
+				return end, true
+			}
+		} else if !strings.HasSuffix(raw, "/>") {
+			depth++
+		}
+	}
+	return 0, false
+}
+
+// A nested close that is followed by a blank line and prose belongs to the user's own text,
+// not the snapshot: snapshots' literal context tags are tag-like or adjacent to their text.
+// Stopping at the nested close keeps ordinary prose rather than deleting it with the resource.
+func agyContextResourceHasUserParagraph(text string) bool {
+	blank := false
+	for _, line := range strings.Split(text, "\n")[1:] {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			blank = true
+			continue
+		}
+		if blank && !strings.HasPrefix(trimmed, "<") {
+			return true
+		}
+		blank = false
+	}
+	return false
 }
 
 func agyToolOutput(text string) string {
@@ -728,17 +844,28 @@ func mapAgySteps(steps []agyStep, fallback time.Time, receipts map[string]bool) 
 			notified = delivered != ""
 		case "USER_INPUT":
 			if step.Source == "" || step.Source == "USER_EXPLICIT" {
-				history.usage.turns++
 				delivered, notified = "", false
 				text := agyUserText(step.Content)
+				if isAgyCompactCommand(text) {
+					add("0", "system", proto.KindNotice, transcript.CompactNotice).ClientMsgID = step.ClientMsgID
+					break
+				}
+				history.usage.turns++
 				if text != "" {
 					add("0", "user", proto.KindText, text).ClientMsgID = step.ClientMsgID
 				}
 				addMedia("user", "", step.ClientMsgID, agyAttachedImagePaths(text))
 			}
 		case "CHECKPOINT":
+			pre := history.usage.contextTokens
+			if _, stepCtx, _, ok := step.tokenUsage(); ok && stepCtx > 0 {
+				pre = stepCtx
+			}
 			history.usage.observeCheckpoint()
-			add("0", "system", proto.KindNotice, transcript.CompactedNotice)
+			it := add("0", "system", proto.KindNotice, transcript.CompactedNotice)
+			if pre > 0 {
+				it.Compact = &proto.Compact{PreTokens: pre}
+			}
 		case "PLANNER_RESPONSE":
 			stepModel := step.normalizedModel()
 			stepUsage, hasUsage := history.usage.observePlanner(step)

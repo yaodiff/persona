@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -347,7 +348,7 @@ func TestClarifiedApprovalAnswerEndRestoresRemainingDecisionTime(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ft := newFleetTestNoStore(t)
 		preparedTestConversation(ft)
-		ix := proto.Interaction{ID: "ix_pause_resume", MachineID: "mac", SessionID: "s1", Kind: proto.IxPermission,
+		ix := proto.Interaction{ID: "ix_pause_resume", MachineID: "mac", SessionID: "s1", Kind: proto.IxPermission, OutwardWrite: true,
 			ExpiresAt: time.Now().Add(250 * time.Millisecond)}
 		done := make(chan preparedTestResult, 1)
 		go func() {
@@ -393,7 +394,7 @@ func TestEquivalentApprovalReplacesClarifiedCard(t *testing.T) {
 	newDone := make(chan preparedTestResult, 1)
 	go func() {
 		out, err := ft.s.waitPreparedCard(context.Background(), proto.Interaction{ID: "ix_new", MachineID: "mac", SessionID: "s1",
-			Kind: proto.IxPermission, ExpiresAt: time.Now().Add(time.Hour)}, approvalops.Operation{Replacement: "same-setting",
+			Kind: proto.IxPermission, OutwardWrite: true, ExpiresAt: time.Now().Add(time.Hour)}, approvalops.Operation{Replacement: "same-setting",
 			Apply: func(context.Context, proto.Resolution) (string, error) { newApplies.Add(1); return "new applied", nil }})
 		newDone <- preparedTestResult{out: out, err: err}
 	}()
@@ -472,6 +473,7 @@ func TestClarifiedApprovalRestartReportsCancellation(t *testing.T) {
 		t.Fatal(err)
 	}
 	awaitPreparedTest(t, done)
+	reloadApprovalJournalForRestart(ft.s)
 	ft.s.recoverApprovalJournals(context.Background())
 	if applies.Load() != 0 {
 		t.Fatal("restart recovery executed a process-local operation")
@@ -491,10 +493,58 @@ func TestClarifiedApprovalRestartReportsInterruptedApplyAsUncertain(t *testing.T
 	if err := ft.s.approvalJournalApplying(context.Background(), proto.Interaction{ID: "ix_interrupted", MachineID: "mac", SessionID: "s1"}); err != nil {
 		t.Fatal(err)
 	}
+	reloadApprovalJournalForRestart(ft.s)
 	ft.s.recoverApprovalJournals(context.Background())
 	result := waitApprovalResult(t, ft, "ix_interrupted")
 	if !strings.Contains(result, "uncertain") || strings.Contains(result, "cancelled without executing") {
 		t.Fatalf("interrupted apply result = %q", result)
+	}
+}
+
+func TestRestoredOwnerClaimPreservesUncertainApply(t *testing.T) {
+	ft := newFleetTest(t)
+	preparedTestConversation(ft)
+	var applies atomic.Int32
+	done := startPreparedTest(t, ft, "ix_restored_uncertain", "", func(context.Context, proto.Resolution) (string, error) {
+		applies.Add(1)
+		return "unexpected second execution", nil
+	})
+	if err := ft.s.clarify(context.Background(), "ix_restored_uncertain", "Question", "owner-message-restored-uncertain", nil); err != nil {
+		t.Fatal(err)
+	}
+	awaitPreparedTest(t, done)
+	ix := proto.Interaction{ID: "ix_restored_uncertain", MachineID: "mac", SessionID: "s1"}
+	if err := ft.s.approvalJournalApplying(context.Background(), ix); err != nil {
+		t.Fatal(err)
+	}
+	// Recovery has made the interrupted apply's outcome durable, but its terminal
+	// interaction finalization has not won before the restored owner claim.
+	ft.s.approvals.mu.Lock()
+	i := slices.IndexFunc(ft.s.approvals.list, func(a approvalJournalEntry) bool { return a.ID == ix.ID })
+	if i < 0 {
+		ft.s.approvals.mu.Unlock()
+		t.Fatal("missing applying journal")
+	}
+	ft.s.approvals.list[i].Status = "failed"
+	ft.s.approvals.list[i].Result = approvalResultText(ix.ID, "failed", "The earlier execution outcome is uncertain; do not assume it did nothing.")
+	ft.s.approvals.list[i].Finalized = false
+	ft.s.approvals.list[i].live = false
+	ft.s.approvals.mu.Unlock()
+	ft.s.fleet.mu.Lock()
+	p := ft.s.fleet.interactions[ix.ID]
+	ft.s.fleet.mu.Unlock()
+	allow := true
+	if err := ft.s.resolvePreparedAnswer(context.Background(), p, proto.Resolution{Allow: &allow}, false, nil); err != nil {
+		t.Fatal(err)
+	}
+	if applies.Load() != 0 {
+		t.Fatal("the restored claim executed an operation with an uncertain earlier outcome")
+	}
+	if status, _, _ := ft.st.InteractionOutcome(context.Background(), ix.ID); status != "failed" {
+		t.Fatalf("restored claim replaced uncertain history with %q", status)
+	}
+	if result := waitApprovalResult(t, ft, ix.ID); !strings.Contains(result, "uncertain") || strings.Contains(result, "not started") || strings.Contains(result, "cancelled") {
+		t.Fatalf("restored claim erased the execution uncertainty: %q", result)
 	}
 }
 

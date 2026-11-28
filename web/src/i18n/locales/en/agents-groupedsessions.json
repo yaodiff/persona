@@ -1,3 +1,4 @@
 {
-  "places": "Where it is checked out"
+  "places": "Where it is checked out",
+  "new_agent_in": "New agent in {name}"
 }

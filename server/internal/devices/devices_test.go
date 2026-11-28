@@ -68,7 +68,7 @@ func (n *testNode) dial(context.Context) (net.Conn, error) {
 		if n.unknown[method] {
 			return nil, errors.New("unknown method " + method)
 		}
-		if (method == "file.copy" || method == "file.zip") && n.fileStarted != nil {
+		if (method == "file.copy" || method == "file.zip" || method == nodeproto.StopIfIdle) && n.fileStarted != nil {
 			close(n.fileStarted)
 			<-ctx.Done()
 			close(n.fileCancelled)

@@ -11,6 +11,7 @@ import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasScrollToIndexAction
+import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -26,6 +27,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -165,18 +167,23 @@ class ChatHeaderFoldShotsTest {
     @Test fun glassLargeText() = openAndFolded(AppStyle.Glass, dark = false, suffix = "-large")
 
     @Config(qualifiers = "en-w320dp-h800dp-xhdpi", fontScale = 2f)
-    @Test fun jumpToLatestStaysBelowTheTranscriptAtLargeText() {
+    @Test fun jumpToLatestFloatsAboveComposerWithoutShrinkingTranscriptAtLargeText() {
         page(AppStyle.Glass, dark = true)
         val list = rule.onNode(hasScrollToIndexAction() and
             androidx.compose.ui.test.SemanticsMatcher.keyIsDefined(androidx.compose.ui.semantics.SemanticsProperties.VerticalScrollAxisRange))
         val jump = rule.onNode(hasContentDescription("Jump to latest", substring = true, ignoreCase = true))
+        val transcriptBefore = list.fetchSemanticsNode().boundsInRoot
         repeat(2) {
             list.performTouchInput { swipeDown(startY = top + height * 0.25f, endY = bottom - height * 0.15f) }
             rule.waitForIdle()
         }
         val transcript = list.fetchSemanticsNode().boundsInRoot
         val button = jump.fetchSemanticsNode().boundsInRoot
-        assertTrue("Jump to latest $button overlaps the transcript $transcript", button.top >= transcript.bottom)
+        val composer = rule.onNode(hasSetTextAction()).fetchSemanticsNode().boundsInRoot
+        assertEquals("Jump to latest must not shrink the transcript", transcriptBefore, transcript)
+        assertTrue("Jump to latest $button overlaps the composer $composer", button.bottom <= composer.top)
+        assertTrue("Jump to latest $button sits outside the transcript $transcript",
+            button.top >= transcript.top && button.right <= transcript.right)
         save(rule.onNodeWithTag("page").captureToImage().asAndroidBitmap(), "jump-narrow-glass-dark-large")
         jump.performClick()
         rule.waitForIdle()

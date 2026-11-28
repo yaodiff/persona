@@ -3,7 +3,7 @@
 // preferences › Seen Agents. The visit's held set lives in memory only, so a reload starts fresh.
 import { useMemo, useSyncExternalStore } from "react";
 import type { HeldOrderOptions, HeldPlace, HeldSeenMap } from "./agent-groups";
-import { stateOf } from "./format";
+import { activityOf } from "./format";
 import { agentKey } from "./pins";
 import { seenCopy, unseen } from "./seen-outbox";
 import { sameValue } from "./stable-lines";
@@ -119,7 +119,7 @@ export function holdNotedSeen(sessions: readonly Session[], onlyKeys?: Iterable<
       const place = shownThisVisit.get(key);
       if (!place) continue;
       const s = byKey.get(key);
-      const st = s ? stateOf(s) : undefined;
+      const st = s ? activityOf(s) : undefined;
       if (s && (st === "idle" || st === "unknown") && !unseen(s)) shownThisVisit.delete(key);
       else if (!(key in seen)) continue;
       if (seen[key] !== place) { seen[key] = place; changed = true; }

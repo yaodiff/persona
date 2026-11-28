@@ -239,3 +239,37 @@ func TestRejectedPlacementStillRestrictsConnectedWorkMachine(t *testing.T) {
 		t.Fatal("existing node retained phone access")
 	}
 }
+
+// kb.speaker_turns_import defaults to false, is read once when the manager starts, and does not change if
+// manager.json is edited while running or when a new hello arrives.
+func TestSpeakerTurnsImportReadAtStart(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "manager.json")
+	bOff := NewBusHub(BusOptions{ConfigFile: file, Logf: t.Logf})
+	svcOff := New(Options{Hub: bOff, Logf: t.Logf})
+	if bOff.speakerTurnsImport || svcOff.speakerTurnsImport.Load() || (recordingHost{s: svcOff}).SpeakerTurnsImport() {
+		t.Fatal("kb.speaker_turns_import defaulted to true")
+	}
+	// Editing manager.json after start and processing a hello must not flip the switch on.
+	if err := os.WriteFile(file, []byte(`{"kb":{"speaker_turns_import":true}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	bOff.setHello(Hello{})
+	if bOff.speakerTurnsImport || svcOff.speakerTurnsImport.Load() || (recordingHost{s: svcOff}).SpeakerTurnsImport() {
+		t.Fatal("editing manager.json after start turned kb.speaker_turns_import on")
+	}
+
+	// Starting a fresh manager with kb.speaker_turns_import: true enables it, and clearing manager.json while
+	// running does not turn it off until restart.
+	bOn := NewBusHub(BusOptions{ConfigFile: file, Logf: t.Logf})
+	svcOn := New(Options{Hub: bOn, Logf: t.Logf})
+	if !bOn.speakerTurnsImport || !svcOn.speakerTurnsImport.Load() || !(recordingHost{s: svcOn}).SpeakerTurnsImport() {
+		t.Fatal("kb.speaker_turns_import: true was not read at start")
+	}
+	if err := os.WriteFile(file, []byte(`{"kb":{"speaker_turns_import":false}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	bOn.setHello(Hello{})
+	if !bOn.speakerTurnsImport || !svcOn.speakerTurnsImport.Load() || !(recordingHost{s: svcOn}).SpeakerTurnsImport() {
+		t.Fatal("editing manager.json after start turned kb.speaker_turns_import off")
+	}
+}

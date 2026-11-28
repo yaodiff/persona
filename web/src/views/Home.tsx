@@ -2,12 +2,14 @@
 import { useEffect, useMemo, useRef, useState, Suspense } from "react";
 import { SESSIONS_HIERARCHY_FEATURE } from "../lib/child-sessions";
 import { homeKey } from "../lib/folded-rows";
-import { ago, backgroundWaiting, interactionCanAnswer, sessionCan, sessionPreview, shortDuration, sourceSubtitle, sessionTitle, stateOf, tabLabel } from "../lib/format";
+import { ago, backgroundWaiting, interactionCanAnswer, sessionCan, sessionPreview, shortDuration, sourceSubtitle, sessionTitle, activityOf, tabLabel } from "../lib/format";
 import { usePendingLine } from "../lib/card-answer";
 import { cardState, requestRoute } from "../lib/card-focus";
 import { interactionAsk } from "../lib/inbox";
 import { interactionKicker } from "../lib/row-line";
 import { answerLines, type Resolution } from "../lib/answered";
+import { approvalImpact } from "../lib/approval-impact";
+import { useApprovalConfirmation } from "../lib/approval-confirmation";
 import { quickAnswers, withHeld, type HeldRow, type QuickChoice } from "../lib/quick-answers";
 import { cardTapKey } from "../lib/card-tap-key";
 import { currentViewId, TapGuardSurface, useTapGuard, useTapGuardView } from "../lib/tap-guard";
@@ -19,7 +21,7 @@ import { heldAsWorking, userCards } from "../lib/supervisor-held";
 import { agentLabel } from "../lib/mentions";
 import { hubLabel, machineWithHub } from "../lib/mesh";
 import { isPending, machineErrorText } from "../lib/add-computer";
-import { machineDeployment } from "../lib/machine-deploy";
+import { disconnectExpected } from "../lib/machine-connection-state";
 import { classifyConnection } from "../lib/connection-failure";
 import { href, navigate, onLinkClick, type Route } from "../lib/router";
 import { useScrollMemory } from "../lib/scroll-memory";
@@ -65,6 +67,7 @@ export function Home({ onNewAgent, onToggleSidebar }: { onNewAgent: () => void; 
   // stamp the opened overview before its first rows are read: a row arriving later is judged against the open-grace
   useTapGuardView(overviewTapSurface, currentViewId());
   // with several assistants, the current one's computers, cards, agents and tasks (docs/assistant/managers.md "Clients")
+  const checkApprovals = useApprovalConfirmation();
   const machines = useScopedMachines();
   const scopedCards = useScopedInteractions();
   // the cards that are the user's: one a task's supervisor holds is its until it passes it up (lib/supervisor-held.ts),
@@ -95,7 +98,7 @@ export function Home({ onNewAgent, onToggleSidebar }: { onNewAgent: () => void; 
     if (!whole) return hubAgentCounts && new Map(Object.entries(hubAgentCounts));
     const byMachine = new Map<string, number>();
     for (const s of agentSessions) {
-      if (stateOf(s) !== "offline") byMachine.set(s.machine_id, (byMachine.get(s.machine_id) ?? 0) + 1);
+      if (activityOf(s) !== "offline") byMachine.set(s.machine_id, (byMachine.get(s.machine_id) ?? 0) + 1);
     }
     return byMachine;
   }, [list, whole, hubAgentCounts, agentSessions]);
@@ -121,6 +124,7 @@ export function Home({ onNewAgent, onToggleSidebar }: { onNewAgent: () => void; 
   // it folds away: the next row does not slide under the pointer and take a second click meant for this one.
   const [held, setHeld] = useState<HeldRow[]>([]);
   const answer = async (ix: Interaction, index: number, before: string | undefined, c: QuickChoice) => {
+    if (!quickAnswers(ix)?.some(choice => choice.key === c.key)) return navigate(requestRoute(ix));
     const phase = (p: HeldRow["phase"]) => setHeld((h) => h.map((x) => (x.ix.id === ix.id ? { ...x, phase: p } : x)));
     setHeld((h) => [...h.filter((x) => x.ix.id !== ix.id), { ix, index, before, phase: "sending", pick: c.key, body: c.body }]);
     if (!(await resolve(ix, c.body))) return setHeld((h) => h.filter((x) => x.ix.id !== ix.id)); // it said why (toast)
@@ -154,7 +158,7 @@ export function Home({ onNewAgent, onToggleSidebar }: { onNewAgent: () => void; 
           const hub = hubLabel(m, machines);
           const detail = { name: "machine" as const, mid: m.id };
           return (
-            <a key={m.id} href={href(detail)} onClick={(e) => onLinkClick(e, detail)} className="flex items-center gap-3 rounded-card bg-surface px-3 py-2.5 shadow-card transition-colors hover:bg-hover">
+            <a key={m.id} href={href(detail)} onClick={(e) => onLinkClick(e, detail)} className="flex items-center gap-3 rounded-card bg-surface px-3 py-2.5 shadow-card card-interactive">
               <span className={cx("flex size-8 shrink-0 items-center justify-center rounded-[8px]", m.online ? "bg-field text-ink-2" : "bg-inset text-ink-3")}>
                 <Icon name="machine" size={15} />
               </span>
@@ -206,7 +210,7 @@ export function Home({ onNewAgent, onToggleSidebar }: { onNewAgent: () => void; 
                   detail={(tool && ask && ask !== tool ? t("home.permission_detail", { tool, what: ask }) : ask) || undefined}
                   pill={!done && <Pill>{interactionKicker(ix)}</Pill>}
                   entry={cardState(ix.id)}
-                  actions={done ? <AnsweredLine ix={ix} body={h.body} /> : quick && <QuickAnswers ix={ix} choices={quick} sending={h?.pick} onPick={(c) => void answer(ix, i, rows[i + 1]?.ix.id, c)} />}
+                  actions={done ? <AnsweredLine ix={ix} body={h.body} /> : quick && <QuickAnswers ix={ix} review={checkApprovals && !!approvalImpact(ix)} choices={quick} sending={h?.pick} onPick={(c) => void answer(ix, i, rows[i + 1]?.ix.id, c)} />}
                 />
               </div>
             </Collapse>
@@ -357,12 +361,13 @@ function MarkAllSeen({ count, onClick }: { count: number; onClick: () => void })
 }
 
 // `grid`: its rows go two, then three to a line as the page gets wider; "cards" (rows with buttons, read before
-// answering) only once each still has room for its question and buttons.
+// answering) only once each still has room for its question and buttons. A section's only card fills a two-column
+// row, but stops at two columns' width when the row has three.
 const GRID = {
-  rows: "grid grid-cols-1 items-start gap-1.5 @min-[60rem]:grid-cols-2 @min-[100rem]:grid-cols-3",
+  rows: "grid grid-cols-1 items-start gap-1.5 [&>:only-child]:col-span-full @min-[60rem]:grid-cols-2 @min-[100rem]:grid-cols-3 @min-[100rem]:[&>:only-child]:col-span-2",
   // task cards differ in height (a stage bar or not): a row stretches them to one height, the agent line at the bottom
-  tasks: "grid grid-cols-1 items-stretch gap-1.5 @min-[60rem]:grid-cols-2 @min-[100rem]:grid-cols-3",
-  cards: "grid grid-cols-1 items-start gap-1.5 @min-[84rem]:grid-cols-2 @min-[120rem]:grid-cols-3",
+  tasks: "grid grid-cols-1 items-stretch gap-1.5 [&>:only-child]:col-span-full @min-[60rem]:grid-cols-2 @min-[100rem]:grid-cols-3 @min-[100rem]:[&>:only-child]:col-span-2",
+  cards: "grid grid-cols-1 items-start gap-1.5 [&>:only-child]:col-span-full @min-[84rem]:grid-cols-2 @min-[120rem]:grid-cols-3 @min-[120rem]:[&>:only-child]:col-span-2",
 };
 
 function Group({ title, count, children, right, hint, grid }: { title: string; count: number; children: React.ReactNode; right?: React.ReactNode; hint?: string; grid?: true | "cards" | "tasks" }) {
@@ -482,7 +487,7 @@ function SessionTask({ s, i, machine, pill, footer }: { s: Session; i: number; m
   const title = sessionTitle(s);
   // the source is a tag once, not again in front of the latest words
   // the latest words are Markdown: one line of them reads without its marks, as the sidebar's row line does (#10939)
-  return <TaskRow i={i} state={stateOf(s)} waiting={backgroundWaiting(s)} to={{ name: "session", mid: s.machine_id, sid: s.session_id }} title={title} tags={rowTags(title, [sourceSubtitle(s), machine, s.space_name, tabLabel(s)])} detail={plainMarkdown(sessionPreview(s))} pill={pill} footer={footer} />;
+  return <TaskRow i={i} state={activityOf(s)} waiting={backgroundWaiting(s)} to={{ name: "session", mid: s.machine_id, sid: s.session_id }} title={title} tags={rowTags(title, [sourceSubtitle(s), machine, s.space_name, tabLabel(s)])} detail={plainMarkdown(sessionPreview(s))} pill={pill} footer={footer} />;
 }
 
 // One tab's agents as one row (#2320): the "Lead"'s title (the first pane's when the panes are peers), the most urgent
@@ -503,9 +508,9 @@ function GroupTask({ g, i, machine, pill, footer }: { g: TabGroup; i: number; ma
       detail={s === head ? preview : agentLabel(s) && preview ? t("home.agent_preview", { agent: agentLabel(s), preview }) : agentLabel(s) || preview}
       pill={
         <>
-          <span className="flex shrink-0 items-center gap-1 text-[11.5px] whitespace-nowrap text-ink-3 tabular-nums" title={g.sessions.map((x) => `${agentLabel(x)} · ${sessionTitle(x)} · ${backgroundWaiting(x) ? stateName("bg_waiting") : STATE_LABEL[stateOf(x)]}`).join("\n")}>
+          <span className="flex shrink-0 items-center gap-1 text-[11.5px] whitespace-nowrap text-ink-3 tabular-nums" title={g.sessions.map((x) => `${agentLabel(x)} · ${sessionTitle(x)} · ${backgroundWaiting(x) ? stateName("bg_waiting") : STATE_LABEL[activityOf(x)]}`).join("\n")}>
             <span aria-hidden className="flex items-center gap-0.5">
-              {g.sessions.map((x) => <StatusMark key={x.session_id} state={stateOf(x)} size="sm" waiting={backgroundWaiting(x)} />)}
+              {g.sessions.map((x) => <StatusMark key={x.session_id} state={activityOf(x)} size="sm" waiting={backgroundWaiting(x)} />)}
             </span>
             <span className="max-sm:sr-only">{t("home.machine_agents", { count: g.sessions.length })}</span>
           </span>
@@ -617,12 +622,15 @@ export function resetOverviewTapGuardForTest(): void {
 /** A row's one-tap answers (lib/quick-answers.ts), under its words; the one being sent spins, the others wait. An answer
  *  on its way from anywhere (this row, the chat's card, a notification) holds them all too, also after leaving Overview
  *  and coming back, and the row says which one, as the chat's card does (#2793). */
-function QuickAnswers({ ix, choices, sending, onPick }: { ix: Interaction; choices: QuickChoice[]; sending?: string; onPick: (c: QuickChoice) => void }) {
+function QuickAnswers({ ix, review, choices, sending, onPick }: { ix: Interaction; review: boolean; choices: QuickChoice[]; sending?: string; onPick: (c: QuickChoice) => void }) {
   const { pending, line } = usePendingLine(ix);
   const { ref } = useTapGuard(overviewTapSurface, `${ix.id}${cardTapKey(ix)}`, currentViewId(), "button");
   return (
     <div ref={ref} className="flex flex-wrap gap-1.5 px-3 pb-2 pl-10.5">
       {line && <p data-row-pending role="status" className="basis-full truncate text-[12px] text-ink-2">{line}</p>}
+      {review && (
+        <Button tone="primary" disabled={sending !== undefined || pending} onClick={() => navigate(requestRoute(ix))}>{t("approval-impact.review")}</Button>
+      )}
       {choices.map((c) => {
         const shown = optionDisplay(c.label);
         return (
@@ -733,7 +741,7 @@ function TaskRow({ i, state, waiting, done, to, title, tags, detail, pill, entry
       href={href(to)}
       onClick={(e) => onLinkClick(e, to, entry)}
       title={[title, ...tags].join(" · ")}
-      className={cx("group flex min-w-0 items-center gap-2.5 rounded-card px-3 py-2 transition-[background-color,transform] duration-150", !below && "bg-surface shadow-card hover:bg-inset active:scale-[0.995]")}
+      className={cx("group flex min-w-0 items-center gap-2.5 rounded-card px-3 py-2", !below && "bg-surface shadow-card card-interactive")}
       style={below ? undefined : enter}
     >
       {done ? (
@@ -748,13 +756,13 @@ function TaskRow({ i, state, waiting, done, to, title, tags, detail, pill, entry
         {(detail || tags.length > 0) && (
           <span className={cx("mt-0.5 flex min-w-0 gap-1.5 text-[12.5px] leading-[18px] text-ink-2", actions ? "flex-col items-start gap-0.5" : "items-center")}>
             {tags.length > 0 && (
-              <span className="hidden shrink-0 items-center gap-1 sm:flex" data-row-tags>
+              <span className="hidden min-w-0 max-w-full items-center gap-1 sm:flex" data-row-tags>
                 {tags.map((x) => (
                   <span key={x} className="max-w-[12em] truncate rounded-chip bg-field px-1.5 text-[11px] leading-[17px] text-ink-3">{x}</span>
                 ))}
               </span>
             )}
-            {detail && <span className={cx("min-w-0", actions ? "line-clamp-3 w-full [overflow-wrap:anywhere]" : "flex-1 truncate")} title={actions ? detail : undefined}>{detail}</span>}
+            {detail && <span className={actions ? "line-clamp-3 w-full min-w-0 [overflow-wrap:anywhere]" : "min-w-1/2 flex-1 truncate"} title={actions ? detail : undefined}>{detail}</span>}
           </span>
         )}
       </span>
@@ -765,7 +773,7 @@ function TaskRow({ i, state, waiting, done, to, title, tags, detail, pill, entry
   if (!below) return link;
   return (
     // the capsule shades while the link part is hovered, not while a button is
-    <div className="rounded-card bg-surface shadow-card transition-colors duration-150 has-[>a:hover]:bg-inset" style={enter}>
+    <div className="rounded-card bg-surface shadow-card transition-shadow duration-150 has-[>a:hover]:shadow-btn" style={enter}>
       {link}
       {below}
     </div>
@@ -813,6 +821,6 @@ export function offlineLine(m: Machine): string {
   if (isPending(m)) return t("machines.never_connected");
   const coded = machineErrorText(m.error_code);
   if (coded) return coded;
-  if (machineDeployment(m).expectedDisconnect) return t("machines.waiting_node");
+  if (disconnectExpected(m)) return t("machines.waiting_node");
   return classifyConnection(m)?.title ?? (m.error || t("home.offline"));
 }

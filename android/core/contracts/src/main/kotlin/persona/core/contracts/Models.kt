@@ -4,6 +4,7 @@ package persona.core.contracts
 
 import persona.core.contracts.CoreText.Key
 import persona.core.contracts.CoreText
+import persona.core.contracts.api.ExtensionView
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.KeepGeneratedSerializer
@@ -198,9 +199,30 @@ data class Machine(
     @WireStrict @SerialName("link_switch") val linkSwitch: MachineLinkSwitch? = null,
     /** The default for new sessions among [engineHosts]. Older hubs describe it with [engine]. */
     @SerialName("engine_default") val engineDefault: String? = null,
+    /**
+     * "Start new Agents as Orca chats" (#17650, docs/integrations/engines.md "Orca chats as New Agent's default") as the
+     * hub sends it ([OrcaChatStarts]'s wire values), only while Orca is in [engineHosts], where it applies; null elsewhere
+     * and from older hubs. Read through [orcaChatSwitch].
+     */
+    @SerialName("orca_chat_starts") val orcaChatStarts: String? = null,
 ) {
+    /** The switch: on or off where the hub sends it; null (no switch) where it does not, and for a value this app does not know. */
+    val orcaChatSwitch: Boolean? get() = OrcaChatStarts.of(orcaChatStarts)?.on
     val displayName: String get() = name.ifEmpty { id }
     val pending: Boolean get() = trust == "pending"
+}
+
+/**
+ * `Machine.orca_chat_starts` (#17650, the hub's `proto.OrcaChatStarts`): a closed set. [of] is null for an absent value
+ * and for one this app does not know, so a later state is never shown as on or off.
+ */
+enum class OrcaChatStarts(val wire: String, val on: Boolean) {
+    On("on", true),
+    Off("off", false);
+
+    companion object {
+        fun of(wire: String?): OrcaChatStarts? = entries.firstOrNull { it.wire == wire }
+    }
 }
 
 /** `Machine.link_switch`: whether this computer can switch from SSH, or where that switch stands. */
@@ -267,7 +289,11 @@ data class MachineComputer(
     val note: String? = null,
 )
 
-/** One engine the node looked for on its machine (docs/protocol/protocol.md "Engines"); [name] and [note] are shown as given. */
+/**
+ * One engine the node looked for on its machine (docs/protocol/protocol.md "Engines"); [name] and [note] are shown as given.
+ * [state] (Orca's row only, #17037; proto.EngineState) tells installed-and-stopped from not there: read it through
+ * `Engines.state`, which turns a state this build does not know into unknown.
+ */
 @KeepGeneratedSerializer
 @Serializable(with = DetectedEngineSerializer::class)
 data class DetectedEngine(
@@ -276,6 +302,7 @@ data class DetectedEngine(
     @SerialName("available") val available: Boolean = false,
     @SerialName("version") val version: String? = null,
     @SerialName("note") val note: String? = null,
+    @SerialName("state") val state: String? = null,
 )
 
 /** Unified agent state computed by the hub (docs/protocol/agent-states.md). */
@@ -681,6 +708,8 @@ data class Session(
      * under its own folder, whose paths name no repository). Group by repository goes by it (core:domain repoOf); older hubs never send it.
      */
     @SerialName("repo_root") val repoRoot: String? = null,
+    /** The physical directory given by the node for workspace association, with symlinks resolved. */
+    @SerialName("workspace_cwd") val workspaceCwd: String? = null,
     /** The top of the git working tree cwd is in (repoRoot for the main checkout) and its branch, from the node (#1805). */
     @SerialName("worktree") val worktree: String? = null,
     @SerialName("branch") val branch: String? = null,
@@ -914,7 +943,7 @@ data class Session(
             else -> UsageLimitWhen.Resets(at)
         }
     }
-    val folderName: String get() = cwd.trimEnd('/').substringAfterLast('/')
+    val folderName: String get() = compactFolderName(cwd)
     val displayTitle: String get() = if (title.isEmpty() || title == "Claude Code") folderName.ifEmpty { sessionId.take(8) } else title
     /** Codex in a terminal, or a thread from a Codex app-server / Codex history. */
     val isCodex: Boolean get() = agent == "codex" || sourceKind == "codex_app_server" || sourceKind == "codex_history"
@@ -1115,6 +1144,10 @@ data class Item(
     val narration: Boolean? = null,
     @SerialName("codex_heartbeat_quiet") val codexHeartbeatQuiet: Boolean? = null,
     @SerialName("source_fingerprint") val sourceFingerprint: String? = null,
+    /** Out-of-band, read-only views rendered beside this item. */
+    @SerialName("tool_views") val toolViews: List<ExtensionView> = emptyList(),
+    /** What a BotMux-wrapped message or `botmux send` call says without its wrapper ([Botmux]); older nodes omit it. */
+    val botmux: Botmux? = null,
 )
 
 /**
@@ -1416,8 +1449,14 @@ data class Interaction(
     @SerialName("delegating") val delegating: Boolean = false,
     /** What the assistant filled in when it handed the question to the user. */
     @SerialName("delegate") val delegate: Delegate? = null,
+    /** True when the card has no interactive computer terminal or UI to hand back to; absent/false keeps "Leave to computer". */
+    @SerialName("no_hand_back") val noHandBack: Boolean = false,
+    /** The authoritative interaction whose display-only copy this is; absent on the authoritative card. Last to keep positional callers source-compatible. */
+    @SerialName("mirror_of") val mirrorOf: String? = null,
 ) {
     val sessionKey: SessionKey get() = SessionKey(machineId, sessionId)
+    /** Aggregate surfaces count the authoritative request; conversation views still show both cards. */
+    val isDisplayMirror: Boolean get() = !mirrorOf.isNullOrEmpty()
     /** The one exact reply this card advertises. Anything else stays an ordinary card action. */
     val ownerApprovalPhrase: String?
         get() = ownerApprovalPhrases?.firstOrNull()?.takeIf {

@@ -131,6 +131,43 @@ const counted = (u) => {
   if (url.pathname !== "/api/v1/sessions" || url.searchParams.has("counts") || url.searchParams.has("session_id")) return false;
   return several ? url.searchParams.get("summary") === "0" : url.searchParams.get("summary") !== "0";
 };
+
+// Long place names in both kinds of working row must leave room for the latest words (#16465).
+async function agentRowLayout() {
+  const cases = [["Working", "Review the report"], ["Waiting in the background", "Wait for the build"]];
+  const words = "The report includes the latest checks and the full results from this morning.";
+  const sessions = cases.map(([, title], i) => ({
+    machine_id: "macbook", session_id: `layout-agent-${i}`, manager: "assistant", title,
+    state: "working", status: i ? "done" : "working", background_working: Boolean(i), background_waiting: Boolean(i),
+    space_kind: "herdr", space_name: "Customer accessibility verification workspace",
+    slot_id: `layout-tab-${i}`, slot_name: "Quarterly integration and documentation review",
+    last_text: words, updated_at: new Date().toISOString(),
+  }));
+  const { context, page } = await open("light", 1440, 900, "/overview", (p) => p.route(counted, (r) =>
+    r.fulfill({ json: { sessions, revision: 1, total: sessions.length, has_more: false } })));
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    for (const [heading, title] of cases) {
+      const section = page.locator("section").filter({ has: page.getByRole("heading", { name: heading, exact: true }) });
+      const row = section.getByRole("link").filter({ hasText: title });
+      const titleBox = await row.getByText(title, { exact: true }).boundingBox();
+      const layout = await row.getByText(words, { exact: true }).evaluate((preview) => {
+        const line = preview.parentElement.getBoundingClientRect();
+        const box = preview.getBoundingClientRect();
+        const tags = preview.parentElement.querySelector("[data-row-tags]");
+        return { line: line.width, preview: box.width, top: box.top, tags: tags.getBoundingClientRect().width,
+          truncated: [...tags.children].some((chip) => chip.scrollWidth > chip.clientWidth) };
+      });
+      check(titleBox && titleBox.y + titleBox.height <= layout.top + 1, `${heading} ${width}: title stays on its own line`);
+      if (width === 390) {
+        check(layout.tags === 0 && layout.preview >= layout.line - 1, `${heading} ${width}: latest words use the full line with tags hidden`, JSON.stringify(layout));
+      } else {
+        check(layout.preview >= layout.line / 2 - 0.5 && layout.tags > 0 && layout.truncated, `${heading} ${width}: long tags truncate and leave half the line for latest words`, JSON.stringify(layout));
+      }
+    }
+  }
+  await context.close();
+}
 async function failedList(theme) {
   const fail = (r) => r.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "boom" }) });
   const { context, page, errors } = await open(theme, 1280, 820, "/overview", (p) => p.route(counted, fail));
@@ -169,6 +206,7 @@ async function failedList(theme) {
 }
 
 try {
+  await agentRowLayout();
   for (const theme of ["light", "dark"]) {
     for (const [width, height] of [[768, 1024], [1024, 768], [1280, 820], [1920, 1080]]) {
       const { context, page, errors } = await open(theme, width, height, "/machines", widestRate);

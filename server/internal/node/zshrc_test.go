@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"testing"
 )
@@ -104,11 +105,25 @@ func TestShellAliasesUnreadableFiles(t *testing.T) {
 		shell, unreadable, err string
 		want                   []string
 	}{
-		{"bash", ".bashrc", "~/.bashrc could not be read", nil},
 		{"zsh", ".zshrc", "~/.zshrc could not be read", nil},
 		{"zsh", ".bashrc", "", []string{"zcc", "acc"}},
 		{"bash", ".zshrc", "", []string{"bcc", "acc"}},
 		{"bash", ".bash_aliases", "", []string{"bcc", "zcc"}},
+	}
+	if runtime.GOOS == "darwin" {
+		// bash runs as a login shell there (shellFlag): ~/.bash_profile is its own file, ~/.bashrc another one.
+		cases = append(cases, struct {
+			shell, unreadable, err string
+			want                   []string
+		}{"bash", ".bash_profile", "~/.bash_profile could not be read", nil}, struct {
+			shell, unreadable, err string
+			want                   []string
+		}{"bash", ".bashrc", "", []string{"acc", "zcc"}})
+	} else {
+		cases = append(cases, struct {
+			shell, unreadable, err string
+			want                   []string
+		}{"bash", ".bashrc", "~/.bashrc could not be read", nil})
 	}
 	for _, c := range cases {
 		t.Run(c.shell+" "+c.unreadable, func(t *testing.T) {
@@ -124,6 +139,11 @@ func TestShellAliasesUnreadableFiles(t *testing.T) {
 					continue
 				}
 				if err := os.WriteFile(path, []byte("alias "+alias+"='ANTHROPIC_MODEL=m claude'\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if c.unreadable == ".bash_profile" {
+				if err := os.Mkdir(filepath.Join(home, c.unreadable), 0o700); err != nil {
 					t.Fatal(err)
 				}
 			}

@@ -163,6 +163,19 @@ class TodoDataTest {
         assertEquals(listOf("free", "a_done"), (nonPinnedGroups[2].rows.map { it.session.sessionId }).zhAny())
     }
 
+    // #17054: an Agent opened by hand in Orca (a terminal or one of Orca's chats) is opened by hand like herdr's.
+    @Test
+    fun agentsOpenedByHandInOrcaJoinTheOpenedByHandSection() {
+        val terminal = AgentSession(s("orca-tab", "idle").copy(spaceKind = "orca", paneId = "orca:tab1:leaf1"))
+        val chat = AgentSession(s("orca-chat", "idle").copy(spaceKind = "orca", sourceKind = "runtime", sourceInstanceId = "orca"))
+        val started = AgentSession(s("orca-started", "idle").copy(spaceKind = "orca", paneId = "orca:tab2:leaf1", startedByPersona = true))
+        val groups = buildAgentList(sessions = listOf(terminal, chat, started), pins = AgentPreferences(), mutes = AgentPreferences(),
+            settings = AgentListSettings(grouping = AgentGrouping.Todo), todos = emptyList()).groups
+        assertEquals(listOf(TodoManualGroup, TodoNoneGroup), groups.map { it.id })
+        assertEquals(setOf("orca-tab", "orca-chat"), groups.single { it.id == TodoManualGroup }.rows.map { it.session.sessionId }.toSet())
+        assertEquals(listOf("orca-started"), groups.single { it.id == TodoNoneGroup }.rows.map { it.session.sessionId })
+    }
+
     @Test
     fun agentsOpenedByHandHaveTheirOwnSectionAndNoTodoFoldsUnderTodos() {
         val todo = Todo(id = "t1", title = "Todo 1", agents = listOf(todoAgent("a1")))

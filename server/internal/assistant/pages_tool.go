@@ -203,6 +203,7 @@ type pageToolInput struct {
 	Icon      string          `json:"icon"`
 	Why       string          `json:"why"`
 	View      json.RawMessage `json:"view"`
+	FromView  json.RawMessage `json:"from_view"`
 	Watch     json.RawMessage `json:"watch"`
 	Reading   json.RawMessage `json:"reading"`
 	Items     json.RawMessage `json:"items"`
@@ -217,6 +218,9 @@ func (s *Service) toolPage(ctx context.Context, machine, self string, args json.
 	var in pageToolInput
 	if err := json.Unmarshal(args, &in); err != nil {
 		return "", fmt.Errorf("invalid arguments: %w", err)
+	}
+	if len(in.FromView) != 0 && in.Action != "create" {
+		return "", errors.New("from_view: only page create accepts a source card")
 	}
 	if task, ok, err := s.pageRoutineTaskFor(ctx, machine, self); err != nil {
 		return "", err
@@ -342,15 +346,21 @@ func (s *Service) pageCreate(ctx context.Context, st pageStore, callMachine stri
 	}
 	var v *wire.View
 	var stored json.RawMessage
-	if hasNonNullJSON(in.View) || watch == nil {
-		v, stored, err = parsePageView(in.View)
-		if err != nil {
-			return "", err
+	views, err := s.viewsStore()
+	if err != nil {
+		return "", err
+	}
+	switch {
+	case len(in.FromView) != 0:
+		if len(in.View) != 0 {
+			return "", errors.New("from_view: choose either a source card or an explicit view")
 		}
-	} else {
+		v, stored, err = s.pageFromCard(ctx, st, views, c, in.FromView)
+	case hasNonNullJSON(in.View) || watch == nil:
+		v, stored, err = parsePageView(in.View)
+	default:
 		stored = json.RawMessage(`{}`)
 	}
-	views, err := s.viewsStore()
 	if err != nil {
 		return "", err
 	}
@@ -726,7 +736,7 @@ func readOnlySection(sec wire.Section) (wire.Section, bool) {
 			continue
 		}
 		e.Action, e.Button, e.Actions, e.Buttons = nil, nil, nil, nil
-		e.Expand, e.Load, e.Comment, e.Reply, e.Context, e.MarkViewed, e.Draft = nil, nil, nil, nil, nil, nil, nil
+		e.Expand, e.Load, e.Comment, e.Reply, e.Context, e.MarkViewed, e.Draft, e.Navigate = nil, nil, nil, nil, nil, nil, nil, nil
 		e.Crumbs, e.Threads = nil, nil
 		e.Tiles = slices.Clone(e.Tiles)
 		for i := range e.Tiles {

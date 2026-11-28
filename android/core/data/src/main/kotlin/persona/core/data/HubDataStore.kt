@@ -174,6 +174,31 @@ class HubDataStore(
         }
     } }
 
+    /** The unrevoked device credential ID kept for [hubId] after an offline sign-out, if any. */
+    suspend fun unrevokedDeviceId(hubId: String): String? = withContext(Dispatchers.IO) { lock.withLock {
+        check(job.isActive) { "Hub data store is closed" }
+        if (hubId.isBlank()) return@withLock null
+        temporary(encrypted::unrevokedTokens) { store -> store.data.first().byHub[hubId]?.takeIf(String::isNotBlank) }
+    } }
+
+    /** Remembers [deviceId] for [hubId] so the next pairing to that hub sends it in `replaces`. Survives [eraseAll]. */
+    suspend fun rememberUnrevokedDeviceId(hubId: String, deviceId: String) = withContext(Dispatchers.IO) { lock.withLock {
+        check(job.isActive) { "Hub data store is closed" }
+        if (hubId.isBlank() || deviceId.isBlank()) return@withLock
+        temporary(encrypted::unrevokedTokens) { store ->
+            store.updateData { it.copy(byHub = it.byHub + (hubId to deviceId)) }
+        }
+    } }
+
+    /** Clears any remembered unrevoked device credential ID for [hubId]. */
+    suspend fun forgetUnrevokedDeviceId(hubId: String) = withContext(Dispatchers.IO) { lock.withLock {
+        check(job.isActive) { "Hub data store is closed" }
+        if (hubId.isBlank()) return@withLock
+        temporary(encrypted::unrevokedTokens) { store ->
+            store.updateData { if (hubId in it.byHub) it.copy(byHub = it.byHub - hubId) else it }
+        }
+    } }
+
     /** Opens a store for one read or write; DataStore refuses a second live instance of a file. Callers hold [lock]. */
     private suspend fun <T, R> temporary(open: (CoroutineScope) -> DataStore<T>, use: suspend (DataStore<T>) -> R): R {
         val storeJob = SupervisorJob(job)

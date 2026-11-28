@@ -61,6 +61,24 @@ type historyRetry struct {
 // historySourceKey prevents a synchronization source read from reading itself from the database.
 type historySourceKey struct{}
 
+// liveHistoryReadKey asks historyCall to bypass the database cache and read the live source directly.
+// Unlike historySourceKey, logicalCall still resolves a logical conversation to its active segment, while
+// logicalHistoryPage clears this flag for retired frozen segments so their durable history remains cached.
+type liveHistoryReadKey struct{}
+
+func withLiveHistoryRead(ctx context.Context) context.Context {
+	return context.WithValue(ctx, liveHistoryReadKey{}, true)
+}
+
+func withoutLiveHistoryRead(ctx context.Context) context.Context {
+	return context.WithValue(ctx, liveHistoryReadKey{}, false)
+}
+
+func liveHistoryRead(ctx context.Context) bool {
+	v, _ := ctx.Value(liveHistoryReadKey{}).(bool)
+	return v
+}
+
 func (s *Service) historyDB(ctx context.Context) conversationHistoryStore {
 	st := s.store()
 	if st == nil {
@@ -140,7 +158,7 @@ type historyPage struct {
 // historyCall covers both manager-internal reads and hub-proxied node calls. It
 // leaves live execution, strict source exports and input-index projections on the runtime.
 func (s *Service) historyCall(ctx context.Context, machine, method string, raw json.RawMessage) (result json.RawMessage, handled bool, err error) {
-	if ctx.Value(historySourceKey{}) != nil {
+	if ctx.Value(historySourceKey{}) != nil || liveHistoryRead(ctx) || ctx.Value(inlineViewSourceKey{}) != nil {
 		return nil, false, nil
 	}
 	if method != DeviceSessionItems && method != DeviceAssistantHandoff && method != "session.item" && method != "session.image" {

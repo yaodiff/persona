@@ -223,8 +223,8 @@ describe("message context interaction paths", () => {
     const item = (label: string) => [...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find((el) => el.textContent?.trim() === label)!;
     act(() => host.querySelector<HTMLButtonElement>('button[aria-label="更多"]')!.click());
     await settle();
-    act(() => item("回退到这里").click());
-    await act(async () => item("只回退对话").click());
+    act(() => item("回退至此处").click());
+    await act(async () => item("仅回退对话").click());
     expect(run).toHaveBeenCalledExactlyOnceWith("u1#0", selected, "conversation");
   });
 
@@ -240,7 +240,7 @@ describe("message context interaction paths", () => {
       ));
       const open = () => act(() => void host.querySelector<HTMLButtonElement>('button[aria-label="更多"]')!.click());
       const item = (label: string) => [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((el) => el.textContent?.trim() === label)!;
-      await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="改后重发"]')!.click());
+      await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="编辑并重发"]')!.click());
       expect(received).toHaveBeenCalledWith({ type: "replace", text: selected });
       open();
       await settle();
@@ -348,7 +348,7 @@ describe("message context interaction paths", () => {
     act(() => host.querySelector<HTMLButtonElement>('button[aria-label="更多"]')!.click());
     const menu = document.querySelector('[role="menu"]')!;
     expect([...menu.querySelectorAll('[role="menuitem"]')].map((item) => item.textContent?.trim())).toEqual([
-      "转发", "作为上下文", "回退到这里", "存为常用提示词…",
+      "转发", "作为上下文", "回退至此处", "保存为常用提示词…",
     ]);
     expect(menu.querySelectorAll('[role="separator"]')).toHaveLength(1);
   });
@@ -380,7 +380,7 @@ describe("a message only on this device (#4626)", () => {
     const last = items.at(-1)!;
     expect(last.textContent?.trim()).toBe("删除");
     expect(last.className).toContain("text-red");
-    expect(items.map((item) => item.textContent?.trim())).not.toContain("回退到这里"); // not in the transcript to go back to
+    expect(items.map((item) => item.textContent?.trim())).not.toContain("回退至此处"); // not in the transcript to go back to
     act(() => last.click());
     expect(onDelete).toHaveBeenCalledOnce();
   });
@@ -414,7 +414,7 @@ describe("why rewind is off, as the session starts and stops working", () => {
     expect(counts).toEqual({ actions: 0, icons: 0 });
 
     act(() => host.querySelector<HTMLButtonElement>('button[aria-label="更多"]')!.click());
-    const rewind = () => [...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find((b) => b.textContent?.includes("回退到这里"))!;
+    const rewind = () => [...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find((b) => b.textContent?.includes("回退至此处"))!;
     expect(rewind().disabled).toBe(false);
     act(() => block.set("工作中"));
     expect(rewind().disabled).toBe(true);

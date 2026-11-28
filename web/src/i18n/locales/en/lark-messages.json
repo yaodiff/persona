@@ -31,5 +31,12 @@
   "pinned_label": "Pinned chats",
   "pinned": "Pinned",
   "at_all": "[@All]",
-  "at_me": "[@Mentioned you]"
+  "at_me": "[@Mentioned you]",
+  "pin_agent": "Pin",
+  "unpin_agent": "Unpin",
+  "kind_agent": "AI assistant",
+  "filter_label": "Show",
+  "filter_all": "All",
+  "filter_lark": "Lark",
+  "filter_agents": "AI assistants"
 }

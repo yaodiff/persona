@@ -90,9 +90,15 @@
     <string name="settings_devices_empty_detail">After pairing, you can see and revoke devices here.</string>
     <string name="settings_devices_unnamed">Unnamed device</string>
     <string name="settings_devices_this">This device</string>
+    <string name="settings_devices_online">Online</string>
+    <string name="settings_devices_group_devices">Devices</string>
+    <string name="settings_devices_group_browsers">Browsers</string>
+    <string name="settings_devices_group_links">Computers</string>
+    <string name="settings_devices_group_integrations">Integrations</string>
     <string name="settings_devices_platform_role">%1$s, %2$s</string>
     <string name="settings_devices_role_full">full access</string>
     <string name="settings_devices_role_answer">answer only</string>
+    <string name="settings_devices_role_scoped">scoped access</string>
     <string name="settings_devices_role_unknown">role not provided</string>
     <string name="settings_devices_added">Added: %1$s</string>
     <string name="settings_devices_last_used">Last used: %1$s</string>
@@ -136,6 +142,8 @@
     <string name="settings_not_provided">Not provided</string>
     <string name="settings_about_build">Build</string>
     <string name="settings_devices_watch">Watch</string>
+    <string name="settings_devices_web">Web</string>
+    <string name="settings_devices_link">Persona Link</string>
     <string name="settings_devices_phone_unknown">Phone (platform not provided)</string>
     <string name="settings_devices_platform_unknown">Platform not provided</string>
     <string name="settings_devices_no_record">No record yet</string>

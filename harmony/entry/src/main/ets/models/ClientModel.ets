@@ -27,6 +27,8 @@ import { ChatAttachments } from './ChatAttachments';
 import { AgentAttentionCard, agentAttentionCards, waitingAgentBadge } from './AgentAttention';
 import type { PreparedAttachmentSend } from './ChatAttachments';
 import { nativeNotifications } from '../platform/NativeNotifications';
+import { nativeLiveView } from '../platform/NativeLiveView';
+import type { LiveViewPrefsStorage } from '../platform/NativeLiveView';
 import { resolveManagerScope } from '../core/ScopePolicy';
 import { SessionWorkspace } from './SessionWorkspace';
 import { common } from '@kit.AbilityKit';
@@ -35,7 +37,7 @@ import { HubTransport, EndpointConfig, HttpFailure } from '../platform/HubTransp
 import { CredentialVault } from '../platform/CredentialVault';
 import { LocalStore } from '../platform/LocalStore';
 import { HubRepository, segment } from './HubRepository';
-import { Wire, ResourceRow, ChatMessage, Decision, HubProfile, HeldAgentMessage } from './Wire';
+import { Wire, ResourceRow, ChatMessage, Decision, HubProfile, HeldAgentMessage, ImageLimits } from './Wire';
 import { tr, Strings } from '../design/Strings';
 import { withSourceContext, messageDisplay } from './Compatibility';
 import { MutationRecord, MutationStore } from './MutationStore';
@@ -43,6 +45,9 @@ import { TranscriptModel } from './TranscriptModel';
 import { Pairing, PairingTarget } from '../platform/Pairing';
 import { scopeKey, sessionCapabilities, projectToolTurn, TranscriptReducer } from '../core/Domain';
 import type { SessionCapabilityInput, EffectiveSessionCapabilities, TranscriptItem, TranscriptSnapshot, ToolTurnProjection, WorkInspectionStep } from '../core/Domain';
+import { extractPublishedModules, isRecordingModuleAllowed, parseStoredHubModules, serializeStoredHubModules } from '../core/XiaoYiActions';
+import { LARK_MODULE_FEATURE, MAIL_MODULE_FEATURE, hasRegisteredPushRoute, isHubModuleAllowed, parseHiddenHubPages } from '../core/HubModules';
+import { buildNextSuggestionsPayload, parseAssistantNextSuggestions, resolveAuthoritativeNextSuggestions } from '../core/NextSuggestions';
 
 
 
@@ -59,6 +64,13 @@ export interface ClientViewLease {
   clearIfUnchanged: (expected: string) => Promise<void>;
 }
 
+class LocalLiveViewPrefsStorage implements LiveViewPrefsStorage {
+  private readonly store: LocalStore;
+  constructor(store: LocalStore) { this.store = store; }
+  get(key: string): Promise<string | undefined> { return this.store.get(key); }
+  put(key: string, value: string): Promise<void> { return this.store.put(key, value); }
+}
+
 class PhoneListRead {
   change: number = 0;
   snapshot: string = '';
@@ -70,6 +82,22 @@ class PhoneListRead {
 export class ClientModel {
   readonly ssh: SshTunnel = new SshTunnel();
   private static pairingEpochs: Map<string, number> = new Map();
+  private static forgetHooks: Set<(hubId: string, context: common.Context) => Promise<void>> = new Set();
+  static registerForgetHook(hook: (hubId: string, context: common.Context) => Promise<void>): void {
+    ClientModel.forgetHooks.add(hook);
+  }
+  private static statusHooks: Set<(pendingCount: number, workingCount: number, context: common.Context) => void> = new Set();
+  static registerStatusHook(hook: (pendingCount: number, workingCount: number, context: common.Context) => void): void {
+    ClientModel.statusHooks.add(hook);
+  }
+  private notifyStatusHooks(): void {
+    if (this.detached || this.demo || !this.connected || !this.context || ClientModel.statusHooks.size === 0) return;
+    const workingCount = this.sessions.filter((s: ResourceRow): boolean => s.state === 'working').length;
+    const pendingCount = this.phoneAgentBadge((): boolean => false);
+    for (const hook of ClientModel.statusHooks) {
+      try { hook(pendingCount, workingCount, this.context); } catch (_) {}
+    }
+  }
   pairingRevision(): number { return ClientModel.pairingEpochs.get(this.profile.id) || 0; }
   private retirePairing(id: string): void { ClientModel.pairingEpochs.set(id, (ClientModel.pairingEpochs.get(id) || 0) + 1); }
   retireHubConnections(id: string): void {
@@ -88,6 +116,57 @@ export class ClientModel {
   @Trace projectsRequested: boolean = false;
   @Trace pairingLink: string = '';
   @Trace notificationTarget: string = '';
+  @Trace pendingXiaoYiRoute: string = '';
+  @Trace rememberedHubModules: string[] | null = null;
+  @Trace useHerdrTabName: boolean = false;
+  @Trace agentsDisplaySupported: boolean = false;
+  @Trace agentsDisplaySaving: boolean = false;
+  private agentsDisplayRevision: number = 0;
+  @Trace nextSuggestionsValue: boolean | null = null;
+  @Trace nextSuggestionsLoaded: boolean = false;
+  @Trace nextSuggestionsSaving: boolean = false;
+  @Trace nextSuggestionsError: string = '';
+  private nextSuggestionsRevision: number = 0;
+  openXiaoYiRoute(routeJson: string): void {
+    if (!routeJson || routeJson.length > 16384) return;
+    this.pendingXiaoYiRoute = routeJson;
+  }
+  private hubModulesKey(hubId: string): string {
+    return 'xiaoyi:' + scopeKey({ groupId: hubId, managerId: '' }) + ':hub-modules';
+  }
+  private agentsDisplayKey(hubId: string): string {
+    return 'view:' + scopeKey({ groupId: hubId, managerId: '' }) + ':agents-display';
+  }
+  isRecordingModuleAllowed(): boolean {
+    return isRecordingModuleAllowed(this.features, this.rememberedHubModules);
+  }
+  canPreviewDemoRecordings(): boolean {
+    return this.demo;
+  }
+  mailModuleAllowed(): boolean {
+    return this.demo || isHubModuleAllowed(MAIL_MODULE_FEATURE, this.features, this.rememberedHubModules);
+  }
+  larkModuleAllowed(): boolean {
+    return this.demo || isHubModuleAllowed(LARK_MODULE_FEATURE, this.features, this.rememberedHubModules);
+  }
+  inboxPageVisible(): boolean {
+    return this.demo || !parseHiddenHubPages(this.sidebarConfig).has('inbox');
+  }
+  todosPageVisible(): boolean {
+    const hidden = parseHiddenHubPages(this.sidebarConfig);
+    return this.demo || (!hidden.has('todos') && !hidden.has('todo'));
+  }
+  knowledgePageVisible(): boolean {
+    return this.demo || !parseHiddenHubPages(this.sidebarConfig).has('knowledge');
+  }
+  /**
+   * Whether this device has a registered Hub background push route (#16783, PushHealth).
+   * HarmonyOS currently uses foreground `ws_notify` without Push Kit registration yet,
+   * so non-demo sessions return `false` and end active LiveViews on background instead of leaving them frozen.
+   */
+  hasPushRoute(): boolean {
+    return this.demo || hasRegisteredPushRoute(false);
+  }
   @Trace forgottenProfile: string = '';
   @Trace forgottenEpoch: number = 0;
   @Trace busy: boolean = false;
@@ -100,6 +179,8 @@ export class ClientModel {
   @Trace managers: ResourceRow[] = [];
   @Trace rosterDefaultId: string = '';
   @Trace features: string[] = [];
+  @Trace starredRevision: number = 0;
+  @Trace private publishedImageLimits: Record<string, Object> = {};
   private helloHub: string = '';
   private helloScope: string = '';
   private helloGeneration: number = -1;
@@ -112,6 +193,7 @@ export class ClientModel {
   @Trace private attentionOwner: string = '';
   private attentionReadRevision: number = 0;
   @Trace conversations: ResourceRow[] = [];
+  @Trace namingAgentKeys: string[] = [];
   @Trace machines: ResourceRow[] = [];
   @Trace directorySessions: ResourceRow[] = [];
   @Trace directoryMachines: ResourceRow[] = [];
@@ -160,9 +242,17 @@ export class ClientModel {
   @Trace mainMachineId: string = '';
   @Trace sidebarConfig: string = '';
   acceptSidebarConfig(assistant: Record<string,Object>, confirmedEdit: boolean = false): void {
-    const config = JSON.stringify(Wire.payload(['main','main_machine_id','leaders','background_supervisor','recent_task_chats'],
+    const existing = Wire.parse(this.sidebarConfig);
+    const payload = Wire.payload(['main','main_machine_id','leaders','background_supervisor','recent_task_chats'],
       [Wire.text(assistant,'main'),Wire.text(assistant,'main_machine_id',Wire.text(assistant,'machine_id')),
-        Wire.strings(assistant,'leaders'),Wire.text(assistant,'background_supervisor'),Wire.bool(assistant,'recent_task_chats')]));
+        Wire.strings(assistant,'leaders'),Wire.text(assistant,'background_supervisor'),Wire.bool(assistant,'recent_task_chats')]);
+    if (Wire.has(assistant, 'pages')) payload['pages'] = assistant['pages'];
+    else if (Wire.has(existing, 'pages')) payload['pages'] = existing['pages'];
+    if (Wire.has(assistant, 'hidden')) payload['hidden'] = assistant['hidden'];
+    else if (Wire.has(existing, 'hidden')) payload['hidden'] = existing['hidden'];
+    if (Wire.has(assistant, 'hidden_pages')) payload['hidden_pages'] = assistant['hidden_pages'];
+    else if (Wire.has(existing, 'hidden_pages')) payload['hidden_pages'] = existing['hidden_pages'];
+    const config = JSON.stringify(payload);
     if (this.sidebarConfig !== config) this.sidebarConfig = config;
     // A scoped settings page can use a detached model. Publish its confirmed Hub preference to the visible drawer only for the same owner.
     const parent = this.directoryParent;
@@ -171,6 +261,18 @@ export class ClientModel {
       current['recent_task_chats'] = Wire.bool(assistant,'recent_task_chats');
       parent.sidebarConfig = JSON.stringify(current);
     }
+  }
+  applyNavigationConfig(data: Record<string, Object>): void {
+    const existing = Wire.parse(this.sidebarConfig);
+    const current: Record<string, Object> = Wire.payload([], []);
+    Object.keys(existing).filter((key: string) => !['pages', 'hidden', 'hidden_pages'].includes(key)).forEach((key: string) => {
+      current[key] = existing[key];
+    });
+    if (Wire.has(data, 'pages')) current['pages'] = data['pages'];
+    if (Wire.has(data, 'hidden')) current['hidden'] = data['hidden'];
+    if (Wire.has(data, 'hidden_pages')) current['hidden_pages'] = data['hidden_pages'];
+    const next = JSON.stringify(current);
+    if (this.sidebarConfig !== next) this.sidebarConfig = next;
   }
   private preferenceTask: Promise<void> = Promise.resolve();
   private async changePreferences(action: () => Promise<void>): Promise<void> { const task = this.preferenceTask.then(action, action); this.preferenceTask = task.catch(() => {}); await task; }
@@ -401,6 +503,7 @@ export class ClientModel {
     if (revision === this.attentionReadRevision && this.owns(generation, scope)) {
       this.attentionCards = agentAttentionCards(values, this.profile.manager);
       this.attentionOwner = JSON.stringify([generation, scope]);
+      this.notifyStatusHooks();
     }
     return values;
   }
@@ -482,6 +585,9 @@ export class ClientModel {
     this.ssh.initialize(context);
     this.vault = new CredentialVault(context);
     await this.local.open(context);
+    if (!this.detached) {
+      nativeLiveView.initialize(context, new LocalLiveViewPrefsStorage(this.local)).catch(() => {});
+    }
     const storedCardHeight = await this.local.get('ui.questionCardHeight');
     const share = Number(storedCardHeight);
     if (storedCardHeight && Number.isFinite(share)) this.questionCardHeightShare = Math.max(0,Math.min(1,share));
@@ -537,7 +643,8 @@ export class ClientModel {
     if (this.detached) return;
     await this.local.put('profiles', JSON.stringify({ profiles: this.profiles, active: this.profile.id }));
   }
-  private async applyAppearance(change: DevicePreferenceChange): Promise<void> {
+  private async applyAppearance(change: DevicePreferenceChange): Promise<boolean> {
+    let saved = false;
     await this.changePreferences(async (): Promise<void> => {
       const mode = change.appearance === undefined ? this.appearance : change.appearance;
       const requested = change.style === undefined ? this.style : change.style;
@@ -547,9 +654,11 @@ export class ClientModel {
       catch (_) { this.error = 'cache_unavailable'; return; }
       this.appearance = mode; this.style = style; this.alerts = alerts;
       for (const view of this.views.values()) { view.appearance = mode; view.style = style; }
+      saved = true;
     });
+    return saved;
   }
-  async setAppearance(mode: number, style?: string, alerts?: boolean): Promise<void> { await this.applyAppearance({ appearance: mode, style: style, alerts: alerts }); }
+  async setAppearance(mode: number, style?: string, alerts?: boolean): Promise<boolean> { return await this.applyAppearance({ appearance: mode, style: style, alerts: alerts }); }
   async setStyle(style: string): Promise<void> { await this.applyAppearance({ style: style }); }
   async setAlerts(alerts: boolean): Promise<void> { await this.applyAppearance({ alerts: alerts }); }
   async setLanguage(language: string): Promise<void> {
@@ -653,12 +762,27 @@ export class ClientModel {
     this.sendAttempts.clear(); this.feedbackChanged();
     this.profile = profile; const scope = this.scope(); this.connected = false;
     this.clearPendingDecisions();
-    this.unresolvedWrites = []; this.operationState = ''; this.mainId = ''; this.mainMachineId = ''; this.sidebarConfig = ''; this.features = []; this.managers = []; this.rosterDefaultId = '';
+    this.unresolvedWrites = []; this.operationState = ''; this.mainId = ''; this.mainMachineId = ''; this.sidebarConfig = ''; this.features = []; this.rememberedHubModules = null; this.useHerdrTabName = false; this.agentsDisplaySupported = false; this.agentsDisplaySaving = false; this.agentsDisplayRevision++; this.nextSuggestionsValue = null; this.nextSuggestionsLoaded = false; this.nextSuggestionsSaving = false; this.nextSuggestionsError = ''; this.nextSuggestionsRevision++; this.managers = []; this.rosterDefaultId = '';
+    this.namingAgentKeys = [];
+    this.publishedImageLimits = {};
     this.demo = false; this.demoRepository = undefined; this.error = '';
     if (!keep) { this.sessionsReady = false; this.sessions = []; this.machines = []; this.conversations = []; this.todos = []; this.inbox = []; this.knowledge = []; this.messages = []; } this.selected = keep ? selection : new ResourceRow(); this.draftLoading = false;
     if (!keep && !this.detached) { this.directoryReady = false; this.directoryLoading = false; this.directoryUnavailable = 0; this.publishDirectory(); }
     if (!keep) { this.draft = ''; this.sourceContext = ''; this.draftRevision = ''; this.localMessages = []; this.renderedMessages = []; this.echoedMessages.clear(); }
     await saved; if (!this.owns(generation, scope)) return;
+    try { this.rememberedHubModules = parseStoredHubModules(await this.local.get(this.hubModulesKey(profile.id))); } catch (_) { this.rememberedHubModules = null; }
+    let cachedDisplay = '';
+    try { cachedDisplay = await this.local.get(this.agentsDisplayKey(profile.id)); } catch (_) {}
+    if (!this.owns(generation, scope)) return;
+    if (cachedDisplay) {
+      try {
+        const parsedDisplay = Wire.parse(cachedDisplay);
+        if (typeof parsedDisplay['use_herdr_tab_name'] === 'boolean') {
+          this.useHerdrTabName = parsedDisplay['use_herdr_tab_name'] === true;
+          this.agentsDisplaySupported = true;
+        }
+      } catch (_) {}
+    }
     await this.saveProfiles(); if (!this.owns(generation, scope) || !this.foreground) return;
     let access: HubAccess | undefined;
     const token = await this.vault?.get(profile.id, (value: HubAccess | undefined): void => { access = value; });
@@ -731,6 +855,7 @@ export class ClientModel {
         else this.refreshDecisions().catch((error: Error) => this.failure(error));
       }
       this.publishDirectory();
+      if (!this.detached) nativeLiveView.syncFromModel(this).catch(() => {});
     }).catch((error: Error) => { if (this.owns(generation, scope)) this.failure(error); });
     if (this.owns(generation, scope)) await this.flushNotification();
   }
@@ -801,7 +926,9 @@ export class ClientModel {
       this.sessionsReady = false; this.sessions = []; this.conversations = []; this.machines = []; this.managers = []; this.todos = []; this.knowledge = []; this.inbox = [];
       this.clearPendingDecisions();
       this.messages = []; this.draft = ''; this.sourceContext = ''; this.draftRevision = ''; this.localMessages = []; this.renderedMessages = []; this.echoedMessages.clear(); this.detail = ''; this.reply = ''; this.mainId = ''; this.mainMachineId = ''; this.sidebarConfig = '';
-      this.unresolvedWrites = []; this.operationState = ''; this.notificationTarget = ''; this.draftLoading = false; this.features = []; this.error = '';
+      this.unresolvedWrites = []; this.operationState = ''; this.notificationTarget = ''; this.pendingXiaoYiRoute = ''; this.draftLoading = false; this.features = []; this.rememberedHubModules = null; this.useHerdrTabName = false; this.agentsDisplaySupported = false; this.agentsDisplaySaving = false; this.agentsDisplayRevision++; this.nextSuggestionsValue = null; this.nextSuggestionsLoaded = false; this.nextSuggestionsSaving = false; this.nextSuggestionsError = ''; this.nextSuggestionsRevision++; this.error = '';
+      this.namingAgentKeys = [];
+      this.publishedImageLimits = {};
     }
     this.publishDirectory();
     try { await this.saveCleanup(); } catch (_) { this.error = 'cleanup_incomplete'; throw new Error('cleanup_incomplete'); }
@@ -817,6 +944,12 @@ export class ClientModel {
     if (this.context) { try { await ChatAttachments.forgetHub(this.context, profile.hubId || id); } catch (_) { cleanupFailed = true; } }
     if (this.context) { try { clearImagePreviews(this.context, profile.hubId || id); } catch (_) { cleanupFailed = true; } }
     try { await nativeNotifications.clear(id); } catch (_) { cleanupFailed = true; }
+    if (!this.detached) { nativeLiveView.stopNow(id).catch(() => {}); }
+    if (this.context) {
+      for (const hook of ClientModel.forgetHooks) {
+        try { await hook(id, this.context); } catch (_) {}
+      }
+    }
     try { await this.credentialChange(id, async (): Promise<void> => { await this.vault?.remove(id); }); } catch (_) { cleanupFailed = true; }
     this.profiles = this.profiles.filter((item: HubProfile) => item.id !== id); this.publishDirectory();
     try { await this.saveProfiles(); } catch (_) { cleanupFailed = true; }
@@ -843,14 +976,27 @@ export class ClientModel {
       if (type === 'tool_call') this.deviceEvent?.(payload);
       for (const listener of this.eventListeners) { try { listener(payload, type); } catch (_) {} }
       if (type === 'hello') {
+        this.publishedImageLimits = Wire.object(data, 'image_limits');
         this.features = Wire.strings(data, 'features'); this.connected = true; this.error = '';
+        if (this.features.length > 0 && this.profile.id) {
+          const published = extractPublishedModules(this.features);
+          this.rememberedHubModules = published;
+          this.local.put(this.hubModulesKey(this.profile.id), serializeStoredHubModules(published)).catch(() => {});
+        }
         this.repository?.transport.hello(nativeNotifications.features(!this.detached && this.alerts));
         const generation = this.generation, scope = this.scope();
         this.reconcileWrites().then(async (): Promise<void> => { if (this.owns(generation, scope)) await this.refresh(); }).then(async (): Promise<void> => { if (this.owns(generation, scope)) await this.flushNotification(); }).catch((error: Error) => { if (this.owns(generation, scope)) this.failure(error); });
       } else if (type === 'notify') { if (!this.detached) nativeNotifications.receive(this, data); }
+      else if (type === 'fleet') { if (!this.detached) nativeLiveView.receiveFleetEvent(this, data).catch(() => {}); }
+      else if (type === 'navigation') {
+        if (Wire.has(data, 'pages') || Wire.has(data, 'hidden') || Wire.has(data, 'hidden_pages')) this.applyNavigationConfig(data);
+        else if (this.repository && !this.demo) this.refreshNavigation(this.repository, this.generation, this.scope()).catch(() => {});
+      }
       else if (type === 'items' || type === 'items_replace') { this.transcript?.receive(data); } else if (type === 'terminal') {
         if (Wire.text(data, 'machine_id') === this.selected.machine && Wire.text(data, 'session_id') === this.selected.session)
           this.terminalText = (this.terminalText + Wire.text(data, 'data')).slice(-200000);
+      } else if (type === 'assistant_starred') {
+        this.starredRevision++;
       } else if (['interaction', 'interactions', 'interaction_resolved', 'session', 'sessions', 'sessions_delta', 'item', 'items', 'session_delta', 'todo', 'inbox', 'task_plan', 'assistant_feed', 'managers', 'machines'].includes(type)) {
         if (type === 'inbox') this.inboxRead.change++;
         if (type === 'todo') this.todoRead.change++;
@@ -894,6 +1040,7 @@ export class ClientModel {
       sessions.forEach((row: ResourceRow) => row.group = this.profile.id); machines.forEach((row: ResourceRow) => row.group = this.profile.id);
       this.sessions = sessions; this.sessionsReady = true; this.machines = machines; this.managers = managers; this.rosterDefaultId = rosterDefault;
       this.updateSendFeedbackSessions(sessions);
+      this.notifyStatusHooks();
       if (owner.heldReceipts.length) owner.heldReceipts = owner.heldReceipts.filter((receipt: HeldActionReceipt) => {
         if (receipt.scope !== scope) return true;
         const row = sessions.find((item: ResourceRow) => this.target(item) === receipt.target);
@@ -905,6 +1052,7 @@ export class ClientModel {
         return !!this.matchingHeldInstruction(receipt.expected, row);
       });
       this.publishDirectory();
+      if (!this.detached) nativeLiveView.syncFromModel(this).catch(() => {});
       if (this.selected.kind === 'session') {
         const selected = sessions.find((item: ResourceRow) => item.id === this.selected.id && item.machine === this.selected.machine);
         if (selected) this.selected = selected;
@@ -929,8 +1077,137 @@ export class ClientModel {
       this.refreshPhoneList('todo', repo, generation, scope, false).catch(() => {});
       if (this.section === 2) await this.refreshPhoneList('inbox', repo, generation, scope, true);
       else if (!this.detached) this.refreshPhoneList('inbox', repo, generation, scope, false).catch(() => {});
+      this.refreshAgentsDisplay(repo, generation, scope).catch(() => {});
+      this.refreshNavigation(repo, generation, scope).catch(() => {});
     } catch (error) { if (this.owns(generation, scope)) this.failure(error as Error); }
     finally { if (this.owns(generation, scope)) { this.busy = false; this.publishDirectory(); } }
+  }
+  private syncViewsAgentsDisplay(profileId: string, supported: boolean, enabled: boolean): void {
+    for (const view of this.views.values()) {
+      if (view.profile.id === profileId && !view.retired) {
+        view.agentsDisplaySupported = supported;
+        view.useHerdrTabName = enabled;
+      }
+    }
+  }
+  async refreshNavigation(repo: HubRepository, generation: number, scope: string): Promise<void> {
+    if (this.demo) return;
+    try {
+      const result = await repo.call('/api/v1/navigation');
+      if (!this.owns(generation, scope)) return;
+      this.applyNavigationConfig(result);
+    } catch (_) { /* Older hubs omit /api/v1/navigation; leave existing page visibility untouched. */ }
+  }
+  async refreshAgentsDisplay(repo: HubRepository, generation: number, scope: string): Promise<void> {
+    if (this.demo || this.agentsDisplaySaving) return;
+    const rev = this.agentsDisplayRevision;
+    try {
+      const result = await repo.call('/api/v1/agents/display-settings');
+      if (!this.owns(generation, scope) || rev !== this.agentsDisplayRevision || this.agentsDisplaySaving) return;
+      if (typeof result['use_herdr_tab_name'] === 'boolean') {
+        const enabled = result['use_herdr_tab_name'] === true;
+        this.agentsDisplaySupported = true;
+        this.useHerdrTabName = enabled;
+        this.syncViewsAgentsDisplay(this.profile.id, true, enabled);
+        this.local.put(this.agentsDisplayKey(this.profile.id), JSON.stringify(Wire.payload(['use_herdr_tab_name'], [enabled]))).catch(() => {});
+      } else {
+        this.agentsDisplaySupported = false;
+        this.useHerdrTabName = false;
+        this.syncViewsAgentsDisplay(this.profile.id, false, false);
+      }
+    } catch (error) {
+      if (error instanceof HttpFailure && [404, 501].includes(error.status) && this.owns(generation, scope) && rev === this.agentsDisplayRevision) {
+        this.agentsDisplaySupported = false;
+        this.useHerdrTabName = false;
+        this.syncViewsAgentsDisplay(this.profile.id, false, false);
+      }
+    }
+  }
+  async setUseHerdrTabName(enabled: boolean): Promise<boolean> {
+    if (this.demo || !this.connected || !this.repository || this.agentsDisplaySaving) return false;
+    const generation = this.generation, scope = this.scope(), repo = this.repository, profileId = this.profile.id;
+    const previous = this.useHerdrTabName;
+    const rev = ++this.agentsDisplayRevision;
+    this.agentsDisplaySaving = true;
+    this.useHerdrTabName = enabled;
+    this.syncViewsAgentsDisplay(profileId, true, enabled);
+    try {
+      const result = await repo.call('/api/v1/agents/display-settings', 'PUT', Wire.payload(['use_herdr_tab_name'], [enabled]));
+      if (!this.owns(generation, scope) || this.repository !== repo || rev !== this.agentsDisplayRevision) return false;
+      const acknowledged = typeof result['use_herdr_tab_name'] === 'boolean' ? result['use_herdr_tab_name'] === true : enabled;
+      this.agentsDisplaySupported = true;
+      this.useHerdrTabName = acknowledged;
+      this.syncViewsAgentsDisplay(profileId, true, acknowledged);
+      await this.local.put(this.agentsDisplayKey(profileId), JSON.stringify(Wire.payload(['use_herdr_tab_name'], [acknowledged]))).catch(() => {});
+      return true;
+    } catch (error) {
+      if (this.owns(generation, scope) && this.repository === repo && rev === this.agentsDisplayRevision) {
+        this.useHerdrTabName = previous;
+        this.syncViewsAgentsDisplay(profileId, true, previous);
+        this.failure(error as Error);
+      }
+      return false;
+    } finally {
+      if (this.owns(generation, scope) && rev === this.agentsDisplayRevision) this.agentsDisplaySaving = false;
+    }
+  }
+  syncNextSuggestions(assistant: Record<string, Object>): void {
+    const parsed = parseAssistantNextSuggestions(assistant);
+    if (parsed !== null) {
+      this.nextSuggestionsValue = parsed;
+      this.nextSuggestionsLoaded = true;
+      if (this.demo) this.refreshDemo();
+    }
+    const parent = this.directoryParent;
+    if (parsed !== null && parent && parent.scope() === this.scope() && parent.profile.hubId === this.profile.hubId) {
+      parent.nextSuggestionsValue = parsed;
+      parent.nextSuggestionsLoaded = true;
+      if (parent.demo) parent.refreshDemo();
+    }
+  }
+  async loadNextSuggestions(): Promise<void> {
+    if ((!this.connected && !this.demo) || !this.repository || this.nextSuggestionsSaving) return;
+    const generation = this.generation, scope = this.scope(), repo = this.repository;
+    const rev = ++this.nextSuggestionsRevision;
+    this.nextSuggestionsError = '';
+    try {
+      const result = await repo.call('/api/v1/assistant');
+      if (!this.owns(generation, scope) || this.repository !== repo || rev !== this.nextSuggestionsRevision) return;
+      this.nextSuggestionsValue = parseAssistantNextSuggestions(result);
+      this.nextSuggestionsLoaded = true;
+    } catch (error) {
+      if (this.owns(generation, scope) && this.repository === repo && rev === this.nextSuggestionsRevision) {
+        this.nextSuggestionsError = error instanceof Error ? error.message : 'failed';
+      }
+    }
+  }
+  async setNextSuggestions(enabled: boolean): Promise<boolean> {
+    if ((!this.connected && !this.demo) || !this.repository || this.nextSuggestionsValue === null || this.nextSuggestionsSaving) return false;
+    const previous = this.nextSuggestionsValue;
+    if (previous === enabled) return true;
+    const generation = this.generation, scope = this.scope(), repo = this.repository;
+    const rev = ++this.nextSuggestionsRevision;
+    this.nextSuggestionsSaving = true;
+    this.nextSuggestionsError = '';
+    this.nextSuggestionsValue = enabled;
+    try {
+      const result = await repo.call('/api/v1/assistant', 'PUT', buildNextSuggestionsPayload(enabled));
+      if (!this.owns(generation, scope) || this.repository !== repo || rev !== this.nextSuggestionsRevision) return false;
+      const authoritative = resolveAuthoritativeNextSuggestions(result, enabled);
+      this.nextSuggestionsValue = authoritative;
+      this.nextSuggestionsLoaded = true;
+      if (this.demo) this.refreshDemo();
+      return authoritative === enabled;
+    } catch (error) {
+      if (this.owns(generation, scope) && this.repository === repo && rev === this.nextSuggestionsRevision) {
+        this.nextSuggestionsValue = previous;
+        this.nextSuggestionsError = error instanceof Error ? error.message : 'failed';
+        this.failure(error as Error);
+      }
+      return false;
+    } finally {
+      if (this.owns(generation, scope) && rev === this.nextSuggestionsRevision) this.nextSuggestionsSaving = false;
+    }
   }
   private async refreshPhoneList(kind: string, repo: HubRepository, generation: number, scope: string, force: boolean): Promise<void> {
     const state = kind === 'todo' ? this.todoRead : this.inboxRead;
@@ -979,11 +1256,13 @@ export class ClientModel {
   async openNotification(target: Record<string, Object>): Promise<void> {
     const id = Wire.text(target, 'profile'), manager = Wire.text(target, 'manager'), machine = Wire.text(target, 'machine'), session = Wire.text(target, 'session');
     if ([id, manager, machine, session].some((value: string) => value.length > 256) || !id || !machine || !session) return;
-    const saved = this.profiles.find((item: HubProfile) => item.id === id); if (!saved) return;
+    const isDemoTarget = this.demo && id === this.profile.id;
+    const saved = isDemoTarget ? this.profile : this.profiles.find((item: HubProfile) => item.id === id);
+    if (!saved) return;
     this.pendingNotification = Wire.payload(['profile', 'manager', 'machine', 'session'], [id, manager, machine, session]);
     this.notificationEpoch++;
     if (!this.foreground) return;
-    if (this.profile.id !== id || this.profile.manager !== manager || !this.connected) {
+    if (!isDemoTarget && (this.profile.id !== id || this.profile.manager !== manager || !this.connected)) {
       const profile = new HubProfile(saved.id, saved.name, saved.baseUrl); profile.addresses = saved.addresses.slice(); profile.hubId = saved.hubId; profile.pin = saved.pin; profile.manager = manager;
       await this.selectProfile(profile, this.profile.id === id && this.profile.manager === manager, true);
     }
@@ -1114,6 +1393,12 @@ export class ClientModel {
   }
   private sessionRow(row: ResourceRow = this.selected): ResourceRow {
     return this.sessions.find((item: ResourceRow) => item.machine === row.machine && (item.session || item.id) === (row.session || row.id)) || row;
+  }
+  imageLimits(row: ResourceRow = this.selected): ImageLimits {
+    // A conversation carries its agent under `launcher`; with only `agent` read, an assistant conversation running
+    // codex fell back to claude's limits (review P1).
+    const data = this.sessionRow(row).data();
+    return ImageLimits.forAgent(this.publishedImageLimits, Wire.text(data, 'agent') || Wire.text(data, 'launcher'));
   }
   private heldMessages(row: ResourceRow = this.selected): HeldAgentMessage[] {
     if (row.kind !== 'session') return [];
@@ -1259,8 +1544,8 @@ export class ClientModel {
         return;
       }
       const projection = projectToolTurn(group[0].id, group, running && index === turns.length - 1);
-      projection.userMessages.forEach((item: TranscriptItem) => { const display = messageDisplay(item.text || ''); const message = new ChatMessage(item.id, 'user', display.text); message.ownerTarget = this.target(); message.itemId = item.id; message.source = display.sources; const content = parseMessageContent(display.text); message.text = content.text; message.imagePaths = content.images; message.filePaths = content.files; message.at = this.itemTime(item); messages.push(message); });
-      projection.userImages.forEach((item: TranscriptItem) => { const message = new ChatMessage(item.id, 'user'); message.imageId = item.id; message.ownerTarget = this.target(); message.itemId = item.id; message.at = this.itemTime(item); messages.push(message); });
+      projection.userMessages.forEach((item: TranscriptItem) => { const display = messageDisplay(item.text || ''); const message = new ChatMessage(item.id, 'user', display.text); message.ownerTarget = this.target(); message.itemId = item.id; message.sourceFingerprint = typeof item['source_fingerprint'] === 'string' ? item['source_fingerprint'] as string : ''; message.source = display.sources; const content = parseMessageContent(display.text); message.text = content.text; message.imagePaths = content.images; message.filePaths = content.files; message.at = this.itemTime(item); messages.push(message); });
+      projection.userImages.forEach((item: TranscriptItem) => { const message = new ChatMessage(item.id, 'user'); message.imageId = item.id; message.ownerTarget = this.target(); message.itemId = item.id; message.sourceFingerprint = typeof item['source_fingerprint'] === 'string' ? item['source_fingerprint'] as string : ''; message.at = this.itemTime(item); messages.push(message); });
       if (projection.summaryVisible) {
         const summary = new ChatMessage(projection.workKey, 'work');
         summary.at = this.itemTime(group[0]);
@@ -1268,7 +1553,7 @@ export class ClientModel {
         summary.work = projection.inspectionSteps.map((step: WorkInspectionStep) => this.workText(step)).filter((value: string) => !!value).join('\n\n');
         summary.raw = JSON.stringify(group); messages.push(summary);
       }
-      if (projection.visibleAssistantText) { const message = new ChatMessage('visible-' + group[0].id, 'assistant', projection.visibleAssistantText.text || ''); message.ownerTarget = this.target(); message.itemId = projection.visibleAssistantText.id; messages.push(message); }
+      if (projection.visibleAssistantText) { const message = new ChatMessage('visible-' + group[0].id, 'assistant', projection.visibleAssistantText.text || ''); message.ownerTarget = this.target(); message.itemId = projection.visibleAssistantText.id; message.sourceFingerprint = typeof projection.visibleAssistantText['source_fingerprint'] === 'string' ? projection.visibleAssistantText['source_fingerprint'] as string : ''; message.at = this.itemTime(projection.visibleAssistantText); messages.push(message); }
     });
     return messages;
   }
@@ -1443,7 +1728,7 @@ export class ClientModel {
       if (admit && !admit() || !this.owns(generation, scope) || this.target() !== target || this.repository !== repo || this.draftRevision !== entry.revision || !this.canSend()) { feedback.finish(); this.feedbackChanged(); await store.settle(scope, entry.id, 'failed'); this.activeMessages.delete(entry.id); entry.state = 'failed'; if (this.owns(generation, scope) && this.target() === target) { this.operationState = 'failed'; this.error = 'request_updated'; this.publishMessages(); } return false; }
       this.localMessages = this.localMessages.concat([entry]); this.publishMessages();
       dispatched = true;
-      const reply = await repo.send(row, text, entry.id, '', images, (): boolean => (!admit || admit()) && this.owns(generation, scope) && this.target() === target && this.repository === repo && this.draftRevision === entry.revision && this.canSend());
+      const reply = await repo.send(row, text, entry.id, '', images, (): boolean => (!admit || admit()) && this.owns(generation, scope) && this.target() === target && this.repository === repo && this.draftRevision === entry.revision && !this.decision && this.canSend(), this.imageLimits(row).requestBytes);
       if (reply && Wire.text(reply,'delivered') === 'later') feedback.finish();
       else if (paired()) {
         const now = Date.now(); feedback.accept(now);
@@ -1549,19 +1834,20 @@ export class ClientModel {
     const path = '/api/v1/sessions/' + encodeURIComponent(this.selected.machine) + '/' + encodeURIComponent(this.selected.session || this.selected.id) + '/interrupt';
     return this.canInterrupt() && this.turnWorking() && this.interruptPendingKey !== this.interruptIdentity() && !this.operationBlocked(path);
   }
-  async stop(admission?: () => boolean): Promise<void> {
-    if (!this.canStop() || admission && !admission()) return;
+  async stop(admission?: () => boolean): Promise<boolean> {
+    if (!this.canStop() || admission && !admission()) return false;
     const generation = this.generation, scope = this.scope(), target = this.target(), row = this.selected, repo = this.repo();
     const feedback = this.sendAttempts.get(target);
     const pending = this.interruptIdentity(), admit = (): boolean => this.owns(generation, scope) && this.target() === target && this.repository === repo && this.canInterrupt() && this.turnWorking() && (!admission || admission());
     this.interruptPendingKey = pending;
     try { await repo.stop(row, admit); } catch (error) {
       if (this.owns(generation, scope) && this.target() === target && this.repository === repo) this.failure(error as Error);
-      return;
+      return false;
     } finally { if (this.interruptPendingKey === pending) this.interruptPendingKey = ''; }
     if (feedback && this.owns(generation,scope) && this.sendAttempts.get(target) === feedback) await this.endSendFeedback(scope,target,feedback);
-    if (!this.owns(generation, scope) || this.target() !== target || this.repository !== repo) return;
+    if (!this.owns(generation, scope) || this.target() !== target || this.repository !== repo) return false;
     if (this.demo && this.demoRepository === repo) this.refreshDemo();
+    return true;
   }
   async answer(option: string, values: Record<string, Object>, expected?: Decision, admit?: () => boolean): Promise<void> {
     if (admit && !admit()) return;
@@ -1830,6 +2116,15 @@ export class ClientModel {
       !!session && this.capabilities(session).canApprove;
   }
   canInterrupt(): boolean { return this.connected && this.capabilities().canInterrupt; }
+  canInterruptSession(row: ResourceRow): boolean {
+    if (!this.connected || row.kind !== 'session') return false;
+    if (row.group && row.group !== this.profile.id) return false;
+    if (row.manager && row.manager !== this.profile.manager) return false;
+    const session = this.sessions.find((item: ResourceRow) =>
+      item.machine === row.machine && (item.session || item.id) === (row.session || row.id)
+    );
+    return this.capabilities(session || row).canInterrupt;
+  }
   private serializeDraftContexts(refs: Record<string,Object>[]): string {
     if (!refs.length) return '';
     return JSON.stringify(refs.length===1 ? refs[0] : Wire.payload(['contexts'],[refs]));
@@ -1953,6 +2248,42 @@ export class ClientModel {
     const previous=this.sourceContext,target=this.target();this.sourceContext='';this.draftRevision=util.generateRandomUUID();
     this.persistDraft().then(()=>new ChatDraftStore(this.local).discardForwardMedia(target,previous,'')).catch(()=>this.error='failed');
   }
+  private autoRenameKey(row: ResourceRow): string {
+    const sid = row.session || row.id;
+    return JSON.stringify([this.scope(), this.connectionGeneration(), row.machine, sid]);
+  }
+  canAutoRenameAgent(row: ResourceRow): boolean {
+    if (!this.connected || row.kind !== 'session' || Wire.bool(row.data(), 'assistant')) return false;
+    if (!this.demo && !this.features.includes('agent_autoname')) return false;
+    const sid = row.session || row.id;
+    return !!row.machine && !!sid;
+  }
+  isAutoRenamingRow(row: ResourceRow): boolean {
+    if (!row || row.kind !== 'session') return false;
+    return this.namingAgentKeys.includes(this.autoRenameKey(row));
+  }
+  async autoRenameAgent(row: ResourceRow): Promise<string> {
+    if (!this.canAutoRenameAgent(row)) return '';
+    const key = this.autoRenameKey(row);
+    if (this.namingAgentKeys.includes(key)) return '';
+    const machine = row.machine, sid = row.session || row.id;
+    const path = '/api/v1/sessions/' + segment(machine) + '/' + segment(sid) + '/autoname';
+    if (this.operationBlocked(path)) return 'pending_action';
+    const generation = this.generation, scope = this.scope();
+    this.namingAgentKeys = this.namingAgentKeys.concat([key]);
+    try {
+      await this.repo().call(path, 'POST', {}, '', () => this.owns(generation, scope));
+      if (!this.owns(generation, scope)) return '';
+      if (this.demo) await this.refresh();
+      return '';
+    } catch (error) {
+      if (!this.owns(generation, scope)) return '';
+      const msg = error instanceof Error ? error.message : 'failed';
+      return msg || 'failed';
+    } finally {
+      this.namingAgentKeys = this.namingAgentKeys.filter((entry: string) => entry !== key);
+    }
+  }
   async createAgent(prompt: string, machine: ResourceRow, directory: string, launcher: string, todoId: string = '', admit?: () => boolean, workspaceId: string = '', host: string = '', model: string = '', effort: string = '', tabName: string = ''): Promise<ResourceRow> {
     if (machine.manager !== this.profile.manager) throw new Error('request_updated');
     const generation = this.generation, scope = this.scope(), repo = this.repo();
@@ -1999,14 +2330,23 @@ export class ClientModel {
     const demo = this.demoRepository; if (!this.demo || !demo) return;
     const roster = demo.roster(); this.features = roster.features; this.mainId = roster.mainId;
     this.sessions = roster.sessions; this.sessionsReady = true; this.machines = roster.machines; this.conversations = roster.conversations; this.mainMachineId = roster.conversations.find((row: ResourceRow) => row.id === roster.mainId)?.machine || '';
+    if (roster.leaders.length > 0 || this.sidebarConfig !== '') {
+      this.acceptSidebarConfig(Wire.payload(['main', 'main_machine_id', 'leaders'], [roster.mainId, this.mainMachineId, roster.leaders]));
+    }
     this.todos = roster.todos; this.knowledge = roster.knowledge; this.inbox = roster.inbox;
     this.managers = [new ResourceRow('demo', tr('local_demo'), 'manager')];
     if (this.selected.kind === 'session') { const current = this.sessions.find((row: ResourceRow) => row.id === this.selected.id && row.machine === this.selected.machine); if (current) this.selected = current; }
     this.directoryReady = true; this.directoryLoading = false; this.directoryUnavailable = 0; this.publishDirectory();
+    if (!this.detached) nativeLiveView.syncFromModel(this).catch(() => {});
   }
   useDemo(): void {
     this.ssh.stop(); this.stopReconnect(); this.cancelDraftTimer(); this.closeTranscript(); this.releaseTerminal(); this.retireViews(); this.repository?.close(); this.generation++; this.selectionGeneration++;
+    this.publishedImageLimits = {};
+    this.namingAgentKeys = [];
     this.demo = true; this.connected = true; this.profile = new HubProfile('demo', tr('local_demo')); this.profile.hubId = 'demo'; this.profile.manager = 'demo';
+    this.features = []; this.rememberedHubModules = null; this.sidebarConfig = '';
+    this.useHerdrTabName = false; this.agentsDisplaySupported = false; this.agentsDisplaySaving = false; this.agentsDisplayRevision++;
+    this.nextSuggestionsValue = true; this.nextSuggestionsLoaded = true; this.nextSuggestionsSaving = false; this.nextSuggestionsError = ''; this.nextSuggestionsRevision++;
     this.sendAttempts.clear(); this.feedbackChanged();
     this.demoRepository = new DemoRepository(this.local); this.repository = this.demoRepository;
     this.selected = new ResourceRow(); this.messages = []; this.revisionItems = []; this.clearPendingDecisions(); this.draft = ''; this.sourceContext = ''; this.draftRevision = ''; this.draftLoading = false;
@@ -2015,13 +2355,13 @@ export class ClientModel {
   }
   releaseTerminal(): void { this.workspace?.hide(); this.terminalControl = false; }
   async background(): Promise<void> {
-    this.foreground = false; this.ssh.stop(); this.stopReconnect(); this.cancelDraftTimer(); this.closeTranscript(); this.clearPendingDecisions(); this.releaseTerminal();
+    this.foreground = false; if (!this.detached) nativeLiveView.setForeground(false, this.hasPushRoute(), this.demo); this.ssh.stop(); this.stopReconnect(); this.cancelDraftTimer(); this.closeTranscript(); this.clearPendingDecisions(); this.releaseTerminal();
     this.feedbackChanged();
     const repository = this.repository; repository?.close();
     const children = Array.from(this.views.values()).map((view: ClientModel): Promise<void> => view.background());
     await this.persistDraft(); await Promise.all(children);
   }
-  activateForeground(): void { this.foreground = true; this.feedbackChanged(); for (const view of this.views.values()) view.activateForeground(); }
+  activateForeground(): void { this.foreground = true; if (!this.detached) nativeLiveView.setForeground(true); this.feedbackChanged(); for (const view of this.views.values()) view.activateForeground(); }
   async foregrounded(): Promise<void> { if (this.retired) return; this.activateForeground(); await this.retryCleanup(); if (this.retired || !this.foreground) return; if (this.profile.id && !this.demo) await this.selectProfile(this.profile, true); await this.flushNotification(); }
   async shutdown(): Promise<void> { await this.background(); this.retireViews(); if (!this.detached) await this.local.close(); }
 }

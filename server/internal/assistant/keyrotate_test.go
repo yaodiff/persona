@@ -40,7 +40,12 @@ var rotPlain = map[string]string{
 
 func newRotRig(t *testing.T) *rotRig {
 	t.Helper()
-	r := &rotRig{t: t, url: newDatabase(t), home: t.TempDir()}
+	return newRotRigSets(t, db.ManagerSet)
+}
+
+func newRotRigSets(t *testing.T, sets db.Sets) *rotRig {
+	t.Helper()
+	r := &rotRig{t: t, url: newMigratedDatabase(t, sets), home: t.TempDir()}
 	ctx := context.Background()
 	was := oldKeyGrace
 	oldKeyGrace = 0 // the old key goes as soon as nothing else holds it (TestTheOldKeyStaysForItsGrace has one)
@@ -394,7 +399,7 @@ func TestTheRotationNeverTouchesTheHubs(t *testing.T) {
 		}
 	})
 	t.Run("the hub's database", func(t *testing.T) {
-		r := newRotRig(t)
+		r := newRotRigSets(t, db.AllSets)
 		shared, err := db.Open(context.Background(), r.url, db.AllSets) // the hub's set too: a database it shares
 		if err != nil {
 			t.Fatal(err)

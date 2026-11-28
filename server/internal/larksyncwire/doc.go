@@ -3,9 +3,9 @@
 // sync reads what changed in their chats, drive, documents, wiki and minutes into the knowledge base
 // (docs/extensions/bots.md "Reading as you: daily sync").
 //
-// The manager owns the state: the accounts, bots and bindings (settings), the sealed tokens, the cursors and the
-// dedup index (Postgres). The module owns the open platform: the user OAuth, the rate limits and the readers. Types,
-// constants and trivial pure helpers only (docs/server/architecture.md "Contract packages").
+// The module owns the open platform, the sync state, routes, scheduler and connector; the manager keeps the settings
+// and Postgres storage behind the seam (internal/botport). Types, constants and trivial pure helpers only
+// (docs/server/architecture.md "Contract packages").
 //
 //persona:layer contract
 package larksyncwire

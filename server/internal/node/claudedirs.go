@@ -51,9 +51,11 @@ type claudeDirs struct {
 // procEnv is what the scan keeps from a running claude's environment: its config directory, and the API endpoint
 // and model a launcher function exported (used to tell which launcher started a claude Persona did not start).
 type procEnv struct {
-	ConfigDir string // CLAUDE_CONFIG_DIR
-	BaseURL   string // ANTHROPIC_BASE_URL
-	Model     string // ANTHROPIC_MODEL
+	ConfigDir       string // CLAUDE_CONFIG_DIR
+	BaseURL         string // ANTHROPIC_BASE_URL
+	Model           string // ANTHROPIC_MODEL
+	FastUnavailable bool   // disabled by the environment or by a provider without fast mode
+	Vertex          bool
 	// From its command line, not its environment (offlauncher.go): Cmd says it was kept (not on Windows, scanClaudeProcesses), MCPConfig
 	// is then each --mcp-config value it was started with, NUL-separated ("" for none).
 	Cmd       bool
@@ -75,53 +77,108 @@ func (n *Node) defaultClaudeDir() string {
 // claudeDirOf is the node's own default Claude Code directory for home: $CLAUDE_CONFIG_DIR, else ~/.claude.
 func claudeDirOf(home string) string { return nodeclient.ClaudeDir(home) }
 
-// claudeConfigDirs lists every config directory in use, the default first, each once (by real path), existing only.
+// filepath.Join cleans parent components before following symlinks. Keep those components during expansion,
+// then use the resolved directory for child lookups. Ordinary symlink aliases keep their configured spelling.
+func claudeDirHasParent(dir string) bool {
+	if !strings.Contains(dir, "..") {
+		return false
+	}
+	for component := range strings.SplitSeq(filepath.ToSlash(dir), "/") {
+		if component == ".." {
+			return true
+		}
+	}
+	return false
+}
+
+func (n *Node) expandClaudeDir(dir string) string {
+	if n.home != "" && len(dir) > 1 && dir[0] == '~' && os.IsPathSeparator(dir[1]) && claudeDirHasParent(dir) {
+		return strings.TrimSuffix(n.home, string(filepath.Separator)) + dir[1:]
+	}
+	return proto.ExpandHome(dir, n.home)
+}
+
+// claudeConfigDirs also supplies the configured default when a caller needs a path before any directory exists.
 func (n *Node) claudeConfigDirs() []string {
+	if dirs := n.existingClaudeDirs(); len(dirs) > 0 {
+		return dirs
+	}
+	return []string{n.defaultClaudeDir()}
+}
+
+func (n *Node) existingClaudeDirs() []string {
+	return n.discoverClaudeDirs(filepath.EvalSymlinks)
+}
+
+func (n *Node) discoverClaudeDirs(resolve func(string) (string, error)) []string {
 	if n.sessionScope != nil {
 		return []string{n.sessionScope.claude}
 	}
-	d := n.cdirs
 	n.refreshClaudeDirs()
-	cands := []string{n.defaultClaudeDir()}
-	// Include private assistant profiles even before a process scan, including
-	// after a node restart when only their transcripts remain.
+	var candidates []string
+	spellings := make(map[string]bool)
+	add := func(dir string) {
+		// Keep the spelling passed to EvalSymlinks: cleaning link/../dir before following link can name a different directory.
+		if spellings[dir] {
+			return
+		}
+		expanded := n.expandClaudeDir(dir)
+		if !spellings[expanded] {
+			candidates = append(candidates, expanded)
+			spellings[expanded] = true
+		}
+		spellings[dir] = true
+	}
+	def := n.defaultClaudeDir()
+	add(def)
 	profiles, _ := filepath.Glob(filepath.Join(n.dir, "profiles", "*"))
-	cands = append(cands, profiles...)
-	cands = append(cands, filepath.Join(n.home, ".claude"))
+	for _, profile := range profiles {
+		add(profile)
+	}
+	add(filepath.Join(n.home, ".claude"))
 	if dir := n.claudeStartDir.Load(); dir != nil && *dir != "" {
-		cands = append(cands, *dir)
+		add(*dir)
 	}
 	if n.state != nil {
 		n.state.mu.Lock()
-		for _, st := range n.state.Sessions {
-			if st.ConfigDir != "" && st.ConfigDir != "default" {
-				cands = append(cands, st.ConfigDir)
+		for id := range n.state.Sessions {
+			if dir := n.state.Sessions[id].ConfigDir; dir != "" && dir != "default" {
+				add(dir)
 			}
 		}
 		n.state.mu.Unlock()
 	}
-	if d != nil {
+	var blocked []string
+	if d := n.cdirs; d != nil {
 		d.mu.Lock()
-		cands = append(append(cands, d.found...), d.known...)
+		for _, dir := range d.found {
+			add(dir)
+		}
+		for _, dir := range d.known {
+			add(dir)
+		}
+		blocked = d.blocked
 		d.mu.Unlock()
 	}
-	var out, seen []string
-	for i, c := range cands {
-		c = proto.ExpandHome(c, n.home)
-		real, err := filepath.EvalSymlinks(c)
-		if err != nil {
-			continue // missing
-		}
-		if i > 0 && n.claudeDirBlocked(c, real) {
+
+	var out []string
+	var defaultReal string
+	seen := make(map[string]bool)
+	for i, dir := range candidates {
+		real, err := resolve(dir)
+		if err != nil || seen[real] {
 			continue
 		}
-		if !slices.Contains(seen, real) {
-			seen = append(seen, real)
-			out = append(out, c)
+		if i == 0 {
+			defaultReal = real
+		} else if n.blockedBy(dir, real, candidates[0], defaultReal, blocked) {
+			continue
 		}
-	}
-	if len(out) == 0 {
-		out = []string{n.defaultClaudeDir()}
+		seen[real] = true
+		if claudeDirHasParent(dir) {
+			dir = real
+		}
+		out = append(out, dir)
 	}
 	return out
 }
@@ -130,7 +187,7 @@ func (n *Node) claudeConfigDirs() []string {
 // symlink; that one is listed once.
 func (n *Node) projectDirs() []string {
 	var out, seen []string
-	for _, d := range n.claudeConfigDirs() {
+	for _, d := range n.existingClaudeDirs() {
 		p := filepath.Join(d, "projects")
 		real, err := filepath.EvalSymlinks(p)
 		if err != nil {
@@ -172,17 +229,33 @@ func (n *Node) claudeSessionFile(pid int) string {
 		dir, ok := d.byPID[pid]
 		d.mu.Unlock()
 		if ok {
-			return filepath.Join(proto.ExpandHome(dir, n.home), name)
+			return n.claudeSessionFileIn(dir, name)
 		}
 	}
-	best, bestT := filepath.Join(n.defaultClaudeDir(), name), time.Time{}
-	for _, dir := range n.claudeConfigDirs() {
+	var best string
+	var bestT time.Time
+	for _, dir := range n.existingClaudeDirs() {
 		p := filepath.Join(dir, name)
 		if st, err := os.Stat(p); err == nil && st.ModTime().After(bestT) {
 			best, bestT = p, st.ModTime()
 		}
 	}
+	if best == "" {
+		return n.claudeSessionFileIn(n.defaultClaudeDir(), name)
+	}
 	return best
+}
+
+func (n *Node) claudeSessionFileIn(dir, name string) string {
+	dir = n.expandClaudeDir(dir)
+	if claudeDirHasParent(dir) {
+		real, err := filepath.EvalSymlinks(dir)
+		if err != nil {
+			return ""
+		}
+		dir = real
+	}
+	return filepath.Join(dir, name)
 }
 
 // primaryClaudeDir is the config directory most running claudes use (the default when none runs): the one whose
@@ -196,7 +269,7 @@ func (n *Node) primaryClaudeDir() string {
 	count := map[string]int{}
 	d.mu.Lock()
 	for _, dir := range d.byPID {
-		if real, err := filepath.EvalSymlinks(proto.ExpandHome(dir, n.home)); err == nil {
+		if real, err := filepath.EvalSymlinks(n.expandClaudeDir(dir)); err == nil {
 			count[real]++
 		}
 	}
@@ -220,7 +293,12 @@ func (n *Node) claudeDirBlocked(dir, real string) bool {
 	d.mu.Lock()
 	blocked := d.blocked
 	d.mu.Unlock()
-	return n.blockedBy(dir, real, blocked)
+	def := n.expandClaudeDir(n.defaultClaudeDir())
+	var defReal string
+	if len(blocked) != 0 && real != "" {
+		defReal, _ = filepath.EvalSymlinks(def)
+	}
+	return n.blockedBy(dir, real, def, defReal, blocked)
 }
 
 // cwdBlocked: true if a session's working directory matches any of the machine's blocked patterns.
@@ -246,28 +324,34 @@ func (n *Node) claudeDirBlocks(cwd string) bool {
 	return n.dirMatches(cwd, blocked)
 }
 
-func (n *Node) blockedBy(dir, real string, patterns []string) bool {
+func (n *Node) blockedBy(dir, real, def, defReal string, patterns []string) bool {
 	if len(patterns) == 0 {
 		return false
 	}
-	def := proto.ExpandHome(n.defaultClaudeDir(), n.home)
-	if dir = proto.ExpandHome(dir, n.home); filepath.Clean(dir) == filepath.Clean(def) {
+	dir = n.expandClaudeDir(dir)
+	if dir == def || (real != "" && real == defReal) {
 		return false
 	}
-	if real != "" {
-		if defReal, err := filepath.EvalSymlinks(def); err == nil && real == defReal {
-			return false
-		}
+	if !claudeDirHasParent(dir) && !claudeDirHasParent(def) && filepath.Clean(dir) == filepath.Clean(def) {
+		return false
 	}
-	return proto.ClaudeDirBlocked(dir, n.home, patterns) || (real != "" && proto.ClaudeDirBlocked(real, n.home, patterns))
+	// Either name of a linked home (a resolved spelling names it by its real path), as dirMatches compares.
+	homeReal := realHome(n.home)
+	return proto.DirPatternMatchedOn(dir, n.home, homeReal, patterns) != "" ||
+		(real != "" && proto.DirPatternMatchedOn(real, n.home, homeReal, patterns) != "")
 }
 
 // reportableDirs: the found directories the hub may remember, those patterns do not block.
 func (n *Node) reportableDirs(found, patterns []string) []string {
 	var out []string
+	def := n.expandClaudeDir(n.defaultClaudeDir())
+	var defReal string
+	if len(patterns) > 0 && len(found) > 0 {
+		defReal, _ = filepath.EvalSymlinks(def)
+	}
 	for _, dir := range found {
-		real, _ := filepath.EvalSymlinks(proto.ExpandHome(dir, n.home))
-		if !n.blockedBy(dir, real, patterns) {
+		real, _ := filepath.EvalSymlinks(n.expandClaudeDir(dir))
+		if !n.blockedBy(dir, real, def, defReal, patterns) {
 			out = append(out, dir)
 		}
 	}
@@ -312,7 +396,11 @@ func scannedConfigDir(goos, dir string) string {
 	if goos != "windows" {
 		return dir
 	}
-	return filepath.Clean(strings.ReplaceAll(dir, "/", `\`))
+	dir = strings.ReplaceAll(dir, "/", `\`)
+	if claudeDirHasParent(dir) {
+		return dir
+	}
+	return filepath.Clean(dir)
 }
 
 // setKnownClaudeDirs takes the hub's list (node.configure).
@@ -357,7 +445,7 @@ func (n *Node) refreshClaudeDirs() {
 	runs := map[string]claudeRun{}
 	twice := map[string]bool{}
 	for pid, e := range envs {
-		launcher := e.BaseURL != "" || e.Model != ""
+		launcher := e.BaseURL != "" || e.Model != "" || e.ConfigDir != "" || e.FastUnavailable || e.Vertex
 		if !launcher && !e.Cmd {
 			continue
 		}
@@ -401,8 +489,8 @@ func (n *Node) refreshClaudeDirs() {
 	}
 }
 
-// sessionEnv is the scanned environment of the live claude running session id (false when none was seen or it set
-// neither ANTHROPIC_BASE_URL nor ANTHROPIC_MODEL).
+// sessionEnv is the scanned environment of the live claude running session id. It returns false when the scan
+// found no launcher or fast-mode information for the session.
 func (n *Node) sessionEnv(id string) (procEnv, bool) {
 	d := n.cdirs
 	if d == nil {
@@ -441,6 +529,17 @@ func envVarRe(name string) *regexp.Regexp {
 }
 
 // parseProcEnv picks the variables procEnv keeps out of an environment listing.
+var (
+	disableFastRe = envVarRe("CLAUDE_CODE_DISABLE_FAST_MODE")
+	bedrockRe     = envVarRe("CLAUDE_CODE_USE_BEDROCK")
+	foundryRe     = envVarRe("CLAUDE_CODE_USE_FOUNDRY")
+	vertexRe      = envVarRe("CLAUDE_CODE_USE_VERTEX")
+)
+
+func claudeEnvFlag(value string) bool {
+	return slices.Contains([]string{"1", "true", "yes", "on"}, strings.ToLower(value))
+}
+
 func parseProcEnv(env string) procEnv {
 	get := func(re *regexp.Regexp) string {
 		if m := re.FindStringSubmatch(env); m != nil {
@@ -448,7 +547,11 @@ func parseProcEnv(env string) procEnv {
 		}
 		return ""
 	}
-	return procEnv{ConfigDir: get(claudeConfigEnvRe), BaseURL: get(anthropicBaseRe), Model: get(anthropicModelRe)}
+	return procEnv{
+		ConfigDir: get(claudeConfigEnvRe), BaseURL: get(anthropicBaseRe), Model: get(anthropicModelRe),
+		FastUnavailable: claudeEnvFlag(get(disableFastRe)) || claudeEnvFlag(get(bedrockRe)) || claudeEnvFlag(get(foundryRe)),
+		Vertex:          claudeEnvFlag(get(vertexRe)),
+	}
 }
 
 // scanClaudeProcesses maps this user's running claude processes to the variables procEnv keeps from their
@@ -532,7 +635,7 @@ func (n *Node) listClaudeDirs() []proto.ClaudeDir {
 			cands = append(cands, cand{k, "found"}) // the hub tells config ones apart
 		}
 		for _, dir := range d.byPID {
-			if real, err := filepath.EvalSymlinks(proto.ExpandHome(dir, n.home)); err == nil {
+			if real, err := filepath.EvalSymlinks(n.expandClaudeDir(dir)); err == nil {
 				running[real]++
 			}
 		}
@@ -541,7 +644,7 @@ func (n *Node) listClaudeDirs() []proto.ClaudeDir {
 	var out []proto.ClaudeDir
 	var seen []string
 	for i, c := range cands {
-		real, err := filepath.EvalSymlinks(proto.ExpandHome(c.dir, n.home))
+		real, err := filepath.EvalSymlinks(n.expandClaudeDir(c.dir))
 		if err != nil || slices.Contains(seen, real) {
 			continue
 		}

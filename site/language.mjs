@@ -18,11 +18,11 @@ export function acceptLanguage(header) {
     let valid = true;
     let sawQuality = false;
     for (const parameter of parameters) {
-      const match = /^\s*q\s*=\s*([^\s]+)\s*$/.exec(parameter);
+      const match = /^\s*q\s*(?:=\s*(.*?)\s*)?$/.exec(parameter);
       if (!match) continue;
       if (sawQuality) valid = false;
       sawQuality = true;
-      if (!/^(?:0(?:\.\d{0,3})?|1(?:\.0{0,3})?)$/.test(match[1])) valid = false;
+      if (!/^(?:0(?:\.\d{0,3})?|1(?:\.0{0,3})?)$/.test(match[1] ?? "")) valid = false;
       else quality = Number(match[1]);
     }
     if (!valid || quality === 0) continue;

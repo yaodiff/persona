@@ -192,6 +192,8 @@ struct ExtensionMarkdown: View {
                 return .handled
             })
             .accessibilityIdentifier("plugin-ui-markdown")
+            // An extension card's words look up on a tap (#10977); never in a picture of it.
+            .textLookupSurface(picture ? "" : "card")
     }
 
     /// The subset has no pictures: whatever an image points at is not loaded.

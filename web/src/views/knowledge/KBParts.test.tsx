@@ -30,6 +30,6 @@ describe("Badges", () => {
   });
 
   it("names every level, and an unknown one with its raw value", () => {
-    expect(["P0", "P1", "P2", "P3", "P9"].map(importanceLabel)).toEqual(["P0 最重要", "P1 重要", "P2 一般", "P3 次要", "重要级 P9"]);
+    expect(["P0", "P1", "P2", "P3", "P9"].map(importanceLabel)).toEqual(["P0 最重要", "P1 重要", "P2 一般", "P3 次要", "重要程度 P9"]);
   });
 });

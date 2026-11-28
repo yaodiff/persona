@@ -23,6 +23,7 @@ const launched = vi.hoisted(() => [] as Record<string, unknown>[]);
 vi.mock("../lib/new-agent", async (original) => ({ ...(await original<typeof import("../lib/new-agent")>()), launchAgent: (input: Record<string, unknown>) => { launched.push(input); return "local-1"; } }));
 
 import { NewAgent } from "./NewAgent";
+import { t } from "../i18n";
 import { resetModelListsForTests } from "../lib/session-models";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -30,6 +31,7 @@ import { resetModelListsForTests } from "../lib/session-models";
 const both = ["default", "bypassPermissions"];
 const LAUNCHERS: Launcher[] = [
   { name: "claude", agent: "claude" },
+  { name: "agy", agent: "agy", source: "agy", display_name: "Antigravity", permission_modes: ["default", "acceptEdits", "plan", "bypassPermissions"] },
   { name: "grok", agent: "paseo", source: "paseo", display_name: "Grok", permission_modes: both },
   { name: "kimi", agent: "paseo", source: "paseo", display_name: "Kimi", permission_modes: ["default"] },
 ];
@@ -59,7 +61,7 @@ beforeEach(() => {
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
     if (url.includes("/model-config/purposes/")) return json({ error: "not found" }, 404);
-    if (url.includes("/launchers/") && url.includes("/models")) return json({ agent: url.includes("/claude/") ? "claude" : "paseo", models: [] });
+    if (url.includes("/launchers/") && url.includes("/models")) return json({ agent: url.includes("/claude/") ? "claude" : url.includes("/agy/") ? "agy" : "paseo", models: [] });
     if (url.includes("/launchers")) return json({ launchers: LAUNCHERS });
     return json({ path: "/code", entries: [] });
   }));
@@ -89,7 +91,7 @@ describe("New agent on a launcher that lists its permission modes", () => {
     await open("grok", "b");
     act(() => button("完全访问").click());
     expect(choices(providerField())).toEqual([["跟随启动器", "false"], ["完全访问", "true"]]);
-    expect(providerField()!.parentElement!.textContent).toContain("完全访问：改文件、跑命令都不问你");
+    expect(providerField()!.parentElement!.textContent).toContain("完全访问：编辑文件和执行命令均不会向你确认");
     act(() => button("启动").click());
     expect(launched[0]).toMatchObject({ launcher: "grok", permissionMode: "bypassPermissions" });
     expect(localStorage.getItem("new.mode.mac")).toBe("plan");
@@ -110,5 +112,20 @@ describe("New agent on a launcher that lists its permission modes", () => {
     expect(button("计划模式")).toBeDefined();
     act(() => button("启动").click());
     expect(launched[0]).toMatchObject({ launcher: "claude", permissionMode: "plan" });
+  });
+
+  it("Antigravity with restricted permission_modes hides Auto, keeps Ask first, and ignores a stale remembered auto (#17239)", async () => {
+    localStorage.setItem("new.mode.mac", "auto");
+    await open("agy", "e");
+    expect(providerField()).toBeNull();
+    expect(button(t("lib-session-actions.mode_default"))).toBeDefined();
+    expect(button(t("lib-session-actions.mode_accept_edits"))).toBeDefined();
+    expect(button(t("lib-session-actions.mode_plan"))).toBeDefined();
+    expect(button(t("lib-session-actions.mode_bypass_permissions"))).toBeDefined();
+    expect(button(t("lib-session-actions.mode_auto"))).toBeUndefined();
+    act(() => button("启动").click());
+    expect(launched[0]).toMatchObject({ launcher: "agy" });
+    expect(launched[0].permissionMode).toBeUndefined();
+    expect(localStorage.getItem("new.mode.mac")).toBe("auto");
   });
 });

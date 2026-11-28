@@ -114,6 +114,7 @@ try {
         }
         if (!on && e.off) {
           for (const k of e.off.kept) {
+            if (k.needs_on && !spec.phases.includes("on")) continue;  // only data the on phase made exists
             await go(e.page);
             const listed = await visible(page, k, 15000);
             record(id, `${e.name}: ${k.name} still listed while off`, scheme, listed, `${k.selector ?? k.text} on ${e.page}`);
@@ -130,6 +131,15 @@ try {
           const gone = await visible(page, { text: e.off_page.text }, 15000);
           record(id, `${e.off_page.path} answers like a removed page`, scheme, gone, page.url());
           await shot(`${id}-${e.off_page.path.replace(/\W+/g, "-")}-off`);
+        }
+        // A page the default panel keeps for existing data (#13430): it stays, read-only, and none of the module's
+        // write entries is on it.
+        if (!on && e.off_stays) {
+          const p = e.off_stays;
+          await go(p.path);
+          for (const s of p.shows) record(id, `${p.path} stays, read-only: shows ${s.name}`, scheme, await visible(page, s, 20000), page.url());
+          for (const h of p.hides) record(id, `${p.path}, read-only: no ${h.name}`, scheme, !(await visible(page, h, 1500)), `${h.selector ?? h.text} on ${page.url()}`);
+          await shot(`${id}-${p.path.replace(/\W+/g, "-")}-off-readonly`);
         }
       }
     }
@@ -149,6 +159,7 @@ try {
         // Kept data opened inside the app while its module is off: the read-only page must fetch none of the module.
         if (!spec.expect[id] && e.off) {
           for (const k of e.off.kept) {
+            if (k.needs_on && !spec.phases.includes("on")) continue;
             await page.evaluate((p) => {
               history.pushState(null, "", p);
               dispatchEvent(new PopStateEvent("popstate"));

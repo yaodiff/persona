@@ -14,7 +14,7 @@ const css = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
 // The minutes' summary card's own tokens load with the Knowledge page (#6563).
 const minutesCss = readFileSync(new URL("../modules/recording/minutes-overview.css", import.meta.url), "utf8");
 const BACKGROUNDS = ["page", "canvas", "surface", "inset", "hover", "hover-2", "field"];
-const TEXT = ["ink", "ink-2", "ink-3", "accent-ink", "attention", "green", "orange", "red", "ai", "source-terminal", "source-desktop"];
+const TEXT = ["ink", "ink-2", "ink-3", "accent-ink", "attention", "green", "orange", "red", "ai", "source-desktop"];
 
 // A color laid over another (#rrggbbaa over #rrggbb), and `color-mix(in srgb, a (1 - p), b p)`, as the browser paints them.
 const channels = (hex: string) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));

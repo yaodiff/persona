@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "kb.schema.json",
   "title": "Knowledge base",
-  "description": "What an extension's program may ask of the knowledge base directly (docs/extensions/extensions.md \"Knowledge base RPC\"): kb.list, kb.recent, kb.get, kb.day, kb.search, kb.owner (permission kb.read) and kb.update (kb.write), and the events event.kb.changed / event.kb.forgotten. An extension's kb.update is attributed to it: it may not touch what the user or another extension holds (conflict), and it holds the locked fields it writes (docs/assistant/knowledge.md \"Who holds a field\"). Params are strict: no contribution, and an unknown field is invalid_params. A connector hands the knowledge base its conversations, items and posts through the connector calls instead (connector.schema.json). Plugin-side: only the hub and the program speak it.",
+  "description": "What an extension's program may ask of the knowledge base directly (docs/extensions/extensions.md \"Knowledge base RPC\"): kb.list, kb.recent, kb.get, kb.day, kb.search, kb.owner (permission kb.read), kb.update and kb.put_recording (kb.write), and the events event.kb.changed / event.kb.forgotten. An extension's kb.update is attributed to it: it may not touch what the user or another extension holds (conflict), and it holds the locked fields it writes (docs/assistant/knowledge.md \"Who holds a field\"). Params are strict: no contribution, and an unknown field is invalid_params. A connector hands the knowledge base its conversations, items and posts through the connector calls instead (connector.schema.json). Plugin-side: only the hub and the program speak it.",
   "x-side": "plugin",
   "x-methods": {
     "kb.list": {"from": "program", "params": "KBListParams", "result": "KBListResult"},
@@ -11,21 +11,64 @@
     "kb.search": {"from": "program", "params": "KBSearchParams", "result": "KBSearchResult"},
     "kb.update": {"from": "program", "params": "KBUpdateParams", "result": "KBUpdateResult"},
     "kb.owner": {"from": "program", "params": "KBOwnerParams", "result": "KBOwner"},
-    "kb.recent": {"from": "program", "params": "KBRecentParams", "result": "KBRecentResult"}
+    "kb.recent": {"from": "program", "params": "KBRecentParams", "result": "KBRecentResult"},
+    "kb.import_checkpoint": {"from": "program", "params": "KBImportCheckpointParams", "result": "KBImportCheckpointResult"},
+    "kb.sent_markers": {"from": "program", "params": "KBSentMarkersParams", "result": "KBSentMarkersResult"},
+    "kb.put_recording": {"from": "program", "params": "KBPutRecordingParams", "result": "KBPutRecordingResult"}
   },
   "x-events": {
     "event.kb.changed": {"from": "hub", "params": "KBChangedEvent"},
     "event.kb.forgotten": {"from": "hub", "params": "KBForgottenEvent"}
   },
   "$defs": {
+    "KBImportCheckpointParams": {
+      "type": "object", "properties": {}, "additionalProperties": false,
+      "description": "The host selects the provider, source, account and chat for this import."
+    },
+    "KBImportState": {
+      "description": "The host importer’s committed state for the selected chat.",
+      "type": "string", "x-enum": "closed", "enum": ["pending", "running", "done", "paused", "error", "unreadable"]
+    },
+    "KBImportCheckpointResult": {
+      "type": "object", "additionalProperties": false, "required": ["state", "approval", "read", "written"],
+      "properties": {
+        "state": {"$ref": "#/$defs/KBImportState"},
+        "approval": {"type": "string", "minLength": 1, "maxLength": 128},
+        "read": {"type": "integer", "minimum": 0},
+        "written": {"type": "integer", "minimum": 0}
+      }
+    },
+    "KBSentMarkersParams": {
+      "type": "object", "additionalProperties": false, "required": ["day", "approval"],
+      "properties": {
+        "day": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$", "maxLength": 10},
+        "approval": {"type": "string", "minLength": 1, "maxLength": 128},
+        "after": {"type": "integer", "minimum": 0, "maximum": 2147483647}
+      }
+    },
+    "KBSentMarker": {
+      "type": "object", "additionalProperties": false, "required": ["n", "sent_by"],
+      "properties": {
+        "n": {"type": "integer", "minimum": 1, "maximum": 2147483647},
+        "sent_by": {"type": "string", "enum": ["assistant"]},
+        "recalled_at": {"type": "string", "format": "date-time", "maxLength": 40}
+      }
+    },
+    "KBSentMarkersResult": {
+      "type": "object", "additionalProperties": false, "required": ["markers"],
+      "properties": {
+        "markers": {"type": "array", "maxItems": 100, "items": {"$ref": "#/$defs/KBSentMarker"}},
+        "next_after": {"type": "integer", "minimum": 1, "maximum": 2147483647}
+      }
+    },
     "KBKind": {
       "type": "string",
       "enum": ["projects", "chats", "people", "docs", "meetings", "events", "recordings", "topics"]
     },
     "KBErrorCode": {
-      "description": "error.code of a knowledge-base call besides permission_denied (data {scope}, the one missing): invalid_params, not_found, assistant_offline (the manager is away), kb_unavailable (not open yet), conflict (kb.update touches fields the user or another extension holds; data KBConflict, nothing was written). assistant_offline and kb_unavailable are worth trying again; conflict is for the user to decide.",
+      "description": "error.code of a knowledge-base call besides permission_denied (data {scope}, the one missing): invalid_params, not_found, assistant_offline (the manager is away), kb_unavailable (not open yet), conflict (kb.update touches fields the user or another extension holds; data KBConflict, nothing was written). assistant_offline and kb_unavailable are worth trying again; conflict is for the user to decide. deleted: kb.put_recording of a recording the user deleted, which is not made again.",
       "type": "string",
-      "enum": ["invalid_params", "not_found", "assistant_offline", "kb_unavailable", "conflict"]
+      "enum": ["invalid_params", "not_found", "assistant_offline", "kb_unavailable", "conflict", "deleted"]
     },
     "KBConflict": {
       "description": "The data of a conflict error: field → who holds it (user, or ext:<extension id>); a linked entity's field is <kind>/<id>.<field>.",
@@ -167,6 +210,7 @@
         "segments": {"type": "array", "items": {"$ref": "#/$defs/KBRecordingSegment"}},
         "minutes": {"description": "A recording's meeting minutes, once written (docs/assistant/meeting-minutes.md); kept as the hub sends them."},
         "recap": {"description": "An all-day recording's day recap, once written (docs/assistant/day-recap.md); kept as the hub sends them."},
+        "speakers": {"$ref": "#/$defs/KBDetailSpeakers", "x-go-pointer": true, "description": "A hub-transcribed meeting's speaker list and timeline (docs/assistant/meeting-minutes.md \"Speakers (#17674)\"); absent when the meeting has no speaker timeline."},
         "points": {"type": "array", "items": {"$ref": "#/$defs/KBTopicPoint"}, "description": "A topic's knowledge points (docs/assistant/knowledge.md \"Topics\")."},
         "profiles": {"type": "object", "additionalProperties": {"$ref": "#/$defs/KBProfileRecord"}, "description": "A person's profiles by writer (\"user\", \"ext:<id>\"), as written; summary shows them too (docs/assistant/knowledge.md \"Person profiles\")."},
         "paused": {"type": "string", "description": "A recording's in-flight state that nothing can settle, as KBEntry.paused: module_off when the recording module is off. Derived when read, never stored."},
@@ -175,6 +219,55 @@
         "sources": {"type": "array", "items": {"$ref": "#/$defs/KBProjectSource"}}
       },
       "required": ["kind", "id", "path", "meta"]
+    },
+    "KBSpeakerState": {
+      "description": "Speaker separation state of a hub-transcribed meeting.",
+      "type": "string",
+      "enum": ["waiting", "ready", "failed", "cleared"],
+      "x-enum": "closed"
+    },
+    "KBSpeakerID": {
+      "description": "Hub-assigned speaker identifier within a meeting (s1, s2, ...).",
+      "type": "string",
+      "x-id": "KBSpeakerID"
+    },
+    "KBSpeakerTurn": {
+      "description": "One speaking interval encoded as a 3-element JSON tuple [start, end, speaker_id].",
+      "x-opaque": "Heterogeneous JSON tuple [start, end, speaker_id]"
+    },
+    "KBDetailSpeakers": {
+      "description": "A hub-transcribed meeting's speaker list and timeline on detail.speakers (docs/assistant/meeting-minutes.md \"Speakers (#17674)\").",
+      "type": "object",
+      "properties": {
+        "rev": {"type": "integer", "x-go-type": "int64"},
+        "state": {"$ref": "#/$defs/KBSpeakerState"},
+        "reason": {"type": "string"},
+        "quality": {"type": "string"},
+        "source": {"type": "string"},
+        "done": {"type": "number", "x-go-pointer": true},
+        "end": {"type": "number", "x-go-pointer": true},
+        "people": {"type": "array", "items": {"$ref": "#/$defs/KBDetailSpeakerPerson"}},
+        "candidates": {"type": "array", "items": {"type": "string"}},
+        "spans": {"type": "array", "items": {"$ref": "#/$defs/KBSpeakerTurn"}},
+        "covered": {"type": "array", "items": {"type": "array", "items": {"type": "number"}}},
+        "trimmed": {"type": "boolean"}
+      },
+      "required": ["rev", "state", "reason", "quality", "source", "people", "candidates", "spans", "covered", "trimmed"]
+    },
+    "KBDetailSpeakerPerson": {
+      "description": "One speaker entry in detail.speakers.people.",
+      "type": "object",
+      "properties": {
+        "id": {"$ref": "#/$defs/KBSpeakerID"},
+        "name": {"type": "string"},
+        "me": {"type": "boolean"},
+        "merged_into": {"$ref": "#/$defs/KBSpeakerID"},
+        "minor": {"type": "boolean"},
+        "seconds": {"type": "number"},
+        "lines": {"type": "integer"},
+        "samples": {"type": "array", "items": {"type": "number"}}
+      },
+      "required": ["id"]
     },
     "KBProjectSource": {
       "type": "object",
@@ -327,7 +420,9 @@
         "text": {"type": "string"},
         "n": {"type": "integer", "description": "An all-day recording's line number: the segment's 1-based position in its uploads (docs/assistant/day-recap.md); absent on other recordings."},
         "source": {"type": "string", "enum": ["hub", "device"], "description": "Whose text the segment is in a meeting transcribed on the hub (docs/assistant/meeting-minutes.md \"The transcript of record\"): hub or device; absent means device."},
-        "echo": {"type": "boolean", "description": "The line is Persona's own answer as the meeting's microphone heard it (docs/assistant/meeting-minutes.md \"Persona's echo\"): kept in the transcript but not what the meeting said, so leave it out of anything read as the meeting's words; absent (false) on every other line."}
+        "echo": {"type": "boolean", "description": "The line is Persona's own answer as the meeting's microphone heard it (docs/assistant/meeting-minutes.md \"Persona's echo\"): kept in the transcript but not what the meeting said, so leave it out of anything read as the meeting's words; absent (false) on every other line."},
+        "speaker": {"type": "string", "description": "Canonical speaker id (\"s1\", \"s2\", ...) assigned by the hub on read when a speaker timeline exists (docs/assistant/meeting-minutes.md \"Speakers (#17674)\"); absent otherwise."},
+        "speaker_unsure": {"type": "boolean", "description": "True when the speaker label is uncertain or the meeting's separation quality is low (docs/assistant/meeting-minutes.md \"Speakers (#17674)\"); absent (false) otherwise."}
       },
       "required": ["start", "end", "text"]
     },
@@ -435,6 +530,123 @@
         "ignored": {"type": "array", "items": {"$ref": "#/$defs/KBIgnoredField"}, "description": "Fields the update carried that its kind does not use (a person's summary and log, for one), and links to make that the user removed: not applied, each with why."}
       },
       "required": ["id"]
+    },
+    "KBRecordingID": {
+      "type": "string",
+      "x-id": "KBRecordingID",
+      "description": "A recording's UUID, picked by the extension so a retry lands on the same recording."
+    },
+    "KBMinutesActionID": {
+      "type": "string",
+      "x-id": "KBMinutesActionID",
+      "description": "An action item's id, picked by the extension and stable across writes."
+    },
+    "KBTodoID": {
+      "type": "string",
+      "x-id": "KBTodoID",
+      "description": "A to-do's id, set by the hub when the user makes a to-do of an action item."
+    },
+    "KBRecordingMeetingKind": {
+      "type": "string",
+      "enum": ["events", "meetings"],
+      "x-enum": "closed",
+      "description": "Whether a recording's meeting is a calendar item (events) or an imported meeting (meetings)."
+    },
+    "KBRecordingMeetingID": {
+      "type": "string",
+      "x-id": "KBRecordingMeetingID",
+      "description": "A calendar item's or imported meeting's id in the knowledge base."
+    },
+    "KBPutRecordingParams": {
+      "description": "kb.put_recording (kb.write): create or update the extension's own recording with its minutes and, optionally, its transcript (docs/extensions/extensions.md \"Writing recordings and minutes\"). It is the extension's: no other extension may write it, and no extension a recording the phone uploaded (permission_denied). The same params again change nothing; a recording the user deleted is not made again (deleted). A recording with minutes is kept past recording_days, its minutes until minutes_days.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string", "x-id": "KBRecordingID", "description": "A UUID the extension picks; one derived from its own source id makes a retry land on the same recording."},
+        "title": {"type": "string"},
+        "started_at": {"type": "string", "format": "date-time", "description": "An RFC 3339 time."},
+        "ended_at": {"type": "string", "format": "date-time", "description": "An RFC 3339 time, not before started_at."},
+        "language": {"type": "string", "description": "An i18n code (zh-Hans, en, ja)."},
+        "minutes": {"$ref": "#/$defs/KBRecordingMinutes"},
+        "transcript": {"type": "array", "items": {"$ref": "#/$defs/KBRecordingSegment"}, "maxItems": 20000, "description": "Optional; n, source, echo, speaker and speaker_unsure are the hub's and are dropped. Without minutes, the hub makes minutes of it when the recording module is on."},
+        "projects": {"type": "array", "items": {"type": "string"}, "maxItems": 20, "description": "Slugs of existing projects to link it to; a later write never removes a link."},
+        "meeting": {"$ref": "#/$defs/KBRecordingMeeting"}
+      },
+      "required": ["id", "started_at"]
+    },
+    "KBRecordingMinutes": {
+      "description": "The minutes the extension wrote, stored as minutes.json and minutes.md. The hub sets version, revision, generated_at, when, start and end. Minutes or a transcript is required.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "title": {"type": "string"},
+        "where": {"type": "string"},
+        "attendees": {"type": "array", "items": {"type": "string"}, "maxItems": 200},
+        "points": {"type": "array", "items": {"$ref": "#/$defs/KBMinutesPoint"}, "maxItems": 200},
+        "decisions": {"type": "array", "items": {"$ref": "#/$defs/KBMinutesItem"}, "maxItems": 200},
+        "actions": {"type": "array", "items": {"$ref": "#/$defs/KBMinutesAction"}, "maxItems": 200},
+        "open": {"type": "array", "items": {"$ref": "#/$defs/KBMinutesItem"}, "maxItems": 200},
+        "language": {"type": "string", "description": "An i18n code: what the minutes are written in."},
+        "markdown": {"type": "string", "description": "The minutes as Markdown: minutes.md, what searches and kb.get read. Required, not blank."}
+      },
+      "required": ["markdown"]
+    },
+    "KBMinutesItem": {
+      "description": "A decision or an open question of the minutes.",
+      "type": "object",
+      "properties": {
+        "text": {"type": "string"},
+        "at": {"type": "number", "description": "Seconds from the recording's start."},
+        "photo": {"type": "integer"}
+      },
+      "required": ["text", "at"]
+    },
+    "KBMinutesPoint": {
+      "description": "A point discussed; who only when the source names the person.",
+      "type": "object",
+      "properties": {
+        "text": {"type": "string"},
+        "at": {"type": "number", "description": "Seconds from the recording's start."},
+        "photo": {"type": "integer"},
+        "who": {"type": "string"}
+      },
+      "required": ["text", "at"]
+    },
+    "KBMinutesAction": {
+      "description": "An action item. id is the extension's, stable across writes (at most 64 characters): a to-do the user made of it stays on it.",
+      "type": "object",
+      "properties": {
+        "id": {"$ref": "#/$defs/KBMinutesActionID"},
+        "who": {"type": "string"},
+        "what": {"type": "string"},
+        "by": {"type": "string", "description": "The deadline as said."},
+        "due_date": {"type": "string", "description": "YYYY-MM-DD, when by is one date."},
+        "at": {"type": "number", "description": "Seconds from the recording's start."},
+        "photo": {"type": "integer"},
+        "todo_id": {"type": "string", "x-id": "KBTodoID", "description": "The hub's: the to-do made of it."}
+      },
+      "required": ["id", "what", "at"]
+    },
+    "KBRecordingMeeting": {
+      "description": "The calendar item (events) or imported meeting (meetings) the recording was; it must exist.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": {"$ref": "#/$defs/KBRecordingMeetingKind"},
+        "id": {"$ref": "#/$defs/KBRecordingMeetingID"}
+      },
+      "required": ["kind", "id"]
+    },
+    "KBPutRecordingResult": {
+      "type": "object",
+      "properties": {
+        "id": {"$ref": "#/$defs/KBRecordingID"},
+        "revision": {"type": "integer", "description": "The hub's revision of the recording: 1 when created, one more for each write that changed it."},
+        "created": {"type": "boolean"},
+        "unchanged": {"type": "boolean", "description": "The write was the same as the last one; nothing was written."},
+        "minutes_version": {"type": "integer"}
+      },
+      "required": ["id", "revision"]
     },
     "KBOwnerParams": {
       "description": "kb.owner takes nothing.",

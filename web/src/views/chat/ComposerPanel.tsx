@@ -13,7 +13,8 @@ import { useSkillCatalog, type CatalogMemory, type SkillCatalogState } from "./u
 import { SkillDetail, SkillRow } from "./SkillRow";
 import { SkillCatalogStatus } from "./SkillCatalogStatus";
 import type { FsListing } from "../../lib/files";
-import { browseTarget, byPrefix, displayTitle, nameMatches, otherSessions, pageSessions, relPath, sessionDetail } from "../../lib/mentions";
+import { displayTitle } from "../../lib/mentions";
+import { browseTarget, byPrefix, nameMatches, otherSessions, pageSessions, relPath, sessionDetail, sessionQuote } from "../../lib/mentions-panel";
 import type { RepositoryMentionRow } from "../../lib/mentions-repositories";
 import { modeTitle } from "../../lib/session-actions";
 import type { Session } from "../../lib/types";
@@ -112,9 +113,9 @@ export interface MentionSource {
 export type MentionRow =
   | { kind: "skill"; id: string; skill: MentionSkill }
   | { kind: "file"; id: string; name: string; detail: string; insert: string; dir: boolean }
-  | { kind: "workspace"; id: string; name: string; detail: string; workspace: Workspace }
+  | { kind: "workspace"; id: string; name: string; detail: string; workspace: Workspace; toContext: () => { title: string; url: string; text: string; attrs: Record<string, string> } }
   | RepositoryMentionRow
-  | { kind: "session"; id: string; name: string; detail: string; session: Session };
+  | { kind: "session"; id: string; name: string; detail: string; session: Session; toContext: () => { title: string; url: string; text: string } };
 
 /** The panel's own rows: the box's file picker and the session's Plan mode. */
 export type PanelAction = "attach" | "plan";
@@ -259,7 +260,7 @@ function useMentionRowsCore(
       out.push(...assistant.rows(query));
     }
     for (const s of source.sessions === false ? [] : otherSessions([...candidateSessions], source.self, q)) {
-      out.push({ kind: "session", id: `session:${s.machine_id}/${s.session_id}`, name: displayTitle(s), detail: sessionDetail(s), session: s });
+      out.push({ kind: "session", id: `session:${s.machine_id}/${s.session_id}`, name: displayTitle(s), detail: sessionDetail(s), session: s, toContext: () => sessionQuote(s) });
     }
     // A large skill inventory must not crowd the existing resource groups out of the empty panel.
     const matches: MentionRow[] = matchingSkills(skills ?? [], q).map(skill => ({ kind: "skill", id: `skill:${skill.id}`, skill }));

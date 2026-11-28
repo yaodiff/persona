@@ -497,6 +497,32 @@ describe("Feishu bot dialog", () => {
     open.mockRestore();
   });
 
+  it("ignores unsafe guide_url and falls back to safe https permission_url, or hides button when both are unsafe", async () => {
+    const open = vi.spyOn(window, "open").mockImplementation(() => null);
+    try {
+      const larkcli: HubConnector = {
+        id: "larkcli",
+        name: "Lark via lark-cli",
+        status: "no_permission",
+        missing_scopes: ["im:chat:read"],
+        guide_url: "https:/admin",
+        permission_url: "https://open.feishu.cn/app/permissions",
+      };
+      act(() => root.render(<FeishuBot larkcli={larkcli} />));
+      await act(async () => calls.status[0].resolve(saved({ owner: { name: "owner", paired_at: 1 } })));
+      await act(async () => host.querySelector<HTMLButtonElement>("button")!.click());
+
+      const permission = [...document.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes(t("settings-feishubot.read_open_platform")))!;
+      await act(async () => permission.click());
+      expect(open).toHaveBeenCalledWith("https://open.feishu.cn/app/permissions", "_blank", "noopener,noreferrer");
+
+      act(() => root.render(<FeishuBot larkcli={{ ...larkcli, guide_url: "javascript:alert(1)", permission_url: "https://user:pw@evil.example/p" }} />));
+      expect([...document.querySelectorAll<HTMLButtonElement>("button")].some((button) => button.textContent?.includes(t("settings-feishubot.read_open_platform")))).toBe(false);
+    } finally {
+      open.mockRestore();
+    }
+  });
+
   it("lists lark-cli profiles and saves the selected choice", async () => {
     const larkcli: HubConnector = { id: "larkcli", name: "Lark via lark-cli", status: "ok", account: "me" };
     connectorList.value = [larkcli];
@@ -577,17 +603,11 @@ describe("Feishu bot dialog", () => {
   });
 
   it("fills the saved App ID into a dialog opened by URL before the status arrived", async () => {
-    const before = location.href;
-    history.replaceState(null, "", "?tab=connectors&connector=feishu-bot");
-    try {
-      act(() => root.render(<FeishuBot larkcli={null} />));
-      await advanced();
-      expect(input("App ID").value).toBe("");
-      await act(async () => calls.status[0].resolve(saved()));
-      expect(input("App ID").value).toBe("cli_saved");
-    } finally {
-      history.replaceState(null, "", before);
-    }
+    act(() => root.render(<FeishuBot larkcli={null} onRouteClose={() => {}} />));
+    await advanced();
+    expect(input("App ID").value).toBe("");
+    await act(async () => calls.status[0].resolve(saved()));
+    expect(input("App ID").value).toBe("cli_saved");
   });
 
   it("keeps a typed App ID when a feature switch is flipped", async () => {
@@ -675,6 +695,27 @@ describe("Feishu bot dialog", () => {
     expect(read().getAttribute("aria-checked")).toBe("false");
     await act(async () => read().click());
     expect(calls.update[0].body).toEqual({ features: { read_group: true } });
+  });
+
+  it("hides answering /read in the group directly for a hub from before it", async () => {
+    await open(saved({ features: { ...saved().features, read_group: true } }));
+    expect(document.body.querySelector(`[role="switch"][aria-label="${t("settings-feishubot.feature_read_group_direct_title")}"]`)).toBeNull();
+  });
+
+  it("dims answering /read in the group directly while /read is off", async () => {
+    const direct = () => document.body.querySelector<HTMLButtonElement>(`[role="switch"][aria-label="${t("settings-feishubot.feature_read_group_direct_title")}"]`)!;
+    await open(saved({ features: { ...saved().features, read_group: false, read_group_direct: false } }));
+    expect(direct().getAttribute("aria-checked")).toBe("false");
+    expect(direct().disabled).toBe(true);
+  });
+
+  it("switches answering /read in the group directly on its own, off by default", async () => {
+    const direct = () => document.body.querySelector<HTMLButtonElement>(`[role="switch"][aria-label="${t("settings-feishubot.feature_read_group_direct_title")}"]`)!;
+    await open(saved({ features: { ...saved().features, read_group: true, read_group_direct: false } }));
+    expect(direct().getAttribute("aria-checked")).toBe("false");
+    expect(direct().disabled).toBe(false);
+    await act(async () => direct().click());
+    expect(calls.update[0].body).toEqual({ features: { read_group_direct: true } });
   });
 
   it("switches the workbench on its own, off by default", async () => {
@@ -832,6 +873,36 @@ describe("Feishu bot dialog", () => {
     await act(async () => calls.update[1].resolve(saved({ features })));
     expect(nativeProcess()!.getAttribute("aria-checked")).toBe("true");
   });
+
+  // The private-chat native process and the unified answer switches show only when the hub sends their keys;
+  // "cot_answer" waits disabled while neither a DM nor a topic native agent message is on.
+  it("hides the DM native process and the unified answer switches when the hub leaves the keys out", async () => {
+    const dmCot = () => document.body.querySelector<HTMLButtonElement>(`[role="switch"][aria-label="${t("settings-feishubot.feature_dm_cot_title")}"]`);
+    const cotAnswer = () => document.body.querySelector<HTMLButtonElement>(`[role="switch"][aria-label="${t("settings-feishubot.feature_cot_answer_title")}"]`);
+    await open(saved());
+    expect(dmCot()).toBeNull();
+    expect(cotAnswer()).toBeNull();
+  });
+
+  it("toggles the DM native process and enables the unified answer switch once a DM or topic native process is on", async () => {
+    const dmCot = () => document.body.querySelector<HTMLButtonElement>(`[role="switch"][aria-label="${t("settings-feishubot.feature_dm_cot_title")}"]`);
+    const cotAnswer = () => document.body.querySelector<HTMLButtonElement>(`[role="switch"][aria-label="${t("settings-feishubot.feature_cot_answer_title")}"]`);
+    const features = { ...saved().features, topic_cot: true, dm_cot: false, cot_answer: false };
+    await open(saved({ features }));
+    expect(dmCot()!.getAttribute("aria-checked")).toBe("false");
+    expect(cotAnswer()!.disabled).toBe(false);
+
+    await act(async () => dmCot()!.click());
+    expect(calls.update[0].body).toEqual({ features: { dm_cot: true } });
+    await act(async () => calls.update[0].resolve(saved({ features: { ...features, dm_cot: true } })));
+    expect(dmCot()!.getAttribute("aria-checked")).toBe("true");
+  });
+
+  it("dims cot_answer while neither a DM nor a topic native agent message is on", async () => {
+    const cotAnswer = () => document.body.querySelector<HTMLButtonElement>(`[role="switch"][aria-label="${t("settings-feishubot.feature_cot_answer_title")}"]`);
+    await open(saved({ features: { ...saved().features, topic_cot: false, dm_cot: false, cot_answer: true } }));
+    expect(cotAnswer()!.disabled).toBe(true);
+  });
 });
 
 describe("topic group policies", () => {
@@ -894,5 +965,31 @@ describe("topic group policies", () => {
     expect(calls.update[3].body).toEqual({ topic_chats: [{ ...group, home: false }] });
     await act(async () => calls.update[3].resolve(saved({ owner, topic_chats: [{ ...group, home: false }] })));
     expect(homeSelect().value).toBe("");
+  });
+  it("saves the to-do mode for one group without changing the home", async () => {
+    const group = { chat_id: "oc_example", name: "Example group", home: true, todo_mode: "answer_only" } as const;
+    const other = { chat_id: "oc_other", name: "Other group", todo_mode: "always_todo" } as const;
+    await open(saved({ owner, topic_chats: [group, other] }));
+    const modeSelect = (name: string) =>
+      document.body.querySelector<HTMLSelectElement>(`select[aria-label="${t("settings-feishubot.topic_todo_for", { name })}"]`)!;
+    const choose = async (value: string) => act(async () => {
+      const select = modeSelect(group.name);
+      select.value = value;
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(modeSelect(group.name).value).toBe("answer_only");
+    await choose("main_decides");
+    expect(JSON.parse(JSON.stringify(calls.update[0].body))).toEqual({ topic_chats: [
+      { chat_id: group.chat_id, name: group.name, todo_mode: "main_decides" },
+      { chat_id: other.chat_id, name: other.name },
+    ] });
+    expect(modeSelect(group.name).disabled).toBe(true);
+    await act(async () => calls.update[0].reject!(new Error("Synthetic save failure")));
+    expect(modeSelect(group.name).value).toBe("answer_only");
+    await choose("main_decides");
+    await act(async () => calls.update[1].resolve(saved({ owner, topic_chats: [{ ...group, todo_mode: "main_decides" }, other] })));
+    expect(modeSelect(group.name).value).toBe("main_decides");
+    expect(modeSelect(other.name).value).toBe("always_todo");
+    expect(homeSelect().value).toBe(group.chat_id);
   });
 });

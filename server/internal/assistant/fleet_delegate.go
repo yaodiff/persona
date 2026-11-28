@@ -466,6 +466,6 @@ func (s *Service) reanswer(ctx context.Context, id string, answers map[string]st
 	s.fleet.mu.Unlock()
 	res := proto.Resolution{Answers: kept}
 	s.event(ctx, map[string]any{"type": "interaction_reanswered", "id": id, "resolution": res})
-	go s.InteractionResolved(context.WithoutCancel(ctx), InteractionResolved{Interaction: ix, Resolution: res, Status: "resolved"})
+	s.interactionResolvedSoon(context.WithoutCancel(ctx), InteractionResolved{Interaction: ix, Resolution: res, Status: "resolved"})
 	return 0, nil
 }

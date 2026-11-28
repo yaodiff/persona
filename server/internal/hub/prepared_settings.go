@@ -2,9 +2,7 @@ package hub
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"fmt"
 	"sync"
 	"time"
 
@@ -184,33 +182,32 @@ func (h *Hub) waitPreparedSetting(ctx context.Context, manager string, ix proto.
 }
 
 func init() {
-	handleBus(assistantwire.MethodFleetApprovalApply, (*Hub).busPreparedSettingApply)
-	handleBus(assistantwire.MethodFleetApprovalDiscard, (*Hub).busPreparedSettingDiscard)
+	handleTypedBus(assistantwire.FleetApprovalApplyMethod, "invalid prepared setting apply: ", (*Hub).busPreparedSettingApply)
+	handleTypedBus(assistantwire.FleetApprovalDiscardMethod, "invalid prepared setting discard: ", (*Hub).busPreparedSettingDiscard)
 }
 
-func (h *Hub) busPreparedSettingApply(ctx context.Context, c *busConn, params json.RawMessage) (any, error) {
-	var p assistantwire.FleetApprovalApply
-	if err := json.Unmarshal(params, &p); err != nil || p.InteractionID == "" {
-		return nil, fmt.Errorf("invalid prepared setting apply: %w", err)
+func (h *Hub) busPreparedSettingApply(ctx context.Context, c *busConn, p assistantwire.FleetApprovalApply) (assistantwire.FleetApprovalApplyResult, error) {
+	if p.InteractionID == "" {
+		// The original check formatted a nil decode error for a missing ID.
+		return assistantwire.FleetApprovalApplyResult{}, errors.New("invalid prepared setting apply: %!w(<nil>)")
 	}
 	if p.Resolution.Remembered || !p.Resolution.UserAllowed() {
-		return nil, errors.New("a prepared setting apply requires a fresh owner Allow")
+		return assistantwire.FleetApprovalApplyResult{}, errors.New("a prepared setting apply requires a fresh owner Allow")
 	}
 	text, err := h.applyPreparedSetting(ctx, c.ident.ID, p.InteractionID, p.Resolution)
 	if errors.Is(err, approval.ErrStale) {
 		return assistantwire.FleetApprovalApplyResult{Stale: true}, nil
 	}
 	if err != nil {
-		return nil, err
+		return assistantwire.FleetApprovalApplyResult{}, err
 	}
 	return assistantwire.FleetApprovalApplyResult{Text: text}, nil
 }
 
-func (h *Hub) busPreparedSettingDiscard(_ context.Context, c *busConn, params json.RawMessage) (any, error) {
-	var p assistantwire.FleetApprovalDiscard
-	if err := json.Unmarshal(params, &p); err != nil || p.InteractionID == "" {
-		return nil, fmt.Errorf("invalid prepared setting discard: %w", err)
+func (h *Hub) busPreparedSettingDiscard(_ context.Context, c *busConn, p assistantwire.FleetApprovalDiscard) (assistantwire.FleetApprovalDiscardResult, error) {
+	if p.InteractionID == "" {
+		return assistantwire.FleetApprovalDiscardResult{}, errors.New("invalid prepared setting discard: %!w(<nil>)")
 	}
 	h.dropPreparedSetting(c.ident.ID, p.InteractionID)
-	return map[string]any{"ok": true}, nil
+	return assistantwire.FleetApprovalDiscardResult{OK: true}, nil
 }

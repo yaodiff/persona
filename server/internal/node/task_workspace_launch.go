@@ -14,8 +14,9 @@ import (
 
 type backendLaunchKey struct{}
 type backendLaunch struct {
-	executor *workspaceExecutor
-	use      string
+	executor     *workspaceExecutor
+	use          string
+	taskDispatch bool
 }
 
 func backendLaunchFrom(ctx context.Context) *backendLaunch {
@@ -29,7 +30,7 @@ func (b *backendLaunch) beforeDispatch(expectedID string) error {
 	if b.executor.journal.Launch != nil {
 		return nil // A resume keeps the original session and use.
 	}
-	b.executor.journal.Launch = &taskworkspace.Launch{UseID: b.use, ExpectedSessionID: expectedID}
+	b.executor.journal.Launch = &taskworkspace.Launch{UseID: b.use, ExpectedSessionID: expectedID, TaskDispatch: b.taskDispatch}
 	return b.executor.save()
 }
 
@@ -53,7 +54,8 @@ func (e *workspaceExecutor) startSession(ctx context.Context, req taskworkspace.
 	if err := json.Unmarshal(params, &in); err != nil {
 		return nil, err
 	}
-	if in.Cwd != j.Plan.RootPath || in.Resume != "" || in.InPane != "" || in.Workspace != "" || in.Task != "" || in.Async {
+	if in.Cwd != j.Plan.RootPath || in.Resume != "" || in.InPane != "" || in.Async ||
+		!req.TaskDispatch && (in.Workspace != "" || in.Task != "") {
 		return problem("invalid_input")
 	}
 	if j.Launch != nil {
@@ -73,10 +75,10 @@ func (e *workspaceExecutor) startSession(ctx context.Context, req taskworkspace.
 			return taskworkspace.Record{Error: taskworkspace.Failure(code, "start", j.OperationID, repo.RepoID, repo.Path)}, nil
 		}
 	}
-	if isDesktopLauncher(in.Launcher) || isCodexAppLauncher(in.Launcher) {
+	if !req.TaskDispatch && (isDesktopLauncher(in.Launcher) || isCodexAppLauncher(in.Launcher)) {
 		return problem("unsupported")
 	}
-	b := &backendLaunch{executor: e, use: req.UseID}
+	b := &backendLaunch{executor: e, use: req.UseID, taskDispatch: req.TaskDispatch}
 	ctx = context.WithValue(ctx, backendLaunchKey{}, b)
 	out, err := e.n.handleMethod(ctx, "session.start", params)
 	if err != nil {
@@ -85,6 +87,9 @@ func (e *workspaceExecutor) startSession(ctx context.Context, req taskworkspace.
 		}
 		if rpcCode(err) == "backend_workspace_unsupported" {
 			return problem("unsupported")
+		}
+		if b.taskDispatch && j.Launch != nil && j.Launch.SessionID != "" {
+			return nil, err // Desktop creation can succeed before its prompt is accepted.
 		}
 		if j.Launch != nil && (startFailedForSure(err) || rpcCode(err) == "backend_workspace_start_refused") {
 			j.Launch = nil
@@ -118,7 +123,7 @@ func (e *workspaceExecutor) startSession(ctx context.Context, req taskworkspace.
 	if s.StartError != "" {
 		return problem("engine_start_failed")
 	}
-	if s.Starting {
+	if s.Starting && !b.taskDispatch {
 		return problem("operation_unknown")
 	}
 	return out, nil

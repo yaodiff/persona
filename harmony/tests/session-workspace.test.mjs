@@ -118,6 +118,27 @@ function fixture(options = {}) {
   return { state, client, repository, workspace };
 }
 
+test('an unsupported terminal keeps its page subscription until the polling page leaves', async () => {
+  const { state, repository, workspace } = fixture({ features: ['terminal_stream', 'terminal_control'] });
+  const sent = [];
+  repository.transport = { send: (raw) => sent.push(JSON.parse(raw)) };
+  try {
+    workspace.onConnected();
+    workspace.selectTab(2);
+    assert.equal(sent.filter((msg) => msg.type === 'terminal_subscribe').length, 1);
+    workspace.receiveTerminal({ error: 'unsupported stream', unsupported: true });
+    await waitForTurn();
+    assert.ok(state.calls.some((call) => call.path.includes('/screen?')));
+    assert.equal(sent.filter((msg) => msg.type === 'terminal_unsubscribe').length, 0);
+    workspace.hide();
+    assert.equal(sent.filter((msg) => msg.type === 'terminal_unsubscribe').length, 1);
+    workspace.hide();
+    assert.equal(sent.filter((msg) => msg.type === 'terminal_unsubscribe').length, 1);
+  } finally {
+    workspace.hide();
+  }
+});
+
 test('file changes use the registered rename, move, trash and restore routes with exact bodies', async () => {
   const { state, workspace } = fixture();
   await waitForTurn();

@@ -106,6 +106,17 @@ func (d *DB) InboxItems(ctx context.Context, doneSince time.Time, each func(raw 
 	return rows.Err()
 }
 
+// StoredInboxSources lists the distinct source ids of every retained item, open and completed. The source index lets
+// Postgres answer without decoding item JSON or returning every history row; the assistant turns the ids into its
+// typed source-presence projection.
+func (d *DB) StoredInboxSources(ctx context.Context) ([]string, error) {
+	rows, err := d.pool.Query(ctx, `SELECT DISTINCT source FROM inbox_items WHERE source IS NOT NULL ORDER BY source`)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, pgx.RowTo[string])
+}
+
 // DoneInboxItemsByID returns the done items stored under ids (the history, whether the manager holds them or not); an
 // id with no row, or an open one, has none.
 func (d *DB) DoneInboxItemsByID(ctx context.Context, ids []string) ([][]byte, error) {

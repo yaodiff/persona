@@ -504,8 +504,8 @@ func TestCodexApprovals(t *testing.T) {
 	if d := command(3, `ex POST /conversations/7123/messages {"text":"hi"}`); d != "accept" {
 		t.Fatalf("a gated write the phone allowed: %s", d)
 	}
-	if ix := fh.interactions(); len(ix) != 1 || ix[0].ToolName != "示例" || ix[0].SessionID != testThread {
-		t.Fatalf("a gated write not confirmed on the phone: %+v", ix)
+	if ix := fh.interactions(); len(ix) != 1 || ix[0].ToolName != "示例" || ix[0].SessionID != testThread || !ix[0].WriteOperation {
+		t.Fatalf("a gated write not confirmed and classified on the phone: %+v", ix)
 	}
 	// Confirmed whole (a command the gate cannot follow): "Always allow in this session" remembers nothing for it, nor does the hub.
 	if ix := fh.interactions(); len(ix[0].AlwaysKeys) != 0 {

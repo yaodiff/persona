@@ -2,379 +2,201 @@ package assistant
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"net/url"
-	"path"
-	"runtime"
-	"slices"
+	"maps"
 	"strings"
-	"sync"
-	"weak"
 
 	"github.com/nwverse/persona/server/internal/assistant/todo/conflict"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// plannedWriteScopeInput carries a planned task together with optional write-scope
-// conflict hints supplied on task_plan input (under todos_v2).
-type plannedWriteScopeInput struct {
-	Task          PlanTask
-	WritePrefixes []string
-	ChangedFiles  []string
-	ForceParallel bool
+// planWriteScope is the scope explicitly declared on task_plan and retained on the saved plan.
+type planWriteScope struct {
+	WritePrefixes []string `json:"write_prefixes,omitempty"`
+	ChangedFiles  []string `json:"changed_files,omitempty"`
+	ForceParallel bool     `json:"force_parallel,omitempty"`
 }
 
-// writeScopeHints holds structured write-scope hints parsed from free-form text
-// (task prompts, context, or to-do notes).
-type writeScopeHints struct {
-	RepoKey       string
-	WritePrefixes []string
-	ChangedFiles  []string
-	ForceParallel bool
+type plannedWriteAssignment struct {
+	planID string
+	scope  conflict.TaskScope
+	title  string
 }
 
-type todoWriteScopeRecord struct {
-	RepoKey       string
-	WritePrefixes []string
-	ChangedFiles  []string
-	ForceParallel bool
+type writeConflictWake struct {
+	PeerTodo   string `json:"peer_todo"`
+	PlanID     string `json:"plan_id"`
+	PeerPlanID string `json:"peer_plan_id"`
 }
 
-// writeScopeTracker keeps per-Service in-memory write scopes and runtime changed files
-// for dispatched todos under todos_v2, without adding DB migrations or modifying Service fields.
-type writeScopeTracker struct {
-	mu      sync.RWMutex
-	records map[string]todoWriteScopeRecord
+func (w writeConflictWake) key() string { return w.PlanID + "|" + w.PeerPlanID }
+
+func declaredTaskScope(t PlanTask, todoID string) conflict.TaskScope {
+	if t.WriteScope == nil {
+		return conflict.TaskScope{}
+	}
+	return conflict.TaskScope{TodoID: todoID, RepoKey: plannedTaskRepoKey(t), WritePrefixes: t.WriteScope.WritePrefixes,
+		ChangedFiles: t.WriteScope.ChangedFiles, ForceParallel: t.WriteScope.ForceParallel}
 }
 
-func newWriteScopeTracker() *writeScopeTracker {
-	return &writeScopeTracker{records: make(map[string]todoWriteScopeRecord)}
-}
-
-func (w *writeScopeTracker) reset() {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	clear(w.records)
-}
-
-func (w *writeScopeTracker) set(todoID string, rec todoWriteScopeRecord) {
-	if todoID == "" {
-		return
-	}
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	prev := w.records[todoID]
-	if rec.RepoKey != "" {
-		prev.RepoKey = rec.RepoKey
-	}
-	if len(rec.WritePrefixes) > 0 {
-		prev.WritePrefixes = slices.Clone(rec.WritePrefixes)
-	}
-	if len(rec.ChangedFiles) > 0 {
-		prev.ChangedFiles = slices.Clone(rec.ChangedFiles)
-	}
-	if rec.ForceParallel {
-		prev.ForceParallel = true
-	}
-	w.records[todoID] = prev
-}
-
-func (w *writeScopeTracker) setRuntimeChangedFiles(todoID string, files []string) {
-	if todoID == "" {
-		return
-	}
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	prev := w.records[todoID]
-	prev.ChangedFiles = slices.Clone(files)
-	w.records[todoID] = prev
-}
-
-func (w *writeScopeTracker) get(todoID string) (todoWriteScopeRecord, bool) {
-	w.mu.RLock()
-	defer w.mu.RUnlock()
-	rec, ok := w.records[todoID]
-	if !ok {
-		return todoWriteScopeRecord{}, false
-	}
-	rec.WritePrefixes = slices.Clone(rec.WritePrefixes)
-	rec.ChangedFiles = slices.Clone(rec.ChangedFiles)
-	return rec, true
-}
-
-var (
-	writeScopeRegistryMu sync.Mutex
-	writeScopeRegistry   = map[weak.Pointer[Service]]*writeScopeTracker{}
-)
-
-func (s *Service) writeScopeTracker() *writeScopeTracker {
-	if s == nil {
-		return nil
-	}
-	key := weak.Make(s)
-	writeScopeRegistryMu.Lock()
-	defer writeScopeRegistryMu.Unlock()
-	if tr, ok := writeScopeRegistry[key]; ok {
-		return tr
-	}
-	tr := newWriteScopeTracker()
-	writeScopeRegistry[key] = tr
-	runtime.AddCleanup(s, func(k weak.Pointer[Service]) {
-		writeScopeRegistryMu.Lock()
-		delete(writeScopeRegistry, k)
-		writeScopeRegistryMu.Unlock()
-	}, key)
-	return tr
-}
-
-// recordTodoRuntimeChangedFiles attaches runtime changed files (e.g. from git diff --name-only)
-// to an active to-do for Layer 2 conflict detection under todos_v2.
-// Strictly bypassed when todos_v2=false.
-func (s *Service) recordTodoRuntimeChangedFiles(ctx context.Context, todoID string, files []string) {
-	if s == nil || !s.settings(ctx).todosV2On() {
-		return
-	}
-	todoID = strings.TrimSpace(todoID)
-	if todoID == "" {
-		return
-	}
-	s.writeScopeTracker().setRuntimeChangedFiles(todoID, files)
-}
-
-// rememberPlannedWriteScopes records dispatched tasks' declared write scopes against their
-// assigned to-do IDs so subsequent task_plan calls can detect same-repo overlaps against them.
-// Strictly bypassed when todos_v2=false.
-func (s *Service) rememberPlannedWriteScopes(ctx context.Context, started []PlanTask, inputs []plannedWriteScopeInput) {
-	if s == nil || !s.settings(ctx).todosV2On() {
-		return
-	}
-	tr := s.writeScopeTracker()
-	for i := range started {
-		todoID := strings.TrimSpace(started[i].TodoID)
-		if todoID == "" || i >= len(inputs) {
+// rememberPlannedWriteScopes updates the conflict check's active assignments after the plan binds to actual to-dos.
+// A replacement plan supplies its own scope, including an empty one.
+func (s *Service) rememberPlannedWriteScopes(ctx context.Context, p *TaskPlan) {
+	enabled := s.settings(ctx).todosV2On()
+	hasScope := false
+	s.tasks.mu.Lock()
+	for _, t := range p.Tasks {
+		if t.TodoID == "" || t.Error != "" {
 			continue
 		}
-		in := inputs[i]
-		in.Task = started[i]
-		hints := parseWriteScopeHints(in.Task.Prompt, in.Task.Context, in.Task.Goal)
-		prefixes := mergeUniqueStrings(in.WritePrefixes, hints.WritePrefixes)
-		changed := mergeUniqueStrings(in.ChangedFiles, hints.ChangedFiles)
-		force := in.ForceParallel || hints.ForceParallel
-		repoKey := plannedTaskRepoKey(in.Task, hints.RepoKey)
-		if repoKey == "" && len(prefixes) == 0 && len(changed) == 0 && !force {
+		scope := declaredTaskScope(t, t.TodoID)
+		if !enabled || scope.RepoKey == "" {
+			delete(s.tasks.writeScopes, t.TodoID)
 			continue
 		}
-		tr.set(todoID, todoWriteScopeRecord{
-			RepoKey:       repoKey,
-			WritePrefixes: prefixes,
-			ChangedFiles:  changed,
-			ForceParallel: force,
-		})
+		if s.tasks.writeScopes == nil {
+			s.tasks.writeScopes = make(map[string]plannedWriteAssignment)
+		}
+		s.tasks.writeScopes[t.TodoID] = plannedWriteAssignment{planID: p.ID, scope: scope, title: t.Title}
+		hasScope = true
+	}
+	s.tasks.mu.Unlock()
+	if !hasScope {
+		return
+	}
+
+	open := s.openWriteScopes()
+	scopes := make([]conflict.TaskScope, 0, len(open))
+	for _, assignment := range open {
+		scopes = append(scopes, assignment.scope)
+	}
+	for _, pair := range conflict.Detect(scopes) {
+		if pair.Action != conflict.ActionSerialize {
+			continue
+		}
+		task, peer := open[pair.TodoA], open[pair.TodoB]
+		if task.planID != p.ID {
+			task, peer = peer, task
+		}
+		if task.planID != p.ID {
+			continue
+		}
+		if t, ok := s.todoNow(task.scope.TodoID); ok && t.DoneAt == nil && !t.Cancelled() {
+			wake := &writeConflictWake{PeerTodo: peer.scope.TodoID, PlanID: task.planID, PeerPlanID: peer.planID}
+			s.signal(superviseSignal{Todo: t.ID, Kind: sigWriteConflict, Key: wake.key(), WriteConflict: wake,
+				To: s.todoReadySupervisor(ctx, s.settings(ctx), t)})
+		}
 	}
 }
 
-// detectPlannedWriteScopeConflicts evaluates static and runtime write-scope conflicts
-// among planned tasks and active open same-repository to-dos using todo/conflict.Detect.
-// Strictly gated behind todos_v2=true; returns nil immediately when todos_v2=false.
-func (s *Service) detectPlannedWriteScopeConflicts(ctx context.Context, planned []plannedWriteScopeInput) []conflict.PairConflict {
-	conflicts, _ := s.detectPlannedWriteScopeConflictsWithLabels(ctx, planned)
-	return conflicts
+func (s *Service) openWriteScopes() map[string]plannedWriteAssignment {
+	s.tasks.mu.Lock()
+	open := maps.Clone(s.tasks.writeScopes)
+	s.tasks.mu.Unlock()
+	s.todos.mu.RLock()
+	defer s.todos.mu.RUnlock()
+	for id := range open {
+		if t := s.todos.todos[id]; t == nil || t.DoneAt != nil || t.Cancelled() {
+			delete(open, id)
+		}
+	}
+	return open
 }
 
-// planWriteScopeConflicts formats any write-scope conflicts detected for planned tasks
-// as a deterministic advisory block for task_plan responses. Returns "" when todos_v2=false
-// or when no conflicts exist.
-func (s *Service) planWriteScopeConflicts(ctx context.Context, planned []plannedWriteScopeInput) string {
-	if s == nil || !s.settings(ctx).todosV2On() {
+// planWriteScopeConflicts is the immediate task_plan advisory, before approval or dispatch.
+func (s *Service) planWriteScopeConflicts(ctx context.Context, planned []PlanTask) string {
+	if !s.settings(ctx).todosV2On() {
 		return ""
 	}
-	conflicts, labels := s.detectPlannedWriteScopeConflictsWithLabels(ctx, planned)
-	return formatPlannedWriteScopeConflicts(conflicts, labels)
-}
-
-func (s *Service) detectPlannedWriteScopeConflictsWithLabels(ctx context.Context, planned []plannedWriteScopeInput) ([]conflict.PairConflict, map[string]string) {
-	if s == nil || !s.settings(ctx).todosV2On() {
-		return nil, nil
-	}
-	if len(planned) == 0 {
-		return nil, nil
-	}
-
 	labels := make(map[string]string, len(planned))
 	plannedIDs := make(map[string]bool, len(planned))
 	skipExisting := make(map[string]bool, len(planned))
 	scopes := make([]conflict.TaskScope, 0, len(planned))
-
-	for i, in := range planned {
-		id := strings.TrimSpace(in.Task.ReuseTodo)
+	for i, task := range planned {
+		id := task.ReuseTodo
 		if id == "" {
 			id = fmt.Sprintf("planned:%d", i+1)
-		} else {
-			skipExisting[id] = true
 		}
-		if c := strings.TrimSpace(in.Task.Continues); c != "" {
-			skipExisting[c] = true
-		}
-		plannedIDs[id] = true
-		title := strings.TrimSpace(in.Task.Title)
-		if title != "" {
-			if strings.HasPrefix(id, "planned:") {
-				labels[id] = fmt.Sprintf("planned #%d (%s)", i+1, title)
-			} else {
-				labels[id] = fmt.Sprintf("%s (%s)", id, title)
-			}
-		} else {
-			labels[id] = id
-		}
-
-		hints := parseWriteScopeHints(in.Task.Prompt, in.Task.Context, in.Task.Goal)
-		repoKey := plannedTaskRepoKey(in.Task, hints.RepoKey)
-		prefixes := mergeUniqueStrings(in.WritePrefixes, hints.WritePrefixes)
-		changed := mergeUniqueStrings(in.ChangedFiles, hints.ChangedFiles)
-		force := in.ForceParallel || hints.ForceParallel
-		if repoKey == "" || (len(prefixes) == 0 && len(changed) == 0) {
+		skipExisting[task.ReuseTodo], skipExisting[task.Continues] = true, true
+		scope := declaredTaskScope(task, id)
+		if scope.RepoKey == "" {
 			continue
 		}
-		scopes = append(scopes, conflict.TaskScope{
-			TodoID:        id,
-			RepoKey:       repoKey,
-			WritePrefixes: prefixes,
-			ChangedFiles:  changed,
-			ForceParallel: force,
-		})
+		plannedIDs[id] = true
+		if task.ReuseTodo == "" {
+			labels[id] = fmt.Sprintf("planned #%d (%s)", i+1, task.Title)
+		} else {
+			labels[id] = fmt.Sprintf("%s (%s)", id, task.Title)
+		}
+		scopes = append(scopes, scope)
 	}
-
 	if len(scopes) == 0 {
-		return nil, labels
+		return ""
 	}
-
-	// Collect active open to-dos and include any same-repo write scopes / runtime changed files.
-	if s.ensureTodosLoaded(ctx) == nil {
-		var open []Todo
-		s.todos.mu.RLock()
-		for _, td := range s.todos.todos {
-			if td.DoneAt != nil || td.CancelledAt != nil || skipExisting[td.ID] {
-				continue
-			}
-			open = append(open, copyTodoLocked(td))
-		}
-		s.todos.mu.RUnlock()
-
-		tr := s.writeScopeTracker()
-		for _, td := range open {
-			scope, ok := s.openTodoTaskScope(ctx, td, tr)
-			if !ok {
-				continue
-			}
-			if title := strings.TrimSpace(td.Title); title != "" {
-				labels[td.ID] = fmt.Sprintf("%s (%s)", td.ID, title)
-			} else {
-				labels[td.ID] = td.ID
-			}
-			scopes = append(scopes, scope)
+	for id, assignment := range s.openWriteScopes() {
+		if !skipExisting[id] {
+			scopes = append(scopes, assignment.scope)
+			labels[id] = fmt.Sprintf("%s (%s)", id, assignment.title)
 		}
 	}
-
-	all := conflict.Detect(scopes)
-	if len(all) == 0 {
-		return nil, labels
-	}
-	// Only report pairs involving at least one task from this plan.
-	filtered := make([]conflict.PairConflict, 0, len(all))
-	for _, c := range all {
-		if plannedIDs[c.TodoA] || plannedIDs[c.TodoB] {
-			filtered = append(filtered, c)
+	var pairs []conflict.PairConflict
+	for _, pair := range conflict.Detect(scopes) {
+		if plannedIDs[pair.TodoA] || plannedIDs[pair.TodoB] {
+			pairs = append(pairs, pair)
 		}
 	}
-	if len(filtered) == 0 {
-		return nil, labels
-	}
-	return filtered, labels
+	return formatPlannedWriteScopeConflicts(pairs, labels)
 }
 
-func (s *Service) openTodoTaskScope(ctx context.Context, td Todo, tr *writeScopeTracker) (conflict.TaskScope, bool) {
-	texts := []string{td.Notes}
-	if td.Brief != nil {
-		texts = append(texts, td.Brief.Goal)
+// recheckWriteConflict reads the two exact execution bindings so a closed task, replacement plan, or changed workspace
+// cannot leave a stale advisory in the outbox. The saved declarations also let a restarted manager recheck a queued wake.
+func (s *Service) recheckWriteConflict(ctx context.Context, g superviseSignal) (conflict.PairConflict, Todo, error) {
+	wake := g.WriteConflict
+	if wake == nil || g.Key != wake.key() {
+		return conflict.PairConflict{}, Todo{}, nil
 	}
-	hints := parseWriteScopeHints(texts...)
-
-	var rec todoWriteScopeRecord
-	if tr != nil {
-		rec, _ = tr.get(td.ID)
+	peer, ok := s.todoNow(wake.PeerTodo)
+	if !ok || peer.DoneAt != nil || peer.Cancelled() {
+		return conflict.PairConflict{}, Todo{}, nil
 	}
-
-	prefixes := mergeUniqueStrings(rec.WritePrefixes, hints.WritePrefixes)
-	changed := mergeUniqueStrings(rec.ChangedFiles, hints.ChangedFiles)
-	force := rec.ForceParallel || hints.ForceParallel
-	if len(prefixes) == 0 && len(changed) == 0 {
-		return conflict.TaskScope{}, false
+	own, err := s.loadPlan(ctx, wake.PlanID)
+	if errors.Is(err, errPlanNotFound) {
+		return conflict.PairConflict{}, Todo{}, nil
 	}
-
-	repoKey := hints.RepoKey
-	if repoKey == "" {
-		repoKey = rec.RepoKey
+	if err != nil {
+		return conflict.PairConflict{}, Todo{}, err
 	}
-	if repoKey == "" {
-		repoKey = s.openTodoRepoKey(ctx, td)
+	other := own
+	if wake.PlanID != wake.PeerPlanID {
+		other, err = s.loadPlan(ctx, wake.PeerPlanID)
+		if errors.Is(err, errPlanNotFound) {
+			return conflict.PairConflict{}, Todo{}, nil
+		}
+		if err != nil {
+			return conflict.PairConflict{}, Todo{}, err
+		}
 	}
-	if repoKey == "" {
-		return conflict.TaskScope{}, false
+	for _, pair := range conflict.Detect([]conflict.TaskScope{scopeOfDispatchedTask(own, g.Todo), scopeOfDispatchedTask(other, peer.ID)}) {
+		if pair.Action == conflict.ActionSerialize {
+			return pair, peer, nil
+		}
 	}
-
-	return conflict.TaskScope{
-		TodoID:        td.ID,
-		RepoKey:       repoKey,
-		WritePrefixes: prefixes,
-		ChangedFiles:  changed,
-		ForceParallel: force,
-	}, true
+	return conflict.PairConflict{}, Todo{}, nil
 }
 
-func (s *Service) openTodoRepoKey(ctx context.Context, td Todo) string {
-	// Prefer the most recent active agent's workspace, then any agent with a Cwd.
-	for i := len(td.Agents) - 1; i >= 0; i-- {
-		a := td.Agents[i]
-		if a.active() && strings.TrimSpace(a.Cwd) != "" {
-			if key := normalizeConflictRepoPathKey(a.MachineID, a.Cwd); key != "" {
-				return key
+func scopeOfDispatchedTask(p *TaskPlan, todoID string) conflict.TaskScope {
+	if p.State == planStarted {
+		for _, task := range p.Tasks {
+			if task.TodoID == todoID && task.Error == "" {
+				return declaredTaskScope(task, todoID)
 			}
 		}
 	}
-	for i := len(td.Agents) - 1; i >= 0; i-- {
-		a := td.Agents[i]
-		if strings.TrimSpace(a.Cwd) != "" {
-			if key := normalizeConflictRepoPathKey(a.MachineID, a.Cwd); key != "" {
-				return key
-			}
-		}
-	}
-	if strings.TrimSpace(td.PRURL) != "" {
-		if repoKey, _, _, ok := parseMergeTrainPRURL(td.PRURL); ok {
-			return repoKey
-		}
-	}
-	if s != nil {
-		if _, ok := s.store().(todoRepositoryStore); ok {
-			if set, err := s.savedTodoRepositories(ctx, td.ID); err == nil {
-				for _, r := range set.Repositories {
-					if key := normalizeConflictRepoRef(r.SourceSnapshot.CloneURL); key != "" {
-						return key
-					}
-					if key := normalizeConflictRepoRef(r.RepoID); key != "" {
-						return key
-					}
-				}
-			}
-		}
-	}
-	return ""
+	return conflict.TaskScope{}
 }
 
-func plannedTaskRepoKey(t PlanTask, explicit string) string {
-	if key := normalizeConflictRepoRef(explicit); key != "" {
-		return key
-	}
+func plannedTaskRepoKey(t PlanTask) string {
 	if strings.TrimSpace(t.Repo) != "" {
 		if key := normalizeConflictRepoPathKey(t.Machine, t.Repo); key != "" {
 			return key
@@ -411,111 +233,6 @@ func normalizeConflictRepoPathKey(machine, dir string) string {
 		return cleaned
 	}
 	return machine + ":" + cleaned
-}
-
-func normalizeConflictRepoRef(raw string) string {
-	s := strings.TrimSpace(raw)
-	if s == "" {
-		return ""
-	}
-	if strings.Contains(s, "://") {
-		if u, err := url.Parse(s); err == nil && u.Host != "" {
-			p := strings.TrimSuffix(strings.Trim(u.Path, "/"), ".git")
-			if p != "" {
-				return strings.ToLower(u.Host) + "/" + strings.ToLower(p)
-			}
-		}
-	}
-	s = strings.ReplaceAll(s, "\\", "/")
-	if strings.HasPrefix(s, "/") {
-		return path.Clean(s)
-	}
-	return strings.ToLower(strings.TrimSuffix(strings.Trim(s, "/"), ".git"))
-}
-
-// parseWriteScopeHints extracts optional write-scope tags from task prompt/context/notes lines:
-//   - write_prefixes: a/b, c/d  (aliases: write_prefix:, write_scope:)
-//   - changed_files: a/b/x.go, c/d/y.go  (alias: changed_file:)
-//   - force_parallel: true
-//   - repo_key: github.com/org/repo
-func parseWriteScopeHints(texts ...string) writeScopeHints {
-	var out writeScopeHints
-	for _, text := range texts {
-		if strings.TrimSpace(text) == "" {
-			continue
-		}
-		for _, rawLine := range strings.Split(text, "\n") {
-			line := strings.TrimSpace(rawLine)
-			line = strings.TrimLeft(line, "-*> \t")
-			line = strings.TrimSpace(line)
-			if line == "" {
-				continue
-			}
-			key, val, ok := strings.Cut(line, ":")
-			if !ok {
-				continue
-			}
-			k := strings.ToLower(strings.TrimSpace(strings.Trim(key, "`*")))
-			v := strings.TrimSpace(val)
-			switch k {
-			case "write_prefixes", "write_prefix", "write_scope":
-				out.WritePrefixes = append(out.WritePrefixes, splitHintList(v)...)
-			case "changed_files", "changed_file":
-				out.ChangedFiles = append(out.ChangedFiles, splitHintList(v)...)
-			case "force_parallel":
-				switch strings.ToLower(strings.Trim(v, "`'\"")) {
-				case "true", "1", "yes":
-					out.ForceParallel = true
-				}
-			case "repo_key", "repo":
-				if out.RepoKey == "" {
-					out.RepoKey = normalizeConflictRepoRef(strings.Trim(v, "`'\""))
-				}
-			}
-		}
-	}
-	out.WritePrefixes = mergeUniqueStrings(out.WritePrefixes)
-	out.ChangedFiles = mergeUniqueStrings(out.ChangedFiles)
-	return out
-}
-
-func splitHintList(raw string) []string {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return nil
-	}
-	raw = strings.TrimPrefix(raw, "[")
-	raw = strings.TrimSuffix(raw, "]")
-	parts := strings.FieldsFunc(raw, func(r rune) bool {
-		return r == ',' || r == ';'
-	})
-	out := make([]string, 0, len(parts))
-	for _, p := range parts {
-		item := strings.TrimSpace(strings.Trim(p, "`'\""))
-		if item != "" {
-			out = append(out, item)
-		}
-	}
-	return out
-}
-
-func mergeUniqueStrings(lists ...[]string) []string {
-	var out []string
-	seen := make(map[string]struct{})
-	for _, list := range lists {
-		for _, raw := range list {
-			v := strings.TrimSpace(raw)
-			if v == "" {
-				continue
-			}
-			if _, dup := seen[v]; dup {
-				continue
-			}
-			seen[v] = struct{}{}
-			out = append(out, v)
-		}
-	}
-	return out
 }
 
 func formatPlannedWriteScopeConflicts(conflicts []conflict.PairConflict, labels map[string]string) string {

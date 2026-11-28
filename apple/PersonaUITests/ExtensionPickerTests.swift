@@ -65,7 +65,7 @@ final class ExtensionPickerTests: XCTestCase {
         scrollTo(launcher)
         launcher.tap()
         XCTAssertTrue(button("cc_main").waitForExistence(timeout: 5), "no launchers to pick:\n\(app.debugDescription)")
-        XCTAssertTrue(button("claude").exists && button("codex").exists)
+        XCTAssertTrue(button("Claude Code (claude)").exists && button("Codex (codex)").exists)
         XCTAssertFalse(button("cc_old").exists, "a hidden launcher is offered")
         shot(app, "launchers")
         button("cc_main").tap()

@@ -21,6 +21,7 @@ import { ModelConfiguration } from "./ModelConfiguration";
 const PROVIDERS: ModelProvider[] = [
   { id: "launcher.claude", name: "Claude Code", kind: "launcher", agent: "claude" },
   { id: "launcher.codex", name: "Codex", kind: "launcher", agent: "codex" },
+  { id: "launcher.traex", name: "TRAE CLI", kind: "launcher", agent: "traex" },
   { id: "launcher.agy", name: "Antigravity", kind: "launcher", agent: "agy" },
   { id: "launcher.omp", name: "omp", kind: "launcher", agent: "omp" },
   { id: "launcher.grok", name: "Grok", kind: "launcher", agent: "paseo", permission_modes: ["default", "bypassPermissions"] },
@@ -43,7 +44,7 @@ function makeAgents(binding: ModelBinding = { provider: "launcher.claude", permi
     id: "agent.new", name: "Agents", group: "Agents", kind: "launcher", launch: "engine", category_id: "agent.new",
     override: binding, effective: { provider: "launcher.claude", ...binding }, revision: 3,
     fields: ["provider", "model", "effort", "permission_mode"],
-    provider_ids: ["launcher.claude", "launcher.codex", "launcher.agy", "launcher.omp", "launcher.grok"],
+    provider_ids: ["launcher.claude", "launcher.codex", "launcher.traex", "launcher.agy", "launcher.omp", "launcher.grok"],
   };
 }
 
@@ -80,6 +81,7 @@ async function hub(input: RequestInfo | URL, init?: RequestInit): Promise<Respon
   if (path.endsWith("/models")) {
     const providerId = decodeURIComponent(path.split("/").slice(-2)[0] ?? "");
     const provider = PROVIDERS.find((p) => p.id === providerId);
+    if (provider?.agent === "traex") return json({ agent: "traex", models: [{ id: "example-fast", name: "Example Fast", efforts: ["medium", "xhigh"] }] });
     const catalog = [agyModels, claudeModels, codexModels].find((list) => list.agent === provider?.agent);
     return json(catalog ?? { agent: provider?.agent ?? "claude", models: [{ id: "default", name: "Default", default: true }] });
   }
@@ -297,7 +299,8 @@ describe("Model configuration model and effort", () => {
 
   it.each([
     ["claude", "Sonnet", "sonnet", "high"],
-    ["codex", "5.5", "gpt-5.5", "xhigh"],
+    ["codex", "GPT-5.5", "gpt-5.5", "xhigh"],
+    ["traex", "Example Fast", "example-fast", "xhigh"],
   ])("writes %s model and effort separately", async (agent, name, model, effort) => {
     agents = makeAgents({ provider: `launcher.${agent}` });
     await render();
@@ -306,6 +309,34 @@ describe("Model configuration model and effort", () => {
     await selectValue(effortSelect(), effort);
     await save();
     expect(writes[0].body).toMatchObject({ model, effort });
+  });
+
+  it("saves the Inbox TRAE model, effort, and Full access mode", async () => {
+    inbox = { ...makeInbox(), provider_ids: [...(makeInbox().provider_ids ?? []), "launcher.traex"] };
+    await render();
+    await openPurpose("inbox.agent");
+    await selectValue(providerSelect(), "launcher.traex");
+    await pickModel("Example Fast");
+    await selectValue(effortSelect(), "xhigh");
+    const modes = dialog().querySelector<HTMLSelectElement>("[data-permission-mode-select]")!;
+    expect([...modes.options].map((option) => option.value)).toEqual(["", "default", "acceptEdits", "auto", "bypassPermissions"]);
+    await selectValue(modes, "bypassPermissions");
+    await save();
+    expect(writes[0].body).toMatchObject({ provider: "launcher.traex", model: "example-fast", effort: "xhigh", permission_mode: "bypassPermissions" });
+  });
+
+  it("keeps a legacy Inbox TRAE binding visible as unavailable and allows switching away", async () => {
+    inbox = { ...makeInbox({ provider: "launcher.traex", model: "example-fast", effort: "xhigh" }), status: "Provider unavailable" };
+    await render();
+    await openPurpose("inbox.agent");
+    expect(providerSelect().selectedOptions[0].textContent).toContain("TRAE CLI");
+    expect(dialog().textContent).toContain("Provider unavailable");
+    expect(modelPicker()).toBeNull();
+    expect(button(t("common.save"), dialog()).disabled).toBe(true);
+    await selectValue(providerSelect(), "launcher.codex");
+    expect([...providerSelect().options].map((o) => o.value)).not.toContain("launcher.traex");
+    await save();
+    expect(writes[0].body).toMatchObject({ provider: "launcher.codex", model: null, effort: null });
   });
 
   it("disables effort when a known model offers none", async () => {

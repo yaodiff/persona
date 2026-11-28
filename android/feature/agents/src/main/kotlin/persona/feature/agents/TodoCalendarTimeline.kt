@@ -561,7 +561,7 @@ private fun AxisBlock(
     val whenText = entryWhen(entry, locale)
     val changeDue = stringResource(R.string.agents_todo_calendar_change_due_action)
     val colors = palette.entryColors(entry)
-    val stateText = entry.state.label
+    val stateText = entry.restStatus?.label ?: entry.state.label
     val strike = if (entry.done) TextDecoration.LineThrough else null
     Row(
         modifier.clip(RoundedCornerShape(Tokens.Radius.badge))

@@ -34,7 +34,7 @@ internal fun AssistantBackgroundRecords(
                 if (line is ChatLine.Work && line.open) line.steps.forEachIndexed { index, step ->
                     ChatLineContent(ChatLine.Step(line.id, step, index == 0), session, loader, null,
                         onToggle, onFold, folding, foldErrors, onFullText = onFullText,
-                        workRunning = line.live, lastWorkStep = index == line.steps.lastIndex)
+                        workRunning = line.live, lastWorkStep = index == line.steps.lastIndex, showToolViews = false)
                 }
             }
         }

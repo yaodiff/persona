@@ -111,9 +111,11 @@ type gateKey struct {
 // gateGrant is a call larkCheck let through, to go once.
 type gateGrant struct {
 	command, method, path, query string
-	body                         any  // the JSON body confirmed, when bodyBound (nil there is JSON null)
-	bodyBound                    bool // false: any body (not JSON, cut short, an upload, $… in it)
-	bodyUseNumber                bool // an edited grant compares JSON numbers without float64 rounding
+	account                      string
+	body                         any    // the JSON body confirmed, when bodyBound (nil there is JSON null)
+	bodyBound                    bool   // false: any body (not JSON, cut short, an upload, $… in it)
+	bodyUseNumber                bool   // an edited grant compares JSON numbers without float64 rounding
+	rewriteBody                  []byte // when set, proxy forwards these JSON bytes instead of the matched original body
 	until                        time.Time
 	// session is the conversation larkCheck decided for, and through how it let the call through: what the ledger says
 	// of the write once it has gone out.
@@ -168,6 +170,72 @@ func (n *Node) gates() *gateProxy {
 	}
 	p.cur.Store(n)
 	return p
+}
+
+// gateProxyIfInit returns the active gateProxy without lazily initializing one.
+func (n *Node) gateProxyIfInit() *gateProxy {
+	if n == nil {
+		return nil
+	}
+	if k := n.keeper; k != nil {
+		k.mu.Lock()
+		gp := k.gp
+		k.mu.Unlock()
+		return gp
+	}
+	n.mu.Lock()
+	gp := n.gp
+	n.mu.Unlock()
+	return gp
+}
+
+// isSpaceSession reports whether the gate proxy already latched session as belonging to a space,
+// without lazily initializing a gate proxy listener when none exists yet.
+func (n *Node) isSpaceSession(session string) bool {
+	if session == "" {
+		return false
+	}
+	gp := n.gateProxyIfInit()
+	return gp != nil && gp.spaceSession(session)
+}
+
+// isRemoteSession reports whether session carries the remote-assistant confirm-writes posture,
+// mirroring isRemoteRuntimeSession without lazily initializing a gate proxy listener.
+func (n *Node) isRemoteSession(session string) bool {
+	if n == nil || session == "" {
+		return false
+	}
+	id := session
+	if parent, _, ok := splitRuntimeChild(session); ok {
+		id = parent
+	}
+	if gp := n.gateProxyIfInit(); gp != nil && (gp.remoteSession(id) || (id != session && gp.remoteSession(session))) {
+		return true
+	}
+	if n.state != nil {
+		for _, candidate := range []string{id, session} {
+			if st, ok := n.state.get(candidate); ok {
+				if st.RemoteAgent {
+					return true
+				}
+				if st.Launcher != "" {
+					if h := n.assistantRuntime(st.Launcher); h != nil && h.remoteAgent() {
+						return true
+					}
+				}
+			}
+			if candidate == session {
+				break
+			}
+		}
+	}
+	if n.runtimes != nil && n.runtimes.isRemoteSession(session) {
+		return true
+	}
+	if n.state != nil && n.state.isLoading() && runtimeSessionID(id) {
+		return true
+	}
+	return false
 }
 
 func (p *gateProxy) ensureListenerLocked() error {
@@ -423,9 +491,62 @@ func (p *gateProxy) close() {
 	clear(p.sessionLeases)
 }
 
+func gateAgentToken(g proto.CommandGate) (string, bool) {
+	if g.PathPrefix != "/agent/v1" || g.Auth == nil || !strings.EqualFold(g.Auth.Header, "Authorization") {
+		return "", false
+	}
+	token, ok := strings.CutPrefix(gateAuthValue(g.Auth.Value, g.Env), "Bearer ")
+	token = strings.TrimSpace(token)
+	return token, ok && token != ""
+}
+
+func normalizeAgentAccount(account string) string {
+	if account == "1" {
+		return ""
+	}
+	return account
+}
+
+func gateAgentQueryAccount(raw string) string {
+	query, _ := url.ParseQuery(raw)
+	return query.Get("ol_account")
+}
+
+func gateAgentAccountHeader(g proto.CommandGate) string {
+	for i := len(g.Headers) - 1; i >= 0; i-- {
+		if strings.HasSuffix(g.Headers[i], "-account") {
+			return g.Headers[i]
+		}
+	}
+	return ""
+}
+
+func gateAgentAccountEnv(g proto.CommandGate) string {
+	for i := len(g.AllowedEnv) - 1; i >= 0; i-- {
+		if strings.HasSuffix(strings.ToLower(g.AllowedEnv[i]), "_account") {
+			return g.AllowedEnv[i]
+		}
+	}
+	return ""
+}
+
+func gateAgentRequestAccount(g proto.CommandGate, r *http.Request) string {
+	if _, ok := gateAgentToken(g); !ok {
+		return ""
+	}
+	account := ""
+	if header := gateAgentAccountHeader(g); header != "" {
+		account = r.Header.Get(header)
+	}
+	if account == "" {
+		account = gateAgentQueryAccount(r.URL.RawQuery)
+	}
+	return normalizeAgentAccount(account)
+}
+
 // grant lets c, which larkCheck let through for session and the way through says, go once through command's gate.
 func (p *gateProxy) grant(command, session string, c larkCall, through proto.LarkLetThrough) {
-	g := gateGrant{command: command, method: strings.ToUpper(c.Method), path: c.Path, query: gateQueryKey(c.Query), until: time.Now().Add(gateGrantFor),
+	g := gateGrant{command: command, method: strings.ToUpper(c.Method), path: c.Path, query: gateQueryKey(c.Query), account: c.Account, until: time.Now().Add(gateGrantFor),
 		session: session, through: through}
 	// $ in it: the shell fills it in when the command runs, so the body sent is not the one on the card.
 	if !strings.Contains(c.Body, "$") {
@@ -458,7 +579,7 @@ func gateQueryKey(raw string) string {
 // the body confirmed if one was. A grant of one conversation is not for another's request: when both are known and
 // differ, it stays for its own. A space conversation's address takes only a grant of its own conversation: not one made
 // for no conversation, nor any when it has none. It returns the grant.
-func (p *gateProxy) take(k gateKey, method, path, query string, body []byte, isJSON bool) (gateGrant, bool) {
+func (p *gateProxy) take(k gateKey, method, path, query, account string, body []byte, isJSON bool) (gateGrant, bool) {
 	var sent any
 	parsed := isJSON && json.Unmarshal(body, &sent) == nil
 	var sentNumbers any
@@ -468,7 +589,7 @@ func (p *gateProxy) take(k gateKey, method, path, query string, body []byte, isJ
 	defer p.mu.Unlock()
 	p.pruneLocked()
 	for i, g := range p.grants {
-		if g.command != k.command || g.method != method || g.path != path || g.query != query {
+		if g.command != k.command || g.method != method || g.path != path || g.query != query || g.account != account {
 			continue
 		}
 		if (k.space || k.remote) && (k.session == "" || g.session != k.session) {
@@ -542,13 +663,14 @@ func (p *gateProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	restPath, err := url.PathUnescape("/" + rest)
+	restPath, err := validateGateProxyPath(rest)
 	if err != nil {
 		gateRefuse(w, http.StatusBadRequest, "路径不对："+err.Error())
 		return
 	}
 	// The call as larkCheck reads `<command> METHOD PATH`: the path past the base, without the gate's prefix.
-	c := larkCall{Gate: gi, Method: strings.ToUpper(r.Method), Path: strings.TrimPrefix(restPath, g.PathPrefix), Query: r.URL.RawQuery}
+	c := larkCall{Gate: gi, Method: strings.ToUpper(r.Method), Path: strings.TrimPrefix(restPath, g.PathPrefix), Query: r.URL.RawQuery,
+		Account: gateAgentRequestAccount(g, r)}
 	if !strings.HasPrefix(c.Path, "/") {
 		c.Path = "/" + c.Path
 	}
@@ -576,14 +698,15 @@ func (p *gateProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	// How the call was let through, for the ledger once the API has taken it.
 	session, through := gk.session, proto.LarkLetThrough{}
+	var rewriteBody []byte
 	switch larkDecision(cfg, c) {
 	case "allow":
 		// A call larkCheck confirmed and a rule allows too (a space or remote runtime conversation confirms what a rule allows)
 		// was let through by the card: it uses up its grant, as a confirmed call does. In a space or remote runtime conversation
 		// a write goes only so: a rule's allow is not the phone's yes.
-		if gr, ok := p.take(gk, c.Method, c.Path, c.Query, body, isJSON); ok {
-			session, through = firstNonEmpty(gr.session, session), gr.through
-		} else if (gk.space || gk.remote || n.isRemoteRuntimeSession(session)) && !larkRead(c) {
+		if gr, ok := p.take(gk, c.Method, c.Path, c.Query, c.Account, body, isJSON); ok {
+			session, through, rewriteBody = firstNonEmpty(gr.session, session), gr.through, gr.rewriteBody
+		} else if (gk.space || gk.remote || n.isRemoteRuntimeSession(session)) && !larkGateRead(g, c) {
 			gateNeedsPhone(w, command, c)
 			return
 		} else if rule, ok := firstLark(g.Rules, c); ok {
@@ -593,22 +716,35 @@ func (p *gateProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		gateRefuse(w, http.StatusForbidden, "这个操作按配置不允许（"+c.Method+" "+c.Path+"）。")
 		return
 	default:
-		gr, ok := p.take(gk, c.Method, c.Path, c.Query, body, isJSON)
+		gr, ok := p.take(gk, c.Method, c.Path, c.Query, c.Account, body, isJSON)
 		if !ok {
 			gateNeedsPhone(w, command, c)
 			return
 		}
-		session, through = firstNonEmpty(gr.session, session), gr.through
+		session, through, rewriteBody = firstNonEmpty(gr.session, session), gr.through, gr.rewriteBody
+	}
+	if len(rewriteBody) > 0 {
+		body = rewriteBody
+		isJSON = true
+		c.Body = string(body)
+		if larkDecision(cfg, c) == "deny" {
+			gateRefuse(w, http.StatusForbidden, "这个操作按配置不允许（"+c.Method+" "+c.Path+"）。")
+			return
+		}
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		r.ContentLength = int64(len(body))
+		r.Header.Del("Content-Length")
+		r.TransferEncoding = nil
 	}
 	sw := &statusWriter{ResponseWriter: w}
-	if !larkRead(c) {
+	if !larkGateRead(g, c) {
 		sw.reply = &replyCopy{}
 	}
 	// Told once the answer has been passed on, also when ReverseProxy gives up on its body halfway (it panics with
 	// http.ErrAbortHandler then): the API had taken the write by the time it answered 2xx. A client that went away
 	// before the API answered leaves no 2xx, and whether the API executed the call is not known: nothing is told.
 	defer func() {
-		if sw.status/100 == 2 && !larkRead(c) {
+		if sw.status/100 == 2 && !larkGateRead(g, c) {
 			p.reportSent(n, proto.LarkSent{Command: command, Method: c.Method, Path: c.Path, SessionID: session, LetThrough: through}, body, isJSON, sw.reply)
 		}
 	}()
@@ -640,6 +776,46 @@ func (p *gateProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 	rp.ServeHTTP(sw, r)
+}
+
+// validateGateProxyPath validates and unescapes the escaped path after /<key>/
+// so every segment seen by gate rules, AgentAPIWriteGET, grant matching, and
+// the upstream or relayed server agrees unambiguously. It rejects empty
+// interior segments ("//"), dot segments (".", "..", literal or
+// percent-encoded), percent-encoded path separators ("%2f"), backslashes, URL
+// delimiters ("?", "#"), and ASCII control characters.
+func validateGateProxyPath(rawRest string) (string, error) {
+	if rawRest == "" {
+		return "/", nil
+	}
+	segs := strings.Split(rawRest, "/")
+	var b strings.Builder
+	b.Grow(len(rawRest) + 1)
+	for i, rawSeg := range segs {
+		if rawSeg == "" {
+			if i == len(segs)-1 && len(segs) > 1 {
+				b.WriteByte('/')
+				continue
+			}
+			return "", errors.New("empty path segment")
+		}
+		seg, err := url.PathUnescape(rawSeg)
+		if err != nil {
+			return "", err
+		}
+		if seg == "." || seg == ".." {
+			return "", errors.New("dot path segment")
+		}
+		for j := 0; j < len(seg); j++ {
+			ch := seg[j]
+			if ch < 0x20 || ch == 0x7f || ch == '/' || ch == '\\' || ch == '?' || ch == '#' {
+				return "", errors.New("disallowed character in path")
+			}
+		}
+		b.WriteByte('/')
+		b.WriteString(seg)
+	}
+	return b.String(), nil
 }
 
 // gateBody is a request's body on its way to the API: what is read of it, and the server's body to close.

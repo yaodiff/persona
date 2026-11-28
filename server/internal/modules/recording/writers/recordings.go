@@ -71,7 +71,7 @@ func cleanUpload(u *RecordingUpload) error {
 	segs := make([]RecordingSegment, 0, len(u.Segments))
 	total := 0
 	for i, sg := range u.Segments {
-		sg.Text, sg.N, sg.Source = strings.TrimSpace(sg.Text), 0, "" // only the hub sets a source
+		sg.Text, sg.N, sg.Source, sg.Speaker, sg.SpeakerUnsure = strings.TrimSpace(sg.Text), 0, "", "", false // only the hub sets source and speaker labels
 		if day {
 			sg.N = i + 1    // its position, empty ones counted
 			sg.Echo = false // Persona never speaks in an all-day recording
@@ -186,6 +186,12 @@ func (e *engine) putRecording(rawID string, u RecordingUpload, now time.Time) (p
 	}
 	put.Revision = u.Revision
 	st := e.Store
+	var changedParts []string
+	defer func() {
+		if len(changedParts) > 0 {
+			e.meetingChanged(id, changedParts)
+		}
+	}()
 	st.recMu.Lock()
 	defer st.recMu.Unlock()
 	if gone := st.tombstoned(id); gone {
@@ -195,7 +201,7 @@ func (e *engine) putRecording(rawID string, u RecordingUpload, now time.Time) (p
 	if exists {
 		put.Revision, put.Base, put.Next = r.Revision, r.Base, r.Next
 	}
-	if u.StartedAt.Before(now.UTC().AddDate(0, 0, -recordingDays(e.RecordingDays()))) {
+	if pastRetention(u.StartedAt, now, e.RecordingDays()) {
 		put.Status = RecordingExpired
 		return put, false, nil
 	}
@@ -232,15 +238,18 @@ func (e *engine) putRecording(rawID string, u RecordingUpload, now time.Time) (p
 	if err != nil {
 		return put, false, err
 	}
-	defer e.meetingChanged(id, parts)
+	changedParts = append(changedParts, parts...)
 	if meeting != nil && meeting.Room != nil {
 		put.Room, put.AttendanceProblem = true, u.RoomProblem
 	}
 	put.Meeting = meeting
 	// A newer transcript (not a retry of the accepted upload): its minutes are pushed as before.
 	advanced := !exists || u.Revision > r.Revision
+	prevDuration := 0.0
 	if !exists {
 		r = &Recording{ID: id}
+	} else {
+		prevDuration = r.Duration
 	}
 	r.Conv = meeting
 	r.Revision, r.StartedAt, r.EndedAt, r.Duration = u.Revision, u.StartedAt.UTC(), u.EndedAt, u.Duration
@@ -292,6 +301,24 @@ func (e *engine) putRecording(rawID string, u RecordingUpload, now time.Time) (p
 	}
 	if err := st.commitRecording(r, u.Segments); err != nil {
 		return put, false, err
+	}
+	if r.HubTranscribed() && r.Conv != nil && r.Conv.Speakers != nil && r.Conv.Speakers.State == SpeakerStateReady {
+		trimTo := 0.0
+		if exists && prevDuration > 0 && r.Duration > 0 && r.Duration < prevDuration {
+			trimTo = r.Duration
+		}
+		if spParts, minChanged, err := e.recomputeSpeakersLocked(r, trimTo); err != nil {
+			e.logf("recording %s: speakers recompute: %v", id, err)
+		} else {
+			for _, p := range spParts {
+				if !slices.Contains(changedParts, p) {
+					changedParts = append(changedParts, p)
+				}
+			}
+			if minChanged {
+				st.notify(KindRecording, id, "summary")
+			}
+		}
 	}
 	put.Status, put.Attendance = RecordingStored, r.AttendanceRole()
 	put.Revision, put.Base, put.Next = r.Revision, r.Base, r.Next

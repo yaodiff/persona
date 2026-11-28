@@ -256,6 +256,9 @@ func TestBotmuxLastTextIsTheTopicReply(t *testing.T) {
 	short["raw"].(map[string]any)["previewBotFullText"] = ""
 	blocked := replied(sidF, "alive", "idle", "replied")
 	blocked["tuiPromptActive"] = true
+	const onlyID = "0d000000-0000-4000-8000-000000000015"
+	only := replied(onlyID, "alive", "idle", "replied")
+	only["raw"].(map[string]any)["previewBotFullText"] = "BOTMUX_NOTHING_TO_SEND"
 	card := replied(sidG, "not_running", "unknown", "replied")
 	card["raw"].(map[string]any)["previewBotFullText"] = "[卡片: 部署完成]\n**结论**：三台都在线"
 	f.rows = []map[string]any{
@@ -263,7 +266,7 @@ func TestBotmuxLastTextIsTheTopicReply(t *testing.T) {
 		replied(sidB, "alive", "working", "replied"),
 		replied(sidC, "alive", "idle", "waiting"),
 		bmxRow(sidD, "claude-code", "alive", "idle", false, "no reply"),
-		short, blocked, card,
+		short, blocked, card, only,
 		replied(sidH, "not_running", "unknown", "replied"),
 		replied(sidI, "not_running", "unknown", "replied"),
 	}
@@ -271,7 +274,7 @@ func TestBotmuxLastTextIsTheTopicReply(t *testing.T) {
 		return `{"type":"assistant","timestamp":"` + at.UTC().Format(time.RFC3339) +
 			`","message":{"role":"assistant","content":[{"type":"text","text":"` + s + `"}]}}`
 	}
-	for _, id := range []string{sidA, sidB, sidC, sidD, sidE, sidF, sidG, sidH, sidI} {
+	for _, id := range []string{sidA, sidB, sidC, sidD, sidE, sidF, sidG, sidH, sidI, onlyID} {
 		at := replyAt.Add(time.Minute) // the sentinel closing the turn of the reply
 		lines := []string{`{"type":"user","message":{"role":"user","content":"hi"}}`, text(at, "已发到话题"),
 			text(at, "BOTMUX_NOTHING_TO_SEND")}
@@ -286,7 +289,7 @@ func TestBotmuxLastTextIsTheTopicReply(t *testing.T) {
 	m := byID(listSessions(t, n))
 	want := map[string]string{sidA: "结论：已修好 测试 9 个通过", sidB: "已发到话题", sidC: "已发到话题", sidD: "已发到话题",
 		sidE: "结论：已修好 …", sidF: "已发到话题", sidG: "部署完成 **结论**：三台都在线", sidH: "在终端里接着做完了",
-		sidI: "结论：已修好 测试 9 个通过"}
+		sidI: "结论：已修好 测试 9 个通过", onlyID: "已发到话题"}
 	for id, text := range want {
 		if got := m[id].LastText; got != text {
 			t.Errorf("%s: last text %q, want %q", id, got, text)

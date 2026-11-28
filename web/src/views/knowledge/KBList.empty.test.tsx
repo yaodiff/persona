@@ -44,14 +44,14 @@ afterEach(async () => {
 describe("an empty kind", () => {
   it("says recordings come from the phone", async () => {
     const [title, body] = await emptyText("recordings");
-    expect(title).toBe("还没有录音");
+    expect(title).toBe("暂无录音");
     expect(body).toBe(zh.empty_recordings_body);
     expect(body).toContain("手机");
   });
 
   it("says events come from a connected calendar", async () => {
     const [title, body] = await emptyText("events");
-    expect(title).toBe("还没有日程");
+    expect(title).toBe("暂无日程");
     expect(body).toBe(zh.empty_events_body);
     expect(body).toContain("日历");
   });
@@ -69,8 +69,8 @@ describe("an empty kind", () => {
     const design = [...document.body.querySelectorAll<HTMLButtonElement>("[data-chips] > button")].find((b) => b.textContent === "#design")!;
     await act(async () => design.click());
     const [title, body] = [...host.querySelectorAll("p")].map((p) => p.textContent ?? "");
-    expect(title).toBe("没有带 #design 的录音");
-    expect(body).toBe("清除筛选，查看全部录音。");
+    expect(title).toBe("暂无带有 #design 标签的录音");
+    expect(body).toBe("清除筛选条件即可查看全部录音。");
     expect(body).not.toBe(zh.empty_recordings_body);
   });
 

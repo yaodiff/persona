@@ -66,11 +66,11 @@ describe("restoreModel", () => {
   });
   it("words the node's refusals by code, and keeps other errors' own words", async () => {
     const cases: [string, string][] = [
-      ["restore_busy", "正在工作"],
+      ["restore_busy", "正在运行中"],
       ["restore_unsupported", "/model"],
-      ["restore_nothing", "已经没有在用回退"],
-      ["restore_unknown", "没有关闭任何东西"],
-      ["node_outdated", "太旧"],
+      ["restore_nothing", "已不再使用回退模型"],
+      ["restore_unknown", "未执行关闭操作"],
+      ["node_outdated", "版本过旧"],
     ];
     for (const [code, words] of cases) {
       failWith = new ApiError(409, "node words " + code, { code, error: "node words " + code });
@@ -118,10 +118,10 @@ const NOW = Date.parse("2026-11-15T06:00:00Z");
 
 describe("recoveryCause", () => {
   it("maps the node's five recovery categories to plain words and leaves anything else alone", () => {
-    expect(recoveryCause("safeguards_refusal")).toBe("模型拒绝了这次请求");
-    expect(recoveryCause("quota_exhausted")).toBe("额度用尽");
-    expect(recoveryCause("rate_limited")).toBe("被限流");
-    expect(recoveryCause("server_error")).toBe("服务出错");
+    expect(recoveryCause("safeguards_refusal")).toBe("模型拒绝了此请求");
+    expect(recoveryCause("quota_exhausted")).toBe("额度已用尽");
+    expect(recoveryCause("rate_limited")).toBe("触发限流");
+    expect(recoveryCause("server_error")).toBe("服务异常");
     expect(recoveryCause("model_unavailable")).toBe("模型不可用");
     // runtime-written records and unknown categories keep their existing wording
     expect(recoveryCause("synthetic-policy")).toBeUndefined();
@@ -137,7 +137,7 @@ describe("recoveryExhausted", () => {
   it("names the cause, the reset time in the user's clock and every model tried", () => {
     const v = recoveryExhausted({ model_fallback: { ...recovery, recovery_exhausted: true } }, NOW);
     expect(v).toEqual({
-      cause: "额度用尽",
+      cause: "额度已用尽",
       reset: usageLimitClock("2026-11-15T07:30:00Z", NOW),
       tried: "primary-model -> fallback-model",
     });
@@ -171,7 +171,7 @@ describe("recoveryReturning", () => {
 describe("fallbackView with the node's recovery marker", () => {
   it("appends the plain-words cause and names the returning model", () => {
     const v = fallbackView({ model_fallback: { ...recovery, recovery_returning: true } });
-    expect(v?.cause).toBe("额度用尽");
+    expect(v?.cause).toBe("额度已用尽");
     expect(v?.returning).toBe("primary-model");
   });
   it("leaves a runtime-written record's view without cause or returning", () => {

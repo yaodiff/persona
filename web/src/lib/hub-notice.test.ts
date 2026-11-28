@@ -43,7 +43,7 @@ describe("hub notice", () => {
   });
 
   it("says each in words, the hub's own for a rollback", () => {
-    expect(hubNoticeText(hubNotice(hub({ state: "restarting" }))!)).toBe("hub 正在更新：正在重启，会断开一会儿");
+    expect(hubNoticeText(hubNotice(hub({ state: "restarting" }))!)).toBe("hub 正在更新：正在重启，连接将短暂中断");
     expect(hubNoticeText({ kind: "rolled_back", why: "新版本没起来", build: 2 })).toBe("新版本没起来");
     expect(hubNoticeText({ kind: "auto_on" })).toBe("hub 会在空闲时自动更新");
     expect(hubNoticeText({ kind: "available", version: "v2", build: 2 })).toBe("hub 有新版本 v2");

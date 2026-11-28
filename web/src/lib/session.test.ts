@@ -29,7 +29,7 @@ describe("session capability contract", () => {
     expect(sourceSubtitle({ ...history, source_kind: "claude_bg", read_only_reason: "回复请在电脑上打开" })).toBe("Claude 后台 · 仅查看：回复请在电脑上打开");
     // The node's own "仅查看：" prefix is said once (#7803); a reason that is only the prefix falls back to the default.
     expect(sourceSubtitle({ ...history, source_kind: "codex_app_server", read_only_reason: "仅查看：这个子 Agent 由父 Agent 驱动" })).toBe("Codex 实时 · 仅查看：这个子 Agent 由父 Agent 驱动");
-    expect(sourceSubtitle({ ...history, source_kind: "codex_app_server", read_only_reason: "仅查看：" })).toBe("Codex 实时 · 仅查看：这个来源还不能发消息");
+    expect(sourceSubtitle({ ...history, source_kind: "codex_app_server", read_only_reason: "仅查看：" })).toBe("Codex 实时 · 仅查看：该来源暂不支持发送消息");
   });
 
   it("names Claude sessions outside Persona's terminals and lets them send only when the node says so", () => {
@@ -39,7 +39,7 @@ describe("session capability contract", () => {
     for (const op of ["interrupt", "approve", "terminal"] as const) expect(sessionCan(desktop, op)).toBe(false);
     expect(sessionMenuActions(desktop)).toEqual([]);
     const terminal: Session = { ...desktop, source_kind: "claude_cli", capabilities: { read: true }, read_only_reason: "回复请在电脑上" };
-    expect(sourceSubtitle(terminal)).toBe("终端里的 Claude · 仅查看：回复请在电脑上");
+    expect(sourceSubtitle(terminal)).toBe("在标签页中的 Claude · 仅查看：回复请在电脑上");
     expect(sessionCan(terminal, "send")).toBe(false);
   });
 
@@ -58,6 +58,8 @@ describe("session capability contract", () => {
     expect(sessionCan(runtime, "terminal")).toBe(false);
     expect(sessionCan(runtime, "close")).toBe(true);
     expect(sessionMenuActions(runtime)).toEqual(["stop", "close"]);
+    expect(sessionMenuActions({ ...runtime, background_working: true })).toEqual(["close"]);
+    expect(sessionMenuActions({ ...runtime, view: { phase: "working", reason: { kind: "background" }, rank: 0 } })).toEqual(["close"]);
     expect(sessionMenuActions({ ...runtime, status: "offline" })).toEqual([]);
     expect(sessionMenuActions({ ...legacy, capabilities: { terminal: true, interrupt: true, close: false } })).toEqual(["stop", "resume"]);
     expect(sessionCan({ ...runtime, capabilities: { terminal: true } }, "close")).toBe(true);

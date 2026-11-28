@@ -1,0 +1,1493 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "name": "overview_with_debates",
+      "description": "Summary-card layout in English with one settled disagreement (linked to decision 0) and one open disagreement: Disagreements sits after Core conclusions and before the first group.",
+      "source": "docs/assistant/meeting-minutes.md \"Disagreements (#16728)\"; server/internal/modules/recording/writers/minutes.go renderOverview",
+      "input": {
+        "minutes": {
+          "version": 1,
+          "revision": 1,
+          "generated_at": "2026-11-10T07:12:03Z",
+          "title": "Sprint review",
+          "when": "2026-11-10 14:00–15:10",
+          "start": "2026-11-10T14:00:00+08:00",
+          "end": "2026-11-10T15:10:00+08:00",
+          "where": "Room 3",
+          "attendees": [
+            "Ada",
+            "Bo"
+          ],
+          "points": [
+            {
+              "text": "Export drops entries over 4 MB",
+              "at": 312.0,
+              "who": "Ada"
+            }
+          ],
+          "decisions": [
+            {
+              "text": "Cap exports per item for this release",
+              "at": 1504.5
+            }
+          ],
+          "actions": [
+            {
+              "id": "a1",
+              "who": "Bo",
+              "what": "Add the regression test",
+              "by": "Friday",
+              "due_date": "2026-11-13",
+              "at": 2100.0
+            }
+          ],
+          "open": [
+            {
+              "text": "Whether the warning banner needs a Japanese copy pass",
+              "at": 2408.0
+            }
+          ],
+          "overview": {
+            "headline": "Export cap ships per item; digest default stays open",
+            "conclusions": [
+              {
+                "text": "Export cap is per item for this release",
+                "strong": [
+                  "per item"
+                ],
+                "at": 1504.5
+              }
+            ],
+            "groups": [
+              {
+                "title": "",
+                "topics": [
+                  {
+                    "title": "Export",
+                    "icon": "progress",
+                    "bullets": [
+                      {
+                        "text": "Export drops entries over 4 MB",
+                        "strong": [
+                          "4 MB"
+                        ],
+                        "at": 312.0,
+                        "who": "Ada"
+                      },
+                      {
+                        "text": "Cap exports per item for this release",
+                        "strong": [
+                          "per item"
+                        ],
+                        "at": 1504.5,
+                        "decision": true
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          "debates": [
+            {
+              "question": "Should the export cap count items or recordings?",
+              "topic": "Export",
+              "status": "settled",
+              "at": 312.0,
+              "positions": [
+                {
+                  "stance": "Per item: one large file should not fail the whole export",
+                  "at": 312.0,
+                  "who": "Ada"
+                },
+                {
+                  "stance": "Per recording: easier to explain",
+                  "at": 340.5
+                }
+              ],
+              "outcome": {
+                "text": "Per item for this release",
+                "at": 1504.5,
+                "decision": 0
+              }
+            },
+            {
+              "question": "Should the weekly digest default to on?",
+              "status": "open",
+              "at": 1800.0,
+              "positions": [
+                {
+                  "stance": "Default on so new users see the recap",
+                  "at": 1800.0,
+                  "who": "Ada"
+                },
+                {
+                  "stance": "Default off to avoid unsolicited email",
+                  "at": 1860.0,
+                  "who": "Bo"
+                }
+              ]
+            }
+          ],
+          "language": "en"
+        }
+      },
+      "expected": {
+        "debates": [
+          {
+            "question": "Should the export cap count items or recordings?",
+            "topic": "Export",
+            "status": "settled",
+            "at": 312.0,
+            "positions": [
+              {
+                "stance": "Per item: one large file should not fail the whole export",
+                "at": 312.0,
+                "who": "Ada"
+              },
+              {
+                "stance": "Per recording: easier to explain",
+                "at": 340.5,
+                "who": null
+              }
+            ],
+            "outcome": {
+              "text": "Per item for this release",
+              "at": 1504.5,
+              "decision": 0
+            }
+          },
+          {
+            "question": "Should the weekly digest default to on?",
+            "topic": null,
+            "status": "open",
+            "at": 1800.0,
+            "positions": [
+              {
+                "stance": "Default on so new users see the recap",
+                "at": 1800.0,
+                "who": "Ada"
+              },
+              {
+                "stance": "Default off to avoid unsolicited email",
+                "at": 1860.0,
+                "who": "Bo"
+              }
+            ],
+            "outcome": null
+          }
+        ],
+        "markdown": "# Sprint review\n\n- When: 2026-11-10 14:00–15:10\n- Location: Room 3\n- Attendees: Ada, Bo\n\nExport cap ships per item; digest default stays open\n\n## Core conclusions\n\n- [14:25:04] Export cap is **per item** for this release\n\n## Disagreements\n\n### Should the export cap count items or recordings? (settled)\n- [14:05:12] Per item: one large file should not fail the whole export (Ada)\n- [14:05:40] Per recording: easier to explain\n- [14:25:04] Outcome: Per item for this release\n\n### Should the weekly digest default to on? (still disagreed)\n- [14:30:00] Default on so new users see the recap (Ada)\n- [14:31:00] Default off to avoid unsolicited email (Bo)\n\n## Export\n\n- [14:05:12] Export drops entries over **4 MB** (Ada)\n- [14:25:04] Decided: Cap exports **per item** for this release\n\n## Action items\n\n- [14:35:00] Bo: Add the regression test (Friday)\n\n## Open questions\n\n- [14:40:08] Whether the warning banner needs a Japanese copy pass\n\n*AI-generated from the recording. Check anything important.*"
+      }
+    },
+    {
+      "name": "legacy_with_debates_en",
+      "description": "Legacy layout in English with settled and open disagreements: Disagreements sits between Action items and Open questions.",
+      "source": "docs/assistant/meeting-minutes.md \"Disagreements (#16728)\" (Markdown); server/internal/modules/recording/writers/minutes.go renderMinutes",
+      "input": {
+        "minutes": {
+          "version": 1,
+          "revision": 1,
+          "generated_at": "2026-11-10T07:12:03Z",
+          "title": "Sprint review",
+          "when": "2026-11-10 14:00–15:10",
+          "start": "2026-11-10T14:00:00+08:00",
+          "end": "2026-11-10T15:10:00+08:00",
+          "points": [
+            {
+              "text": "Export drops entries over 4 MB",
+              "at": 312.0,
+              "who": "Ada"
+            }
+          ],
+          "decisions": [
+            {
+              "text": "Cap exports per item for this release",
+              "at": 1504.5
+            }
+          ],
+          "actions": [
+            {
+              "id": "a1",
+              "who": "Bo",
+              "what": "Add the regression test",
+              "by": "Friday",
+              "at": 2100.0
+            }
+          ],
+          "open": [
+            {
+              "text": "Whether the warning banner needs a Japanese copy pass",
+              "at": 2408.0
+            }
+          ],
+          "debates": [
+            {
+              "question": "Should the export cap count items or recordings?",
+              "status": "settled",
+              "at": 312.0,
+              "positions": [
+                {
+                  "stance": "Per item: one large file should not fail the whole export",
+                  "at": 312.0,
+                  "who": "Ada"
+                },
+                {
+                  "stance": "Per recording: easier to explain",
+                  "at": 340.5
+                }
+              ],
+              "outcome": {
+                "text": "Per item for this release",
+                "at": 1504.5,
+                "decision": 0
+              }
+            },
+            {
+              "question": "Should the weekly digest default to on?",
+              "status": "open",
+              "at": 1800.0,
+              "positions": [
+                {
+                  "stance": "Default on so new users see the recap",
+                  "at": 1800.0
+                },
+                {
+                  "stance": "Default off to avoid unsolicited email",
+                  "at": 1860.0
+                }
+              ]
+            }
+          ],
+          "language": "en"
+        }
+      },
+      "expected": {
+        "debates": [
+          {
+            "question": "Should the export cap count items or recordings?",
+            "topic": null,
+            "status": "settled",
+            "at": 312.0,
+            "positions": [
+              {
+                "stance": "Per item: one large file should not fail the whole export",
+                "at": 312.0,
+                "who": "Ada"
+              },
+              {
+                "stance": "Per recording: easier to explain",
+                "at": 340.5,
+                "who": null
+              }
+            ],
+            "outcome": {
+              "text": "Per item for this release",
+              "at": 1504.5,
+              "decision": 0
+            }
+          },
+          {
+            "question": "Should the weekly digest default to on?",
+            "topic": null,
+            "status": "open",
+            "at": 1800.0,
+            "positions": [
+              {
+                "stance": "Default on so new users see the recap",
+                "at": 1800.0,
+                "who": null
+              },
+              {
+                "stance": "Default off to avoid unsolicited email",
+                "at": 1860.0,
+                "who": null
+              }
+            ],
+            "outcome": null
+          }
+        ],
+        "markdown": "# Sprint review\n\n- When: 2026-11-10 14:00–15:10\n\n## Key points\n\n- [14:05:12] Export drops entries over 4 MB (Ada)\n\n## Decisions\n\n- [14:25:04] Cap exports per item for this release\n\n## Action items\n\n- [14:35:00] Bo: Add the regression test (Friday)\n\n## Disagreements\n\n### Should the export cap count items or recordings? (settled)\n- [14:05:12] Per item: one large file should not fail the whole export (Ada)\n- [14:05:40] Per recording: easier to explain\n- [14:25:04] Outcome: Per item for this release\n\n### Should the weekly digest default to on? (still disagreed)\n- [14:30:00] Default on so new users see the recap\n- [14:31:00] Default off to avoid unsolicited email\n\n## Open questions\n\n- [14:40:08] Whether the warning banner needs a Japanese copy pass"
+      }
+    },
+    {
+      "name": "legacy_with_debates_zh",
+      "description": "Legacy layout in zh-Hans with settled and open disagreements, pinning Chinese headings, status words and outcome prefix.",
+      "source": "docs/assistant/meeting-minutes.md \"Disagreements (#16728)\" (Markdown); server/internal/i18n/locales/zh-Hans/kb-minutes.json",
+      "input": {
+        "minutes": {
+          "version": 1,
+          "revision": 1,
+          "generated_at": "2026-11-10T07:12:03Z",
+          "title": "导出评审",
+          "when": "2026-11-10 14:00–14:30",
+          "start": "2026-11-10T14:00:00+08:00",
+          "end": "2026-11-10T14:30:00+08:00",
+          "points": [
+            {
+              "text": "导出超过 4 MB 的条目会被跳过",
+              "at": 60.0,
+              "who": "Ada"
+            }
+          ],
+          "decisions": [
+            {
+              "text": "本版按单条计算上限",
+              "at": 600.0
+            }
+          ],
+          "actions": [
+            {
+              "id": "a1",
+              "who": "Bo",
+              "what": "补充回归测试",
+              "by": "周五前",
+              "at": 900.0
+            }
+          ],
+          "open": [
+            {
+              "text": "是否需要补充日文文案",
+              "at": 1200.0
+            }
+          ],
+          "debates": [
+            {
+              "question": "导出上限按单条还是按整份录音计算？",
+              "status": "settled",
+              "at": 60.0,
+              "positions": [
+                {
+                  "stance": "按单条算，避免一个大文件拖垮整次导出",
+                  "at": 60.0,
+                  "who": "Ada"
+                },
+                {
+                  "stance": "按整份录音算，规则更好解释",
+                  "at": 120.0
+                }
+              ],
+              "outcome": {
+                "text": "本版先按单条计算",
+                "at": 600.0,
+                "decision": 0
+              }
+            },
+            {
+              "question": "周报邮件是否默认开启？",
+              "status": "open",
+              "at": 300.0,
+              "positions": [
+                {
+                  "stance": "默认开启，新用户能直接看到",
+                  "at": 300.0,
+                  "who": "Ada"
+                },
+                {
+                  "stance": "默认关闭，避免打扰",
+                  "at": 360.0,
+                  "who": "Bo"
+                }
+              ]
+            }
+          ],
+          "language": "zh-Hans"
+        }
+      },
+      "expected": {
+        "debates": [
+          {
+            "question": "导出上限按单条还是按整份录音计算？",
+            "topic": null,
+            "status": "settled",
+            "at": 60.0,
+            "positions": [
+              {
+                "stance": "按单条算，避免一个大文件拖垮整次导出",
+                "at": 60.0,
+                "who": "Ada"
+              },
+              {
+                "stance": "按整份录音算，规则更好解释",
+                "at": 120.0,
+                "who": null
+              }
+            ],
+            "outcome": {
+              "text": "本版先按单条计算",
+              "at": 600.0,
+              "decision": 0
+            }
+          },
+          {
+            "question": "周报邮件是否默认开启？",
+            "topic": null,
+            "status": "open",
+            "at": 300.0,
+            "positions": [
+              {
+                "stance": "默认开启，新用户能直接看到",
+                "at": 300.0,
+                "who": "Ada"
+              },
+              {
+                "stance": "默认关闭，避免打扰",
+                "at": 360.0,
+                "who": "Bo"
+              }
+            ],
+            "outcome": null
+          }
+        ],
+        "markdown": "# 导出评审\n\n- 时间：2026-11-10 14:00–14:30\n\n## 讨论要点\n\n- [14:01:00] 导出超过 4 MB 的条目会被跳过（Ada）\n\n## 结论与决定\n\n- [14:10:00] 本版按单条计算上限\n\n## 待办\n\n- [14:15:00] Bo：补充回归测试（周五前）\n\n## 分歧\n\n### 导出上限按单条还是按整份录音计算？（已谈拢）\n- [14:01:00] 按单条算，避免一个大文件拖垮整次导出（Ada）\n- [14:02:00] 按整份录音算，规则更好解释\n- [14:10:00] 结果：本版先按单条计算\n\n### 周报邮件是否默认开启？（仍有分歧）\n- [14:05:00] 默认开启，新用户能直接看到（Ada）\n- [14:06:00] 默认关闭，避免打扰（Bo）\n\n## 未决问题\n\n- [14:20:00] 是否需要补充日文文案"
+      }
+    },
+    {
+      "name": "legacy_with_debates_ja",
+      "description": "Legacy layout in ja with settled and open disagreements, pinning Japanese headings, status words and outcome prefix.",
+      "source": "docs/assistant/meeting-minutes.md \"Disagreements (#16728)\" (Markdown); server/internal/i18n/locales/ja/kb-minutes.json",
+      "input": {
+        "minutes": {
+          "version": 1,
+          "revision": 1,
+          "generated_at": "2026-11-10T07:12:03Z",
+          "title": "エクスポートレビュー",
+          "when": "2026-11-10 14:00–14:30",
+          "start": "2026-11-10T14:00:00+08:00",
+          "end": "2026-11-10T14:30:00+08:00",
+          "points": [
+            {
+              "text": "4 MB を超える項目はスキップされる",
+              "at": 60.0,
+              "who": "Ada"
+            }
+          ],
+          "decisions": [
+            {
+              "text": "今版では項目ごとに上限を数える",
+              "at": 600.0
+            }
+          ],
+          "actions": [
+            {
+              "id": "a1",
+              "who": "Bo",
+              "what": "回帰テストを追加する",
+              "by": "金曜まで",
+              "at": 900.0
+            }
+          ],
+          "open": [
+            {
+              "text": "警告文の多言語確認が必要か",
+              "at": 1200.0
+            }
+          ],
+          "debates": [
+            {
+              "question": "上限は項目ごとか録音全体か？",
+              "status": "settled",
+              "at": 60.0,
+              "positions": [
+                {
+                  "stance": "項目ごとにして1件の大きなファイルで全体を止めない",
+                  "at": 60.0,
+                  "who": "Ada"
+                },
+                {
+                  "stance": "録音全体の方が説明しやすい",
+                  "at": 120.0
+                }
+              ],
+              "outcome": {
+                "text": "今版では項目ごとにする",
+                "at": 600.0,
+                "decision": 0
+              }
+            },
+            {
+              "question": "週次ダイジェストを既定でオンにするか？",
+              "status": "open",
+              "at": 300.0,
+              "positions": [
+                {
+                  "stance": "既定でオンにして新規ユーザーに届ける",
+                  "at": 300.0,
+                  "who": "Ada"
+                },
+                {
+                  "stance": "既定でオフにして通知過多を避ける",
+                  "at": 360.0,
+                  "who": "Bo"
+                }
+              ]
+            }
+          ],
+          "language": "ja"
+        }
+      },
+      "expected": {
+        "debates": [
+          {
+            "question": "上限は項目ごとか録音全体か？",
+            "topic": null,
+            "status": "settled",
+            "at": 60.0,
+            "positions": [
+              {
+                "stance": "項目ごとにして1件の大きなファイルで全体を止めない",
+                "at": 60.0,
+                "who": "Ada"
+              },
+              {
+                "stance": "録音全体の方が説明しやすい",
+                "at": 120.0,
+                "who": null
+              }
+            ],
+            "outcome": {
+              "text": "今版では項目ごとにする",
+              "at": 600.0,
+              "decision": 0
+            }
+          },
+          {
+            "question": "週次ダイジェストを既定でオンにするか？",
+            "topic": null,
+            "status": "open",
+            "at": 300.0,
+            "positions": [
+              {
+                "stance": "既定でオンにして新規ユーザーに届ける",
+                "at": 300.0,
+                "who": "Ada"
+              },
+              {
+                "stance": "既定でオフにして通知過多を避ける",
+                "at": 360.0,
+                "who": "Bo"
+              }
+            ],
+            "outcome": null
+          }
+        ],
+        "markdown": "# エクスポートレビュー\n\n- 日時：2026-11-10 14:00–14:30\n\n## 要点\n\n- [14:01:00] 4 MB を超える項目はスキップされる（Ada）\n\n## 決定事項\n\n- [14:10:00] 今版では項目ごとに上限を数える\n\n## アクション項目\n\n- [14:15:00] Bo：回帰テストを追加する（金曜まで）\n\n## 意見の相違\n\n### 上限は項目ごとか録音全体か？（合意済み）\n- [14:01:00] 項目ごとにして1件の大きなファイルで全体を止めない（Ada）\n- [14:02:00] 録音全体の方が説明しやすい\n- [14:10:00] 結果：今版では項目ごとにする\n\n### 週次ダイジェストを既定でオンにするか？（未合意）\n- [14:05:00] 既定でオンにして新規ユーザーに届ける（Ada）\n- [14:06:00] 既定でオフにして通知過多を避ける（Bo）\n\n## 未解決の質問\n\n- [14:20:00] 警告文の多言語確認が必要か"
+      }
+    },
+    {
+      "name": "legacy_no_debates_zh",
+      "description": "Legacy layout in zh-Hans without debates: Markdown stays byte for byte unchanged.",
+      "source": "docs/assistant/meeting-minutes.md \"Disagreements (#16728)\" (No disagreement)",
+      "input": {
+        "minutes": {
+          "version": 1,
+          "revision": 1,
+          "generated_at": "2026-11-10T07:12:03Z",
+          "title": "导出评审",
+          "when": "2026-11-10 14:00–14:30",
+          "start": "2026-11-10T14:00:00+08:00",
+          "end": "2026-11-10T14:30:00+08:00",
+          "points": [
+            {
+              "text": "导出超过 4 MB 的条目会被跳过",
+              "at": 60.0,
+              "who": "Ada"
+            }
+          ],
+          "decisions": [
+            {
+              "text": "本版保留上限",
+              "at": 600.0
+            }
+          ],
+          "actions": [
+            {
+              "id": "a1",
+              "who": "Bo",
+              "what": "补充回归测试",
+              "by": "周五前",
+              "at": 900.0
+            }
+          ],
+          "open": [
+            {
+              "text": "是否需要补充日文文案",
+              "at": 1200.0
+            }
+          ],
+          "language": "zh-Hans"
+        }
+      },
+      "expected": {
+        "debates": [],
+        "markdown": "# 导出评审\n\n- 时间：2026-11-10 14:00–14:30\n\n## 讨论要点\n\n- [14:01:00] 导出超过 4 MB 的条目会被跳过（Ada）\n\n## 结论与决定\n\n- [14:10:00] 本版保留上限\n\n## 待办\n\n- [14:15:00] Bo：补充回归测试（周五前）\n\n## 未决问题\n\n- [14:20:00] 是否需要补充日文文案"
+      }
+    },
+    {
+      "name": "legacy_no_debates_ja",
+      "description": "Legacy layout in ja without debates: Markdown stays byte for byte unchanged.",
+      "source": "docs/assistant/meeting-minutes.md \"Disagreements (#16728)\" (No disagreement)",
+      "input": {
+        "minutes": {
+          "version": 1,
+          "revision": 1,
+          "generated_at": "2026-11-10T07:12:03Z",
+          "title": "エクスポートレビュー",
+          "when": "2026-11-10 14:00–14:30",
+          "start": "2026-11-10T14:00:00+08:00",
+          "end": "2026-11-10T14:30:00+08:00",
+          "points": [
+            {
+              "text": "4 MB を超える項目はスキップされる",
+              "at": 60.0,
+              "who": "Ada"
+            }
+          ],
+          "decisions": [
+            {
+              "text": "今版では上限を維持する",
+              "at": 600.0
+            }
+          ],
+          "actions": [
+            {
+              "id": "a1",
+              "who": "Bo",
+              "what": "回帰テストを追加する",
+              "by": "金曜まで",
+              "at": 900.0
+            }
+          ],
+          "open": [
+            {
+              "text": "警告文の多言語確認が必要か",
+              "at": 1200.0
+            }
+          ],
+          "language": "ja"
+        }
+      },
+      "expected": {
+        "debates": [],
+        "markdown": "# エクスポートレビュー\n\n- 日時：2026-11-10 14:00–14:30\n\n## 要点\n\n- [14:01:00] 4 MB を超える項目はスキップされる（Ada）\n\n## 決定事項\n\n- [14:10:00] 今版では上限を維持する\n\n## アクション項目\n\n- [14:15:00] Bo：回帰テストを追加する（金曜まで）\n\n## 未解決の質問\n\n- [14:20:00] 警告文の多言語確認が必要か"
+      }
+    },
+    {
+      "name": "empty_debates_overview",
+      "description": "Summary-card layout with an explicit empty debates array renders byte for byte as without debates.",
+      "source": "docs/assistant/meeting-minutes.md \"Disagreements (#16728)\" (No disagreement)",
+      "input": {
+        "minutes": {
+          "version": 1,
+          "revision": 1,
+          "generated_at": "2026-11-10T07:12:03Z",
+          "title": "Sync",
+          "when": "2026-11-10 14:00–14:20",
+          "start": "2026-11-10T14:00:00+08:00",
+          "end": "2026-11-10T14:20:00+08:00",
+          "points": [
+            {
+              "text": "Export is ready",
+              "at": 60.0
+            }
+          ],
+          "overview": {
+            "headline": "Export is ready to ship",
+            "groups": [
+              {
+                "title": "",
+                "topics": [
+                  {
+                    "title": "Export",
+                    "icon": "progress",
+                    "bullets": [
+                      {
+                        "text": "Export is ready",
+                        "strong": [
+                          "ready"
+                        ],
+                        "at": 60.0
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          "debates": [],
+          "language": "en"
+        }
+      },
+      "expected": {
+        "debates": [],
+        "markdown": "# Sync\n\n- When: 2026-11-10 14:00–14:20\n\nExport is ready to ship\n\n## Export\n\n- [14:01:00] Export is **ready**\n\n*AI-generated from the recording. Check anything important.*"
+      }
+    },
+    {
+      "name": "empty_debates_legacy",
+      "description": "Legacy layout with an explicit empty debates array renders byte for byte as without debates.",
+      "source": "docs/assistant/meeting-minutes.md \"Disagreements (#16728)\" (No disagreement)",
+      "input": {
+        "minutes": {
+          "version": 1,
+          "revision": 1,
+          "generated_at": "2026-11-10T07:12:03Z",
+          "title": "Sync",
+          "when": "2026-11-10 14:00–14:20",
+          "start": "2026-11-10T14:00:00+08:00",
+          "end": "2026-11-10T14:20:00+08:00",
+          "points": [
+            {
+              "text": "Export is ready",
+              "at": 60.0
+            }
+          ],
+          "open": [
+            {
+              "text": "Next release date",
+              "at": 120.0
+            }
+          ],
+          "debates": [],
+          "language": "en"
+        }
+      },
+      "expected": {
+        "debates": [],
+        "markdown": "# Sync\n\n- When: 2026-11-10 14:00–14:20\n\n## Key points\n\n- [14:01:00] Export is ready\n\n## Open questions\n\n- [14:02:00] Next release date"
+      }
+    },
+    {
+      "name": "cleaned_to_empty_overview",
+      "description": "Summary-card layout whose debates block cleans down to nothing: no Disagreements section and identical Markdown to without debates.",
+      "source": "docs/assistant/meeting-minutes.md \"Disagreements (#16728)\" (Clients)",
+      "input": {
+        "minutes": {
+          "version": 1,
+          "revision": 1,
+          "generated_at": "2026-11-10T07:12:03Z",
+          "title": "Sync",
+          "when": "2026-11-10 14:00–14:20",
+          "start": "2026-11-10T14:00:00+08:00",
+          "end": "2026-11-10T14:20:00+08:00",
+          "points": [
+            {
+              "text": "Export is ready",
+              "at": 60.0
+            }
+          ],
+          "overview": {
+            "headline": "Export is ready to ship",
+            "groups": [
+              {
+                "title": "",
+                "topics": [
+                  {
+                    "title": "Export",
+                    "icon": "progress",
+                    "bullets": [
+                      {
+                        "text": "Export is ready",
+                        "strong": [
+                          "ready"
+                        ],
+                        "at": 60.0
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          "debates": [
+            "not-an-object",
+            null,
+            {
+              "question": "   ",
+              "status": "open",
+              "positions": [
+                {
+                  "stance": "A",
+                  "at": 10.0
+                },
+                {
+                  "stance": "B",
+                  "at": 20.0
+                }
+              ]
+            },
+            {
+              "question": "Only one valid stance",
+              "status": "open",
+              "positions": [
+                {
+                  "stance": "A",
+                  "at": 10.0
+                },
+                {
+                  "stance": "   ",
+                  "at": 20.0
+                },
+                "bad"
+              ]
+            },
+            {
+              "question": "Non-array positions",
+              "positions": {
+                "stance": "A"
+              }
+            }
+          ],
+          "language": "en"
+        }
+      },
+      "expected": {
+        "debates": [],
+        "markdown": "# Sync\n\n- When: 2026-11-10 14:00–14:20\n\nExport is ready to ship\n\n## Export\n\n- [14:01:00] Export is **ready**\n\n*AI-generated from the recording. Check anything important.*"
+      }
+    },
+    {
+      "name": "debates_not_array",
+      "description": "A string debates value reads as absent; the rest of the minutes decodes and renders unchanged.",
+      "source": "docs/assistant/meeting-minutes.md \"Disagreements (#16728)\" (Clients)",
+      "input": {
+        "minutes": {
+          "version": 1,
+          "revision": 1,
+          "generated_at": "2026-11-10T07:12:03Z",
+          "title": "Sync",
+          "when": "2026-11-10 14:00–14:20",
+          "start": "2026-11-10T14:00:00+08:00",
+          "end": "2026-11-10T14:20:00+08:00",
+          "points": [
+            {
+              "text": "Export is ready",
+              "at": 60.0
+            }
+          ],
+          "debates": "none",
+          "language": "en"
+        }
+      },
+      "expected": {
+        "debates": [],
+        "markdown": "# Sync\n\n- When: 2026-11-10 14:00–14:20\n\n## Key points\n\n- [14:01:00] Export is ready"
+      }
+    },
+    {
+      "name": "debates_null",
+      "description": "A null debates value reads as absent; the rest of the minutes decodes and renders unchanged.",
+      "source": "docs/assistant/meeting-minutes.md \"Disagreements (#16728)\" (Clients)",
+      "input": {
+        "minutes": {
+          "version": 1,
+          "revision": 1,
+          "generated_at": "2026-11-10T07:12:03Z",
+          "title": "Sync",
+          "when": "2026-11-10 14:00–14:20",
+          "start": "2026-11-10T14:00:00+08:00",
+          "end": "2026-11-10T14:20:00+08:00",
+          "points": [
+            {
+              "text": "Export is ready",
+              "at": 60.0
+            }
+          ],
+          "debates": null,
+          "language": "en"
+        }
+      },
+      "expected": {
+        "debates": [],
+        "markdown": "# Sync\n\n- When: 2026-11-10 14:00–14:20\n\n## Key points\n\n- [14:01:00] Export is ready"
+      }
+    },
+    {
+      "name": "debates_object",
+      "description": "An object debates value reads as absent; the rest of the minutes decodes and renders unchanged.",
+      "source": "docs/assistant/meeting-minutes.md \"Disagreements (#16728)\" (Clients)",
+      "input": {
+        "minutes": {
+          "version": 1,
+          "revision": 1,
+          "generated_at": "2026-11-10T07:12:03Z",
+          "title": "Sync",
+          "when": "2026-11-10 14:00–14:20",
+          "start": "2026-11-10T14:00:00+08:00",
+          "end": "2026-11-10T14:20:00+08:00",
+          "points": [
+            {
+              "text": "Export is ready",
+              "at": 60.0
+            }
+          ],
+          "debates": {
+            "question": "Not a list"
+          },
+          "language": "en"
+        }
+      },
+      "expected": {
+        "debates": [],
+        "markdown": "# Sync\n\n- When: 2026-11-10 14:00–14:20\n\n## Key points\n\n- [14:01:00] Export is ready"
+      }
+    },
+    {
+      "name": "unknown_status_and_extra_keys",
+      "description": "An unknown status shows no status word and ignores outcome; unknown keys at every level of debates are ignored.",
+      "source": "docs/assistant/meeting-minutes.md \"Disagreements (#16728)\" (The `debates` field, Clients)",
+      "input": {
+        "minutes": {
+          "version": 1,
+          "revision": 1,
+          "generated_at": "2026-11-10T07:12:03Z",
+          "title": "Sync",
+          "when": "2026-11-10 14:00–14:20",
+          "start": "2026-11-10T14:00:00+08:00",
+          "end": "2026-11-10T14:20:00+08:00",
+          "points": [
+            {
+              "text": "Reviewed cache policy",
+              "at": 60.0
+            }
+          ],
+          "decisions": [
+            {
+              "text": "Use 7-day retention",
+              "at": 600.0
+            }
+          ],
+          "debates": [
+            {
+              "question": "Escalate to security review?",
+              "status": "escalated",
+              "at": 60.0,
+              "future_key": "ignored",
+              "positions": [
+                {
+                  "stance": "Escalate before launch",
+                  "at": 60.0,
+                  "who": "Ada",
+                  "est": true
+                },
+                {
+                  "stance": "Ship behind flag first",
+                  "at": 120.0,
+                  "also": [
+                    180.0
+                  ]
+                }
+              ],
+              "outcome": {
+                "text": "Should be ignored because status is not settled",
+                "at": 600.0,
+                "decision": 0
+              }
+            },
+            {
+              "question": "How long should logs stay?",
+              "topic": "Storage",
+              "status": "settled",
+              "at": 300.0,
+              "positions": [
+                {
+                  "stance": "Keep 7 days to save disk",
+                  "at": 300.0
+                },
+                {
+                  "stance": "Keep 30 days for audits",
+                  "at": 360.0
+                }
+              ],
+              "outcome": {
+                "text": "Keep 7 days for now",
+                "at": 600.0,
+                "decision": 0,
+                "span": [
+                  600.0,
+                  612.0
+                ]
+              }
+            }
+          ],
+          "language": "en"
+        }
+      },
+      "expected": {
+        "debates": [
+          {
+            "question": "Escalate to security review?",
+            "topic": null,
+            "status": null,
+            "at": 60.0,
+            "positions": [
+              {
+                "stance": "Escalate before launch",
+                "at": 60.0,
+                "who": "Ada"
+              },
+              {
+                "stance": "Ship behind flag first",
+                "at": 120.0,
+                "who": null
+              }
+            ],
+            "outcome": null
+          },
+          {
+            "question": "How long should logs stay?",
+            "topic": "Storage",
+            "status": "settled",
+            "at": 300.0,
+            "positions": [
+              {
+                "stance": "Keep 7 days to save disk",
+                "at": 300.0,
+                "who": null
+              },
+              {
+                "stance": "Keep 30 days for audits",
+                "at": 360.0,
+                "who": null
+              }
+            ],
+            "outcome": {
+              "text": "Keep 7 days for now",
+              "at": 600.0,
+              "decision": 0
+            }
+          }
+        ],
+        "markdown": "# Sync\n\n- When: 2026-11-10 14:00–14:20\n\n## Key points\n\n- [14:01:00] Reviewed cache policy\n\n## Decisions\n\n- [14:10:00] Use 7-day retention\n\n## Disagreements\n\n### Escalate to security review?\n- [14:01:00] Escalate before launch (Ada)\n- [14:02:00] Ship behind flag first\n\n### How long should logs stay? (settled)\n- [14:05:00] Keep 7 days to save disk\n- [14:06:00] Keep 30 days for audits\n- [14:10:00] Outcome: Keep 7 days for now"
+      }
+    },
+    {
+      "name": "malformed_members",
+      "description": "Mixed valid and malformed debate entries, positions, times, statuses and outcomes check every client cleaning rule.",
+      "source": "docs/assistant/meeting-minutes.md \"Disagreements (#16728)\" (Clients)",
+      "input": {
+        "minutes": {
+          "version": 1,
+          "revision": 1,
+          "generated_at": "2026-11-10T07:12:03Z",
+          "title": "Sync",
+          "when": "2026-11-10 14:00–14:20",
+          "start": "2026-11-10T14:00:00+08:00",
+          "end": "2026-11-10T14:20:00+08:00",
+          "decisions": [
+            {
+              "text": "Use zip backups",
+              "at": 600.0
+            }
+          ],
+          "debates": [
+            "drop-string",
+            null,
+            42,
+            {
+              "question": "  ",
+              "status": "open",
+              "positions": [
+                {
+                  "stance": "A",
+                  "at": 1
+                },
+                {
+                  "stance": "B",
+                  "at": 2
+                }
+              ]
+            },
+            {
+              "question": "Too few valid positions",
+              "status": "open",
+              "positions": [
+                {
+                  "stance": "Only one",
+                  "at": 10
+                },
+                {
+                  "stance": " ",
+                  "at": 20
+                }
+              ]
+            },
+            {
+              "question": "Open ignores outcome and bad types",
+              "topic": "  ",
+              "status": "open",
+              "at": -5,
+              "positions": [
+                null,
+                "x",
+                {
+                  "stance": "Keep plain folders",
+                  "at": -1,
+                  "who": 123
+                },
+                {
+                  "stance": "Use compressed archives",
+                  "at": "not-a-number",
+                  "who": "  "
+                },
+                {
+                  "stance": "Hybrid option",
+                  "at": 120.0,
+                  "who": "Ada"
+                }
+              ],
+              "outcome": {
+                "text": "Should not appear on open",
+                "at": 600.0,
+                "decision": 0
+              }
+            },
+            {
+              "question": "Settled with invalid outcome stays without outcome",
+              "topic": 99,
+              "status": "settled",
+              "at": 300.0,
+              "positions": [
+                {
+                  "stance": "Ship Monday",
+                  "at": 300.0
+                },
+                {
+                  "stance": "Ship Friday",
+                  "at": 360.0
+                }
+              ],
+              "outcome": "bad-outcome"
+            },
+            {
+              "question": "Settled with out-of-bounds decision drops only the link",
+              "status": "settled",
+              "at": 400.0,
+              "positions": [
+                {
+                  "stance": "Option A",
+                  "at": 400.0
+                },
+                {
+                  "stance": "Option B",
+                  "at": 420.0
+                }
+              ],
+              "outcome": {
+                "text": "Picked A",
+                "at": -10,
+                "decision": 5
+              }
+            },
+            {
+              "question": "Settled with boolean decision drops only the link",
+              "status": "settled",
+              "at": 440.0,
+              "positions": [
+                {
+                  "stance": "Option C",
+                  "at": 440.0
+                },
+                {
+                  "stance": "Option D",
+                  "at": 460.0
+                }
+              ],
+              "outcome": {
+                "text": "Picked C",
+                "at": 600.0,
+                "decision": true
+              }
+            },
+            {
+              "question": "Settled with fractional decision drops only the link",
+              "status": "settled",
+              "at": 480.0,
+              "positions": [
+                {
+                  "stance": "Option E",
+                  "at": 480.0
+                },
+                {
+                  "stance": "Option F",
+                  "at": 500.0
+                }
+              ],
+              "outcome": {
+                "text": "Picked E",
+                "at": 600.0,
+                "decision": 0.5
+              }
+            },
+            {
+              "question": "Settled with whole-float decision 0.0 keeps link 0",
+              "status": "settled",
+              "at": 520.0,
+              "positions": [
+                {
+                  "stance": "Zip backups",
+                  "at": 520.0
+                },
+                {
+                  "stance": "Raw folders",
+                  "at": 540.0
+                }
+              ],
+              "outcome": {
+                "text": "Use zip backups",
+                "at": 600.0,
+                "decision": 0.0
+              }
+            }
+          ],
+          "language": "en"
+        }
+      },
+      "expected": {
+        "debates": [
+          {
+            "question": "Open ignores outcome and bad types",
+            "topic": null,
+            "status": "open",
+            "at": null,
+            "positions": [
+              {
+                "stance": "Keep plain folders",
+                "at": null,
+                "who": null
+              },
+              {
+                "stance": "Use compressed archives",
+                "at": null,
+                "who": null
+              },
+              {
+                "stance": "Hybrid option",
+                "at": 120.0,
+                "who": "Ada"
+              }
+            ],
+            "outcome": null
+          },
+          {
+            "question": "Settled with invalid outcome stays without outcome",
+            "topic": null,
+            "status": "settled",
+            "at": 300.0,
+            "positions": [
+              {
+                "stance": "Ship Monday",
+                "at": 300.0,
+                "who": null
+              },
+              {
+                "stance": "Ship Friday",
+                "at": 360.0,
+                "who": null
+              }
+            ],
+            "outcome": null
+          },
+          {
+            "question": "Settled with out-of-bounds decision drops only the link",
+            "topic": null,
+            "status": "settled",
+            "at": 400.0,
+            "positions": [
+              {
+                "stance": "Option A",
+                "at": 400.0,
+                "who": null
+              },
+              {
+                "stance": "Option B",
+                "at": 420.0,
+                "who": null
+              }
+            ],
+            "outcome": {
+              "text": "Picked A",
+              "at": null,
+              "decision": null
+            }
+          },
+          {
+            "question": "Settled with boolean decision drops only the link",
+            "topic": null,
+            "status": "settled",
+            "at": 440.0,
+            "positions": [
+              {
+                "stance": "Option C",
+                "at": 440.0,
+                "who": null
+              },
+              {
+                "stance": "Option D",
+                "at": 460.0,
+                "who": null
+              }
+            ],
+            "outcome": {
+              "text": "Picked C",
+              "at": 600.0,
+              "decision": null
+            }
+          },
+          {
+            "question": "Settled with fractional decision drops only the link",
+            "topic": null,
+            "status": "settled",
+            "at": 480.0,
+            "positions": [
+              {
+                "stance": "Option E",
+                "at": 480.0,
+                "who": null
+              },
+              {
+                "stance": "Option F",
+                "at": 500.0,
+                "who": null
+              }
+            ],
+            "outcome": {
+              "text": "Picked E",
+              "at": 600.0,
+              "decision": null
+            }
+          },
+          {
+            "question": "Settled with whole-float decision 0.0 keeps link 0",
+            "topic": null,
+            "status": "settled",
+            "at": 520.0,
+            "positions": [
+              {
+                "stance": "Zip backups",
+                "at": 520.0,
+                "who": null
+              },
+              {
+                "stance": "Raw folders",
+                "at": 540.0,
+                "who": null
+              }
+            ],
+            "outcome": {
+              "text": "Use zip backups",
+              "at": 600.0,
+              "decision": 0
+            }
+          }
+        ],
+        "markdown": null
+      }
+    },
+    {
+      "name": "overview_star_escape",
+      "description": "In the summary-card layout, literal * inside debate question, stance and outcome is escaped as \\* in Markdown.",
+      "source": "docs/assistant/meeting-minutes.md \"Disagreements (#16728)\" (Markdown)",
+      "input": {
+        "minutes": {
+          "version": 1,
+          "revision": 1,
+          "generated_at": "2026-11-10T07:12:03Z",
+          "title": "Formula review",
+          "when": "2026-11-10 14:00–14:20",
+          "start": "2026-11-10T14:00:00+08:00",
+          "end": "2026-11-10T14:20:00+08:00",
+          "points": [
+            {
+              "text": "Score uses a*b",
+              "at": 60.0
+            }
+          ],
+          "decisions": [
+            {
+              "text": "Keep a*b formula",
+              "at": 300.0
+            }
+          ],
+          "overview": {
+            "groups": [
+              {
+                "title": "",
+                "topics": [
+                  {
+                    "title": "Scoring",
+                    "icon": "metrics",
+                    "bullets": [
+                      {
+                        "text": "Score uses a*b",
+                        "at": 60.0
+                      },
+                      {
+                        "text": "Keep a*b formula",
+                        "at": 300.0,
+                        "decision": true
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          "debates": [
+            {
+              "question": "Use a*b or a+b?",
+              "status": "settled",
+              "at": 60.0,
+              "positions": [
+                {
+                  "stance": "Keep a*b for scale",
+                  "at": 60.0,
+                  "who": "Ada"
+                },
+                {
+                  "stance": "Switch to a+b for clarity",
+                  "at": 120.0
+                }
+              ],
+              "outcome": {
+                "text": "Keep a*b for now",
+                "at": 300.0,
+                "decision": 0
+              }
+            }
+          ],
+          "language": "en"
+        }
+      },
+      "expected": {
+        "debates": [
+          {
+            "question": "Use a*b or a+b?",
+            "topic": null,
+            "status": "settled",
+            "at": 60.0,
+            "positions": [
+              {
+                "stance": "Keep a*b for scale",
+                "at": 60.0,
+                "who": "Ada"
+              },
+              {
+                "stance": "Switch to a+b for clarity",
+                "at": 120.0,
+                "who": null
+              }
+            ],
+            "outcome": {
+              "text": "Keep a*b for now",
+              "at": 300.0,
+              "decision": 0
+            }
+          }
+        ],
+        "markdown": "# Formula review\n\n- When: 2026-11-10 14:00–14:20\n\n## Disagreements\n\n### Use a\\*b or a+b? (settled)\n- [14:01:00] Keep a\\*b for scale (Ada)\n- [14:02:00] Switch to a+b for clarity\n- [14:05:00] Outcome: Keep a\\*b for now\n\n## Scoring\n\n- [14:01:00] Score uses a\\*b\n- [14:05:00] Decided: Keep a\\*b formula\n\n*AI-generated from the recording. Check anything important.*"
+      }
+    }
+  ]
+}

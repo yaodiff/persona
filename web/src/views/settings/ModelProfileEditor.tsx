@@ -37,6 +37,8 @@ import { namedLauncher, namesFromProviders, providerIdNote, providerLabel, provi
 import { EFFORT_LEVELS, type ProviderView } from "../../lib/providers";
 import { BYPASS_MODE, BYPASS_WARNING, effortTitle, modeTitle } from "../../lib/session-actions";
 import { Button, cx, Switch } from "../../ui/atoms";
+import { useAnyBlocked } from "../../lib/execution";
+import { ExecutionCheck } from "../execution/ExecutionCheck";
 import {
   ApiModelSelect,
   LauncherModelSelect,
@@ -97,6 +99,7 @@ export function ModelProfileEditor({
   conflict,
   onSave,
   onCapture,
+  onDelete,
   onReload,
   onCancel,
 }: {
@@ -113,6 +116,7 @@ export function ModelProfileEditor({
   conflict: boolean;
   onSave: (input: ModelProfileSaveInput) => Promise<void>;
   onCapture?: () => Promise<void>;
+  onDelete?: () => void;
   onReload: () => Promise<void>;
   onCancel: () => void;
 }) {
@@ -237,7 +241,9 @@ export function ModelProfileEditor({
 
   const problems = useMemo(() => profileDraftProblems(draft, launcherKinds), [draft, launcherKinds]);
   const dirty = useMemo(() => isProfileDraftDirty(draft, initialDraft), [draft, initialDraft]);
-  const canSave = !busy && !conflict && problems.length === 0;
+  // a candidate whose four dimensions the hub blocks (views/execution/ExecutionCheck.tsx) keeps the preset from saving
+  const execBlocked = useAnyBlocked(PROFILE_EXECUTION_SCOPE);
+  const canSave = !busy && !conflict && problems.length === 0 && !execBlocked;
 
   const updatePurpose = (id: string, patch: Partial<PurposeDraftEntry>) => {
     setDraft((prev) => ({
@@ -540,18 +546,33 @@ export function ModelProfileEditor({
             )}
           </div>
         )}
-        <div className="flex items-center justify-end gap-2">
-          <Button tone="quiet" disabled={busy} onClick={onCancel}>
-            {t("common.cancel")}
-          </Button>
-          <Button
-            tone="primary"
-            busy={saving ?? busy}
-            disabled={!canSave || (!dirty && !conflict)}
-            onClick={handleSave}
-          >
-            {t("settings-modelprofiles.save")}
-          </Button>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            {onDelete && (
+              <Button
+                tone="quiet"
+                className="text-red enabled:hover:text-red"
+                testId="profile-editor-delete-button"
+                disabled={busy}
+                onClick={onDelete}
+              >
+                {t("settings-modelprofiles.delete")}
+              </Button>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <Button tone="quiet" disabled={busy} onClick={onCancel}>
+              {t("common.cancel")}
+            </Button>
+            <Button
+              tone="primary"
+              busy={saving ?? busy}
+              disabled={!canSave || (!dirty && !conflict)}
+              onClick={handleSave}
+            >
+              {t("settings-modelprofiles.save")}
+            </Button>
+          </div>
         </div>
       </div>
     </div>
@@ -1146,6 +1167,9 @@ function TierEditorCard({
   );
 }
 
+/** The form whose candidates' blocked combinations disable Save (lib/execution.ts reportBlocked). */
+const PROFILE_EXECUTION_SCOPE = "model-profile-editor";
+
 function TierCandidateCard({
   tierLabel,
   candidate,
@@ -1286,7 +1310,7 @@ function TierCandidateCard({
           onChange={(e) => {
             const nextLauncher = e.target.value;
             if (nextLauncher === candidate.launcher) return;
-            onChange({ launcher: nextLauncher, model: "", effort: "", permission_mode: "", speed: "", originalModel: undefined });
+            onChange({ launcher: nextLauncher, model: "", effort: "", permission_mode: "", speed: "", originalModel: undefined, runtime: "", channel: "" });
           }}
         >
           <option value="">{t("settings-modelprofiles.tier_launcher_placeholder")}</option>
@@ -1300,6 +1324,25 @@ function TierCandidateCard({
           ))}
         </select>
       </label>
+
+      <ExecutionCheck
+        machine=""
+        launcher={candidate.launcher.trim()}
+        model={candidate.model.trim()}
+        effort={candidate.effort.trim()}
+        runtime={candidate.runtime}
+        channel={candidate.channel}
+        scope={PROFILE_EXECUTION_SCOPE}
+        part={candidate.key}
+        disabled={busy}
+        onPick={(p) => onChange({
+          launcher: p.launcher,
+          runtime: p.runtime ?? "",
+          channel: p.channel ?? "",
+          ...(p.model !== undefined ? { model: p.model } : {}),
+          ...(p.effort !== undefined ? { effort: p.effort } : {}),
+        })}
+      />
 
       <div className="block">
         <span className="mb-1 block text-label font-medium text-ink-2">

@@ -256,6 +256,23 @@ func TestRunningObservationCannotEraseAnInFlightUserClose(t *testing.T) {
 	}
 }
 
+func TestAcceptedAssistantInputKeepsNewerStop(t *testing.T) {
+	n, _, _ := herdrNode(t)
+	n.state.put(sidA, sessionState{Launcher: "claude"})
+	n.state.stopped(sidA, proto.StopExit)
+	before, _ := n.state.get(sidA)
+	n.state.stopped(sidA, proto.StopUser)
+	stopped, _ := n.state.get(sidA)
+
+	before.AppMode = "plan"
+	n.state.put(sidA, before)
+	n.state.clearStopAfterAssistantInput(sidA, before.StopCauseAt)
+	after, _ := n.state.get(sidA)
+	if after.StopCause != proto.StopUser || after.StopCauseAt != stopped.StopCauseAt || after.AppMode != "plan" {
+		t.Fatalf("accepting the input lost the newer Stop or its updated mode: %+v", after)
+	}
+}
+
 func TestGuardedResumeRejectsStaleRowsAndPermissionOverrides(t *testing.T) {
 	for _, tc := range []struct {
 		name     string

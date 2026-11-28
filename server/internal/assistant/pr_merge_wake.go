@@ -11,12 +11,12 @@ import (
 	"github.com/nwverse/persona/server/internal/prompts"
 )
 
-// Idempotent PR-merge review wake for unparked open supervised tasks (#13100).
+// Idempotent PR-merge review wake for open supervised tasks (#13100, #14049).
 //
 // When applyPRStatus observes an open supervised task's delivery PR transition to merged (and no other delivery PR of
-// that task remains open), parked tasks continue using the existing sigReview path while unparked open tasks receive a
-// durable, idempotent sigPRMerged wake without mutating Supervision.State destructively, without disturbing unrelated
-// active parks, and without blindly marking the task done.
+// that task remains open), a park waiting on that PR continues using the existing sigReview path, while other tasks,
+// including ones parked on something else (a date, a person), receive a durable, idempotent sigPRMerged wake without
+// mutating Supervision.State, without ending an unrelated park, and without blindly marking the task done.
 
 const prMergeWakesKey = "assistant.pr_merge_wakes"
 
@@ -55,7 +55,13 @@ func (s *Service) checkUnparkedPRMerged(ctx context.Context, t Todo, prURL strin
 	if t.DoneAt != nil || t.Cancelled() || t.StartError != "" || t.isConcern() || isAskTodo(t.ID) {
 		return nil, false, nil
 	}
-	if t.Supervision == nil || t.Supervision.parking() != nil || t.Supervision.externalPRWake() != nil {
+	if t.Supervision == nil || t.Supervision.externalPRWake() != nil {
+		return nil, false, nil
+	}
+	// A park that waits on this PR is woken by its own sigReview path (applyPRStatus). Any other park (a date, someone
+	// else, a handoff to another task) stays parked, but its supervisor still hears that the delivery is complete (#14049).
+	held := t.Supervision.parking()
+	if parkWaitsOnPR(held, prURL) {
 		return nil, false, nil
 	}
 	switch t.Supervision.state(t) {
@@ -81,7 +87,7 @@ func (s *Service) checkUnparkedPRMerged(ctx context.Context, t Todo, prURL strin
 			break
 		}
 	}
-	if !inDelivery {
+	if !inDelivery || parkWaitsOnPR(held, delivery...) {
 		return nil, false, nil
 	}
 	targetFacts, ok := todoObservedPRState(t, prURL)
@@ -277,11 +283,11 @@ func (s *Service) hasPendingReviewSignal(todoID string) bool {
 // other delivery PR of the task remains open. Parked tasks (including unrelated active parks) and tasks already
 // carrying a PR-park or pending sigReview wake are left untouched.
 func (s *Service) maybeEmitUnparkedPRMerged(ctx context.Context, todoID, prURL string, held *TaskReview, parkWoke, wasOpen bool, preStage string) {
-	if parkWoke || held != nil {
+	if parkWoke || parkWaitsOnPR(held, prURL) {
 		return
 	}
 	cur, ok := s.todoNow(todoID)
-	if !ok || cur.Supervision == nil || cur.Supervision.parking() != nil || cur.Supervision.externalPRWake() != nil {
+	if !ok || cur.Supervision == nil || parkWaitsOnPR(cur.Supervision.parking(), prURL) || cur.Supervision.externalPRWake() != nil {
 		return
 	}
 	if s.hasPendingReviewSignal(cur.ID) {
@@ -291,7 +297,9 @@ func (s *Service) maybeEmitUnparkedPRMerged(ctx context.Context, todoID, prURL s
 	if st == reviewPending && !wasOpen {
 		return
 	}
-	if !wasOpen && preStage != "merge" && st != reviewNeedsUser && st != reviewTimedOut && st != reviewRework {
+	// A parked task's supervisor is not watching its PRs: a delivery PR first read merged while it waits (one only in
+	// its repository links, polled since #14049) is news too, once per PR (the marker below).
+	if !wasOpen && preStage != "merge" && st != reviewNeedsUser && st != reviewTimedOut && st != reviewRework && st != reviewParked {
 		return
 	}
 	if _, ready, err := s.checkUnparkedPRMerged(ctx, cur, prURL); err != nil || !ready {
@@ -336,7 +344,7 @@ func (s *Service) prMergedDigestEntry(ctx context.Context, g superviseSignal, we
 		ID:       t.ID,
 		Title:    t.Title,
 		Kind:     sigPRMerged,
-		Detail:   prompts.RenderPRMergedWake(prompts.PRMergedWake{Language: lang, PRURL: g.PRURL, OtherPRs: otherMerged}),
+		Detail:   prompts.RenderPRMergedWake(prompts.PRMergedWake{Language: lang, PRURL: g.PRURL, OtherPRs: otherMerged, Parked: parkedReason(v)}),
 		DoneWhen: v.DoneWhen,
 		Round:    v.Round,
 		Link:     todoLink(web, t.ID),
@@ -346,4 +354,12 @@ func (s *Service) prMergedDigestEntry(ctx context.Context, g superviseSignal, we
 	s.setEntryOrigin(ctx, t, web, &e)
 	s.briefEntry(ctx, t.ID, &e)
 	return e, true, false
+}
+
+// parkedReason is what task supervision v is parked for, "" when it is not parked.
+func parkedReason(v *Supervision) string {
+	if r := v.parking(); r != nil {
+		return r.Reason
+	}
+	return ""
 }

@@ -1,7 +1,7 @@
 {
   "unnamed": "未命名文件",
-  "empty": "「{name}」是空文件，不能发送",
-  "too_big": "「{name}」超过 100 MiB，不能发送",
-  "image_too_big": "图片「{name}」太大了，换一张小一点的",
-  "no_receipt": "还不知道发出去没有，过一会儿再看看"
+  "empty": "「{name}」为空文件，无法发送",
+  "too_big": "「{name}」超过 100 MiB，无法发送",
+  "image_too_big": "图片「{name}」体积过大，请选择更小的图片",
+  "no_receipt": "暂无法确认是否发送成功，请稍后查看"
 }

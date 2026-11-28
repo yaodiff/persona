@@ -1,0 +1,3 @@
+{"name": "速记",
+ "description": "示例：不改 Persona Core 就给它加一个功能，包括一个速记页面、一个给应用用的接口和一个 hub 功能标记。",
+ "ui": {"quicknotes": "速记"}}

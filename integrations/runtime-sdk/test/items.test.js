@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { clipInput, clipTo, MAX_INPUT, summaryOf } from '../index.js'
+import { clipInput, clipTo, light, MAX_INPUT, page, PAGE_OUTPUT, PAGE_TEXT, summaryOf } from '../index.js'
 
 const jsonBytes = (v) => Buffer.byteLength(JSON.stringify(v), 'utf8')
 
@@ -195,4 +195,61 @@ test('summaryOf says what a call does, not just which tool', () => {
   for (const k of ['author', 'authorName', 'oauth_scope', 'session_name', 'keyword', 'passage', 'monkey', 'OAuthScope', 'URLPath', 'HTTPMethod', 'IDList']) {
     assert.equal(summaryOf('x', { [k]: 'v' }), `${k}: v`, `${k} is no credential: shown`)
   }
+})
+
+test('light is idempotent and page preserves full_size on already-lightened items', () => {
+  const cases = [
+    { id: '1#0', seq: 1, role: 'user', kind: 'tool_result', text: 'a'.repeat(PAGE_OUTPUT + 5_000) },
+    { id: '2#0', seq: 2, role: 'user', kind: 'tool_result', text: 'line\n'.repeat(1_200) },
+    { id: '3#0', seq: 3, role: 'user', kind: 'tool_result', text: '界'.repeat(2_000) },
+    { id: '4#0', seq: 4, role: 'assistant', kind: 'text', text: 'b'.repeat(PAGE_TEXT + 10_000) },
+    { id: '5#0', seq: 5, role: 'assistant', kind: 'text', text: '中'.repeat(10_000) },
+    { id: '6#0', seq: 6, role: 'user', kind: 'tool_result', text: 'c'.repeat(PAGE_OUTPUT + 1) },
+    { id: '7#0', seq: 7, role: 'assistant', kind: 'text', text: 'd'.repeat(PAGE_TEXT + 1) },
+    { id: '8#0', seq: 8, role: 'user', kind: 'tool_result', text: '🙂'.repeat(1_500) },
+    { id: '9#0', seq: 9, role: 'assistant', kind: 'text', text: '🙂'.repeat(7_000) },
+  ]
+  for (const raw of cases) {
+    const expectedSize = Buffer.byteLength(raw.text, 'utf8')
+    const once = light(raw)
+    assert.equal(once.full_size, expectedSize)
+    assert.ok(once.text.isWellFormed())
+    const twice = light(once)
+    assert.strictEqual(twice, once, `second light() must return clipped ${raw.kind} unchanged`)
+    assert.equal(twice.full_size, expectedSize)
+    assert.equal(twice.text, once.text)
+    const paged = page([once], {}, { history: 'h', toSeq: raw.seq })
+    assert.equal(paged.items[0].full_size, expectedSize)
+    assert.equal(paged.items[0].text, once.text)
+  }
+
+  // (1) Unclipped oversized text carrying a valid matching suffix (limit + 1 bytes + suffix) must still be clipped.
+  const validSuffix = '\n…（已截断，点开看全文，共 99999 字节）'
+  const oversizedWithSuffix = { id: '10#0', seq: 10, role: 'user', kind: 'tool_result', text: 'x'.repeat(PAGE_OUTPUT + 1) + validSuffix, full_size: 99_999 }
+  const clippedOversized = light(oversizedWithSuffix)
+  assert.notEqual(clippedOversized, oversizedWithSuffix)
+  assert.equal(clippedOversized.full_size, Buffer.byteLength(oversizedWithSuffix.text, 'utf8'))
+
+  // (2) Invalid full_size values with a matching suffix must still be clipped.
+  for (const badFullSize of [NaN, Infinity, PAGE_OUTPUT, 5000.5, Number.MAX_SAFE_INTEGER + 1, '9000']) {
+    const suffix = `\n…（已截断，点开看全文，共 ${String(badFullSize)} 字节）`
+    const item = { id: '11#0', seq: 11, role: 'user', kind: 'tool_result', text: 'x'.repeat(PAGE_OUTPUT) + suffix, full_size: badFullSize }
+    const out = light(item)
+    assert.notEqual(out, item, `invalid full_size ${String(badFullSize)} must not bypass light()`)
+    assert.equal(out.full_size, Buffer.byteLength(item.text, 'utf8'))
+  }
+
+  // (3) Cross-kind suffix mismatch (kind: 'text' carrying tool_result suffix) must still be clipped.
+  const crossKindSuffix = '\n…（已截断，点开看全文，共 50000 字节）'
+  const crossKind = { id: '12#0', seq: 12, role: 'assistant', kind: 'text', text: 'y'.repeat(PAGE_TEXT) + crossKindSuffix, full_size: 50_000 }
+  const clippedCrossKind = light(crossKind)
+  assert.notEqual(clippedCrossKind, crossKind)
+  assert.equal(clippedCrossKind.full_size, Buffer.byteLength(crossKind.text, 'utf8'))
+
+  // Unclipped oversized text that happens to carry a full_size field without a matching suffix must still be clipped.
+  const spoofed = { id: '13#0', seq: 13, role: 'user', kind: 'tool_result', text: 'x'.repeat(PAGE_OUTPUT + 2_000), full_size: 99_999 }
+  const clipped = light(spoofed)
+  assert.notEqual(clipped, spoofed)
+  assert.equal(clipped.full_size, PAGE_OUTPUT + 2_000)
+  assert.ok(clipped.text.endsWith(`共 ${PAGE_OUTPUT + 2_000} 字节）`))
 })

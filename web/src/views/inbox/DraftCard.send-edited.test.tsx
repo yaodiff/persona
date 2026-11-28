@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 // The AI twin's draft card sends what it shows (#2793): an edit the draft dialog kept (closed without Cancel) and the
 // proposed changes left ticked there, marked "Edited"; Cancel puts the card back to the AI's draft.
+import { registerTestMailbox } from "../../test/mailbox-fixture";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -91,6 +92,8 @@ afterEach(() => {
   host.remove();
   resetInboxForTests();
 });
+
+registerTestMailbox();
 
 describe("the draft card after the draft dialog", () => {
   it("shows the edit kept by closing the dialog, marked Edited, and its Send sends that text", async () => {

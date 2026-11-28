@@ -214,6 +214,28 @@ func TestSupervisorWithdrawsAnOwnerWait(t *testing.T) {
 	}
 }
 
+func TestSupervisorWithdrawalRespectsOwnerActivity(t *testing.T) {
+	s, f, todo := newSupervisedService(t)
+	s.superviseJudged(t.Context(), todo, time.Now().UTC(), taskDoneCheck{Verdict: verdictNeedsUser, Reason: "owner action"}, nil)
+	before := todoNow(s, todo.ID)
+	if before.Supervision.Waits == nil {
+		t.Fatal("expected an owner wait")
+	}
+	agent := before.Agents[0]
+	setTaskViewer(t, s, agent.MachineID, agent.SessionID, true)
+	args := withdrawArgs()
+	args["todo_id"] = todo.ID
+	args["checks"] = completeReviewChecks(before)
+	if _, err := runJSON(t, s, "conv1", "task_review", args); err == nil || !strings.Contains(err.Error(), "cannot be closed") {
+		t.Fatalf("withdrawal with an active viewer: %v", err)
+	}
+	after := todoNow(s, todo.ID)
+	if after.DoneAt != nil || after.Supervision.Waits == nil || len(after.Supervision.Reviews) != len(before.Supervision.Reviews) ||
+		toldResolved(f, assistantwire.TodoAskCardID(todo.ID)) {
+		t.Fatalf("refused withdrawal changed the open task: %+v", after)
+	}
+}
+
 // Directly closing or deleting a to-do, or withdrawing an outside decision, tells the hub its to-do ask is over
 // (EventFleetResolved todo-ask:<id>) so any delivered phone notification is recalled (#13916).
 func TestTodoCloseDeleteAndOutsideWithdrawTellHubResolved(t *testing.T) {

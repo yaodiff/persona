@@ -470,6 +470,7 @@ func TestEveryExtensionRouteIsBounded(t *testing.T) {
 		"DELETE /api/v1/push/grading/layer":                "manager", // deletes only the calling extension's own layer on its manager (pushGradingLayerRoutes)
 		"POST /api/v1/push/grading/preview":                "manager", // read-only preview bounded to the calling extension's manager (pushGradingLayerRoutes)
 		"GET /api/v1/push/stats/daily":                     "manager", // only its manager's counts (pushGradingRoutes, TestPushDailyStatsHeldToManager)
+		"GET /api/v1/agents/triage":                        "manager", // the token's manager's switches (byRequest; TestVoiceProgramOnAnExtensionsToken)
 		"GET /api/v1/assistant":                            "manager",
 		"GET /api/v1/assistant/capabilities":               "manager",
 		"GET /api/v1/assistant/entries":                    "manager", // TestAssistantEntriesStayOnTokenManager
@@ -481,6 +482,7 @@ func TestEveryExtensionRouteIsBounded(t *testing.T) {
 		"PUT /api/v1/assistant/tracks/{slug}": "manager", "GET /api/v1/assistant/track-kinds": "manager",
 		"GET /api/v1/assistant/tracks/{slug}/space-md": "manager", "PUT /api/v1/assistant/tracks/{slug}/space-md": "manager",
 		"GET /api/v1/assistant/tracks/{slug}/conversations":   "manager",
+		"GET /api/v1/assistant/tracks/launchers":              "manager",
 		"GET /api/v1/assistant/conversations/{id}/categories": "path",
 		"PUT /api/v1/assistant/conversations/{id}/categories": "path",
 		"GET /api/v1/assistant/reporters":                     "manager",
@@ -514,6 +516,9 @@ func TestEveryExtensionRouteIsBounded(t *testing.T) {
 		"GET /api/v1/todos/{id}/workspace-naming/plans/{operation_id}": "manager",
 		"POST /api/v1/assistant/workspace-naming/preview":              "manager",
 		"POST /api/v1/todos":                                           "manager", "PATCH /api/v1/todos/{id}": "manager",
+		// The paired bot is the owner's; the manager reads its public identity and bounds every handoff (bots_handoff.go).
+		"GET /api/v1/bots/feishu/identity":                  "manager",
+		"POST /api/v1/bots/feishu/handoffs":                 "manager",
 		"POST /api/v1/decisions":                            "manager",
 		"GET /api/v1/decisions/{id}":                        "manager",
 		"POST /api/v1/decisions/{id}/withdraw":              "manager",

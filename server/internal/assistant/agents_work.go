@@ -458,6 +458,10 @@ func sameTurn(c proto.Session, turnAt time.Time) bool {
 	return d > -2*time.Second && d < 2*time.Second
 }
 
+func workRetiredForTurn(w proto.WorkState, turnAt time.Time) bool {
+	return w.RetiredAt != nil && (w.RetiredTurnAt == nil || turnAt.Before(w.RetiredTurnAt.Add(2*time.Second)))
+}
+
 // retiredRetry retires a transient retry when a later stopped row no longer carries its model failure. The node has
 // already required closing evidence before dropping an old error-only preview; an offline or running row is not recovery.
 // With no newer words the work stays unsure rather than becoming an invented textual conclusion.
@@ -580,6 +584,9 @@ func (s *Service) saveWork(e db.SessionWork) {
 	if err := st.PutSessionWork(ctx, e); err != nil {
 		s.logf("work: save %s/%s: %v", e.MachineID, e.SessionID, err)
 	}
+	if err := s.importTaskRepositoryArtifacts(ctx, e); err != nil {
+		s.logf("work: repository links %s/%s not saved: %v", e.MachineID, e.SessionID, err)
+	}
 }
 
 // startWorkEventWrite serializes new event writes with fixture teardown. A stopped service starts no new write; every
@@ -653,9 +660,17 @@ func (s *Service) putWork(_ context.Context, e db.SessionWork) {
 	s.work.init()
 	key := [2]string{e.MachineID, e.SessionID}
 	current := s.work.entries[key]
-	if current != nil && (current.Work.Deferred || current.Work.RetiredAt != nil) && current.TurnAt.Equal(e.TurnAt) {
+	if current != nil && workRetiredForTurn(current.Work, e.TurnAt) {
+		_, out := s.work.cards[e.InteractionID]
+		delete(s.work.cards, e.InteractionID)
+		s.work.mu.Unlock()
+		if out {
+			s.publishSoon()
+		}
+		return
+	}
+	if current != nil && current.Work.Deferred && current.TurnAt.Equal(e.TurnAt) {
 		e.Work.Deferred = true
-		e.Work.RetiredAt, e.Work.RetiredTurnAt = current.Work.RetiredAt, current.Work.RetiredTurnAt
 		e.InteractionID, e.Work.InteractionID, e.WakeAt, e.Work.WakeAt = "", "", nil, nil
 	}
 	old, out := s.supersededCardLocked(current, e)
@@ -705,7 +720,7 @@ func (s *Service) putTriageWork(e db.SessionWork, generation uint64) bool {
 	s.work.mu.Lock()
 	s.work.init()
 	current := s.work.entries[key]
-	retired := current != nil && current.Work.RetiredAt != nil && (current.Work.RetiredTurnAt == nil || !e.TurnAt.After(current.Work.RetiredTurnAt.Add(2*time.Second)))
+	retired := current != nil && workRetiredForTurn(current.Work, e.TurnAt)
 	if s.work.generation[key] != generation || current != nil && (current.TurnAt.After(e.TurnAt) || retired || current.Work.Deferred && current.TurnAt.Equal(e.TurnAt)) {
 		s.work.mu.Unlock()
 		return false

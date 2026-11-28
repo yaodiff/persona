@@ -1,6 +1,6 @@
 {
   "title": "Standing authorizations",
-  "description": "Permissions you have granted for future tasks on specific computers and directories. Ask Persona in the main conversation to add one.",
+  "description": "Permissions for specific computers, directories, or outward-message scopes. Add a message scope above, or ask Persona in the main conversation.",
   "footer": "Revoking a grant stops its use for future tasks and approvals. It cannot undo work or instructions already delivered. Action reversibility describes the authorized work; every grant can be revoked here.",
   "refresh": "Refresh",
   "machine": "Computer",

@@ -151,6 +151,7 @@ export function NodeHealth({ machine, heading }: { machine: Machine; heading: Re
                   <span className={cx("mt-[7px] size-1.5 shrink-0 rounded-full", STATE_TONE[f.state].dot)} aria-hidden />
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-[13px] font-medium text-ink">{f.name}</p>
+                    {f.finding && <p className="mt-0.5 break-words text-submeta leading-relaxed text-ink-2">{f.finding}</p>}
                     <p className="mt-0.5 break-words text-[11.5px] leading-relaxed text-ink-3">{f.state === "ready" || !f.note ? f.detail : f.note}</p>
                   </div>
                   <span className={cx("inline-flex h-5 shrink-0 items-center whitespace-nowrap rounded-full px-2 text-[11px] font-medium", STATE_TONE[f.state].pill)}>{FEATURE_STATE_LABEL[f.state]}</span>

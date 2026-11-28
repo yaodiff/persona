@@ -17,6 +17,14 @@
   "topics_home": "已设为主话题群：从别的群发来的请求，会在这里开新话题。",
   "topics_on_home": "已开启，并设为主话题群：从别的群发来的请求，会在这里开新话题。只认你本人的消息。",
   "topics_home_already": "这个群已经是主话题群了。",
+  "topics_space": "已绑定空间 {space}：以后这个群里每个新话题都会在该空间内开启独立会话。发 /topics space off 可解除绑定。",
+  "topics_on_space": "已开启并绑定空间 {space}：这个群里每个新话题都会在该空间内开启独立会话，只认你本人的消息。",
+  "topics_space_cleared": "已解除这个群的空间绑定。",
+  "topics_space_none": "这个群目前没有绑定空间。",
+  "topics_space_bad": "空间 {space} 不存在或不可绑定到话题群。",
   "chat_not_enabled": "这个群没有为机器人开启，先在群里发 /topics。",
-  "chat_unknown": "暂时判断不出这张卡片在哪个聊天里，请稍后再试。"
+  "chat_unknown": "暂时判断不出这张卡片在哪个聊天里，请稍后再试。",
+  "guest_busy": "还在回答这个话题里的上一个问题，稍等片刻再试。",
+  "guest_rate_limited": "这里现在的问题太多了，过一会儿再试。",
+  "guest_too_long": "这条消息太长了，我在这里答不了。"
 }

@@ -13,7 +13,7 @@ afterEach(() => vi.unstubAllGlobals());
 describe("连接器的状态", () => {
   it("says each state and its dot; an unknown state is not 出错了", () => {
     expect(connectorState(conn("not_signed_in"))).toBe("未登录");
-    expect(connectorState(conn("rate_limited"))).toBe("请求太多，暂停中");
+    expect(connectorState(conn("rate_limited"))).toBe("请求过于频繁，已暂停");
     expect(connectorState(conn("weird"))).toBe("状态未知");
     expect(["ok", "rate_limited", "error", "no_permission", "disabled", "weird"].map((s) => connectorTone(conn(s)))).toEqual([
       "green", "orange", "red", "red", "idle", "idle",
@@ -54,15 +54,15 @@ describe("连接器的状态", () => {
     expect(switchFooter(off("telegram", "Telegram"))).toContain("私聊和群");
     expect(signInFooter(conn("not_signed_in", { id: "telegram", name: "Telegram" }))).toContain("api_id");
     // an extension's connector says its own storage words in its sign-in hint, so the footer is the generic one
-    expect(signInFooter(conn("not_signed_in", { id: "examplechat", name: "示例聊天" }))).toBe("登录状态加密存在 hub 上，退出登录时删掉。");
-    expect(connectorOpenTitle("telegram")).toBe("在 Telegram 里回复");
+    expect(signInFooter(conn("not_signed_in", { id: "examplechat", name: "示例聊天" }))).toBe("登录状态会加密保存在 hub 上，退出登录时将自动删除。");
+    expect(connectorOpenTitle("telegram")).toBe("在 Telegram 中回复");
 
     // not in the table: the generic wording, with the connector's own name where one is shown
     const plugin = off("example", "示例");
-    expect(switchFooter(plugin)).toBe("打开后才能登录，登录后它的内容进知识库和收件箱，助手也能查。");
-    expect(signInFooter(plugin)).toBe("登录状态加密存在 hub 上，退出登录时删掉。");
+    expect(switchFooter(plugin)).toBe("开启后即可登录。登录后，其内容将同步至知识库和收件箱，助手也可以搜索相关内容。");
+    expect(signInFooter(plugin)).toBe("登录状态会加密保存在 hub 上，退出登录时将自动删除。");
     expect(connectorOpenTitle("example")).toBeUndefined();
-    expect(switchFooter({ ...plugin, enabled: true })).toContain("关掉后不再读 示例");
+    expect(switchFooter({ ...plugin, enabled: true })).toContain("关闭后将停止读取 示例");
     for (const text of [switchFooter(plugin), signInFooter(plugin)]) expect(text).not.toMatch(/Telegram|api_id|私聊和群/);
   });
 
@@ -70,9 +70,9 @@ describe("连接器的状态", () => {
     const wechat = (enabled: boolean) => conn("ok", { id: "wechat", name: "微信", enabled, capabilities: ["status", "login"] });
     expect(storesData(wechat(true))).toBe(false);
     expect(switchLabel(wechat(true))).toBe("启用 微信");
-    expect(switchFooter(wechat(true))).toBe("关掉后 微信 停下来；登录状态留着。");
-    expect(switchFooter(wechat(false))).toBe("打开后才能登录。");
-    for (const text of [switchFooter(wechat(true)), switchFooter(wechat(false))]) expect(text).not.toMatch(/知识库|收件箱|不再读/);
+    expect(switchFooter(wechat(true))).toBe("关闭后将停止运行 微信，并保留当前登录状态。");
+    expect(switchFooter(wechat(false))).toBe("开启后即可登录。");
+    for (const text of [switchFooter(wechat(true)), switchFooter(wechat(false))]) expect(text).not.toMatch(/知识库|收件箱|停止读取/);
 
     const telegram = conn("ok", { id: "telegram", name: "Telegram", capabilities: ["status", "login", "archive", "inbox"] });
     expect(storesData(telegram)).toBe(true);
@@ -87,24 +87,24 @@ describe("连接器的状态", () => {
   it("tells a sign-out that ends the remote session from one that only forgets the hub's copy", () => {
     // Telegram's log-out call ends the session at Telegram: the old wording stays, word for word
     expect(logoutMessage(conn("ok", { id: "telegram", name: "Telegram" }))).toBe(
-      "hub 上存的 API 凭据和登录状态都会删掉，Telegram 那边这个设备会话也会结束。再用要重新登录。",
+      "hub 上保存的 API 凭据和登录状态将被删除，同时会终止该设备在 Telegram 中的会话。下次使用需重新登录。",
     );
     // An extension's app key, GitHub's device token, an unknown plugin or an Object.prototype name: nothing is ended or revoked over there
     for (const [id, name] of [["examplechat", "示例聊天"], ["github", "GitHub"], ["example", "示例"], ["constructor", "示例"]]) {
       const text = logoutMessage(conn("ok", { id, name }));
-      expect(text).toContain("授权不会自动撤销");
-      expect(text).not.toMatch(/会话也会结束|API 凭据|Telegram/);
+      expect(text).toContain("访问权限不会自动撤销");
+      expect(text).not.toMatch(/终止该设备|API 凭据|Telegram/);
     }
   });
 
   it("words the footers", () => {
-    expect(switchFooter(conn("ok"))).toContain("关掉后不再读 GitHub");
+    expect(switchFooter(conn("ok"))).toContain("关闭后将停止读取 GitHub");
     expect(feedsFooter(conn("ok", { archive: true, inbox: false }))).toBe(
-      "进知识库：GitHub 的内容存进知识库，助手和 AI 分身都能查。关掉后不再存新的，已存的留着。\n不进收件箱：不再收新的，已有的条目留着。",
+      "已同步至知识库：GitHub 的内容会存入知识库，供助手和 AI 分身检索。关闭后将不再保存新内容，已保存的数据会继续保留。\n不进入收件箱：不再接收新条目，已有条目仍会保留。",
     );
     expect(feedsFooter(conn("ok"))).toBe("");
-    expect(deletedLine({ chats: 3, people: 5, inbox: 2 })).toBe("已删除：知识库里 3 个会话、5 个人，收件箱里 2 条。");
-    expect(deletedLine({ chats: 1 }, false)).toBe("已删除：知识库里 1 个会话、0 个人。");
+    expect(deletedLine({ chats: 3, people: 5, inbox: 2 })).toBe("已删除。知识库：3 个会话、5 人；收件箱：2 条。");
+    expect(deletedLine({ chats: 1 }, false)).toBe("已删除。知识库：1 个会话、0 人。");
   });
 });
 
@@ -152,17 +152,17 @@ describe("GitHub", () => {
   it("says each computer's gh login", () => {
     expect(githubMachineLine({ id: "a", name: "A", state: "signed_in", account: "alice" })).toBe("gh 已登录 · alice");
     expect(githubMachineLine({ id: "a", name: "A", state: "signed_in", missing: [{ scope: "repo", affects: [] }, { scope: "notifications", affects: [] }] }))
-      .toBe("gh 已登录 · 少 repo、notifications 权限");
+      .toBe("gh 已登录 · 缺少 repo、notifications 权限");
     expect(githubMachineLine({ id: "a", name: "A", state: "offline" })).toBe("离线");
-    expect(githubMachineLine({ id: "a", name: "A", state: "error", error: "boom" })).toBe("读不了 gh 的登录：boom");
+    expect(githubMachineLine({ id: "a", name: "A", state: "error", error: "boom" })).toBe("无法读取 gh 登录状态：boom");
   });
 
   it("advises on missing scopes by where the token comes from", () => {
     const missing = [{ scope: "repo", affects: [] }, { scope: "notifications", affects: [] }];
     expect(githubScopeAdvice({ source: "machine", machine: "m", machines: [{ id: "m", name: "MacBook" }] }, missing)).toBe(
-      "MacBook 的 gh 少了 repo、notifications 权限：在那台电脑上运行 gh auth refresh -s repo,notifications，或者改用设备码登录。",
+      "MacBook 上的 gh 缺少 repo、notifications 权限。请在该电脑上运行 gh auth refresh -s repo,notifications，或改用设备码登录。",
     );
-    expect(githubScopeAdvice({ source: "device", machines: [] }, missing)).toContain("设备码登录少了");
+    expect(githubScopeAdvice({ source: "device", machines: [] }, missing)).toContain("设备码登录缺少");
   });
 
   it("reads its inbox options and checks a repository to mute", () => {
@@ -172,7 +172,7 @@ describe("GitHub", () => {
     expect(mutableRepo(" owner/name ", [])).toBe("owner/name");
     expect(mutableRepo("owner/name", ["owner/name"])).toBeNull();
     expect(mutableRepo("owner", [])).toBeNull();
-    expect(githubInboxFooter({ ci: "off", muted_repos: [] })).toMatch(/^CI 失败不进收件箱。.*自动分支（train\/\*）不提醒/);
+    expect(githubInboxFooter({ ci: "off", muted_repos: [] })).toMatch(/^CI 失败不会进入收件箱。.*自动创建的分支（train\/\*）不会触发提醒/);
   });
 
   it("asks the hub with the right bodies", async () => {
@@ -252,8 +252,8 @@ describe("会话页", () => {
 
 describe("信息 (iMessage)", () => {
   it("says what 交给 Persona does on and off", () => {
-    expect(imessageAIFooter(true)).toContain("关掉立刻停止");
-    expect(imessageAIFooter(false)).toContain("hub 上之前存下的还在");
+    expect(imessageAIFooter(true)).toContain("关闭后立即停止同步");
+    expect(imessageAIFooter(false)).toContain("hub 上此前已保存的数据仍会保留");
   });
 
   it("puts the switch and deletes the data on the hub's iMessage API", async () => {

@@ -8,8 +8,9 @@
 import { t } from "../i18n";
 import { type KBDetail, type KBEntry } from "./kb";
 import { groupPoints, type PointGroup, type TopicPoint } from "./kb-points";
+import { type MilestoneState, type TreeEntry } from "./kb-tree";
 
-export type MapKind = "root" | "branch" | "group" | "project" | "section" | "text" | "link" | "day" | "topic" | "point";
+export type MapKind = "root" | "branch" | "group" | "project" | "section" | "text" | "link" | "day" | "topic" | "point" | "pnode";
 export type MapTone = "accent" | "green" | "orange";
 /** The icon a section node shows (icons.tsx names). */
 export type SectionIcon = "target" | "gauge" | "arrowRight" | "warning" | "flag" | "book" | "clock" | "calendar" | "folder" | "person" | "chat" | "light";
@@ -48,7 +49,13 @@ export interface MapNode {
   point?: TopicPoint;
   /** a topic or subtopic in the topic tree; the root says which view it is */
   isTopic?: boolean;
-  view?: "topics" | "projects";
+  view?: "topics" | "projects" | "tree";
+  /** the project tree (lib/kb-tree.ts): the project a node draws, its milestone flag, its depth (1 at the top), and in
+   *  the tag view where it sits in the tree */
+  project?: TreeEntry;
+  flag?: { text: string; state: MilestoneState };
+  depth?: number;
+  where?: string;
   icon?: SectionIcon;
   /** a topic: the entries its points name, to show sources by name */
   links?: KBEntry[];
@@ -137,6 +144,18 @@ function sectionIcon(title: string): SectionIcon {
 
 const IMPORTANCE = ["P0", "P1", "P2", "P3"];
 
+/** How much map height (px at 100%) what opens at first may add (#16206): about three views of the map at the opening 65%
+ * zoom. A large knowledge base starts with fewer branches open, so Fit to view still shows it whole; a small one opens as
+ * before. Only the start: what the owner opens or closes afterwards is theirs. */
+const OPEN_BUDGET = 3200;
+/** The layout's height for a row under an open branch: a subtopic, section, group or "Other" (28 + 12 between rows), a
+ * point (two lines, 44 + 12), a project card (58 + 12). */
+const ROW = { other: 40, point: 56, project: 70 };
+
+function rowsHeight(kids: MapNode[]): number {
+  return kids.reduce((h, k) => h + (k.point ? ROW.point : k.kind === "project" ? ROW.project : ROW.other), 0);
+}
+
 let seq = 0;
 const node = (title: string, kind: MapKind, tone: MapTone, kids: MapNode[] = [], extra: Partial<MapNode> = {}): MapNode => ({
   id: `m${++seq}`, title, kind, tone, kids, ...extra,
@@ -204,7 +223,15 @@ export function buildProjectMap(list: KBEntry[], details: Map<string, KBDetail>)
     const g = e.importance && IMPORTANCE.includes(e.importance) ? e.importance : t("lib-kb-map.unrated");
     groups.set(g, [...(groups.get(g) ?? []), project(e, details.get(e.id), "accent")]);
   }
-  const activeKids = [...groups].map(([g, ns], i) => node(g, "group", "accent", ns, { meta: String(ns.length), collapsed: i >= 2 }));
+  // The importance groups open in order, at most two, each only while its projects fit in what is left of OPEN_BUDGET. The
+  // first that does not fit and every group after it start closed: a less important group never opens before a more
+  // important one.
+  let left = OPEN_BUDGET, open = true;
+  const activeKids = [...groups].map(([g, ns], i) => {
+    open &&= i < 2 && rowsHeight(ns) <= left;
+    if (open) left -= rowsHeight(ns);
+    return node(g, "group", "accent", ns, { meta: String(ns.length), collapsed: !open });
+  });
   const done = by("done"), paused = by("paused");
   const branches = [node(t("lib-kb-map.branch_active"), "branch", "accent", activeKids, { side: "R", meta: String(active.length), icon: "folder" })];
   if (done.length) branches.push(node(t("lib-kb-map.branch_done"), "branch", "green", done.map((e) => project(e, details.get(e.id), "green")), { side: "L", meta: String(done.length), collapsed: true }));
@@ -216,7 +243,7 @@ export function buildProjectMap(list: KBEntry[], details: Map<string, KBDetail>)
 
 /** Topics with more loose points than this, beside subtopics, keep them under one closed "Other" node. */
 const LOOSE_SHOWN = 3;
-/** How many of the biggest topics open at first. */
+/** How many of the biggest topics open at first, at most. */
 const OPEN_TOPICS = 6;
 
 export interface TopicData {
@@ -236,7 +263,8 @@ export function topicSize(x: TopicData): number {
 }
 
 /** The topic tree as a map: the root, one branch per topic (split between the sides by size), subtopics, points. At
- * first it shows structure: the biggest topics open onto their subtopics, every subtopic closed. */
+ * first it shows structure: the biggest topics open onto their subtopics, every subtopic closed, as many as OPEN_BUDGET
+ * allows. */
 export function buildTopicMap(topics: TopicData[]): MapNode {
   seq = 0;
   const tones: MapTone[] = ["accent", "green", "orange"];
@@ -254,10 +282,19 @@ export function buildTopicMap(topics: TopicData[]): MapNode {
   const tops = order.map((x, i) => {
     const tone = tones[i % tones.length];
     const g = groupPoints(x.detail?.points);
-    const n = group(g, x.entry.name, tone, 1, x.detail?.links ?? [], { body: x.entry.one_line, open: { kind: "topics", id: x.entry.id }, collapsed: i >= OPEN_TOPICS, icon: "light" });
+    const n = group(g, x.entry.name, tone, 1, x.detail?.links ?? [], { body: x.entry.one_line, open: { kind: "topics", id: x.entry.id }, collapsed: true, icon: "light" });
     if (!x.detail) n.meta = String(topicSize(x));
     return n;
   });
+  // The biggest open first, at most OPEN_TOPICS, each only when what it shows fits in what is left of OPEN_BUDGET; one that
+  // does not fit stays closed and the next is tried, so a large base still opens a few mid-sized topics.
+  let left = OPEN_BUDGET, opened = 0;
+  for (const n of tops) {
+    if (opened === OPEN_TOPICS || rowsHeight(n.kids) > left) continue;
+    n.collapsed = false;
+    opened++;
+    left -= rowsHeight(n.kids);
+  }
   // Fill the lighter side first, biggest topics first, so the two sides come out about as tall.
   const weight = { R: 0, L: 0 };
   order.forEach((x, i) => {

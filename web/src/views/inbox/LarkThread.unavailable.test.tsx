@@ -82,21 +82,21 @@ describe("a conversation that can no longer be opened", () => {
   ])("shows the unavailable state for status %s with body %j", async (status, body) => {
     failure = { status, body };
     await open();
-    expect(host.textContent).toContain("这个会话已不可用");
-    expect(host.textContent).not.toContain("正在读飞书消息");
+    expect(host.textContent).toContain("该会话暂不可用");
+    expect(host.textContent).not.toContain("正在加载飞书消息");
   });
 
   it("keeps the ordinary error text for a transient gateway failure", async () => {
     failure = { status: 502, body: { code: "UPSTREAM_UNAVAILABLE", error: "upstream unavailable" } };
     await open();
-    expect(host.textContent).not.toContain("这个会话已不可用");
+    expect(host.textContent).not.toContain("该会话暂不可用");
     expect(host.querySelector(".text-red")).toBeTruthy();
   });
 
   it("does not treat the hub's generic route 404 as a gone conversation", async () => {
     failure = { status: 404, body: { code: "not_found", error: "Not Found" } };
     await open();
-    expect(host.textContent).not.toContain("这个会话已不可用");
+    expect(host.textContent).not.toContain("该会话暂不可用");
     expect(host.querySelector(".text-red")).toBeTruthy();
   });
 });

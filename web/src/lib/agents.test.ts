@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { addSection, agentPath, arrangeSessions, assignSection, blockView, dateBucket, emptyPrefs, isDefaultView, mergeMessages, normalizePrefs, pendingOutgoing, removeSection, resetView, setView, setupHints, toggleProvider, togglePin, totalUnread, viewOf, type AgentMessage, type AgentSession, type Outgoing } from "./agents";
+import { accountGroup, addSection, agentPath, arrangeSessions, assignSection, blockView, dateBucket, emptyPrefs, isDefaultView, mergeMessages, normalizePrefs, pendingOutgoing, providerLabel, providerMarkAgent, removeSection, resetView, setView, setupHints, toggleProvider, togglePin, totalUnread, viewOf, type AgentMessage, type AgentSession, type AgentSourceStatus, type Outgoing } from "./agents";
+import { agentLetter, markId } from "./agent-kind";
 
 const s = (id: string, provider: string, rank: number, unread = 0, title = id): AgentSession => ({ id, source: "lark-bridge", sessionKey: id, provider, title, canSend: true, unreadCount: unread, rankTimeMs: rank });
 const m = (id: string, pos: number, role = "assistant", text = id, t = pos * 1000): AgentMessage => ({ externalId: id, role, blocks: [{ type: "text", text }], createTimeMs: t, position: pos });
@@ -161,5 +162,42 @@ describe("date groups by calendar day (#9912)", () => {
     expect(key(at(5, 2, 23, 59), now)).toBe("month");
     expect(key(at(4, 11, 0, 0), now)).toBe("month");
     expect(key(at(4, 10, 23, 59), now)).toBe("older");
+  });
+});
+
+describe("account groups (#16248)", () => {
+  const sources: AgentSourceStatus[] = [
+    { source: "bridge-a", enabled: true, accounts: [{ accountId: "acct-1", provider: "dots", displayName: " Dots · Example User " }, { accountId: "acct-2", provider: "muse2api", displayName: "" }] },
+    { source: "bridge-b", enabled: true, accounts: [{ accountId: "acct-3", displayName: "" }] },
+    { source: "bridge-c", enabled: false },
+  ];
+  const rows = [s("x", "groq", 1), s("y", "grok_bot", 2)].map((r, i) => ({ ...r, accountId: ["acct-9", "acct-3"][i] }));
+
+  it("names an account by its displayName, else its provider's label, else its sessions' provider, and last its id", () => {
+    expect(accountGroup("acct-1", sources, rows)).toEqual({ name: "Dots · Example User", provider: "dots" });
+    expect(accountGroup("acct-2", sources, rows)).toEqual({ name: "Muse", provider: "muse2api" });
+    expect(accountGroup("acct-3", sources, rows)).toEqual({ name: "Grok Bot", provider: "grok_bot" }); // listed with neither: its sessions say
+    expect(accountGroup("acct-9", sources, rows)).toEqual({ name: "Groq", provider: "groq" }); // not listed at all
+    expect(accountGroup("acct-0", sources, rows)).toEqual({ name: "acct-0", provider: "" });
+    expect(accountGroup("acct-1", null, [])).toEqual({ name: "acct-1", provider: "" }); // before /agents has answered
+  });
+
+  it("reads whatever an extension sends for accounts without throwing", () => {
+    const odd = [{ source: "x", enabled: true, accounts: [null, "acct-1", { accountId: "acct-1", displayName: 7 }] }] as unknown as AgentSourceStatus[];
+    expect(accountGroup("acct-1", odd, [])).toEqual({ name: "acct-1", provider: "" });
+  });
+
+  it("labels the agent-source providers", () => {
+    expect(["grok_bot", "muse", "muse2api", "cue", "dots", "claude_duet", "gemini_tasks", "groq"].map(providerLabel))
+      .toEqual(["Grok Bot", "Muse", "Muse", "Cue", "Dots", "Claude Duet", "Gemini", "Groq"]);
+  });
+
+  it("draws a provider with its product's bundled mark, else its label's letter, never Claude Code's for an unknown one", () => {
+    const mark = (p: string) => markId(providerMarkAgent(p));
+    expect(["claude_duet", "gemini_tasks"].map(mark)).toEqual(["claude", "gemini"]);
+    for (const [p, letter] of [["grok_bot", "G"], ["dots", "D"], ["muse", "M"], ["muse2api", "M"], ["cue", "C"], ["groq", "G"], ["some_new_bot", "S"]]) {
+      expect(mark(p)).not.toMatch(/^(claude|codex|opencode|pi|gemini|cursor|trae|grok|agy|dsh|kimi|copilot)$/);
+      expect(agentLetter(providerMarkAgent(p))).toBe(letter);
+    }
   });
 });
